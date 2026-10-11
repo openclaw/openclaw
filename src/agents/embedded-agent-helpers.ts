@@ -16,7 +16,6 @@ export {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
 } from "./embedded-agent-helpers/context-overflow-observation.js";
-export type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 export {
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
@@ -35,15 +34,12 @@ export {
 } from "../shared/assistant-error-format.js";
 export {
   classifyFailoverReason,
-  isAuthErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
-  isFailoverErrorMessage,
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
-export type { FailoverReason } from "./failover/signal.js";
 export { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
 
 export {

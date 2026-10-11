@@ -84,7 +84,7 @@ const SCENARIOS = {
     docsRefs: ["docs/nodes/talk.md", "docs/web/control-ui.md"],
     codeRefs: [
       SOURCE_PATH,
-      "src/gateway/server-methods/talk-client.ts",
+      "src/gateway/talk/handlers/client.ts",
       "src/talk/agent-run-control.ts",
       "src/agents/embedded-agent-runner/runs.ts",
     ],

@@ -1,16 +1,20 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
+  normalizeBackgroundPreference,
+  USER_BACKGROUND_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/background-preferences.js";
+import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
-} from "../../packages/gateway-protocol/src/schema/users.js";
+} from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
 } from "./user-preferences.types.js";
 
-export function prepareUserPreferenceUpdate(
+function prepareEntries(
   entries: Record<string, unknown>,
-): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
+): Result<Pick<PreparedUserPreferenceUpdate, "serialized" | "deletionKeys">, UserPreferenceError> {
   const rawEntries = Object.entries(entries);
   if (rawEntries.length > USER_PREFS_ENTRY_LIMIT) {
     return err({ code: "invalid-entry-count" });
@@ -28,7 +32,14 @@ export function prepareUserPreferenceUpdate(
     }
     let valueJson: string | undefined;
     try {
-      valueJson = JSON.stringify(value);
+      const background =
+        prefKey === USER_BACKGROUND_PREFERENCE_KEY
+          ? normalizeBackgroundPreference(value)
+          : undefined;
+      if (prefKey === USER_BACKGROUND_PREFERENCE_KEY && !background) {
+        return err({ code: "invalid-value", key: prefKey });
+      }
+      valueJson = JSON.stringify(background ?? value);
     } catch {
       return err({ code: "invalid-value", key: prefKey });
     }
@@ -41,4 +52,25 @@ export function prepareUserPreferenceUpdate(
     serialized.push({ prefKey, valueJson });
   }
   return ok({ serialized, deletionKeys });
+}
+
+export function prepareUserPreferenceUpdate(
+  entries: Record<string, unknown>,
+  expectedEntries: Record<string, unknown> = {},
+): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
+  const prepared = prepareEntries(entries);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const expected = prepareEntries(expectedEntries);
+  if (!expected.ok) {
+    return expected;
+  }
+  return ok({
+    ...prepared.value,
+    expected: [
+      ...expected.value.serialized,
+      ...expected.value.deletionKeys.map((prefKey) => ({ prefKey, valueJson: null })),
+    ],
+  });
 }

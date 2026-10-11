@@ -1,10 +1,14 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
 read_required_checks_for_crabbox_bypass() {
   local pr="$1"
   local output_file="$2"
   local error_file
   local status
   error_file=$(mktemp)
-  if gh_plain pr checks "$pr" --required --json name,bucket,state >"$output_file" 2>"$error_file"; then
+  # REST check-runs/status omit the GraphQL isRequired(appId) admission decision.
+  if pr_gh_plain pr checks "$pr" --required --json name,bucket,state >"$output_file" 2>"$error_file"; then
     status=0
   else
     status=$?
@@ -29,6 +33,7 @@ verify_crabbox_admin_merge_bypass() {
     [ "${REMOTE_GATES_PROVIDER:-}" != "aws" ] ||
     [ "${FULL_GATES_HEAD_SHA:-}" != "$head_sha" ] ||
     [ "${LAST_VERIFIED_HEAD_SHA:-}" != "$head_sha" ] ||
+    [[ ! "${REMOTE_GATES_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] ||
     [[ "${REMOTE_GATES_RUN_ID:-}" != run_* ]] ||
     [[ "${REMOTE_GATES_LEASE_ID:-}" != cbx_* ]]; then
     echo "Crabbox merge bypass requires exact prepared remote_crabbox_aws gate artifacts." >&2
@@ -36,23 +41,19 @@ verify_crabbox_admin_merge_bypass() {
   fi
 
   local repo_nwo
-  repo_nwo=$(gh_plain repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  repo_nwo=$(pr_gh_plain repo view --json nameWithOwner --jq .nameWithOwner) || return 1
   # Mutable authorization evidence must be revalidated even when PATH uses a cache.
   local api_read=(api -H 'Cache-Control: max-age=0')
   local proof_dir=".local/merge-crabbox-bypass"
   rm -rf "$proof_dir"
   mkdir -p "$proof_dir"
   read_required_checks_for_crabbox_bypass "$pr" "$proof_dir/required-checks.json" || return 1
-  gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer >"$proof_dir/actor.json" || return 1
-  gh_plain "${api_read[@]}" "repos/$repo_nwo/pulls/$pr" >"$proof_dir/pull-request.json" || return 1
   local actor
-  actor=$(jq -r '.login // empty' "$proof_dir/actor.json")
-  if [ -z "$actor" ]; then
-    echo "Crabbox merge bypass failed: authenticated actor login is missing." >&2
-    return 1
-  fi
+  actor=$(pr_gh_writer_login) || return 1
+  jq -n --arg login "$actor" '{login:$login}' >"$proof_dir/actor.json" || return 1
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/pulls/$pr" >"$proof_dir/pull-request.json" || return 1
 
-  if ! gh_plain "${api_read[@]}" --paginate --slurp \
+  if ! pr_gh_plain "${api_read[@]}" --paginate --slurp \
     "repos/$repo_nwo/commits/$head_sha/check-runs?filter=latest&per_page=100" \
     >"$proof_dir/check-run-pages.json"; then
     echo "Crabbox merge bypass failed: unable to read exact-head check runs." >&2
@@ -75,7 +76,7 @@ verify_crabbox_admin_merge_bypass() {
     echo "Crabbox merge bypass failed: trusted gate has no exact Actions run URL." >&2
     return 1
   fi
-  gh_plain "${api_read[@]}" "repos/$repo_nwo/actions/runs/$crabbox_publisher_run_id" \
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/actions/runs/$crabbox_publisher_run_id" \
     >"$proof_dir/publisher-run.json" || return 1
 
   local ci_details_url
@@ -95,9 +96,9 @@ verify_crabbox_admin_merge_bypass() {
     return 1
   fi
 
-  gh_plain "${api_read[@]}" "repos/$repo_nwo/actions/runs/$ci_run_id" \
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/actions/runs/$ci_run_id" \
     >"$proof_dir/workflow-run.json" || return 1
-  if ! gh_plain "${api_read[@]}" --paginate --slurp \
+  if ! pr_gh_plain "${api_read[@]}" --paginate --slurp \
     "repos/$repo_nwo/actions/runs/$ci_run_id/jobs?filter=latest&per_page=100" \
     >"$proof_dir/job-pages.json"; then
     echo "Crabbox merge bypass failed: unable to read normal CI jobs." >&2
@@ -105,28 +106,57 @@ verify_crabbox_admin_merge_bypass() {
   fi
   jq '{jobs: [.[] | .jobs[]]}' "$proof_dir/job-pages.json" >"$proof_dir/jobs.json" || return 1
 
-  local encoded_actor
-  encoded_actor=$(jq -rn --arg value "$actor" '$value | @uri')
-  gh_plain "${api_read[@]}" "orgs/openclaw/memberships/$encoded_actor" \
-    >"$proof_dir/membership.json" || return 1
-  gh_plain "${api_read[@]}" "repos/$repo_nwo/git/ref/heads/main" >"$proof_dir/main-ref.json" || return 1
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/git/ref/heads/main" >"$proof_dir/main-ref.json" || return 1
   local workflow_sha
   local main_sha
+  local pull_base_sha
   workflow_sha=$(jq -er '.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
     "$proof_dir/publisher-run.json") || return 1
   main_sha=$(jq -er '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
     "$proof_dir/main-ref.json") || return 1
-  gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$workflow_sha...$main_sha" \
+  pull_base_sha=$(jq -er '.base.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+    "$proof_dir/pull-request.json") || return 1
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$workflow_sha...$main_sha" \
     >"$proof_dir/main-comparison.json" || return 1
-  # Keep this as the final remote authority read before the verifier returns.
-  gh_plain "${api_read[@]}" "repos/$repo_nwo/git/ref/heads/main" \
+  # Later comparisons bind immutable SHAs; live membership is checked last.
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/git/ref/heads/main" \
     >"$proof_dir/final-main-ref.json" || return 1
+  local final_main_sha
+  final_main_sha=$(jq -er '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+    "$proof_dir/final-main-ref.json") || return 1
+  local main_args=(
+    --main-ref "$proof_dir/main-ref.json"
+    --main-comparison "$proof_dir/main-comparison.json"
+    --final-main-ref "$proof_dir/final-main-ref.json"
+  )
+  if [ "$pull_base_sha" != "$REMOTE_GATES_BASE_SHA" ] && [ "${OPENCLAW_PR_STRICT_DRIFT:-}" != 1 ]; then
+    pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$REMOTE_GATES_BASE_SHA...$pull_base_sha" \
+      >"$proof_dir/base-comparison.json" || return 1
+    main_args+=(--base-comparison "$proof_dir/base-comparison.json")
+  fi
+  if [ "$main_sha" != "$pull_base_sha" ] && [ "${OPENCLAW_PR_STRICT_DRIFT:-}" != 1 ]; then
+    pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$pull_base_sha...$main_sha" \
+      >"$proof_dir/pull-main-comparison.json" || return 1
+    main_args+=(--pull-main-comparison "$proof_dir/pull-main-comparison.json")
+  fi
+  if [ "$final_main_sha" != "$main_sha" ] && [ "${OPENCLAW_PR_STRICT_DRIFT:-}" != 1 ]; then
+    pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$main_sha...$final_main_sha" \
+      >"$proof_dir/main-advance-comparison.json" || return 1
+    pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/compare/$workflow_sha...$final_main_sha" \
+      >"$proof_dir/final-main-comparison.json" || return 1
+    main_args+=(
+      --main-advance-comparison "$proof_dir/main-advance-comparison.json"
+      --final-main-comparison "$proof_dir/final-main-comparison.json"
+    )
+  fi
+  local encoded_actor
+  encoded_actor=$(jq -rn --arg value "$actor" '$value | @uri')
+  pr_gh_plain "${api_read[@]}" "orgs/openclaw/memberships/$encoded_actor" \
+    >"$proof_dir/membership.json" || return 1
   if ! node "$script_parent_dir/pr-lib/crabbox-merge-bypass.mjs" \
     --actor "$proof_dir/actor.json" \
     --membership "$proof_dir/membership.json" \
-    --main-ref "$proof_dir/main-ref.json" \
-    --main-comparison "$proof_dir/main-comparison.json" \
-    --final-main-ref "$proof_dir/final-main-ref.json" \
+    "${main_args[@]}" \
     --pull-request "$proof_dir/pull-request.json" \
     --publisher-run "$proof_dir/publisher-run.json" \
     --required-checks "$proof_dir/required-checks.json" \
@@ -134,6 +164,7 @@ verify_crabbox_admin_merge_bypass() {
     --workflow-run "$proof_dir/workflow-run.json" \
     --jobs "$proof_dir/jobs.json" \
     --head "$head_sha" \
+    --base "$REMOTE_GATES_BASE_SHA" \
     --run-id "$REMOTE_GATES_RUN_ID" \
     --lease-id "$REMOTE_GATES_LEASE_ID" \
     >.local/merge-crabbox-bypass.json; then

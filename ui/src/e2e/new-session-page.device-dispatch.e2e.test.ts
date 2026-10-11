@@ -2,6 +2,7 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { releasePlacementPolicyRead } from "../test-helpers/control-ui-e2e.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -82,7 +83,7 @@ suite.define(() => {
           .locator(".new-session-page__environment-heading")
           .allTextContents()
           .then((headings) => headings.map((heading) => heading.replace(/\s+/g, " ").trim())),
-      ).toEqual(["Your devices", "Cloud"]);
+      ).toEqual(["Your devices", "Hosted workspaces", "Cloud"]);
       const auto = destinations.locator('[data-value="auto-device"]');
       expect(await auto.getAttribute("aria-pressed")).toBe("false");
       expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
@@ -172,6 +173,7 @@ suite.define(() => {
         agentId: "main",
         message: "",
         worktree: true,
+        worktreeSource: "empty",
       });
       expect(create.params).not.toHaveProperty("execNode");
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
@@ -261,9 +263,11 @@ suite.define(() => {
         await page.clock.pauseAt(clockTime + 1_000);
         await gateway.deferNext("environments.list");
         const requestsBeforeRefresh = (await gateway.getRequests("environments.list")).length;
-        await gateway.emitGatewayEvent("node.runnerInventory.changed", {
-          nodeId: "paired-runner",
-        });
+        await releasePlacementPolicyRead(page, gateway, () =>
+          gateway.emitGatewayEvent("node.runnerInventory.changed", {
+            nodeId: "paired-runner",
+          }),
+        );
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh });
         await expect.poll(() => start.isDisabled()).toBe(true);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
@@ -286,7 +290,9 @@ suite.define(() => {
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
           {
-            surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+            surface: page.locator(
+              '.new-session-page__where-popover > dialog > wa-popup > [part="popup"]',
+            ),
             content: [selectedDevice, automaticDevice],
           },
         );
@@ -297,7 +303,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.deferNext("environments.list");
-        await page.clock.runFor(1);
+        await releasePlacementPolicyRead(page, gateway, () => page.clock.runFor(1));
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 1 });
         await gateway.resolveDeferred("environments.list", {
           environments: [
@@ -428,9 +434,10 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
+        // Pending remote isolation is not a provisional Local checkout selection.
         await expect
           .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
-          .toBe("true");
+          .toBe("false");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {
             window.dispatchEvent(new Event("test-release-recovery-scope"));
@@ -451,6 +458,9 @@ suite.define(() => {
         await expect.poll(() => where.getAttribute(attribute)).toBe(value);
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
+        await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+          params: { worktree: true },
+        });
         await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
           params: { key: sessionKey, agentId: "main", ...target },
         });
@@ -657,7 +667,7 @@ suite.define(() => {
   });
 
   it.each(deviceTargets)(
-    "reloads a pending $name device create with the same placement target",
+    "reloads a pending empty-workspace create with the same $name device target",
     async ({ value, target }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -665,7 +675,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["sessions.create"],
         workspace: WORKSPACE,
-        workspaceGit: true,
+        workspaceGit: false,
         methodResponses: {
           "environments.list": {
             environments: [
@@ -687,7 +697,6 @@ suite.define(() => {
             ],
             profiles: [],
           },
-          "worktrees.branches": gitRepository,
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
           "sessions.send": { runId: "run-device-recovery", status: "started" },
         },
@@ -701,6 +710,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill(message);
         await page.getByRole("button", { name: "Start session" }).click();
         const firstCreate = await gateway.waitForRequest("sessions.create");
+        expect(firstCreate.params).toMatchObject({ worktree: true, worktreeSource: "empty" });
         const sessionKey = (firstCreate.params as { key?: string }).key;
         if (!sessionKey) {
           throw new Error("expected a recoverable device create key");
@@ -718,9 +728,18 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".new-session-page__message").inputValue())
           .toBe(message);
+        await expect
+          .poll(() => page.locator("#new-session-project-trigger").textContent())
+          .toContain("New workspace");
+        expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
         await page.getByRole("button", { name: "Start session" }).click();
         const retryCreate = await gateway.waitForRequest("sessions.create");
-        expect(retryCreate.params).toMatchObject({ key: sessionKey, message: "", worktree: true });
+        expect(retryCreate.params).toMatchObject({
+          key: sessionKey,
+          message: "",
+          worktree: true,
+          worktreeSource: "empty",
+        });
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         await gateway.deferNext("sessions.dispatch");
         await gateway.resolveDeferred("sessions.create", { key: sessionKey });

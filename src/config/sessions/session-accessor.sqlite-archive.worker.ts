@@ -1,197 +1,74 @@
 /** Worker entrypoint for SQLite transcript archive materialization off the gateway event loop. */
 import { randomUUID } from "node:crypto";
+import { on } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { parentPort, workerData } from "node:worker_threads";
+import { MessagePort, parentPort, threadId, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
-  getOpenClawAgentDatabaseValidation,
-  type OpenClawAgentDatabaseValidation,
-} from "../../state/openclaw-agent-db-validation-cache.js";
+  bindSqliteDatabaseAdmissionUpstream,
+  exchangeSqliteDatabaseAdmissions,
+} from "../../infra/sqlite-worker-database-admission-relay.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { routeLogsToStderr } from "../../logging/console.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import {
-  settleOpenClawAgentDatabaseWorkerClose,
-  withOpenClawAgentDatabaseAdmission,
-  type OpenClawAgentDatabaseWorkerCloseResult,
-  type OpenClawAgentDatabaseWriteAdmission,
-} from "../../state/openclaw-agent-db.js";
 import {
   hashSessionArchiveBytes,
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
-  type TranscriptArchivePublishPlan,
-  type TranscriptArchivePublishResult,
-  type TranscriptArchivePublishWorkerMessage,
-  type TranscriptArchiveWorkerMessage,
-  type TranscriptArchiveWorkerPlan,
-  type TranscriptArchiveWorkerResult,
-} from "./session-accessor.sqlite-archive.js";
+} from "./session-accessor.sqlite-archive-artifact.js";
+import type {
+  SqliteArchiveOneShotWorkerData,
+  SqliteArchiveSessionRequest,
+  SqliteArchiveSessionResponse,
+  SessionHistoryEvictionArchivePlan,
+  SessionTranscriptMaintenanceSizingInput,
+  TranscriptArchivePageResult,
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+  TranscriptArchivePublishWorkerMessage,
+  TranscriptArchiveReadResult,
+  TranscriptArchiveWorkerMessage,
+  TranscriptArchiveWorkerPlan,
+  TranscriptArchiveWorkerResult,
+} from "./session-accessor.sqlite-archive-types.js";
+import type {
+  SqliteCanonicalValidationTaskMessage,
+  SqliteCanonicalValidationTaskResult,
+  SqliteCanonicalValidationWorkerTask,
+} from "./session-accessor.sqlite-canonical-worker-pool.js";
 import {
+  planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import {
-  markSqliteReclamationSettled,
-  waitForSqliteReclamationCommit,
-} from "./session-accessor.sqlite-reclamation-commit.js";
-import {
-  reclaimSqliteSessionInTransaction,
-  type SqliteSessionReclamationWorkerData,
-} from "./session-accessor.sqlite-reclamation.js";
-import {
-  mutateSessionColdTranscriptInWorker,
-  prepareSessionColdBatchInWorker,
-  prepareSessionColdRestoreInWorker,
-  type SessionColdPreparationWorkerData,
-  type SessionColdMutationResult,
-  type SessionColdWorkerData,
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
+  SessionColdPreparationWorkerData,
+  SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
-import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "session_transcript_archives" | "transcript_events"
 >;
-
-const WORKER_CLOSE_MAX_ATTEMPTS = 3;
-
-async function settleReclamationDatabase(
-  pathname: string,
-): Promise<{ cleanupWarnings: string[]; settled: boolean }> {
-  const warnings = new Set<string>();
-  let outcome: OpenClawAgentDatabaseWorkerCloseResult = { errors: [], settled: false };
-  for (let attempt = 0; attempt < WORKER_CLOSE_MAX_ATTEMPTS; attempt += 1) {
-    outcome = settleOpenClawAgentDatabaseWorkerClose(pathname);
-    outcome.errors.forEach((error) => warnings.add(error.message));
-    if (outcome.settled) {
-      break;
-    }
-    if (attempt + 1 < WORKER_CLOSE_MAX_ATTEMPTS) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25 * 2 ** attempt);
-      });
-    }
-  }
-  return { cleanupWarnings: [...warnings], settled: outcome.settled };
-}
-
-function isSqliteTranscriptArchiveWorkerData(value: unknown): boolean {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as { type?: unknown }).type === "sqlite-transcript-archive-v2"
-  );
-}
-
-function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const plans = (value as { plans?: unknown }).plans;
-  if (!Array.isArray(plans)) {
-    return undefined;
-  }
-  const parsed: TranscriptArchivePublishPlan[] = [];
-  for (const planValue of plans) {
-    if (!planValue || typeof planValue !== "object" || Array.isArray(planValue)) {
-      return undefined;
-    }
-    const plan = planValue as Record<string, unknown>;
-    if (
-      typeof plan.agentId !== "string" ||
-      typeof plan.archiveDirectory !== "string" ||
-      typeof plan.databasePath !== "string" ||
-      typeof plan.generation !== "string" ||
-      typeof plan.sessionId !== "string"
-    ) {
-      return undefined;
-    }
-    parsed.push({
-      agentId: plan.agentId,
-      archiveDirectory: plan.archiveDirectory,
-      databasePath: plan.databasePath,
-      generation: plan.generation,
-      sessionId: plan.sessionId,
-    });
-  }
-  return parsed;
-}
-
-function parseSessionStateDeleteSnapshot(value: unknown): SessionStateDeleteSnapshot | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const snapshot = value as Record<string, unknown>;
-  if (
-    typeof snapshot.acpParentStreamEventCount !== "number" ||
-    (snapshot.generation !== null && typeof snapshot.generation !== "string") ||
-    (snapshot.lastSeq !== null && typeof snapshot.lastSeq !== "number") ||
-    (snapshot.sessionKey !== null && typeof snapshot.sessionKey !== "string") ||
-    (snapshot.sessionUpdatedAt !== null && typeof snapshot.sessionUpdatedAt !== "number") ||
-    (snapshot.trajectoryLastSeq !== null && typeof snapshot.trajectoryLastSeq !== "number") ||
-    (snapshot.transcriptUpdatedAt !== null && typeof snapshot.transcriptUpdatedAt !== "number")
-  ) {
-    return null;
-  }
-  return {
-    acpParentStreamEventCount: snapshot.acpParentStreamEventCount,
-    generation: snapshot.generation,
-    lastSeq: snapshot.lastSeq,
-    sessionKey: snapshot.sessionKey,
-    sessionUpdatedAt: snapshot.sessionUpdatedAt,
-    trajectoryLastSeq: snapshot.trajectoryLastSeq,
-    transcriptUpdatedAt: snapshot.transcriptUpdatedAt,
-  };
-}
-
-function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const plans = (value as { plans?: unknown }).plans;
-  if (!Array.isArray(plans)) {
-    return undefined;
-  }
-  const parsed: TranscriptArchiveWorkerPlan[] = [];
-  for (const planValue of plans) {
-    if (!planValue || typeof planValue !== "object" || Array.isArray(planValue)) {
-      return undefined;
-    }
-    const plan = planValue as Record<string, unknown>;
-    const snapshot = parseSessionStateDeleteSnapshot(plan.snapshot);
-    if (
-      typeof plan.agentId !== "string" ||
-      typeof plan.archiveDirectory !== "string" ||
-      typeof plan.databasePath !== "string" ||
-      (plan.reason !== "deleted" && plan.reason !== "reset") ||
-      typeof plan.sessionId !== "string" ||
-      !snapshot
-    ) {
-      return undefined;
-    }
-    parsed.push({
-      agentId: plan.agentId,
-      archiveDirectory: plan.archiveDirectory,
-      databasePath: plan.databasePath,
-      reason: plan.reason,
-      sessionId: plan.sessionId,
-      snapshot,
-    });
-  }
-  return parsed;
-}
 
 const TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES = 64 * 1024;
 
@@ -218,7 +95,7 @@ function stageTranscriptArchiveContent(
       database,
       db
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     )) {
@@ -293,20 +170,12 @@ async function encodeStagedTranscriptArchive(params: {
   })}${compressed ? ".zst" : ""}`;
   const encodedPath = `${archivePath}.${randomUUID()}.stage`;
   try {
-    if (compressed) {
-      await pipeline(
-        fs.createReadStream(params.stagedPath),
-        createZstdCompress.call(zlib),
-        createArchiveByteLimitTransform(),
-        fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
-      );
-    } else {
-      await pipeline(
-        fs.createReadStream(params.stagedPath),
-        createArchiveByteLimitTransform(),
-        fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
-      );
-    }
+    await pipeline([
+      fs.createReadStream(params.stagedPath),
+      ...(compressed ? [createZstdCompress.call(zlib)] : []),
+      createArchiveByteLimitTransform(),
+      fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
+    ]);
     const bytes = fs.readFileSync(encodedPath);
     return {
       archiveName: path.basename(archivePath),
@@ -322,7 +191,28 @@ async function encodeStagedTranscriptArchive(params: {
 
 export async function materializeTranscriptArchiveInWorker(
   plan: TranscriptArchiveWorkerPlan,
+  env?: NodeJS.ProcessEnv,
 ): Promise<TranscriptArchiveWorkerResult> {
+  if ("historyEviction" in plan) {
+    return materializeHistoryEvictionArchiveInWorker(plan, env);
+  }
+  if (plan.snapshot.lastSeq === null) {
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
+      { agentId: plan.agentId, path: plan.databasePath, env },
+    );
+    if (!opened.found) {
+      throw new Error(
+        `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
+      );
+    }
+    if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
+      throw new Error(
+        `SQLite session state changed before archive materialization for ${plan.sessionId}`,
+      );
+    }
+    return { archive: null, sessionId: plan.sessionId };
+  }
   fs.mkdirSync(plan.archiveDirectory, { recursive: true, mode: 0o700 });
   const stagedPath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: plan.archiveDirectory,
@@ -332,31 +222,22 @@ export async function materializeTranscriptArchiveInWorker(
     sessionId: plan.sessionId,
   })}.${randomUUID()}.jsonl-stage`;
   try {
-    const opened = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        let transactionOpen = false;
-        try {
-          // sqlite-allow-raw: metadata and transcript rows must come from one read snapshot.
-          database.db.exec("BEGIN");
-          transactionOpen = true;
-          const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
-          if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
-            throw new Error(
-              `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-            );
-          }
-          const rowCount = stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
-          database.db.exec("COMMIT"); // sqlite-allow-raw: closes the consistent read snapshot.
-          transactionOpen = false;
-          return { rowCount, snapshot };
-        } catch (error) {
-          if (transactionOpen) {
-            database.db.exec("ROLLBACK"); // sqlite-allow-raw: releases a failed read snapshot.
-          }
-          throw error;
-        }
-      },
-      { agentId: plan.agentId, path: plan.databasePath },
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(
+          database.db,
+          () => {
+            const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
+            if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
+              throw new Error(
+                `SQLite session state changed before archive materialization for ${plan.sessionId}`,
+              );
+            }
+            return stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
+          },
+          { databaseLabel: database.path, operationLabel: "session.archive.materialize" },
+        ),
+      { agentId: plan.agentId, path: plan.databasePath, env },
     );
     if (!opened.found) {
       throw new Error(
@@ -364,13 +245,13 @@ export async function materializeTranscriptArchiveInWorker(
       );
     }
     const generation = plan.snapshot.generation;
-    if (opened.value.rowCount > 0 && !generation) {
+    if (opened.value > 0 && !generation) {
       throw new Error(
         `Cannot archive SQLite transcript without a generation for ${plan.sessionId}`,
       );
     }
     const archive =
-      opened.value.rowCount > 0 && generation
+      opened.value > 0 && generation
         ? await encodeStagedTranscriptArchive({
             archiveDirectory: plan.archiveDirectory,
             generation,
@@ -385,12 +266,88 @@ export async function materializeTranscriptArchiveInWorker(
   }
 }
 
+async function materializeHistoryEvictionArchiveInWorker(
+  input: SessionHistoryEvictionArchivePlan,
+  env?: NodeJS.ProcessEnv,
+): Promise<TranscriptArchiveWorkerResult> {
+  const assertSource = () =>
+    assertDatabasePathIdentity(input.databasePath, input.historyEviction.expectedIdentity);
+  assertSource();
+  const stagedPath = `${resolveSqliteTranscriptArchivePath({
+    archiveDirectory: input.archiveDirectory,
+    identityOwner: "registry",
+    reason: input.reason,
+    sessionId: input.sessionId,
+  })}.${randomUUID()}.jsonl-stage`;
+  try {
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () => {
+          assertSource();
+          if (
+            isRecentHistoricalSessionId({
+              database,
+              sessionId: input.sessionId,
+              preserveRecentMs: input.historyEviction.preserveRecentMs,
+            })
+          ) {
+            return null;
+          }
+          const plan = planSessionStateDeleteIfUnreferenced({
+            ...input,
+            database,
+            referencedSessionIds: new Set(),
+          });
+          if (!plan) {
+            return null;
+          }
+          let rows = 0;
+          if (plan.snapshot.lastSeq !== null) {
+            fs.mkdirSync(input.archiveDirectory, { recursive: true, mode: 0o700 });
+            rows = stageTranscriptArchiveContent(database.db, input.sessionId, stagedPath);
+          }
+          return { plan, rows };
+        }),
+      { agentId: input.agentId, path: input.databasePath, env },
+    );
+    assertSource();
+    if (!opened.found) {
+      throw new Error(`Cannot archive SQLite transcript ${input.sessionId}: ${opened.reason}`);
+    }
+    if (!opened.value) {
+      return { archive: null, sessionId: input.sessionId, preparedPlan: null };
+    }
+    const { plan, rows } = opened.value;
+    const generation = plan.snapshot.generation;
+    if (rows > 0 && !generation) {
+      throw new Error(
+        `Cannot archive SQLite transcript without a generation for ${input.sessionId}`,
+      );
+    }
+    const archive =
+      rows > 0 && generation
+        ? await encodeStagedTranscriptArchive({ ...input, generation, stagedPath })
+        : null;
+    assertSource();
+    return { archive, sessionId: input.sessionId, preparedPlan: plan };
+  } finally {
+    fs.rmSync(stagedPath, { force: true });
+  }
+}
+
 export function publishTranscriptArchiveInWorker(
   plan: TranscriptArchivePublishPlan,
+  env?: NodeJS.ProcessEnv,
 ): TranscriptArchivePublishResult {
   try {
-    const opened = withOpenClawAgentDatabaseReadOnly(
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
+        if (
+          plan.databaseIdentity !== undefined &&
+          readOpenClawAgentDatabaseIdentity(database).identity !== plan.databaseIdentity
+        ) {
+          throw new Error("SQLite archive publication database was replaced");
+        }
         const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
         return executeSqliteQuerySync(
           database.db,
@@ -401,7 +358,7 @@ export function publishTranscriptArchiveInWorker(
             .where("generation", "=", plan.generation),
         ).rows[0];
       },
-      { agentId: plan.agentId, path: plan.databasePath },
+      { agentId: plan.agentId, path: plan.databasePath, env },
     );
     if (!opened.found || !opened.value) {
       throw new Error(`Canonical SQLite transcript archive is missing for ${plan.sessionId}`);
@@ -428,182 +385,201 @@ export function publishTranscriptArchiveInWorker(
   }
 }
 
-async function runWorkerPort(
+async function runArchiveSession(
   port: NonNullable<typeof parentPort>,
-  plans: readonly TranscriptArchiveWorkerPlan[],
+  env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  let materializedBytes = 0;
-  for (const plan of plans) {
-    const result = await materializeTranscriptArchiveInWorker(plan);
-    materializedBytes += result.archive?.bytes.byteLength ?? 0;
-    if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-      throw new Error(
-        `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
-      );
+  for await (const [message] of on(port, "message")) {
+    cancelWorkerIdleGc();
+    // SAFETY: only the paired scoped archive owner sends this private port's requests.
+    const request = message as SqliteArchiveSessionRequest | { type: "close" };
+    if (request.type === "close") {
+      break;
     }
-    port.postMessage({ type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage);
-  }
-  port.close();
-}
-
-function runPublishWorkerPort(
-  port: NonNullable<typeof parentPort>,
-  plans: readonly TranscriptArchivePublishPlan[],
-): void {
-  const results = plans.map((plan) => publishTranscriptArchiveInWorker(plan));
-  port.postMessage({ type: "published", results } satisfies TranscriptArchivePublishWorkerMessage);
-  port.close();
-}
-
-async function runReclamationWorkerPort(
-  port: NonNullable<typeof parentPort>,
-  data: SqliteSessionReclamationWorkerData | SessionColdWorkerData,
-): Promise<void> {
-  let result: ReturnType<typeof reclaimSqliteSessionInTransaction> | SessionColdMutationResult;
-  let validation: OpenClawAgentDatabaseValidation | undefined;
-  const coldRecords =
-    data.operation === "cold-mutate" && data.plan.kind === "cold-restore"
-      ? await prepareSessionColdRestoreInWorker(data.plan)
-      : undefined;
-  const commitGate = data.commitGate;
-  let admissionId = 0;
-  let finalAdmission = false;
-  const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
-    const requestedId = ++admissionId;
-    const admission = await new Promise<{
-      allowed: boolean;
-      validation?: OpenClawAgentDatabaseValidation;
-    }>((resolve, reject) => {
-      const receive = (message: {
-        type: string;
-        admissionId: number;
-        allowed: boolean;
-        validation?: OpenClawAgentDatabaseValidation;
-      }) => {
-        cleanup();
-        if (message.type !== "admission" || message.admissionId !== requestedId) {
-          reject(new Error("SQLite reclamation Worker received invalid write admission"));
-          return;
+    let response: SqliteArchiveSessionResponse;
+    if (request.operation === "materialize") {
+      const results: TranscriptArchiveWorkerResult[] = [];
+      let bytes = 0;
+      for (const plan of request.plans) {
+        const result = await materializeTranscriptArchiveInWorker(plan, env);
+        bytes += result.archive?.bytes.byteLength ?? 0;
+        if (bytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+          throw new Error(
+            `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+          );
         }
-        resolve(message);
-      };
-      const closed = () => {
-        cleanup();
-        reject(new Error("SQLite reclamation parent closed during database admission"));
-      };
-      const cleanup = () => {
-        port.off("message", receive);
-        port.off("close", closed);
-      };
-      port.on("message", receive);
-      port.once("close", closed);
-      port.postMessage({ type: "admission-request", admissionId: requestedId });
-    });
-    const value = await run(() => {
-      if (!admission.allowed) {
-        throw new Error("SQLite reclamation database admission was revoked");
+        results.push(result);
       }
-    }, admission.validation);
-    if (!finalAdmission) {
-      port.postMessage({ type: "admission-release", admissionId: requestedId });
-    }
-    return value;
-  };
-  try {
-    result = await withOpenClawAgentDatabaseAdmission(
-      data.plan.databaseOptions,
-      withAdmission,
-      async (openedDatabase) => {
-        finalAdmission = true;
-        let transactionDatabase: DatabaseSync | undefined;
-        try {
-          const onCommit = (
-            database: import("../../state/openclaw-agent-db.js").OpenClawAgentDatabase,
-          ) => {
-            transactionDatabase = database.db;
-            if (commitGate) {
-              waitForSqliteReclamationCommit(commitGate, () =>
-                port.postMessage({ type: "commit-request" }),
-              );
-            }
-          };
-          if (data.operation === "cold-mutate") {
-            const changed = mutateSessionColdTranscriptInWorker(data.plan, coldRecords, onCommit);
-            markSqliteReclamationSettled(commitGate);
-            if (data.plan.kind !== "cold-restore") {
-              await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
-            }
-            return changed;
-          }
-          return reclaimSqliteSessionInTransaction(data.plan, { onCommit });
-        } finally {
-          validation = getOpenClawAgentDatabaseValidation(openedDatabase);
-          if (
-            transactionDatabase &&
-            (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
-          ) {
-            markSqliteReclamationSettled(commitGate);
-          }
-        }
-      },
-    );
-  } catch (error) {
-    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-    if (cleanup.settled) {
-      markSqliteReclamationSettled(commitGate);
+      response = { type: "done", results };
+    } else if (request.operation === "publish") {
+      response = {
+        type: "published",
+        results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
+      };
+    } else if (request.operation === "read-page") {
+      const { readTranscriptArchivePageInWorker } =
+        await import("./session-accessor.sqlite-archive-read.js");
+      const results: Array<TranscriptArchivePageResult | undefined> = [];
+      for (const plan of request.plans) {
+        results.push(await readTranscriptArchivePageInWorker(plan, env));
+      }
+      response = { type: "page-read", results };
     } else {
-      throw new AggregateError(
-        [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
-        "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
-        { cause: error },
-      );
+      const { readTranscriptArchiveFinalInWorker } =
+        await import("./session-accessor.sqlite-archive-read.js");
+      const results: TranscriptArchiveReadResult[] = [];
+      for (const plan of request.plans) {
+        results.push(await readTranscriptArchiveFinalInWorker(plan, env));
+      }
+      response = { type: "final-read", results };
     }
-    throw error;
+    // Each callee has closed its fresh database, streams, file descriptors and staging files.
+    // Failed publication still requires native exit in case its error came from native close.
+    port.postMessage(response);
+    const failed =
+      response.type === "published" &&
+      response.results.some((result) => result.error !== undefined);
+    response.results.length = 0;
+    request.plans = [];
+    scheduleWorkerIdleGc();
+    if (failed) {
+      break;
+    }
   }
-  const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-  const workerResult = {
-    result,
-    ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
-    ...(!cleanup.settled ? { cleanupIncomplete: true } : {}),
-  };
-  port.postMessage({
-    type: "reclaimed",
-    results: [workerResult],
-    validation: cleanup.settled ? validation : undefined,
-  });
   port.close();
 }
 
-if (isSqliteTranscriptArchiveWorkerData(workerData)) {
+if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") {
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
   }
-  const operation = (workerData as { operation?: unknown }).operation;
-  if (operation === "materialize") {
-    const plans = parseWorkerPlans(workerData);
-    if (!plans) {
-      throw new Error("SQLite transcript archive worker requires valid materialization data");
+  const workerPort = parentPort;
+  const run = async (port: MessagePort) => {
+    // Every mode returns results over IPC; lease cleanup diagnostics must preserve CLI JSON stdout.
+    routeLogsToStderr();
+    const operation = workerData.operation;
+    if (operation === "canonical-validation-pool") {
+      const { serveWorkerTasks } = await import("../../infra/worker-task-server.js");
+      const { runReclamationWorkerPort } =
+        await import("./session-accessor.sqlite-mutation-worker.runtime.js");
+      // Coordination actor IDs remain unique even when the previous task retained failed cleanup.
+      const taskSequence = { operationId: 0 };
+      serveWorkerTasks<SqliteCanonicalValidationTaskResult>(async (value, channel) => {
+        // SAFETY: the matching pool owns the typed private task and its transferred port.
+        const task = value as SqliteCanonicalValidationWorkerTask;
+        try {
+          if (!(task?.port instanceof MessagePort) || !channel) {
+            throw new Error("Canonical validation task requires its own message port");
+          }
+          task.port.postMessage(
+            {
+              type: "ready",
+              threadId,
+              operationId: taskSequence.operationId,
+            } satisfies SqliteCanonicalValidationTaskMessage,
+            [],
+          );
+          await runReclamationWorkerPort(task.port, task.databaseOptions, taskSequence);
+          channel.consumeInput();
+          return { status: "closed" };
+        } catch (error) {
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        } finally {
+          task?.port?.close();
+        }
+      });
+    } else if (operation === "archive-session") {
+      // SAFETY: the parent captures the state root before entering the scoped FIFO.
+      const data = workerData as { env: NodeJS.ProcessEnv };
+      await runArchiveSession(port, data.env);
+    } else if (operation === "materialize") {
+      // SAFETY: the paired archive owner constructs this private typed boot payload.
+      const data = workerData as Extract<
+        SqliteArchiveOneShotWorkerData,
+        { operation: "materialize" }
+      >;
+      let materializedBytes = 0;
+      for (const plan of data.plans) {
+        const result = await materializeTranscriptArchiveInWorker(plan);
+        materializedBytes += result.archive?.bytes.byteLength ?? 0;
+        if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+          throw new Error(
+            `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+          );
+        }
+        port.postMessage(
+          { type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage,
+          [],
+        );
+      }
+      port.close();
+    } else if (operation === "publish") {
+      // SAFETY: the paired archive owner constructs this private typed boot payload.
+      const data = workerData as Extract<SqliteArchiveOneShotWorkerData, { operation: "publish" }>;
+      const results = data.plans.map((plan) => publishTranscriptArchiveInWorker(plan));
+      port.postMessage(
+        { type: "published", results } satisfies TranscriptArchivePublishWorkerMessage,
+        [],
+      );
+      port.close();
+    } else if (operation === "cold-prepare") {
+      const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
+      // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.
+      const data = workerData as SessionColdPreparationWorkerData;
+      const result = await prepareSessionColdBatchInWorker(data.input);
+      port.postMessage({ type: "done", results: [result] }, []);
+      port.close();
+    } else if (operation === "maintenance-size") {
+      const { readSessionTranscriptJsonlBytesInDatabase } =
+        await import("./session-accessor.sqlite-maintenance-store.js");
+      // SAFETY: the maintenance owner constructs this private worker payload.
+      const { input } = workerData as { input: SessionTranscriptMaintenanceSizingInput };
+      const opened = withFreshOpenClawAgentDatabaseReadOnly(
+        (database) => readSessionTranscriptJsonlBytesInDatabase(database, input.sessionIds),
+        input,
+      );
+      if (!opened.found) {
+        throw new Error(
+          `Cannot size SQLite session transcripts: ${opened.reason.replaceAll("-", " ")}`,
+        );
+      }
+      port.postMessage({ type: "sized", results: [opened.value] }, []);
+      port.close();
+    } else if (operation === "cold-mutate" || operation === "reclaim") {
+      const { runColdMutationWorkerPort, runReclamationWorkerPort } =
+        await import("./session-accessor.sqlite-mutation-worker.runtime.js");
+      if (operation === "cold-mutate") {
+        // SAFETY: the paired parent constructs this internal payload; commit revalidates its rows.
+        await runColdMutationWorkerPort(port, workerData as SessionColdWorkerData);
+      } else {
+        await runReclamationWorkerPort(
+          port,
+          // SAFETY: the parent creates these cloneable boot options from its typed plan.
+          (workerData as { databaseOptions: SqliteSessionReclamationPlan["databaseOptions"] })
+            .databaseOptions,
+        );
+      }
+    } else {
+      throw new Error("SQLite transcript archive worker requires a supported operation");
     }
-    await runWorkerPort(parentPort, plans);
-  } else if (operation === "publish") {
-    const plans = parsePublishWorkerPlans(workerData);
-    if (!plans) {
-      throw new Error("SQLite transcript archive worker requires valid publication data");
+  };
+  const admissionPort = workerData.databaseAdmissionPort;
+  if (admissionPort instanceof MessagePort) {
+    bindSqliteDatabaseAdmissionUpstream(admissionPort);
+    try {
+      await withSqliteDatabaseAdmissionExchange(
+        (admissions, location, create) =>
+          exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
+        () => run(workerPort),
+      );
+    } finally {
+      admissionPort.close();
     }
-    runPublishWorkerPort(parentPort, plans);
-  } else if (operation === "cold-prepare") {
-    // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.
-    const data = workerData as SessionColdPreparationWorkerData;
-    const result = await prepareSessionColdBatchInWorker(data.input);
-    parentPort.postMessage({ type: "done", results: [result] }, []);
-    parentPort.close();
-  } else if (operation === "cold-mutate") {
-    // SAFETY: the paired parent constructs this internal payload with SessionColdWorkerData; commit revalidates its rows.
-    await runReclamationWorkerPort(parentPort, workerData as SessionColdWorkerData);
-  } else if (operation === "reclaim") {
-    // SAFETY: the parent creates this internal structured-clone payload from the typed plan.
-    await runReclamationWorkerPort(parentPort, workerData as SqliteSessionReclamationWorkerData);
   } else {
-    throw new Error("SQLite transcript archive worker requires a supported operation");
+    // Task-pool dispatch installs its own existing admission exchange per task.
+    await run(workerPort);
   }
 }

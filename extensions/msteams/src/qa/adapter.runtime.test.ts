@@ -6,7 +6,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createMSTeamsQaTransportAdapter } from "./adapter.runtime.js";
-import * as botFrameworkServer from "./bot-framework-server.js";
+
+const sleep = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: sleep,
+}));
 
 const createdDirs: string[] = [];
 
@@ -34,8 +39,30 @@ async function listenOnLoopback(server: Server): Promise<number> {
   return address.port;
 }
 
+async function prepareAdapterFlow(
+  adapter: Awaited<ReturnType<typeof createMSTeamsQaTransportAdapter>>,
+  gatewayBaseUrl: string,
+  outputDir: string,
+) {
+  await adapter.prepareFlow?.({
+    config: {},
+    scenarioId: "channel-canary",
+    scenarioTitle: "Channel transport canary",
+    gateway: {
+      baseUrl: gatewayBaseUrl,
+      tempRoot: outputDir,
+      workspaceDir: outputDir,
+      runtimeEnv: {},
+      call: vi.fn(),
+    },
+    outputDir,
+    timeoutMs: 1_000,
+    waitForConfigRestartSettle: vi.fn(),
+  });
+}
+
 describe("Microsoft Teams QA transport adapter", () => {
-  it("creates a private bootstrap, sends real webhook-shaped inbound, and cleans up", async () => {
+  it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans up", async () => {
     // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers; afterEach removes it.
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-qa-"));
     createdDirs.push(outputDir);
@@ -51,8 +78,18 @@ describe("Microsoft Teams QA transport adapter", () => {
       direction: "outbound",
       timestamp: Date.now(),
     }));
+    let labRequests = 0;
+    const lab = createServer((_request, response) => {
+      labRequests += 1;
+      response.writeHead(404).end();
+    });
+    const labPort = await listenOnLoopback(lab);
     let inboundActivity: Record<string, unknown> | undefined;
+    let inboundAuthorization: string | undefined;
+    let inboundPath: string | undefined;
     const webhook = createServer((request, response) => {
+      inboundAuthorization = request.headers.authorization;
+      inboundPath = request.url;
       void (async () => {
         const chunks: Buffer[] = [];
         for await (const chunk of request) {
@@ -63,8 +100,6 @@ describe("Microsoft Teams QA transport adapter", () => {
       })();
     });
     const webhookPort = await listenOnLoopback(webhook);
-    // Keep the webhook port owned while the adapter starts its Connector listener.
-    vi.spyOn(botFrameworkServer, "reserveMSTeamsQaWebhookPort").mockResolvedValue(webhookPort);
     const adapter = await createMSTeamsQaTransportAdapter({
       adapterOptions: { transportPolicy: { requireGroupMention: true } },
       channelId: "msteams",
@@ -83,8 +118,9 @@ describe("Microsoft Teams QA transport adapter", () => {
       const env = adapter.createRuntimeEnvPatch?.();
       expect(env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
       expect(env).not.toHaveProperty("OPENCLAW_QA_MSTEAMS_CONNECTOR_URL");
-      const bootstrapUrl = /--import=(\S+)/u.exec(env?.NODE_OPTIONS ?? "")?.[1];
+      const [bootstrapUrl] = adapter.createRuntimePreloads?.() ?? [];
       expect(bootstrapUrl).toMatch(/^file:/u);
+      expect(env?.NODE_OPTIONS).toContain(`--import=${bootstrapUrl}`);
       bootstrapPath = fileURLToPath(bootstrapUrl!);
       const bootstrap = await fs.readFile(bootstrapPath, "utf8");
       expect(bootstrap).toContain('Symbol.for("openclaw.msteams.privateQaRuntime")');
@@ -99,12 +135,37 @@ describe("Microsoft Teams QA transport adapter", () => {
       });
       expect(bootstrapConfig.botToken?.split(".")).toHaveLength(3);
 
-      const config = adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1" });
-      expect(config.channels?.msteams?.webhook?.port).toBe(webhookPort);
+      const config = adapter.createGatewayConfig({ baseUrl: `http://127.0.0.1:${labPort}` });
+      expect(config.channels?.msteams?.webhook).toEqual({ path: "/api/messages" });
+      expect(config.channels?.msteams?.legacyWebhook).toBe(false);
       expect(config.channels?.msteams).toMatchObject({
         dmPolicy: "allowlist",
         allowFrom: ["00000000-0000-4000-8000-000000000002"],
       });
+      const ready = {
+        accountId: "default",
+        running: true,
+        connected: true,
+        lifecycle: "ready",
+        restartPending: false,
+      };
+      const statuses = [
+        { ...ready, lifecycle: "starting", connected: false },
+        // A new task can retain its predecessor's connected flag until it publishes readiness.
+        { ...ready, lifecycle: "starting" },
+        { ...ready, connected: false },
+        { ...ready, restartPending: true },
+        ready,
+      ];
+      const call = vi.fn().mockRejectedValue(new Error("unexpected extra readiness poll"));
+      for (const status of statuses) {
+        call.mockResolvedValueOnce({ channelAccounts: { msteams: [status] } });
+      }
+      await adapter.waitReady({ gateway: { call } });
+      expect(call).toHaveBeenCalledTimes(statuses.length);
+      expect(inboundActivity).toBeUndefined();
+      await prepareAdapterFlow(adapter, `http://127.0.0.1:${webhookPort}`, outputDir);
+
       await adapter.sendInbound({
         accountId: "default",
         conversation: { id: "qa-primary", kind: "channel" },
@@ -114,6 +175,9 @@ describe("Microsoft Teams QA transport adapter", () => {
         threadId: "thread-root",
         replyToId: "quoted-parent",
       });
+      expect(labRequests).toBe(0);
+      expect(inboundPath).toBe("/api/messages");
+      expect(inboundAuthorization).toBe(`Bearer ${bootstrapConfig.botToken}`);
       expect(inboundActivity).toMatchObject({
         text: "<at>openclaw</at> qa ingress",
         entities: [
@@ -132,6 +196,10 @@ describe("Microsoft Teams QA transport adapter", () => {
         conversation: {
           id: "19:qa-primary@thread.tacv2;messageid=thread-root",
           conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "qa-msteams-team" },
+          channel: { id: "19:qa-primary@thread.tacv2" },
         },
       });
       expect(addInboundMessage).toHaveBeenCalledTimes(1);
@@ -160,6 +228,22 @@ describe("Microsoft Teams QA transport adapter", () => {
         timestamp: expect.any(Number),
         to: "channel:qa-primary",
       });
+
+      for (const [kind, conversationType] of [
+        ["direct", "personal"],
+        ["group", "groupChat"],
+      ] as const) {
+        await adapter.sendInbound({
+          accountId: "default",
+          conversation: { id: `qa-${kind}`, kind },
+          senderId: "driver",
+          text: "qa chat ingress",
+        });
+        expect(inboundActivity).toMatchObject({ conversation: { conversationType } });
+        // Team/channel markers make a personal chat fail the Gateway's scope admission.
+        expect(inboundActivity?.channelData).toEqual({ tenant: { id: "qa-msteams-tenant" } });
+      }
+      expect(labRequests).toBe(0);
     } finally {
       await adapter.cleanup?.();
     }
@@ -185,7 +269,6 @@ describe("Microsoft Teams QA transport adapter", () => {
         .end();
     });
     const webhookPort = await listenOnLoopback(webhook);
-    vi.spyOn(botFrameworkServer, "reserveMSTeamsQaWebhookPort").mockResolvedValue(webhookPort);
 
     const adapter = await createMSTeamsQaTransportAdapter({
       adapterOptions: {},
@@ -201,8 +284,10 @@ describe("Microsoft Teams QA transport adapter", () => {
     });
 
     try {
-      const config = adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1" });
-      expect(config.channels?.msteams?.webhook?.port).toBe(webhookPort);
+      const config = adapter.createGatewayConfig({ baseUrl: `http://127.0.0.1:${targetPort}` });
+      expect(config.channels?.msteams?.webhook).toEqual({ path: "/api/messages" });
+      expect(config.channels?.msteams?.legacyWebhook).toBe(false);
+      await prepareAdapterFlow(adapter, `http://127.0.0.1:${webhookPort}`, outputDir);
       await expect(
         adapter.sendInbound({
           accountId: "default",

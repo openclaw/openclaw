@@ -8,11 +8,11 @@ import {
 } from "./app-server/session-binding.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { isAdoptionSessionKeyForThread, requireIdleThread } from "./session-catalog-adoption.js";
-import { runSessionActionExclusive } from "./session-catalog-node-adoption.js";
+import { catalogSessionActions } from "./session-catalog-node-adoption.js";
 import { CatalogParamsError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
-function assertNoPendingSupervisionBranch(params: {
+async function assertNoPendingSupervisionBranch(params: {
   agentId: string;
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
@@ -20,7 +20,7 @@ function assertNoPendingSupervisionBranch(params: {
   threadId: string;
   sourceHomeId?: string;
   allowLegacy?: boolean;
-}): void {
+}): Promise<void> {
   const adoptedEntries = [
     params.agentId,
     ...listAgentIds(params.config).filter((agentId) => agentId !== params.agentId),
@@ -45,7 +45,7 @@ function assertNoPendingSupervisionBranch(params: {
     if (!sessionId) {
       continue;
     }
-    const binding = params.bindingStore.read(
+    const binding = await params.bindingStore.readAsync(
       sessionBindingIdentity({
         sessionId,
         sessionKey: adopted.sessionKey,
@@ -76,12 +76,12 @@ export async function archiveLocalCodexSession(params: {
   sourceHomeId?: string;
   allowLegacy?: boolean;
 }): Promise<{ archived: true }> {
-  return await runSessionActionExclusive(
+  return await catalogSessionActions.enqueue(
     sessionCatalogAdoptedSourceKey(params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID, params.threadId),
-    async () => {
-      return await params.bindingStore.withThreadArchiveFence(async () => {
-        const run = async (control: CodexSessionCatalogControl) => {
-          assertNoPendingSupervisionBranch(params);
+    () =>
+      params.bindingStore.withThreadArchiveFence(() =>
+        params.control.withPinnedConnection(async (control) => {
+          await assertNoPendingSupervisionBranch(params);
           await control.requireEligibleThread(params.threadId);
           // Eligibility reads metadata before checking membership; activity can change meanwhile.
           const thread = await control.readThread(params.threadId, false);
@@ -108,9 +108,7 @@ export async function archiveLocalCodexSession(params: {
           });
           await control.archiveThread(params.threadId);
           return { archived: true as const };
-        };
-        return await params.control.withPinnedConnection(run);
-      });
-    },
+        }),
+      ),
   );
 }

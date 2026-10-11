@@ -1,0 +1,192 @@
+---
+summary: "Let an agent select plugin themes or create a personal OpenClaw theme"
+title: "Theme"
+sidebarTitle: "Theme"
+read_when:
+  - You want an agent to change your OpenClaw theme
+  - You want to create a custom theme and apply it in one call
+  - You need the theme catalog and profile selection contract
+---
+
+The `theme` tool lets an agent list, inspect, select, and create OpenClaw
+appearance themes. Settings and the agent use the same catalog of built-in,
+plugin, and personal themes. Theme descriptions explain their palette,
+typography, and character so the agent can choose a theme from a request such
+as "make this look like an alien spacecraft."
+
+Theme branding is cosmetic and applies to the Control UI, not the CLI or native
+applications. It does not rewrite technical command text, package paths,
+authentication protocols, or legal and copyright notices. An anonymous cold
+login cannot use an authenticated person’s theme until their profile and theme
+catalog have loaded; only the existing locally remembered mascot fallback is
+available before that point. These fields add no Gateway configuration options
+or configuration migrations.
+
+The tool is available in the coding and messaging profiles and `group:ui`.
+It does not require a connected browser. Personal changes require a trusted
+participant profile.
+
+CRT and Phosphor use a neutral terminal mark, dot working indicators, and no
+Lobsterdex. They retain the OpenClaw name and help links. Other built-in themes,
+including Claw, keep their existing mascot and branding. Hiding Lobsterdex does
+not delete the browser's collection or saved favicon preference.
+
+## Select a theme
+
+Ask the agent to list available themes or choose one for you. `list` includes
+the current selection, so selecting a theme usually takes two calls:
+
+```json
+{ "action": "list" }
+```
+
+```json
+{ "action": "set", "id": "space-pack/xenovessel", "mode": "dark" }
+```
+
+Use an ID returned by `list`. Plugin IDs are qualified as
+`<pluginId>/<themeId>`; personal themes use `user/<slug>`.
+
+## Actions
+
+| Action   | Inputs                                       | Result                                                                                                                                 |
+| -------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`   | None                                         | Available themes, descriptions, supported modes, sources, and the current selection.                                                   |
+| `get`    | Optional `id`                                | Current selection and the requested theme, including its editable definition when available. Without `id`, inspects the current theme. |
+| `set`    | `id` and/or `mode`                           | Saves profile overrides and returns the resulting selection.                                                                           |
+| `import` | `id`, `definition`; optional `apply`, `mode` | Saves a personal theme. `apply: true` selects it in the same call.                                                                     |
+
+Every action accepts optional `user`, the person's verified `requester_profile.id`
+from the Control UI message's conversation context. When several people have
+steered the turn, `user` is required; the agent chooses the person who asked or
+asks them if it is unclear. Only the turn's owner or an accepted participant
+can be selected. Reads, including the
+current selection in `list` and `get`, use that person's profile; changes save
+only to that profile. If their access has changed, they must ask again.
+
+`mode` is `system`, `light`, or `dark`. `set` accepts `null` for either `id` or
+`mode` to clear that profile override and inherit the Gateway setting. Setting
+only one field preserves the other override when it is compatible. Selecting or
+applying a single-mode theme also selects its supported mode if the previous
+explicit mode cannot render it. An explicitly requested incompatible mode is
+rejected; `system` follows the available palette:
+
+```json
+{ "action": "set", "id": null, "mode": null }
+```
+
+`set` and `import` return `application: "saved"` after persistence succeeds.
+The response already includes the resulting state; an extra `get` is not
+necessary. Saving does not assert that a particular browser has rendered the
+theme.
+
+The returned `current.mode` is the saved preference. `current.effectiveMode`
+reports the rendered variant when it can be determined without a browser; with
+two palettes and `system` mode, the device determines it. A plugin reload can
+change available variants without rewriting anyone's saved preferences.
+
+## Create and apply a personal theme
+
+`import` accepts a lowercase slug of up to 64 characters using letters,
+numbers, hyphens, and underscores. Reimporting the same slug updates that
+personal theme. `apply` defaults to `false`.
+
+A definition requires a name, a short description, and at least one complete
+`light` or `dark` palette. Each palette uses the semantic colors shown below
+and may include `font-sans` and `font-mono`. Use CSS color values such as hex,
+`rgb()`, `hsl()`, or `oklch()`. Font families describe locally available fonts;
+definitions cannot load external stylesheets or resources.
+
+Definitions can also supply these optional presentation fields, shared by built-in, plugin, and personal themes:
+
+- `mascot`: `"claw"` (the default) or `"none"`. `"none"` defaults to a neutral prompt mark and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled; the theme does not change that toggle.
+- `brandName`: a display name of 1–80 printable characters, trimmed before saving. Omit it to keep “OpenClaw.” This is appearance text, not a change to agent identities or product configuration.
+- `brandIcon`: `"claw"` or the neutral `"mark"`. Omission follows `mascot`: claw for `"claw"`, mark for `"none"`. Plugin themes can also select a declared icon artwork ID.
+- `workingIndicator`: `"claw"`, `"dots"`, `"brand"` (the selected brand icon), or `"none"`. Omission uses claw for the claw mascot and dots for no mascot. This choice is independent of long-wait phrases.
+- `lobsterdex` and `communityLinks`: booleans controlling their respective navigation entries. Both default to `true`, independently of `mascot`. Hiding an entry does not delete discoveries or change access permissions.
+- `workingPhrases`: up to 24 literal status phrases, each trimmed to 1–24 characters with no control characters or duplicates after trimming. These authored strings are not translated. Omit the field to use the default whimsical vocabulary, or set it to `[]` to hide long-wait phrases.
+- `critters`: up to 8 unique IDs from the built-in `"penguin"` and `"fedora"` catalog. These add occasional visitors to ordinary composer ledge traffic while Lobster visits is enabled. Omit the field or use `[]` to add none; unknown IDs and duplicates are rejected.
+- `avatarHat`: `"fedora"`, `"crown"`, `"santa"`, `"party"`, or `"pumpkin"` adds an occasional decorative hat to agent avatars. Omit the field for no theme-supplied avatar hat.
+
+Use consistent CSS separators: `rgb(20 30 40 / 50%)` or
+`rgba(20, 30, 40, 0.5)`. Modern functions such as `oklch()` use spaces between
+components and `/` before opacity. Font lists use comma-separated family names;
+quote names containing punctuation or beginning with a digit, such as
+`"123 Font", monospace`. Also quote names containing CSS keywords, such as
+`"Foo serif"`. Malformed colors and unbalanced font quotes are rejected before
+the theme is saved.
+
+This example creates and activates a dark theme in one call:
+
+```json
+{
+  "action": "import",
+  "id": "xenovessel",
+  "apply": true,
+  "mode": "dark",
+  "definition": {
+    "name": "Xenovessel",
+    "description": "Indigo spacecraft surfaces, lime controls, cyan highlights, and monospace typography.",
+    "mascot": "none",
+    "brandName": "Mission Control",
+    "brandIcon": "mark",
+    "workingIndicator": "dots",
+    "lobsterdex": false,
+    "communityLinks": false,
+    "workingPhrases": ["Navigating", "Calibrating", "Scanning"],
+    "critters": ["penguin", "fedora"],
+    "avatarHat": "fedora",
+    "dark": {
+      "background": "#090818",
+      "foreground": "#e8f2ff",
+      "card": "#12112b",
+      "card-foreground": "#e8f2ff",
+      "popover": "#171533",
+      "popover-foreground": "#e8f2ff",
+      "primary": "#c7ff3d",
+      "primary-foreground": "#172300",
+      "secondary": "#28234a",
+      "secondary-foreground": "#e8f2ff",
+      "muted": "#211e39",
+      "muted-foreground": "#aca6cc",
+      "accent": "#4ce9ef",
+      "accent-foreground": "#042b30",
+      "destructive": "#ff698b",
+      "destructive-foreground": "#290711",
+      "border": "#40385e",
+      "input": "#40385e",
+      "ring": "#c7ff3d",
+      "font-sans": "ui-monospace, monospace",
+      "font-mono": "ui-monospace, monospace"
+    }
+  }
+}
+```
+
+Names are limited to 80 characters, descriptions to 320 characters, and the
+normalized definition to 4096 UTF-8 bytes. The Gateway validates definitions
+before saving them. A personal theme does not require installing a plugin or
+publishing the definition elsewhere.
+
+## Plugin themes and hot reload
+
+Plugins contribute theme definitions declaratively through their manifest.
+Personal themes use only the built-in brand icon, hat, and critter catalog IDs; plugin themes
+may also reference their own SVG artwork IDs declared in the
+[plugin manifest](/plugins/manifest/surfaces#themes). Definitions never contain
+artwork markup or external URLs.
+The shared catalog updates when the plugin is enabled, disabled, or reloaded;
+a Gateway restart is not required. The agent continues using the same `theme`
+tool rather than receiving a new tool for each plugin.
+
+If a selected plugin theme becomes unavailable, the result includes
+`current.requestedId` while `current.id` identifies the fallback that can be
+rendered. Re-enable the plugin or choose another theme. Listing the catalog
+does not execute plugin theme code.
+
+## Related
+
+- [Plugin theme declarations](/plugins/manifest/surfaces#themes)
+- [Manage plugins](/plugins/manage-plugins)
+- [Control UI](/web/control-ui)
+- [Screen tool](/tools/screen)

@@ -45,10 +45,7 @@ beforeEach(() => {
   mocks.routeReply.mockReset().mockResolvedValue({ ok: true, delivered: true });
   sessionStoreMocks.currentEntry = undefined;
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => undefined);
-  sessionStoreMocks.loadSessionStore.mockReturnValue({});
-  sessionStoreMocks.readSessionEntry.mockImplementation(() => undefined);
   sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
 });
 
 afterEach(() => {
@@ -194,11 +191,15 @@ it.each([true, undefined] as const)(
   async (supportsSettledReceipt) => {
     const f = fixture();
     const dispatcher = createDispatcher();
+    const sendFinalReply = dispatcher.sendFinalReply;
+    // A custom adapter can report aggregate delivery without tracking the caller's exact payload.
+    dispatcher.sendFinalReply = vi.fn((payload) => sendFinalReply({ ...payload }));
     dispatcher.supportsSettledReceipt = supportsSettledReceipt;
     await withReplyDispatcher({
       dispatcher,
       run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
     });
+    expect(await dispatcher.waitForIdle()).toMatchObject({ anyVisibleDelivered: true });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Completed synthetic work") }),
     );

@@ -24,28 +24,6 @@ import type {
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
-type CodexCatalogConnectionHome = {
-  agentDir: string;
-  fingerprint: string;
-  codexHome: string;
-};
-
-let catalogConnectionHomes = new Map<string, string>();
-
-function catalogConnectionHomeKey(fingerprint: string, agentDir?: string): string {
-  return `${agentDir ?? ""}\0${fingerprint}`;
-}
-
-/** Replaces the lifecycle-owned catalog connection snapshot used by supervised bindings. */
-export function replaceCodexCatalogConnectionHomes(homes: CodexCatalogConnectionHome[]): void {
-  catalogConnectionHomes = new Map(
-    homes.map((home) => [
-      catalogConnectionHomeKey(home.fingerprint, home.agentDir),
-      home.codexHome,
-    ]),
-  );
-}
-
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
 type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
@@ -81,12 +59,14 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
   );
 }
 
+type CodexConnectionFingerprintOptions = Pick<
+  CodexAppServerRuntimeOptions,
+  "start" | "connectionClass" | "remoteWorkspaceRoot"
+>;
+
 /** Builds a durable thread-binding fingerprint for one initialized app-server runtime. */
 export function buildCodexAppServerRuntimeFingerprint(params: {
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >;
+  appServer: CodexConnectionFingerprintOptions;
   appServerVersion?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
 }): string {
@@ -101,10 +81,7 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
 
 /** Fingerprints the configured connection that owns a supervised source thread. */
 export function buildCodexAppServerConnectionFingerprint(
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >,
+  appServer: CodexConnectionFingerprintOptions,
   agentDir?: string,
 ): string {
   return JSON.stringify({
@@ -117,19 +94,11 @@ export function buildCodexAppServerConnectionFingerprint(
   });
 }
 
-/** Looks up a snapshotted catalog store without repeating filesystem discovery on a run. */
-export function resolveCodexCatalogConnectionHome(
-  fingerprint: string,
-  agentDir?: string,
-): string | undefined {
-  return catalogConnectionHomes.get(catalogConnectionHomeKey(fingerprint, agentDir));
-}
-
 function resolveCodexAppServerConnectionHome(
   start: CodexAppServerStartOptions,
   agentDir?: string,
 ): string | null {
-  const configured = start.env?.CODEX_HOME?.trim();
+  const configured = start.codexHome ?? start.env?.CODEX_HOME?.trim();
   if (configured) {
     return configured;
   }
@@ -163,7 +132,7 @@ function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,
 ): string | undefined {
-  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  const configuredCodexHome = appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     return configuredCodexHome;
   }

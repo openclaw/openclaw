@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
@@ -7,7 +8,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { currentConfigObject, resolveAgentConfigEntryTarget } from "./config-state-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createGatewayHarness,
   createConfigServerMock,
   createConfigCapabilityHarness,
@@ -160,7 +160,7 @@ describe("config state model", () => {
       expect(canReloadControlUiDocument()).toBe(true);
       runtimeConfig.patchForm(["count"], 3);
       expect(canReloadControlUiDocument()).toBe(false);
-      runtimeConfig.resetDraft();
+      await runtimeConfig.discardDraft();
       expect(canReloadControlUiDocument()).toBe(true);
       runtimeConfig.setRaw('{"count":4}');
       expect(canReloadControlUiDocument()).toBe(false);
@@ -194,7 +194,7 @@ describe("config state model", () => {
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
 
-    await runtimeConfig.refresh({ discardPendingChanges: true });
+    await runtimeConfig.discardDraft({ reloadOnly: true });
     expect(runtimeConfig.state.configForm).toEqual({ count: 3 });
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
@@ -268,7 +268,7 @@ describe("config state model", () => {
     // Discarding local edits does not undo the already-saved file: the
     // restart banner must survive until apply.
     runtimeConfig.patchForm(["count"], 9);
-    await runtimeConfig.refresh({ discardPendingChanges: true });
+    await runtimeConfig.discardDraft({ reloadOnly: true });
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
 

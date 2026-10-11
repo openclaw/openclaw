@@ -2,10 +2,15 @@ import { render, type ReactiveElement } from "lit";
 import { describe, expect, it } from "vitest";
 import { updateConfigFormValue } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { analyzeConfigSchema, renderConfigForm, type JsonSchema } from "./config-form.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
+import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
-function mountForm(properties: Record<string, JsonSchema>, values: Record<string, unknown>) {
+function mountForm(
+  properties: Record<string, JsonSchema>,
+  values: Record<string, unknown>,
+  accepts = () => true,
+) {
   const analysis = analyzeConfigSchema({
     type: "object",
     properties: { settings: { type: "object", properties } },
@@ -20,21 +25,17 @@ function mountForm(properties: Record<string, JsonSchema>, values: Record<string
   container.style.cssText = "height: 100%; overflow: auto";
   document.body.append(container);
   const renderValue = () => {
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: state.configForm,
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch: (path, value) => {
-          updateConfigFormValue(state, path, value);
-          renderValue();
-        },
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: state.configForm,
+      onPatch: (path, value) => {
+        if (!accepts()) {
+          return false;
+        }
+        updateConfigFormValue(state, path, value);
+        renderValue();
+        return true;
+      },
+    });
   };
   renderValue();
   return {
@@ -66,7 +67,8 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
         { enabled: false, values: initial },
       );
       try {
-        const inputs = () => Array.from(container.querySelectorAll<HTMLInputElement>("input"));
+        const inputs = () =>
+          Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-array input"));
         const second = inputs()[1]!;
         await page.elementLocator(second).fill("x");
         expect(second.getAttribute("aria-invalid")).toBe("true");
@@ -74,7 +76,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           second.addEventListener("blur", () => resolve(), { once: true });
         });
         const action = container.querySelector<HTMLElement>(
-          scenario === "unrelated edit" ? "wa-switch" : "button[aria-label='Remove item']",
+          scenario === "unrelated edit"
+            ? '.settings-toggle__input[role="switch"]'
+            : "button[aria-label='Remove item']",
         )!;
         await page.elementLocator(action).click();
         await blurred;
@@ -168,6 +172,153 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
               container.querySelector<HTMLInputElement>(`${hostSelector} ${inputSelector}`)?.value,
           )
           .toBe(draftText);
+      } finally {
+        close();
+      }
+    },
+  );
+});
+
+function removeControls(container: HTMLElement, label: string) {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>(`button[aria-label='${label}']`));
+}
+
+function addControl(container: HTMLElement) {
+  const button = container.querySelector<HTMLButtonElement>("button[aria-controls]");
+  if (!button) {
+    throw new Error("missing collection Add control");
+  }
+  return button;
+}
+
+// Programmatic focus applies only after the test frame received a user interaction.
+async function focusRemoveControl(container: HTMLElement, button: HTMLButtonElement | undefined) {
+  const { userEvent } = await import("vitest/browser");
+  const input = container.querySelector("input");
+  if (!button || !input) {
+    throw new Error("missing collection controls");
+  }
+  await userEvent.click(input);
+  button.focus();
+  expect(document.activeElement).toBe(button);
+}
+
+describe.runIf("__vitest_browser__" in globalThis)("config collection removal focus", () => {
+  it("moves keyboard focus to the next row, the previous row, then Add after list removals", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { state, container, close } = mountForm(
+      { values: { type: "array", items: { type: "string" } } },
+      { values: ["alpha", "beta", "gamma"] },
+    );
+    try {
+      const [alpha, beta, gamma] = removeControls(container, "Remove item");
+      await focusRemoveControl(container, beta);
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: ["alpha", "gamma"] } });
+      expect(document.activeElement).toBe(gamma);
+
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: ["alpha"] } });
+      expect(document.activeElement).toBe(alpha);
+
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: [] } });
+      expect(document.activeElement).toBe(addControl(container));
+    } finally {
+      close();
+    }
+  });
+
+  it("keeps keyboard focus on a surviving entry, then Add entry after map removals", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { state, container, close } = mountForm(
+      { values: { type: "object", additionalProperties: { type: "string" } } },
+      { values: { alpha: "a", beta: "b", gamma: "c" } },
+    );
+    const focusedKey = () =>
+      document.activeElement
+        ?.closest(".settings-row")
+        ?.querySelector<HTMLInputElement>("input[aria-label^='Key: ']")?.value;
+    try {
+      await focusRemoveControl(container, removeControls(container, "Remove entry")[1]);
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: { alpha: "a", gamma: "c" } } });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry");
+      expect(focusedKey()).toBe("gamma");
+
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: { alpha: "a" } } });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry");
+      expect(focusedKey()).toBe("alpha");
+
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: {} } });
+      expect(document.activeElement).toBe(addControl(container));
+    } finally {
+      close();
+    }
+  });
+
+  it("keeps focus on the outer list when a removed row contains a nested list", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { state, container, close } = mountForm(
+      {
+        values: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { tags: { type: "array", items: { type: "string" } } },
+          },
+        },
+      },
+      { values: [{ tags: ["x"] }, { tags: ["y"] }] },
+    );
+    try {
+      const outer = container.querySelector(".cfg-array");
+      if (!outer) {
+        throw new Error("missing outer list");
+      }
+      const outerControls = (selector: string) =>
+        Array.from(outer.querySelectorAll<HTMLButtonElement>(selector)).filter(
+          (button) => button.closest(".cfg-array") === outer,
+        );
+      const [first, second] = outerControls("button[aria-label='Remove item']");
+      await focusRemoveControl(container, second);
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: [{ tags: ["x"] }] } });
+      expect(document.activeElement).toBe(first);
+
+      await userEvent.keyboard("{Enter}");
+      expect(state.configForm).toEqual({ settings: { values: [] } });
+      expect(document.activeElement).toBe(outerControls("button[aria-controls]")[0]);
+    } finally {
+      close();
+    }
+  });
+
+  it.each([
+    ["list", { type: "array", items: { type: "string" } }, ["alpha", "beta"], "Remove item"],
+    [
+      "map",
+      { type: "object", additionalProperties: { type: "string" } },
+      { alpha: "a" },
+      "Remove entry",
+    ],
+  ] as const)(
+    "keeps focus on the %s Remove control when its owner rejects the removal",
+    async (_kind, schema, values, label) => {
+      const { userEvent } = await import("vitest/browser");
+      const { state, container, close } = mountForm(
+        { values: schema as JsonSchema },
+        { values },
+        () => false,
+      );
+      try {
+        const remove = removeControls(container, label)[0];
+        await focusRemoveControl(container, remove);
+        await userEvent.keyboard("{Enter}");
+        expect(state.configForm).toEqual({ settings: { values } });
+        expect(document.activeElement).toBe(remove);
       } finally {
         close();
       }

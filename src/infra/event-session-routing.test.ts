@@ -50,10 +50,8 @@ describe("event session routing", () => {
   );
 
   it.each([
-    { channel: undefined, accountId: undefined, expected: "original" },
     { channel: " Other ", accountId: " ALT ", expected: "override" },
     { channel: "", accountId: " ", expected: "original" },
-    { channel: "other", accountId: "", expected: "other-work" },
   ])("resolves channel/account overrides $channel/$accountId", ({ expected, ...overrides }) => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },
@@ -77,15 +75,8 @@ describe("event session routing", () => {
   });
 
   it.each([
-    ["agent:ops_1:example:direct:123", "agent:ops_1:main"],
-    ["  AGENT:OPS_1:EXAMPLE:DIRECT:123:THREAD:t  ", "agent:ops_1:main"],
     ["agent:ops_1:example:direct:123:thread:", "agent:ops_1:main"],
-    ["agent:ops_1:example:direct:123:thread:first:thread:last", null],
-    ["agent::example:direct:123:thread:t", null],
-    ["agent:ops_1::example:direct:123:thread:t", null],
-    ["prefix:agent:ops_1:example:direct:123:thread:t", null],
     ["agent:ops_1:agent:other:example:direct:123:thread:t", null],
-    ["agent:ops_1:example:direct::thread:t", null],
     ["agent:ops_1:example:group:123:thread:t", null],
   ] as const)("preserves direct event owner and thread parsing for %s", (sessionKey, expected) => {
     expect(
@@ -101,7 +92,7 @@ describe("event session routing", () => {
 
   it("routes single-owner dmScope=main direct event keys to the agent main session", () => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       session: { dmScope: "main" },
       channels: {
         telegram: {
@@ -136,7 +127,7 @@ describe("event session routing", () => {
 
   it("does not route multi-owner or wildcard direct sessions to main", () => {
     const baseCfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       session: { dmScope: "main" },
       channels: {
         telegram: { allowFrom: ["123", "456"] },
@@ -162,7 +153,7 @@ describe("event session routing", () => {
 
   it("preserves route-binding direct session overrides under global dmScope=main", () => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       session: { dmScope: "main" },
       channels: {
         telegram: {

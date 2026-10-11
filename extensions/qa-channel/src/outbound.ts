@@ -1,13 +1,12 @@
-// Qa Channel plugin module implements outbound behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
+import type { QaBusAttachment, QaBusToolCall } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { resolveQaChannelAccount } from "./accounts.js";
 import { buildQaTarget, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
-import type { QaBusAttachment, QaBusToolCall } from "./protocol.js";
 import type { CoreConfig } from "./types.js";
 
 type QaChannelTextSendParams = {
@@ -28,6 +27,12 @@ type QaChannelMediaAccessParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
+export function collectQaMediaUrls(...urls: Array<string | undefined>): string[] {
+  return [
+    ...new Set(urls.filter((url): url is string => typeof url === "string" && Boolean(url.trim()))),
+  ];
+}
+
 export async function sendQaChannelText(params: QaChannelTextSendParams) {
   const account = resolveQaChannelAccount({ cfg: params.cfg, accountId: params.accountId });
   const resolved = resolveQaTargetThread({ target: params.to, threadId: params.threadId });
@@ -38,7 +43,6 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     to: buildQaTarget({
       chatType: parsed.chatType,
       conversationId: parsed.conversationId,
-      threadId: resolved.threadId,
     }),
     text: params.text,
     isError: params.isError,

@@ -14,7 +14,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -31,32 +31,9 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     targetKey: string;
     expectedKind: "agent" | "acp";
     sourceKey?: string;
-    metadata?: boolean;
-    missing?: boolean;
     bound?: boolean;
     tail?: boolean;
   }>([
-    { name: "local session", targetKey: "agent:test:session", expectedKind: "agent" },
-    { name: "new session", targetKey: "agent:test:session", missing: true, expectedKind: "agent" },
-    {
-      name: "stale ACP key",
-      targetKey: "agent:test:acp:missing",
-      missing: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "stored ACP session",
-      targetKey: "agent:test:session",
-      metadata: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "ACP command target",
-      sourceKey: "agent:test:source",
-      targetKey: "agent:test:target",
-      metadata: true,
-      expectedKind: "acp",
-    },
     {
       name: "local command target from ACP source",
       sourceKey: "agent:test:acp:source",
@@ -83,19 +60,11 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     });
     const sourceKey = scenario.sourceKey ?? scenario.targetKey;
     const sourceEntry = { sessionId: "source-session", updatedAt: Date.now() };
-    const targetEntry = scenario.missing
-      ? undefined
-      : {
-          sessionId: "target-session",
-          updatedAt: Date.now(),
-          ...(scenario.metadata ? { acp: { backend: "acpx" } } : {}),
-        };
+    const targetEntry = { sessionId: "target-session", updatedAt: Date.now() };
     if (sourceKey !== scenario.targetKey) {
       sessionStoreMocks.entriesBySessionKey.set(sourceKey, sourceEntry);
     }
-    if (targetEntry) {
-      sessionStoreMocks.entriesBySessionKey.set(scenario.targetKey, targetEntry);
-    }
+    sessionStoreMocks.entriesBySessionKey.set(scenario.targetKey, targetEntry);
     const readEntry = (...args: unknown[]) => {
       const { sessionKey } = args[0] as { sessionKey: string };
       return sessionStoreMocks.entriesBySessionKey.get(sessionKey);

@@ -92,6 +92,12 @@ spend limits, and backend failover without changing OpenClaw config.
 
 The default model onboarding writes is `litellm/claude-opus-4-6`.
 
+In merge mode, onboarding with an explicit proxy URL preserves any authored provider models and
+otherwise leaves the provider model list empty for discovery. Run
+`openclaw models list --provider litellm --refresh --json` to list the proxy's models.
+With `models.mode: "replace"`, discovery is disabled, so onboarding keeps the documented default
+in the provider model list while preserving existing model definitions.
+
 ## Image generation
 
 LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/generations` and

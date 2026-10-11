@@ -1,18 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionPreview } from "../../../src/gateway/control-ui-contract.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { findLocalSessionReference } from "../pages/chat/route-loader-short-cache.ts";
-import { markdownSessionPublicOrigin, parseMarkdownSessionUrl } from "./markdown-session-links.ts";
+import {
+  markdownSessionPublicOrigin,
+  parseLocalMarkdownSessionUrl,
+} from "./markdown-session-links.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
-const SESSION_LINK_SELECTOR = "a.markdown-session-link, [data-session-href]";
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
@@ -49,10 +54,15 @@ function titleFromPreview(value: unknown): SessionTitle {
 }
 
 export class SessionLinkTitler {
-  client: GatewayBrowserClient | null = null;
-  context: ApplicationContext | null = null;
-
+  private currentClient: GatewayBrowserClient | null = null;
+  private currentContext: ApplicationContext | null = null;
   private readonly cache = new Map<string, CacheEntry>();
+  private scope = {};
+  private presentationScope: number | undefined;
+  private readonly titledAnchors = new WeakMap<
+    HTMLElement,
+    { scope: object; key: string; title: string }
+  >();
   private readonly observer = new MutationObserver((records) => {
     for (const node of records.flatMap((record) => [...record.addedNodes])) {
       if (node instanceof HTMLElement) {
@@ -63,17 +73,55 @@ export class SessionLinkTitler {
 
   constructor(private readonly host: HTMLElement) {}
 
+  get client() {
+    return this.currentClient;
+  }
+
+  set client(client: GatewayBrowserClient | null) {
+    if (client !== this.currentClient) {
+      this.currentClient = client;
+      this.retireTitles();
+    }
+  }
+
+  get context() {
+    return this.currentContext;
+  }
+
+  set context(context: ApplicationContext | null) {
+    if (context !== this.currentContext) {
+      this.currentContext = context;
+      this.retireTitles();
+    }
+  }
+
+  private retireTitles(): void {
+    this.cache.clear();
+    this.scope = {};
+  }
+
+  private currentScope(): object {
+    const scope = this.context ? gatewayPresentationScope(this.context.gateway).key : undefined;
+    if (scope !== this.presentationScope) {
+      this.presentationScope = scope;
+      this.retireTitles();
+    }
+    return this.scope;
+  }
+
   connect(): void {
     this.observer.observe(this.host, { childList: true, subtree: true });
     this.refresh();
   }
 
   refresh(root = this.host): void {
-    if (root.matches(SESSION_LINK_SELECTOR)) {
-      void this.decorate(root);
+    // Share repeated references only within this synchronous roster projection.
+    const targets = new Map<string, SessionTitleTarget | null>();
+    if (root.matches(SESSION_TITLE_TARGET_SELECTOR)) {
+      void this.decorate(root, false, targets);
     }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_LINK_SELECTOR)) {
-      void this.decorate(anchor);
+    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
+      void this.decorate(anchor, false, targets);
     }
   }
 
@@ -81,9 +129,17 @@ export class SessionLinkTitler {
     this.observer.disconnect();
   }
 
-  async decorate(element: HTMLElement, load = false): Promise<void> {
-    const target = this.targetForAnchor(element);
-    const anchor = element instanceof HTMLAnchorElement ? element : document.createElement("a");
+  async decorate(
+    element: HTMLElement,
+    load = false,
+    targets?: Map<string, SessionTitleTarget | null>,
+  ): Promise<void> {
+    const scope = this.currentScope();
+    const target = this.targetForAnchor(element, targets);
+    const anchor =
+      element instanceof HTMLAnchorElement || element.hasAttribute("data-session-title-only")
+        ? element
+        : document.createElement("a");
     if (element !== anchor && element.classList.contains("markdown-session-link")) {
       anchor.dataset.sessionHref = element.dataset.sessionHref;
       anchor.setAttribute("href", element.getAttribute("href") ?? "");
@@ -94,6 +150,16 @@ export class SessionLinkTitler {
       element.replaceWith(anchor);
       anchor.append(element);
     }
+    const previous = this.titledAnchors.get(anchor);
+    if (previous && previous.scope !== scope) {
+      const label = anchor.querySelector<HTMLSpanElement>(":scope > .session-label");
+      if (label?.textContent === previous.title) {
+        anchor.classList.remove("markdown-session-link--titled");
+        anchor.removeAttribute("title");
+        label.textContent = previous.key;
+      }
+      this.titledAnchors.delete(anchor);
+    }
     if (!target) {
       return;
     }
@@ -103,7 +169,10 @@ export class SessionLinkTitler {
       return;
     }
     try {
-      this.stampAnchor(anchor, target, await this.loadTitle(target));
+      const title = await this.loadTitle(target);
+      if (this.currentScope() === scope) {
+        this.stampAnchor(anchor, target, title);
+      }
     } catch {
       // A title is decoration; the session link remains usable with its raw key.
     }
@@ -116,49 +185,58 @@ export class SessionLinkTitler {
     });
   }
 
-  private targetForAnchor(anchor: HTMLElement): SessionTitleTarget | null {
+  private targetForAnchor(
+    anchor: HTMLElement,
+    targets?: Map<string, SessionTitleTarget | null>,
+  ): SessionTitleTarget | null {
     const rawKey = anchor.dataset.sessionKey?.trim();
     if (rawKey && !anchor.dataset.sessionHref) {
       const parsed = parseAgentSessionKey(rawKey);
       return parsed ? { sessionKey: rawKey, agentId: parsed.agentId, namespace: "chat" } : null;
     }
-    const path = parseMarkdownSessionUrl(
+    const path = parseLocalMarkdownSessionUrl(
       anchor.dataset.sessionHref ?? anchor.getAttribute("href") ?? "",
-      this.context?.basePath,
-      this.mainKey(),
+      {
+        basePath: this.context?.basePath,
+        mainKey: this.mainKey(),
+        publicOrigin: markdownSessionPublicOrigin(this.context),
+      },
     );
-    if (
-      !path ||
-      (path.url.origin !== globalThis.location.origin &&
-        path.url.origin !== markdownSessionPublicOrigin(this.context))
-    ) {
+    if (!path) {
       return null;
     }
     // Keep URL route intent (face, query, fragment) even when its identity is cached.
-    anchor.setAttribute("href", `${path.url.pathname}${path.url.search}${path.url.hash}`);
-    anchor.classList.add("markdown-session-link");
+    const href = `${path.url.pathname}${path.url.search}${path.url.hash}`;
+    if (anchor.getAttribute("href") !== href) {
+      anchor.setAttribute("href", href);
+    }
+    if (!anchor.classList.contains("markdown-session-link")) {
+      anchor.classList.add("markdown-session-link");
+    }
     anchor.removeAttribute("target");
     anchor.removeAttribute("rel");
-    anchor.removeAttribute("data-session-key");
-    const row = findLocalSessionReference(
-      this.context?.sessions.state.result?.sessions ?? [],
-      path.target,
-      this.mainKey(),
-    );
-    return row
-      ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
-      : null;
+    let target = targets?.get(path.url.pathname);
+    if (target === undefined) {
+      const row = findLocalSessionReference(
+        this.context?.sessions.state.result?.sessions ?? [],
+        path.target,
+        this.mainKey(),
+      );
+      target = row
+        ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
+        : null;
+      targets?.set(path.url.pathname, target);
+    }
+    if (!target) {
+      anchor.removeAttribute("data-session-key");
+    }
+    return target;
   }
 
   private setCacheEntry(key: string, entry: CacheEntry): void {
     this.cache.delete(key);
     this.cache.set(key, entry);
-    for (const oldest of this.cache.keys()) {
-      if (this.cache.size <= CACHE_LIMIT) {
-        break;
-      }
-      this.cache.delete(oldest);
-    }
+    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
   }
 
   private cachedOrSeededEntry(target: SessionTitleTarget): CacheEntry | undefined {
@@ -191,12 +269,13 @@ export class SessionLinkTitler {
     if (cached) {
       return cached.promise;
     }
+    const client = this.client;
     const load = async () => {
-      if (!this.client) {
+      if (!client) {
         throw new Error("Session title requires a connected Gateway");
       }
       const title = titleFromPreview(
-        await this.client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
+        await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
           sessionKey: target.sessionKey,
         }),
       );
@@ -221,7 +300,7 @@ export class SessionLinkTitler {
   }
 
   private stampAnchor(
-    anchor: HTMLAnchorElement,
+    anchor: HTMLElement,
     target: SessionTitleTarget,
     titleRecord?: SessionTitle,
   ): void {
@@ -233,15 +312,22 @@ export class SessionLinkTitler {
       this.context?.basePath,
       { displayName: title, exactKey: true, mainKey: this.mainKey() },
     );
-    anchor.dataset.sessionKey = target.sessionKey;
-    anchor.classList.add("markdown-session-link");
-    if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
-      anchor.setAttribute("href", href);
+    if (anchor.dataset.sessionKey !== target.sessionKey) {
+      anchor.dataset.sessionKey = target.sessionKey;
+    }
+    if (!anchor.hasAttribute("data-session-title-only")) {
+      if (!anchor.classList.contains("markdown-session-link")) {
+        anchor.classList.add("markdown-session-link");
+      }
+      if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
+        anchor.setAttribute("href", href);
+      }
     }
     if (!title || anchor.classList.contains("markdown-session-link--titled")) {
       return;
     }
     anchor.classList.add("markdown-session-link--titled");
+    this.titledAnchors.set(anchor, { scope: this.scope, key: target.sessionKey, title });
     // Keep a producer's label node so Lit can still update its text binding.
     const label =
       anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??

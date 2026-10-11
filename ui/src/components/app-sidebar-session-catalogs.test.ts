@@ -4,7 +4,9 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
+import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   findCatalogSessionHovercardRow,
   formatSidebarTimestamp,
@@ -150,28 +152,60 @@ describe("projectSidebarSessionCatalogs", () => {
     canArchive: false,
   });
 
-  it("removes empty hosts", () => {
-    const hosts: SessionCatalogHost[] = [
-      {
-        hostId: "gateway:local",
-        label: "Gateway",
-        kind: "gateway",
-        connected: true,
-        sessions: [session("shared", "Gateway copy")],
-      },
-      {
-        hostId: "node:empty",
-        label: "Empty node",
-        kind: "node",
-        connected: true,
-        sessions: [],
-      },
-    ];
-
-    expect(projectSidebarSessionCatalogs([catalog(hosts)], null, [])).toEqual([
-      { ...catalog(hosts), visibleHosts: [hosts[0]] },
-    ]);
-  });
+  it.each([
+    ["active", 100, ["native"]],
+    ["all", 100, ["native", "adopted"]],
+  ] as const)(
+    "applies shared %s visibility at %i to adopted rows only",
+    (statusFilter, now, expected) => {
+      const row: GatewaySessionRow = {
+        key: "agent:main:adopted",
+        kind: "direct",
+        snoozedUntil: 200,
+      };
+      const hosts: SessionCatalogHost[] = [
+        {
+          hostId: "gateway:local",
+          label: "Gateway",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            session("native", "Native"),
+            { ...session("adopted", "Adopted"), sessionKey: row.key },
+          ],
+        },
+      ];
+      const visibility = projectSidebarArchiveVisibility({
+        sessionData: {
+          sessionsAgentId: "main",
+          sessionsResult: null,
+          sessionResultsByAgent: {},
+          childSessionRowsByParent: {},
+          loadedChildSessionKeys: new Set(),
+          loadingChildSessionKeys: new Set(),
+          childSessionErrorsByParent: new Map(),
+        },
+        selectedAgentId: "main",
+        statusFilter,
+        now,
+        deletionState: () => undefined,
+        archiveVisibility: () => undefined,
+      });
+      const projected = projectSidebarSessionCatalogs(
+        [catalog(hosts)],
+        null,
+        [row],
+        visibility.isSessionHidden,
+      );
+      expect(
+        projected.flatMap((entry) =>
+          entry.visibleHosts.flatMap((host) =>
+            host.sessions.map((threadRow) => threadRow.threadId),
+          ),
+        ),
+      ).toEqual(expected);
+    },
+  );
 
   it("filters sessions by effective owner without inferring host identity", () => {
     const hosts: SessionCatalogHost[] = [

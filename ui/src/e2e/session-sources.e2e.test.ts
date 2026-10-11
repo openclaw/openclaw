@@ -1,6 +1,5 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -84,23 +83,19 @@ const methodResponses = {
   },
 };
 
-function isChecked(toggle: Locator) {
-  return toggle.evaluate((element) => (element as HTMLElement & { checked: boolean }).checked);
-}
-
 suite.define(() => {
   it("opens session source settings with the keyboard and preserves modified-click navigation", async () => {
     await suite.withPage({}, async ({ page, context }) => {
       await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(new URL(controlUiSessionPath("agent:main:main"), suite.server.baseUrl).href);
       const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
-      const item = page.getByRole("menuitem", { name: "Session sources…", exact: true });
+      const item = page.getByRole("link", { name: "Session sources", exact: true });
       await trigger.click();
       const originalUrl = page.url();
       // Native tab gestures do not retain an opener.
       const [popup] = await Promise.all([
         context.waitForEvent("page"),
-        item.locator("a").click({ modifiers: ["ControlOrMeta"] }),
+        item.click({ modifiers: ["ControlOrMeta"] }),
       ]);
       try {
         await popup.waitForLoadState("domcontentloaded");
@@ -125,7 +120,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
-      await page.getByRole("menuitem", { name: "Session sources…", exact: true }).click();
+      await page.getByRole("link", { name: "Session sources", exact: true }).click();
       const { search, sidebar } = await waitForControlUiSettingsTakeover(page);
       await expect.poll(() => new URL(page.url()).hash).toBe("#settings-session-sources");
       const section = page.locator("#settings-session-sources");
@@ -133,17 +128,11 @@ suite.define(() => {
       const codex = section.locator(".settings-row", { hasText: "Show Codex sessions" });
       const opencode = section.locator(".settings-row", { hasText: "Show OpenCode sessions" });
       const pi = section.locator(".settings-row", { hasText: "Show Pi sessions" });
-      await expect.poll(() => isChecked(claude.locator("wa-switch"))).toBe(false);
-      await expect.poll(() => isChecked(codex.locator("wa-switch"))).toBe(false);
-      await expect.poll(() => isChecked(opencode.locator("wa-switch"))).toBe(false);
-      await expect.poll(() => isChecked(pi.locator("wa-switch"))).toBe(true);
-      await expect
-        .poll(() =>
-          codex
-            .locator("wa-switch")
-            .evaluate((element) => (element as HTMLElement & { disabled: boolean }).disabled),
-        )
-        .toBe(false);
+      await expect.poll(() => claude.getByRole("switch").isChecked()).toBe(false);
+      await expect.poll(() => codex.getByRole("switch").isChecked()).toBe(false);
+      await expect.poll(() => opencode.getByRole("switch").isChecked()).toBe(false);
+      await expect.poll(() => pi.getByRole("switch").isChecked()).toBe(true);
+      await expect.poll(() => codex.getByRole("switch").isDisabled()).toBe(false);
 
       const artifacts = createControlUiE2eArtifactDir("session-sources");
       await section.scrollIntoViewIfNeeded();
@@ -170,15 +159,15 @@ suite.define(() => {
           config: { timeoutSeconds: 42 },
         });
         expect(saved.plugins.entries.acpx.config).not.toHaveProperty("sessionCatalog");
-        await expect.poll(() => isChecked(row.locator("wa-switch"))).toBe(enabled);
+        await expect.poll(() => row.getByRole("switch").isChecked()).toBe(enabled);
       }
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
-      await expect.poll(() => isChecked(claude.locator("wa-switch"))).toBe(true);
-      await expect.poll(() => isChecked(codex.locator("wa-switch"))).toBe(false);
-      await expect.poll(() => isChecked(opencode.locator("wa-switch"))).toBe(true);
-      await expect.poll(() => isChecked(pi.locator("wa-switch"))).toBe(false);
+      await expect.poll(() => claude.getByRole("switch").isChecked()).toBe(true);
+      await expect.poll(() => codex.getByRole("switch").isChecked()).toBe(false);
+      await expect.poll(() => opencode.getByRole("switch").isChecked()).toBe(true);
+      await expect.poll(() => pi.getByRole("switch").isChecked()).toBe(false);
       await section.scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(artifacts, "session-sources-saved.png") });
 
@@ -199,14 +188,10 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/appearance#settings-session-sources`);
       await waitForControlUiSettingsTakeover(page);
-      const switches = page.locator("#settings-session-sources wa-switch");
+      const switches = page.locator("#settings-session-sources").getByRole("switch");
       await expect.poll(() => switches.count()).toBe(4);
       for (const toggle of await switches.all()) {
-        expect(
-          await toggle.evaluate(
-            (element) => (element as HTMLElement & { disabled: boolean }).disabled,
-          ),
-        ).toBe(true);
+        expect(await toggle.isDisabled()).toBe(true);
       }
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
     });
@@ -234,7 +219,7 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         await gateway.waitForRequest("plugins.list");
         const section = page.locator("#settings-session-sources");
-        await expect.poll(() => section.locator("wa-switch").count()).toBe(installed ? 1 : 0);
+        await expect.poll(() => section.getByRole("switch").count()).toBe(installed ? 1 : 0);
         if (installed) {
           expect(await section.locator(".settings-row__title").allTextContents()).toEqual([
             "Show OpenCode sessions",
@@ -268,16 +253,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/appearance#settings-session-sources`);
       await waitForControlUiSettingsTakeover(page);
       const section = page.locator("#settings-session-sources");
-      await expect.poll(() => section.locator("wa-switch").count()).toBe(4);
+      await expect.poll(() => section.getByRole("switch").count()).toBe(4);
       await expect
         .poll(() => section.textContent())
         .toContain("Session source settings are unavailable");
-      for (const toggle of await section.locator("wa-switch").all()) {
-        expect(
-          await toggle.evaluate(
-            (element) => (element as HTMLElement & { disabled: boolean }).disabled,
-          ),
-        ).toBe(true);
+      for (const toggle of await section.getByRole("switch").all()) {
+        expect(await toggle.isDisabled()).toBe(true);
       }
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
     });

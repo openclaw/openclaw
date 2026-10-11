@@ -1,9 +1,6 @@
-// Slack plugin module implements external arg menu store behavior.
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
+import { pruneExpiredMapEntries } from "./lru-map-cache.js";
 
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES = 18;
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_LENGTH = Math.ceil(
@@ -23,22 +20,6 @@ type SlackExternalArgMenuEntry = {
   expiresAt: number;
 };
 
-function pruneSlackExternalArgMenuStore(
-  store: Map<string, SlackExternalArgMenuEntry>,
-  rawNow: number,
-): void {
-  const now = asDateTimestampMs(rawNow);
-  if (now === undefined) {
-    store.clear();
-    return;
-  }
-  for (const [token, entry] of store.entries()) {
-    if (asDateTimestampMs(entry.expiresAt) === undefined || entry.expiresAt <= now) {
-      store.delete(token);
-    }
-  }
-}
-
 function createSlackExternalArgMenuToken(store: Map<string, SlackExternalArgMenuEntry>): string {
   let token;
   do {
@@ -55,7 +36,7 @@ export function createSlackExternalArgMenuStore() {
       params: { choices: SlackExternalArgMenuChoice[]; userId: string },
       now = Date.now(),
     ): string {
-      pruneSlackExternalArgMenuStore(store, now);
+      pruneExpiredMapEntries(store, now);
       const token = createSlackExternalArgMenuToken(store);
       const expiresAt = resolveExpiresAtMsFromDurationMs(SLACK_EXTERNAL_ARG_MENU_TTL_MS, {
         nowMs: now,
@@ -77,7 +58,7 @@ export function createSlackExternalArgMenuStore() {
       return SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN.test(token) ? token : undefined;
     },
     get(token: string, now = Date.now()): SlackExternalArgMenuEntry | undefined {
-      pruneSlackExternalArgMenuStore(store, now);
+      pruneExpiredMapEntries(store, now);
       return store.get(token);
     },
   };

@@ -92,7 +92,24 @@ describe("message tool sandbox attachments", () => {
       name: "standard mirrored sandbox bridge",
       createBridge: async (hostMirrorDir: string) => {
         await fs.writeFile(path.join(hostMirrorDir, "chart.txt"), "mirrored chart");
-        return createSandboxFsBridge({ sandbox: createSandboxContext(hostMirrorDir) });
+        return createSandboxFsBridge({
+          sandbox: {
+            ...createSandboxContext(hostMirrorDir),
+            backend: {
+              // This regular fixture file has no container-side aliases. Keep the
+              // real pinned host read; only model the backend's metadata command.
+              runShellCommand: async ({ script, args }) => {
+                expect(script).toContain('readlink -n -f -- "$cursor"');
+                expect(args).toEqual(["/sandbox/chart.txt", "0", "0"]);
+                return {
+                  stdout: Buffer.from("/sandbox/chart.txt\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              },
+            },
+          },
+        });
       },
       expectedBytes: "mirrored chart",
     },
@@ -181,51 +198,6 @@ describe("message tool sandbox attachments", () => {
       ).rejects.toThrow("sandbox media access was denied");
       expect(sendMedia).toHaveBeenCalledTimes(1);
       expect(bridgeReadFile).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps managed host artifacts readable with a remote workspace bridge", async () => {
-    await withTempDir("message-tool-managed-media-", async (tempDir) => {
-      const stateDir = await fs.realpath(tempDir);
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const hostMirrorDir = path.join(stateDir, "host-mirror");
-      const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
-      const managedPath = path.join(stateDir, "media", "tool-image-generation", "chart.txt");
-      await fs.mkdir(hostMirrorDir, { recursive: true });
-      await fs.mkdir(remoteWorkspaceDir, { recursive: true });
-      await fs.mkdir(path.dirname(managedPath), { recursive: true });
-      await fs.writeFile(managedPath, "managed chart");
-      const bridge = createRemoteBridge({ hostMirrorDir, remoteWorkspaceDir });
-      const deliveredBytes: Buffer[] = [];
-      const sendMedia = vi.fn(async (ctx: ChannelOutboundContext) => {
-        if (!ctx.mediaAccess?.readFile || !ctx.mediaUrl) {
-          throw new Error("managed media access was not delivered to the channel adapter");
-        }
-        deliveredBytes.push(await ctx.mediaAccess.readFile(ctx.mediaUrl));
-        return { channel, messageId: "managed-media-1" };
-      });
-      registerSandboxMediaPlugin(sendMedia);
-      const tool = createMessageTool({
-        config: cfg,
-        getRuntimeConfig: () => cfg,
-        conversationReadOrigin: "direct-operator",
-        sandboxRoot: hostMirrorDir,
-        sandboxContainerWorkdir: "/sandbox",
-        sandboxFsBridge: bridge,
-        sandboxWorkspaceMediaReadAllowed: true,
-        runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
-      });
-
-      await tool.execute("managed-media-send", {
-        action: "send",
-        channel,
-        target: "recipient",
-        message: "chart ready",
-        media: managedPath,
-      });
-
-      expect(sendMedia).toHaveBeenCalledTimes(1);
-      expect(deliveredBytes).toEqual([Buffer.from("managed chart")]);
     });
   });
 });

@@ -1,4 +1,3 @@
-// Discord plugin module implements monitor.gateway behavior.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
 import { DiscordGatewayLifecycleError } from "./monitor/gateway-supervisor.js";
@@ -23,11 +22,7 @@ export async function waitForDiscordGatewayStop(
   const { gateway, abortSignal } = params;
   return await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const cleanup = () => {
-      abortSignal?.removeEventListener("abort", onAbort);
-      params.gatewaySupervisor?.detachLifecycle();
-    };
-    const finishResolve = () => {
+    const finish = (settle: () => void) => {
       if (settled) {
         return;
       }
@@ -37,33 +32,22 @@ export async function waitForDiscordGatewayStop(
       } finally {
         // remove listeners after disconnect so late "error" events emitted
         // during disconnect are still handled instead of becoming uncaught
-        cleanup();
-        resolve();
+        abortSignal?.removeEventListener("abort", onAbort);
+        params.gatewaySupervisor?.detachLifecycle();
+        settle();
       }
     };
     const finishReject = (err: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        gateway?.disconnect?.();
-      } finally {
-        cleanup();
-        reject(toErrorObject(err, "Non-Error rejection"));
-      }
+      finish(() => reject(toErrorObject(err, "Non-Error rejection")));
     };
     const onAbort = () => {
-      finishResolve();
+      finish(resolve);
     };
     const onGatewayEvent = (event: DiscordGatewayEvent) => {
       const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
       if (shouldStop) {
         finishReject(new DiscordGatewayLifecycleError(event));
       }
-    };
-    const onForceStop = (err: unknown) => {
-      finishReject(err);
     };
     if (abortSignal?.aborted) {
       onAbort();
@@ -72,6 +56,6 @@ export async function waitForDiscordGatewayStop(
 
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     params.gatewaySupervisor?.attachLifecycle(onGatewayEvent);
-    params.registerForceStop?.(onForceStop);
+    params.registerForceStop?.(finishReject);
   });
 }

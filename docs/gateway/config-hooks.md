@@ -15,8 +15,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 `hooks.*` configures generic Gateway HTTP ingress. For setup and a verified first
 request, see [Webhooks](/automation/cron-jobs#webhooks). This is separate from
-[internal hooks](/automation/hooks) (`hooks.internal`, `HOOK.md`) and the
-[TaskFlow Webhooks plugin](/plugins/webhooks) (`plugins.entries.webhooks`).
+[internal hooks](/automation/hooks) (`hooks.internal`, `HOOK.md`).
 
 ```json5
 {
@@ -73,14 +72,13 @@ Configure trusted proxy attribution correctly before exposing a proxy route.
 
 The normal body limit is **256 KiB**, with a **30-second** body-read timeout.
 Gmail-path mappings receive a larger derived allowance described below. Generic
-hooks parse JSON but do not require the JSON content-type header; the TaskFlow
-plugin does enforce it.
+hooks parse JSON but do not require the JSON content-type header.
 
-| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/config-hooks#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                                       |
-| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/config-hooks#hook-retries-and-fan-out).                                                                                                                                                                                      |
+| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` admits an ordinary session event; the result does not prove execution or delivery completed. |
+| `POST /hooks/agent`  | [Agent payload](/gateway/config-hooks#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                                                  |
+| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/config-hooks#hook-retries-and-fan-out).                                                                                                                                                                                                 |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
 those names. `/hooks` itself has no action.
@@ -138,6 +136,11 @@ owner can be resolved, admission fails rather than inventing an agent. The
 effective agent must pass `allowedAgentIds`; global session-store ownership is
 also enforced. Agent-prefixed keys are re-scoped to the selected agent and
 prefix-checked again.
+
+For a fixed global session store, an omitted target uses its persisted
+`agents.defaults.sessionStore.agentId` owner ahead of the runtime default.
+Explicit targets that conflict with that owner are rejected. The persisted owner
+must still pass `allowedAgentIds`.
 
 Keys resolve from the request/mapping, then `hooks.defaultSessionKey`, then a
 generated `hook:<uuid>`. A configured default must match the prefix allowlist.

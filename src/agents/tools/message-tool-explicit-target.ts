@@ -21,16 +21,12 @@ type ExplicitMessageTargetGuard = {
   require(params: Record<string, unknown>, action: ChannelMessageActionName): void;
 };
 
-function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return action === "broadcast" || actionRequiresTarget(action);
-}
-
 function requireExplicitMessageTarget(
   params: Record<string, unknown>,
   action: ChannelMessageActionName,
   context: ExplicitMessageTargetContext,
 ): void {
-  if (!actionNeedsExplicitTarget(action)) {
+  if (action !== "broadcast" && !actionRequiresTarget(action)) {
     return;
   }
   const hasCanonicalTarget =
@@ -69,12 +65,8 @@ export function createMessageToolExplicitTargetGuard(params: {
   decisionChannel?: string;
 }): ExplicitMessageTargetGuard {
   const toolCallIds = new WeakMap<object, string>();
-  const context: ExplicitMessageTargetContext = {
-    currentChannelProvider: params.currentChannelProvider,
-    preparedMessageToolCatalog: params.preparedMessageToolCatalog,
-  };
   const requireTarget = (actionParams: Record<string, unknown>, action: ChannelMessageActionName) =>
-    requireExplicitMessageTarget(actionParams, action, context);
+    requireExplicitMessageTarget(actionParams, action, params);
 
   return {
     prepareBeforeToolCallParams(rawParams, hookContext) {

@@ -25,7 +25,7 @@ scenario:
     - src/gateway/worker-environments/transcript-commit.ts
     - src/gateway/worker-environments/worker-turn-launcher.ts
     - src/gateway/worker-environments/placement-disk-space.ts
-    - src/gateway/server-methods/sessions-list-cache.ts
+    - src/gateway/session-row-projection.ts
     - test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-proof.ts
   execution:
     kind: script

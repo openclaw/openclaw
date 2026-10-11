@@ -4,13 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { spawnNodeTerminalPty } from "./terminal-pty-node.js";
 import type { TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle } from "./terminal-pty.js";
@@ -20,17 +22,36 @@ const handles: TerminalPtyHandle[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const handle of handles.splice(0)) {
     handle.kill();
   }
 });
 
+// Worker exit joins the shell's onExit, but session signaling does not join foreign descendants.
+async function waitForPidsToExit(pids: number[], signal: AbortSignal): Promise<void> {
+  try {
+    while (pids.some(isPidAlive)) {
+      await delay(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for PTY processes to exit: ${pids.join(", ")}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
-  it.each(["before", "after"] as const)(
-    "checks launch policy %s the PTY start message",
+  it.each(["before", "prepared", "after"] as const)(
+    "checks launch policy at the %s PTY boundary",
     async (timing) => {
       const directory = tempDirs.make("openclaw-pty-policy-");
       const marker = path.join(directory, "started");
+      const nativeAdmission = createDeferredCore();
+      let launchGrants = 0;
       let allowed = true;
       const starting = spawnNodeTerminalPty(
         {
@@ -46,15 +67,35 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
             throw new Error("PTY policy revoked");
           }
         },
+        (launch, settlement) => {
+          launchGrants++;
+          if (timing === "prepared") {
+            allowed = false;
+          }
+          if (!allowed) {
+            throw new Error("PTY policy revoked");
+          }
+          if (!settlement) {
+            throw new Error("PTY launch did not retain native admission");
+          }
+          void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
+          return launch();
+        },
       );
       if (timing === "before") {
         // The Node helper has started, but its boot acknowledgement has not arrived.
         allowed = false;
+      }
+      if (timing !== "after") {
         await expect(starting).rejects.toThrow("PTY policy revoked");
         expect(fs.existsSync(marker)).toBe(false);
+        expect(launchGrants).toBe(timing === "prepared" ? 1 : 0);
       } else {
         const handle = await starting;
         handles.push(handle);
+        await nativeAdmission.promise;
+        expect(launchGrants).toBe(1);
+        expect(isPidAlive(handle.pid)).toBe(true);
         allowed = false;
         const done = createDeferredCore<{ exitCode: number; signal?: number }>();
         let output = "";
@@ -70,7 +111,10 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     },
   );
 
-  it("preserves terminal input, resize ordering, and final output before exit", async () => {
+  it("preserves terminal input, resize ordering, and final output with a non-Node shim first on PATH", async () => {
+    const directory = tempDirs.make("openclaw-pty-node-shim-");
+    fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\nexit 42\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
     const handle = await spawnNodeTerminalPty({
       file: "/bin/sh",
       args: [
@@ -97,7 +141,7 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     });
     expect(await done.promise).toEqual({ exitCode: 7, signal: 0 });
     expect(output).toBe("READY\r\n37 101\r\nhello 🦞\r\nxterm-256color\r\n");
-    expect(await waitForPidToExit(handle.pid, 2_000)).toBe(true);
+    expect(isPidAlive(handle.pid)).toBe(false);
   });
 
   it("retains bounded pipe output while paused and drains it before reporting exit", async () => {
@@ -134,7 +178,9 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     expect(output).toBe(payload);
   });
 
-  it("reaps the PTY and its background process when the owning host disconnects", async () => {
+  it("reaps the PTY and its background process when the owning host disconnects", async ({
+    signal,
+  }) => {
     const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
     const node = resolveTestNodeExecPath();
     const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
@@ -184,13 +230,15 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       }
     });
     try {
-      await started.promise;
+      await withinTest(started.promise, signal);
       child.disconnect();
-      await exited;
+      await withinTest(exited, signal);
       expect(shellPid).toBeGreaterThan(0);
       expect(backgroundPid).toBeGreaterThan(0);
-      expect(await waitForPidToExit(shellPid!, 2_000)).toBe(true);
-      expect(await waitForPidToExit(backgroundPid!, 2_000)).toBe(true);
+      // The worker finishes only after the native shell onExit callback.
+      expect(isPidAlive(shellPid!)).toBe(false);
+      await waitForPidsToExit([backgroundPid!], signal);
+      expect(isPidAlive(backgroundPid!)).toBe(false);
     } finally {
       child.kill("SIGKILL");
       killPidIfAlive(backgroundPid);

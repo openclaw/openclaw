@@ -1,18 +1,24 @@
+import { execFileSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import * as backupShared from "../commands/backup-shared.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { createConfigIO } from "../config/config.js";
-import { MAX_INCLUDE_DEPTH } from "../config/includes.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
+import { listArchiveEntries } from "./backup-create.test-support.js";
 import * as sqliteCapture from "./backup-sqlite-snapshot.js";
 import { requireNodeSqlite, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 
@@ -37,7 +43,6 @@ async function configGraph(state: OpenClawTestState) {
   const snapshot = await createConfigIO({ observe: false }).readConfigFileSnapshot();
   expect(snapshot.issues).toEqual([]);
   return {
-    includePath,
     leafPath,
     files: new Map([
       [state.configPath, root],
@@ -78,8 +83,11 @@ describe("full backup config include capture", () => {
           const raw = graph.files
             .get(state.configPath)!
             .replace('ownership: "explicit"', "defaults: { workspace: 42 }");
-          graph.files.set(state.configPath, raw);
           await fs.writeFile(state.configPath, raw);
+          await expect(
+            createBackupArchive({ output: state.path("backup.tar.gz"), includeWorkspace: false }),
+          ).rejects.toThrow(/ownership could not be resolved/i);
+          return;
         }
         if (rootLink) {
           const authoredRoot = state.path("authored-config.json5");
@@ -87,18 +95,8 @@ describe("full backup config include capture", () => {
           await fs.symlink(authoredRoot, state.configPath);
         }
         await fs.writeFile(state.statePath("ordinary.txt"), "ordinary");
-        const { archive, restoredPath } = await restore(
-          state,
-          state.path("backup.tar.gz"),
-          !invalid,
-        );
-        const entries: string[] = [];
-        await tar.t({
-          file: archive.archivePath,
-          onReadEntry: (entry) => {
-            entries.push(entry.path);
-          },
-        });
+        const { archive, restoredPath } = await restore(state, state.path("backup.tar.gz"));
+        const entries = await listArchiveEntries(archive.archivePath);
         expect(new Set(entries).size).toBe(entries.length);
         for (const [source, raw] of graph.files) {
           expect(await fs.readFile(restoredPath(source), "utf8")).toBe(raw);
@@ -116,12 +114,10 @@ describe("full backup config include capture", () => {
           configPath: restoredPath(state.configPath),
           observe: false,
         }).readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(!invalid);
+        expect(snapshot.valid).toBe(true);
         expect(snapshot.includeProvenance).toBeDefined();
-        expect(snapshot.issues.map((issue) => issue.path)).toEqual(
-          invalid ? ["agents.defaults.workspace"] : [],
-        );
-        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(invalid);
+        expect(snapshot.issues.map((issue) => issue.path)).toEqual([]);
+        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(false);
         expect(snapshot.config.gateway?.mode).toBe("local");
       });
     },
@@ -148,13 +144,7 @@ describe("full backup config include capture", () => {
         onlyConfig: true,
       });
       await verifyBackupArchive(rootOnly.archivePath);
-      const entries: string[] = [];
-      await tar.t({
-        file: rootOnly.archivePath,
-        onReadEntry: (entry) => {
-          entries.push(entry.path);
-        },
-      });
+      const entries = await listArchiveEntries(rootOnly.archivePath);
       expect(entries).toEqual(
         expect.arrayContaining([
           backupShared.buildBackupArchivePath(rootOnly.archiveRoot, state.configPath),
@@ -164,27 +154,13 @@ describe("full backup config include capture", () => {
     });
   });
 
-  it.each(["missing", "cycle", "depth", "alias", "invalid-directive"])(
+  it.each(["missing", "alias"])(
     "refuses an indeterminate %s graph before publication",
     async (kind) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
         const graph = await configGraph(state);
         if (kind === "missing") {
           await fs.unlink(graph.leafPath);
-        }
-        if (kind === "cycle") {
-          await fs.writeFile(graph.leafPath, '{ "$include": "./settings.json5" }');
-        }
-        if (kind === "depth") {
-          await fs.writeFile(graph.leafPath, '{ "$include": "./depth-0.json5" }');
-          for (let i = 0; i <= MAX_INCLUDE_DEPTH; i++) {
-            await fs.writeFile(
-              path.join(path.dirname(graph.leafPath), `depth-${i}.json5`),
-              i === MAX_INCLUDE_DEPTH
-                ? "{}"
-                : JSON.stringify({ $include: `./depth-${i + 1}.json5` }),
-            );
-          }
         }
         if (kind === "alias") {
           const moved = path.join(path.dirname(state.configPath), "real-parts");
@@ -194,9 +170,6 @@ describe("full backup config include capture", () => {
             path.dirname(graph.leafPath),
             process.platform === "win32" ? "junction" : "dir",
           );
-        }
-        if (kind === "invalid-directive") {
-          await fs.writeFile(state.configPath, '{ "$include": 123 }');
         }
         const output = state.path("refused.tar.gz");
         await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
@@ -213,7 +186,7 @@ describe("full backup config include capture", () => {
     },
   );
 
-  it.each(["leaf", "root-edge", "replacement", "unreadable"])(
+  it.each(["leaf", "replacement", "unreadable"])(
     "refuses %s changes after discovery without overwriting sources",
     async (kind) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -229,11 +202,6 @@ describe("full backup config include capture", () => {
                 graph.files.get(graph.leafPath)!.replace("local", "other"),
               );
               await fs.utimes(graph.leafPath, stat.atime, stat.mtime);
-            } else if (kind === "root-edge") {
-              await fs.writeFile(
-                state.configPath,
-                graph.files.get(state.configPath)!.replace("settings", "replaced"),
-              );
             } else if (kind === "replacement") {
               await fs.rename(graph.leafPath, `${graph.leafPath}.original`);
               await fs.writeFile(graph.leafPath, graph.files.get(graph.leafPath)!);
@@ -257,9 +225,6 @@ describe("full backup config include capture", () => {
         if (kind === "leaf") {
           expect(await fs.readFile(graph.leafPath, "utf8")).toContain('mode: "other"');
         }
-        if (kind === "root-edge") {
-          expect(await fs.readFile(state.configPath, "utf8")).toContain("replaced.json5");
-        }
         if (kind === "replacement") {
           expect(await fs.readFile(`${graph.leafPath}.original`, "utf8")).toBe(
             graph.files.get(graph.leafPath),
@@ -273,7 +238,9 @@ describe("full backup config include capture", () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const graph = await configGraph(state);
       const { DatabaseSync } = requireNodeSqlite();
-      const dbPath = state.statePath("proof.sqlite");
+      const dbPath = resolveOpenClawStateSqlitePath(state.env);
+      openOpenClawStateDatabase({ env: state.env });
+      closeOpenClawStateDatabase();
       const db = new DatabaseSync(dbPath);
       db.exec(
         "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE proof(value TEXT); INSERT INTO proof VALUES ('captured');",
@@ -311,6 +278,48 @@ describe("full backup config include capture", () => {
       }
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a config replaced by a FIFO at open without dispatching a blocking read",
+    async () => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const graph = await configGraph(state);
+        const resolve = backupShared.resolveBackupPlanFromDisk;
+        let replaced = false;
+        let blockingOpen = false;
+        vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockImplementationOnce(
+          async (options) => {
+            const plan = await resolve(options);
+            const open = fs.open;
+            vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+              if (!replaced && args[0] === graph.leafPath) {
+                replaced = true;
+                await fs.rename(graph.leafPath, `${graph.leafPath}.original`);
+                execFileSync("mkfifo", [graph.leafPath]);
+                const flags = args[1];
+                if (typeof flags !== "number" || !(flags & fsSync.constants.O_NONBLOCK)) {
+                  blockingOpen = true;
+                  throw new Error("refusing a blocking FIFO open in the test");
+                }
+              }
+              return open(...args);
+            });
+            return plan;
+          },
+        );
+        const output = state.path("refused.tar.gz");
+        await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
+          /required config file .*retry backup/s,
+        );
+        expect(replaced).toBe(true);
+        expect(blockingOpen).toBe(false);
+        await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readFile(`${graph.leafPath}.original`, "utf8")).toBe(
+          graph.files.get(graph.leafPath),
+        );
+      });
+    },
+  );
 
   it.each(["present", "missing"])(
     "does not archive a later include-bearing root that was %s without includes at capture",

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -243,14 +244,8 @@ describe("heartbeat wake target concurrency", () => {
 
   it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
     vi.useFakeTimers();
-    let finishOldWake: (() => void) | undefined;
-    let finishNewWake: (() => void) | undefined;
-    const oldWakeFinished = new Promise<void>((resolve) => {
-      finishOldWake = resolve;
-    });
-    const newWakeFinished = new Promise<void>((resolve) => {
-      finishNewWake = resolve;
-    });
+    const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
+    const { promise: newWakeFinished, resolve: finishNewWake } = createDeferred();
     let oldSignal: AbortSignal | undefined;
     let newSignal: AbortSignal | undefined;
     const oldHandler = vi.fn(async () => {
@@ -300,10 +295,7 @@ describe("heartbeat wake target concurrency", () => {
 
   it("keeps task and event wakes for the same target serialized", async () => {
     vi.useFakeTimers();
-    let finishTask: (() => void) | undefined;
-    const taskFinished = new Promise<void>((resolve) => {
-      finishTask = resolve;
-    });
+    const { promise: taskFinished, resolve: finishTask } = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.intent === "task") {
         await taskFinished;

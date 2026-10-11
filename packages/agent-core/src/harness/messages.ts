@@ -1,6 +1,14 @@
-import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import {
+  hasLegacyRuntimeContextEnvelope,
+  labelRuntimeContextContent,
+  RUNTIME_CONTEXT_CUSTOM_TYPE,
+  type ImageContent,
+  type Message,
+  type TextContent,
+} from "@openclaw/llm-core";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -15,15 +23,6 @@ export type {
   CompactionSummaryMessage,
   CustomMessage,
 } from "../types.js";
-
-/** Harness-only transcript entries that can be normalized into LLM messages. */
-export type HarnessMessage = AgentMessage;
-
-// Internal session paths keep call sites explicit about this harness-owned
-// boundary even though these message roles are part of AgentMessage.
-export function asAgentMessage(message: HarnessMessage): AgentMessage {
-  return message;
-}
 
 function requireSessionTimestampMs(value: string, label: string): number {
   const parsed = parseSessionTimestampMs(value);
@@ -123,9 +122,16 @@ export function createCustomMessage(
 }
 
 /** Recognize the structured carrier marker shared with provider replay. */
-export function isRuntimeContextCarrier(message: AgentMessage): boolean {
+export function isRuntimeContextCarrier(message: unknown): message is CustomMessage {
+  const candidate = asOptionalRecord(message);
+  const details = candidate?.role === "custom" ? asOptionalRecord(candidate.details) : undefined;
   return (
-    message.role === "custom" && asOptionalRecord(message.details)?.runtimeContextCarrier === true
+    candidate?.role === "custom" &&
+    ((candidate.customType === RUNTIME_CONTEXT_CUSTOM_TYPE &&
+      ((details?.source === "openclaw-runtime-context" &&
+        details.runtimeContextCarrier !== false) ||
+        (details?.source === undefined && details?.runtimeContextCarrier === true))) ||
+      getOpenClawSystemUpdateKind(message) === "runtime-context")
   );
 }
 
@@ -134,64 +140,91 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
   const llmMessages: Message[] = [];
   // Preserve map's hole skipping and captured length without its intermediate array.
   messages.forEach((message) => {
+    let content: (TextContent | ImageContent)[];
     switch (message.role) {
       case "bashExecution":
         if (message.excludeFromContext) {
           return;
         }
-        llmMessages.push({
-          role: "user",
-          content: [{ type: "text", text: bashExecutionToText(message) }],
-          timestamp: message.timestamp,
-        });
+        content = [{ type: "text", text: bashExecutionToText(message) }];
         break;
-      case "custom": {
+      case "custom":
         if (message.excludeFromContext) {
           return;
         }
-        const content =
+        content =
           typeof message.content === "string"
-            ? [{ type: "text" as const, text: message.content }]
+            ? [{ type: "text", text: message.content }]
             : message.content;
-        // Preserve carrier identity so provider-owned replay and cache policy
-        // can distinguish transient context from append-only context.
-        llmMessages.push({
-          role: "user",
-          content,
-          timestamp: message.timestamp,
-          ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
-        });
         break;
-      }
       case "branchSummary":
-        llmMessages.push({
-          role: "user",
-          content: [
-            {
-              type: "text" as const,
-              text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX,
-            },
-          ],
-          timestamp: message.timestamp,
-        });
+        content = [
+          { type: "text", text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX },
+        ];
         break;
       case "compactionSummary":
-        llmMessages.push({
-          role: "user",
-          content: [
-            {
-              type: "text" as const,
-              text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
-            },
-          ],
-          timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),
-        });
+        content = [
+          {
+            type: "text",
+            text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
+          },
+        ];
         break;
       case "user":
       case "assistant":
       case "toolResult":
         llmMessages.push(message);
-        break;
+        return;
+      default:
+        return;
+    }
+    const turnScoped = message.role === "custom" && asOptionalRecord(message.details)?.turnScoped;
+    if (
+      message.role === "custom" &&
+      getOpenClawSystemUpdateKind(message) &&
+      typeof turnScoped === "boolean"
+    ) {
+      llmMessages.push({
+        role: "user",
+        content: message.content,
+        timestamp: message.timestamp,
+        operatorMessage: { turnScoped },
+      });
+      return;
+    }
+    const timestamp =
+      message.role === "compactionSummary"
+        ? normalizeCompactionSummaryTimestamp(message.timestamp)
+        : message.timestamp;
+    if (isRuntimeContextCarrier(message)) {
+      if (content.some((block) => block.type === "image")) {
+        llmMessages.push({
+          role: "user",
+          content,
+          timestamp,
+          runtimeContextCarrier: true,
+        });
+        return;
+      }
+      // Prefix-bound providers may have signed this exact v2026.9.7 projection.
+      // Keep its historical bytes while attaching the canonical semantic marker.
+      const textContent = content.filter((block): block is TextContent => block.type === "text");
+      const legacyContent = hasLegacyRuntimeContextEnvelope(
+        textContent.map((block) => block.text).join(""),
+      )
+        ? textContent
+        : undefined;
+      const runtimeContent =
+        legacyContent ?? (typeof message.content === "string" ? message.content : textContent);
+      llmMessages.push({
+        role: "user",
+        content: legacyContent ?? labelRuntimeContextContent(runtimeContent),
+        timestamp,
+        runtimeContext: {},
+        runtimeContextCarrier: true,
+      });
+    } else {
+      llmMessages.push({ role: "user", content, timestamp });
     }
   });
   return llmMessages;

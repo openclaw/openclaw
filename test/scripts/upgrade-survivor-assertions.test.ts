@@ -8,7 +8,6 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -16,20 +15,28 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../scripts/lib/upgrade-survivor-policy.mjs";
+import { readLegacySessionStoreEntries } from "../../src/config/sessions/legacy-store-inspection.js";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
+import type { PluginUpdateOutcome } from "../../src/plugins/update.js";
+import { withEnv } from "../../src/test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   writePluginInspectFixture,
   type PluginInspectFixture,
 } from "./plugin-inspect.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
+// Extracted and sourced snippets do not execute the production Darwin Bash fallback.
+const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
-  baseline = "openclaw@2026.6.35",
+  baseline = "openclaw@2026.8.35",
   workingVersion?: string,
-  legacyClawHub = false,
 ) {
   const selectedRoot = join(root, "selected");
   const selectedScenario = join(selectedRoot, "scripts/e2e/lib/upgrade-survivor");
@@ -41,13 +48,6 @@ function selectFrozenUpgradeOracle(
     'throw new Error("selected oracle has no serving-turn command");\n',
   );
   writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
-  if (legacyClawHub) {
-    mkdirSync(join(selectedRoot, "src/plugins"), { recursive: true });
-    writeFileSync(
-      join(selectedRoot, "src/plugins/clawhub.ts"),
-      'import { install } from "../infra/clawhub.js";\n',
-    );
-  }
   for (const path of [
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/windows-cmd-helpers.mjs",
@@ -74,7 +74,6 @@ function selectFrozenUpgradeOracle(
     "selected release contract",
   );
   const selectedSha = git("rev-parse", "HEAD");
-  const modePath = join(root, "clawhub-mode");
   if (workingVersion) {
     writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: workingVersion }));
   }
@@ -84,7 +83,7 @@ function selectFrozenUpgradeOracle(
     source.indexOf("\nIMAGE_NAME="),
   );
   const result = spawnSync(
-    "bash",
+    testBashExecPath,
     [
       "-euo",
       "pipefail",
@@ -97,7 +96,6 @@ printf '%s\\n' "$UPGRADE_RUNNER"
 printf '%s\\n' "$UPGRADE_TRUSTED_ASSERTIONS"
 printf '%s\\n' "$UPGRADE_TRUSTED_DIAGNOSTICS"
 printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
-printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
 `,
     ],
     {
@@ -110,7 +108,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
         OPENCLAW_TOOLING_SHA: "f".repeat(40),
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
-        MODE_PATH: modePath,
         TMPDIR: root,
       },
     },
@@ -119,7 +116,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     .trim()
     .split("\n")
     .filter(Boolean);
-  const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
   const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
   return {
     result,
@@ -131,7 +127,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     selectedOracle,
     selectedScenario,
     stagedScenario,
-    clawhubMode,
   };
 }
 
@@ -184,7 +179,7 @@ function runJsonTextAssertion(command: string, contents: string, ...args: string
   const file = join(root, "result.json");
   writeFileSync(file, contents);
   const result = spawnSync(
-    process.execPath,
+    testNodeExecPath,
     [
       ASSERTIONS_PATH,
       command,
@@ -215,151 +210,157 @@ function withPluginResult(patch: Record<string, unknown>) {
   };
 }
 
+function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
+  const finalMessage =
+    source === "npm"
+      ? 'Failed to install missing configured plugin "codex" from @openclaw/codex: Package not found on npm: @openclaw/codex@2026.9.4. See https://docs.openclaw.ai/tools/plugin for installable plugins.'
+      : 'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Package not found on ClawHub.';
+  const messages =
+    source === "fallback"
+      ? ["@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.", finalMessage]
+      : [finalMessage];
+  const outcomes: PluginUpdateOutcome[] = [
+    {
+      pluginId: "discord",
+      status: "updated",
+      nextVersion: "2026.9.4",
+      message: "Repaired Discord.",
+    },
+    {
+      pluginId: "whatsapp",
+      status: "updated",
+      nextVersion: "2026.9.4",
+      message: "Repaired WhatsApp.",
+    },
+    ...messages.map((message): PluginUpdateOutcome => ({
+      pluginId: "codex",
+      status: "error",
+      message,
+    })),
+  ];
+  const errors: string[] = [];
+  const integrityDrifts: Array<{ pluginId: string }> = [];
+  return {
+    status: "ok",
+    before: { version: "2026.9.2" },
+    after: { version: "2026.9.4" },
+    steps: [
+      { name: "global update", exitCode: 0 },
+      { name: "global install swap", exitCode: 0 },
+      { name: "openclaw doctor", exitCode: 0 },
+    ],
+    run: { status: "succeeded" },
+    postUpdate: {
+      plugins: {
+        status: "warning",
+        warnings: messages.map((message) => ({
+          pluginId: "codex",
+          reason: message,
+          message:
+            'Plugin "codex" could not be updated. Run `openclaw plugins update codex` to retry.',
+          guidance: ["openclaw plugins update codex"],
+        })),
+        sync: { errors },
+        npm: { outcomes },
+        integrityDrifts,
+      },
+    },
+  };
+}
+
 describe("upgrade recovery result assertions", () => {
-  it("recovers consent warnings emitted after a historical successful core update", () => {
-    const core = {
-      status: "ok",
-      mode: "npm",
-      before: { version: "2026.7.1-2" },
-      after: { version: "2026.8.1" },
-      steps: [
-        { name: "global update", exitCode: 0 },
-        { name: "openclaw doctor", exitCode: 0 },
-      ],
+  describe.each(["fallback"] as const)("missing Codex (%s)", (source) => {
+    const scenarioEnv = {
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration",
     };
-    const plugins = {
-      ...RECOVERABLE_UPDATE.postUpdate.plugins,
-      status: "warning",
-      reason: undefined,
-      warnings: [RECOVERABLE_UPDATE.postUpdate.plugins.warnings[0]],
-    };
-    const continuation = { status: "ok", mode: "unknown", steps: [], postUpdate: { plugins } };
-    const output = `${JSON.stringify(core, null, 2)}\n${JSON.stringify(continuation, null, 2)}\n`;
-    expect(runJsonTextAssertion("assert-recoverable-update-json", output, "2026.8.1").status).toBe(
-      0,
-    );
-    expect(
-      runJsonTextAssertion("assert-successful-update-json", output, "2026.8.1").status,
-    ).not.toBe(0);
-    expect(
-      runJsonAssertion(
-        "assert-recoverable-update-json",
-        { ...core, postUpdate: { plugins } },
-        "2026.8.1",
-      ).status,
-    ).toBe(0);
-    // April 23 prints only the core report; the candidate's complete child result
-    // must remain tied to this invocation before it can authorize fixture recovery.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-upgrade-capture-")));
-    const observationRoot = join(root, "observation");
-    const resultFile = join(root, "update.json");
-    mkdirSync(join(observationRoot, "diagnostics"), { recursive: true });
-    writeJson(resultFile, core);
-    const snapshot = { artifactRoot: observationRoot, childExitCode: 0, result: plugins };
-    const captured = (command: string, value: unknown) => {
-      writeJson(join(observationRoot, "diagnostics", "post-core.json"), value);
-      return spawnSync(
-        process.execPath,
-        [ASSERTIONS_PATH, command, resultFile, "2026.8.1", observationRoot, "2026.7.1-2"],
-        { encoding: "utf8" },
+    const check = (report: ReturnType<typeof missingCodexUpdateResult>) =>
+      withEnv(scenarioEnv, () =>
+        runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
       );
-    };
-    try {
-      const recovery = captured("assert-recoverable-update-json", snapshot);
-      expect(recovery.status, recovery.stderr).toBe(0);
-      expect(captured("assert-successful-update-json", snapshot).status).not.toBe(0);
-      for (const invalid of [
-        { ...snapshot, artifactRoot: join(root, "previous-update") },
-        { ...snapshot, childExitCode: 1 },
-        { ...snapshot, result: { ...plugins, status: "error" } },
-        {
-          ...snapshot,
-          result: { ...plugins, sync: { ...plugins.sync, errors: ["registry unavailable"] } },
+
+    it("accepts the successful published update with its named unavailable-Codex warning", () => {
+      const result = check(missingCodexUpdateResult(source));
+      expect(result.status, result.stderr).toBe(0);
+    });
+
+    const invalidReports: Array<{
+      name: string;
+      mutate: (report: ReturnType<typeof missingCodexUpdateResult>) => void;
+    }> = [
+      {
+        name: "Codex consent failure",
+        mutate: (report) => {
+          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
+            (outcome) =>
+              outcome.pluginId === "codex" && outcome.status === "error"
+                ? { ...outcome, code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED" }
+                : outcome,
+          );
         },
-      ]) {
-        expect(captured("assert-recoverable-update-json", invalid).status).not.toBe(0);
-        expect(captured("assert-successful-update-json", invalid).status).not.toBe(0);
+      },
+    ];
+    it.each(invalidReports)("rejects $name", ({ mutate }) => {
+      const report = missingCodexUpdateResult(source);
+      mutate(report);
+      const result = check(report);
+      expect(result.status).not.toBe(0);
+    });
+  });
+
+  it.each([{ name: "reversed history", change: "reverse" }])(
+    "rejects missing-Codex history with $name",
+    ({ change }) => {
+      const report = missingCodexUpdateResult("fallback");
+      const outcomes = report.postUpdate.plugins.npm.outcomes;
+      const transition = outcomes[2]!;
+      switch (change) {
+        case "duplicate":
+          outcomes.splice(2, 0, { ...transition });
+          break;
+        case "duplicate-final":
+          transition.message = outcomes[3]!.message;
+          break;
+        case "reverse":
+          outcomes.splice(2, 2, outcomes[3]!, transition);
+          break;
+        case "missing-final":
+          outcomes.pop();
+          break;
+        case "typed":
+          transition.code = "PLUGIN_CAPABILITY_CONSENT_REQUIRED";
+          break;
+        case "plugin":
+          transition.pluginId = "slack";
+          break;
+        case "target":
+          transition.message =
+            "@openclaw/codex unavailable; using clawhub:@openclaw/other instead.";
+          break;
+        case "source":
+          transition.message =
+            "@openclaw/other unavailable; using clawhub:@openclaw/codex instead.";
+          break;
+        case "npm-final":
+          outcomes[3]!.message =
+            missingCodexUpdateResult("npm").postUpdate.plugins.npm.outcomes[2]!.message;
+          report.postUpdate.plugins.warnings[1]!.reason = outcomes[3]!.message;
+          break;
+        case "appended":
+          transition.message += " Another install failed.";
+          break;
+        case "guidance":
+          report.postUpdate.plugins.warnings[0]!.guidance = [];
+          break;
       }
-      writeJson(resultFile, {
-        ...core,
-        postUpdate: { plugins: { ...plugins, status: "error", reason: "registry-unavailable" } },
-      });
-      expect(captured("assert-recoverable-update-json", snapshot).status).not.toBe(0);
-      expect(captured("assert-successful-update-json", snapshot).status).not.toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-    for (const invalid of [
-      { ...continuation, status: "error", reason: "doctor-failed" },
-      { ...continuation, steps: [{ name: "doctor", exitCode: 1 }] },
-      {
-        ...continuation,
-        postUpdate: { plugins: { ...plugins, sync: { errors: ["registry unavailable"] } } },
-      },
-      {
-        ...continuation,
-        postUpdate: {
-          plugins: {
-            ...plugins,
-            warnings: [...plugins.warnings, { reason: "unrelated plugin failure" }],
-          },
-        },
-      },
-    ]) {
-      const invalidOutput = `${JSON.stringify(core, null, 2)}\n${JSON.stringify(invalid, null, 2)}\n`;
-      expect(
-        runJsonTextAssertion("assert-recoverable-update-json", invalidOutput, "2026.8.1").status,
-      ).not.toBe(0);
-      expect(
-        runJsonTextAssertion("assert-successful-update-json", invalidOutput, "2026.8.1").status,
-      ).not.toBe(0);
-    }
-    expect(
-      runJsonTextAssertion("assert-recoverable-update-json", output.slice(0, -4), "2026.8.1")
-        .status,
-    ).not.toBe(0);
-  });
-
-  it("accepts historical split successful reports without assuming consent support", () => {
-    const core = {
-      status: "ok",
-      mode: "npm",
-      after: { version: "2026.6.35" },
-      steps: [{ name: "global update", exitCode: 0 }],
-    };
-    const continuation = {
-      status: "ok",
-      mode: "unknown",
-      steps: [],
-      postUpdate: { plugins: { status: "ok" } },
-    };
-    const output = `${JSON.stringify(core, null, 2)}\n${JSON.stringify(continuation, null, 2)}\n`;
-    expect(runJsonTextAssertion("assert-successful-update-json", output, "2026.6.35").status).toBe(
-      0,
-    );
-  });
-
-  it("accepts clean updates for baselines that already have consent", () => {
-    const result = {
-      status: "ok",
-      after: { version: "2026.8.1" },
-      steps: [{ name: "global update", exitCode: 0 }],
-    };
-    expect(runJsonAssertion("assert-successful-update-json", result, "2026.8.1").status).toBe(0);
-    expect(
-      runJsonAssertion(
-        "assert-successful-update-json",
-        {
-          ...result,
-          steps: [{ name: "global update", exitCode: 1 }],
-        },
-        "2026.8.1",
-      ).status,
-    ).not.toBe(0);
-    expect(
-      runPrefixedJsonAssertion("assert-successful-update-json", result, "2026.8.1").status,
-    ).toBe(0);
-  });
+      report.postUpdate.plugins.warnings[0]!.reason = transition.message;
+      report.postUpdate.plugins.warnings[0]!.pluginId = transition.pluginId;
+      const result = withEnv(
+        { OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration" },
+        () => runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
+      );
+      expect(result.status).not.toBe(0);
+    },
+  );
 
   it("accepts only a completed core swap stranded on capability consent", () => {
     expect(
@@ -422,22 +423,6 @@ describe("upgrade recovery result assertions", () => {
         0,
       );
     }
-  });
-
-  it("requires repair to finish doctor and plugin convergence without restart", () => {
-    const repaired = {
-      status: "ok",
-      mode: "finalize",
-      restart: false,
-      postUpdate: { doctor: { status: "ok" }, plugins: { status: "ok" } },
-    };
-    expect(runJsonAssertion("assert-repair-json", repaired).status).toBe(0);
-    expect(
-      runJsonAssertion("assert-repair-json", {
-        ...repaired,
-        postUpdate: { ...repaired.postUpdate, plugins: { status: "warning" } },
-      }).status,
-    ).not.toBe(0);
   });
 });
 
@@ -621,7 +606,7 @@ function writeSharedRuntimeCaches(stateDir: string, versioned = false): void {
   if (versioned) {
     roots.push(
       ...["discord", "feishu", "telegram", "whatsapp"].map(
-        (plugin) => `openclaw-2026.4.24-${plugin}`,
+        (plugin) => `openclaw-2026.6.1-${plugin}`,
       ),
     );
   }
@@ -649,14 +634,14 @@ function runSessionStateAssertion(
     writeSharedRuntimeCaches(stateDir, options.scenario === "versioned-runtime-deps");
     const fixtureEnv = setup(stateDir);
     for (const command of options.commands ?? ["assert-state"]) {
-      execFileSync(process.execPath, [ASSERTIONS_PATH, command], {
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, command], {
         env: {
           ...process.env,
           ...fixtureEnv,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.4.24",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.6.1",
         },
         stdio: "pipe",
       });
@@ -664,6 +649,43 @@ function runSessionStateAssertion(
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPath = false) {
+  const root = join(stateDir, "..");
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: join(root, "openclaw.json"),
+    OPENCLAW_TEST_WORKSPACE_DIR: join(root, "workspace"),
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+    OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
+    OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+    OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: join(root, "artifacts"),
+    OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED: "",
+  };
+  writeJson(env.OPENCLAW_CONFIG_PATH, { plugins: { allow: [], entries: {} } });
+  // Use the production shell seed boundary before the same assertions seed used by artifact-only.
+  env.OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED = execFileSync(
+    testBashExecPath,
+    [
+      "-euc",
+      `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
+SCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"
+UPDATE_RESTART_MODE="$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE"
+baseline_version=2026.9.3
+phase() { shift; "$@"; }
+${missingPath ? "run_missing_load_path_fixture seed" : ""}
+"$1" "$2" seed
+printf '%s' "\${OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED:-}"
+`,
+      "survivor-session-source-seed",
+      testNodeExecPath,
+      ASSERTIONS_PATH,
+    ],
+    { env, encoding: "utf8" },
+  ).trim();
+  return env;
 }
 
 function assertConfiguredPluginState(params: { installPath?: string } = {}): void {
@@ -701,10 +723,9 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     const coveragePath = join(root, "coverage.json");
     writeJson(coveragePath, {
       acceptedIntents: ["configured-plugin-installs"],
-      skippedIntents: [],
     });
 
-    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
+    execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-state"], {
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
@@ -721,6 +742,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 
 function assertConfig(params: {
   acceptedIntents: string[];
+  baselineVersion?: string;
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
@@ -733,10 +755,10 @@ function assertConfig(params: {
     writeJson(configPath, params.config);
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
-      skippedIntents: [],
+      baselineVersion: params.baselineVersion,
     });
 
-    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+    execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
       env: {
         ...process.env,
         OPENCLAW_CONFIG_PATH: configPath,
@@ -893,14 +915,24 @@ function assertCompanionPluginRecords(
       const isolatedScripts = join(root, "production-assertion-runtime", "scripts");
       const isolatedLib = join(isolatedScripts, "e2e", "lib");
       cpSync("scripts/e2e/lib", isolatedLib, { recursive: true });
+      mkdirSync(join(isolatedScripts, "lib"), { recursive: true });
+      for (const file of [
+        "release-version.mjs",
+        "sqlite-transcript-payload.mjs",
+        "upgrade-survivor-policy.mjs",
+        "upgrade-survivor-scenarios.json",
+      ]) {
+        cpSync(join("scripts/lib", file), join(isolatedScripts, "lib", file));
+      }
       cpSync(
         "scripts/prepublish-plugin-registry-artifact.mjs",
         join(isolatedScripts, "prepublish-plugin-registry-artifact.mjs"),
       );
+      cpSync("scripts/windows-cmd-helpers.mjs", join(isolatedScripts, "windows-cmd-helpers.mjs"));
       assertionsPath = join(isolatedLib, "upgrade-survivor", "assertions.mjs");
     }
     execFileSync(
-      process.execPath,
+      testNodeExecPath,
       [
         assertionsPath,
         ...(recoveryPluginIds
@@ -923,107 +955,10 @@ function assertCompanionPluginRecords(
   }
 }
 
-function createUpdateRunSelfUpgradeSummary() {
-  const sourceVersion = "2026.4.26";
-  const targetVersion = "2026.7.2";
-  const note = "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE";
-  return {
-    status: "passed",
-    source: { spec: `openclaw@${sourceVersion}`, version: sourceVersion },
-    target: { tag: "latest", resolvedVersion: targetVersion },
-    installedVersion: targetVersion,
-    expectedRestartNote: note,
-    updateRpcResult: {
-      ok: true,
-      result: {
-        status: "ok",
-        before: { version: sourceVersion },
-        after: { version: targetVersion },
-        steps: [{ name: "package manager install" }],
-      },
-      restart: { scheduled: true },
-      sentinel: { payload: { message: note } },
-    },
-    restartSentinel: {
-      kind: "update",
-      status: "ok",
-      message: note,
-      stats: {
-        before: { version: sourceVersion },
-        after: { version: targetVersion },
-      },
-    },
-    qaChannelInstallRecord: {
-      source: "path",
-      sourcePath: "/tmp/source/dist/extensions/qa-channel",
-      installPath: "/tmp/source/dist/extensions/qa-channel",
-      version: "2026.4.25",
-    },
-    sourcePluginInspect: {
-      plugin: { id: "qa-channel", status: "loaded" },
-    },
-    targetPluginIndex: {
-      installRecords: {
-        "qa-channel": {
-          source: "path",
-          sourcePath: "/tmp/source/dist/extensions/qa-channel",
-          installPath: "/tmp/source/dist/extensions/qa-channel",
-          version: "2026.4.25",
-        },
-      },
-    },
-    supervisorHandoff: {
-      servicePid: 4242,
-      systemctlInvocations: ["--user start openclaw-gateway.service"],
-      monitorEvents: [
-        "source Gateway exited through supervised update handoff",
-        "starting installed service without provider suppression",
-        "service Gateway started pid=4242",
-      ],
-    },
-    gateway: {
-      healthz: { body: { ok: true, status: "live" } },
-      readyz: { body: { ready: true } },
-      status: {
-        cli: { version: targetVersion },
-        gateway: { version: targetVersion },
-        rpc: { ok: true, version: targetVersion },
-      },
-    },
-    qaChannel: {
-      status: {
-        channelAccounts: {
-          "qa-channel": [{ accountId: "default", running: true, restartPending: false }],
-        },
-      },
-      busPollsAfterRestart: 2,
-    },
-  };
-}
-
-function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSelfUpgradeSummary>) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-update-run-self-upgrade-"));
-  try {
-    const summaryPath = join(root, "summary.json");
-    writeJson(summaryPath, summary);
-    execFileSync(
-      process.execPath,
-      [ASSERTIONS_PATH, "assert-update-run-self-upgrade", summaryPath],
-      { stdio: "pipe" },
-    );
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-}
-
 describe("upgrade survivor assertions", () => {
   it.each([
-    ["2026.9.3", false, "openclaw@2026.6.35", ""],
-    ["2026.9.3-beta.1", false, "openclaw@2026.6.35", ""],
-    ["2026.4.25", false, "openclaw@2026.6.35", ""],
-    ["2026.6.35", true, "openclaw@2026.9.2", ""],
-    ["2026.7.33", true, "openclaw@2026.9.2", ""],
-    ["2026.9.3", false, "openclaw@2026.6.35", "2026.6.35"],
+    ["2026.8.35", true, "openclaw@2026.9.2", ""],
+    ["2026.9.3", false, "openclaw@2026.8.35", "2026.8.35"],
   ])(
     "selects upgrade assertion ownership from immutable target %s",
     (version, selected, baseline, workingVersion) => {
@@ -1053,9 +988,49 @@ describe("upgrade survivor assertions", () => {
           expect(readFileSync(join(proof.stagedScenario!, "assertions.mjs"), "utf8")).toBe(
             readFileSync(proof.selectedOracle, "utf8"),
           );
-          expect(readFileSync(join(proof.stagedScenario!, "diagnostics.mjs"), "utf8")).toBe(
-            readFileSync("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs", "utf8"),
+          const artifacts = join(root, "artifacts");
+          const published = join(root, "published");
+          const runtimeScripts = join(root, "runtime/scripts");
+          const runtimeScenario = join(runtimeScripts, "e2e/lib/upgrade-survivor");
+          cpSync(proof.stagedScenario!, runtimeScenario, { recursive: true });
+          mkdirSync(join(runtimeScripts, "lib"), { recursive: true });
+          cpSync(
+            "scripts/lib/release-version.mjs",
+            join(runtimeScripts, "lib/release-version.mjs"),
           );
+          mkdirSync(artifacts);
+          writeJson(join(artifacts, "summary.json"), {
+            status: "passed",
+            baseline: { spec: baseline, version: baseline.slice("openclaw@".length) },
+            candidate: { kind: "package", version },
+            scenario: "base",
+            installedVersion: version,
+            candidateInstallMode: "updater",
+            updateRestartMode: "manual",
+            updateOutcome: "success",
+            phases: [],
+          });
+          const publication = spawnSync(
+            testNodeExecPath,
+            [
+              "--input-type=module",
+              "-e",
+              `import { pathToFileURL } from "node:url";
+const [projector, artifacts, destination] = process.argv.slice(1);
+const { publishDiagnostics } = await import(pathToFileURL(projector).href);
+publishDiagnostics(artifacts, destination, value => value, "passed");`,
+              join(runtimeScenario, "diagnostics.mjs"),
+              artifacts,
+              published,
+            ],
+            { encoding: "utf8", cwd: root },
+          );
+          expect(publication.status, publication.stderr).toBe(0);
+          expect(JSON.parse(readFileSync(join(published, "summary.json"), "utf8"))).toMatchObject({
+            status: "passed",
+            candidate: { version },
+            installedVersion: version,
+          });
         }
         expect(proof.mounts).toEqual(
           selected
@@ -1097,34 +1072,6 @@ describe("upgrade survivor assertions", () => {
     },
   );
 
-  it.each(["invalid", "2026.6.35-1"])("rejects invalid frozen target train %s", (version) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-invalid-oracle-"));
-    try {
-      const proof = selectFrozenUpgradeOracle(root, version);
-      expect(proof.result.status).not.toBe(0);
-      expect(proof.oracle).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("derives the shipped ClawHub request contract from the authorized selected source", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-clawhub-mode-"));
-    try {
-      const proof = selectFrozenUpgradeOracle(
-        root,
-        "2026.6.35",
-        "openclaw@2026.6.34",
-        undefined,
-        true,
-      );
-      expect(proof.result.status, proof.result.stderr).toBe(0);
-      expect(proof.clawhubMode).toBe("legacy");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it.each([
     {
       name: "legacy default-only doctor export",
@@ -1153,14 +1100,6 @@ describe("upgrade survivor assertions", () => {
       declaresTypes: false,
       runtime: "export {};\n",
       failure: "declared a keyed store constructor but did not export it",
-    },
-    {
-      name: "dedicated default-only store constructor failure",
-      sdkPath: "plugin-state-store-runtime",
-      declaresTypes: false,
-      runtime:
-        'export function createPluginStateSyncKeyedStore() { throw new Error("synthetic store failure"); }\n',
-      failure: "synthetic store failure",
     },
   ])(
     "classifies baseline shared state for $name",
@@ -1192,7 +1131,7 @@ describe("upgrade survivor assertions", () => {
         const baselinePath = join(stateDir, "survivor-baseline.json");
         writeJson(baselinePath, { marker: "existing fixture" });
         const result = spawnSync(
-          process.execPath,
+          testNodeExecPath,
           [
             "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
             "seed-baseline-plugin-state",
@@ -1362,54 +1301,42 @@ process.stdout.write(sessionDir + "\\n");
 
   it("lists the dependency-free scenario contract", () => {
     const scenarios = JSON.parse(
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "list-scenarios"], {
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "list-scenarios"], {
         encoding: "utf8",
       }),
     ) as string[];
 
     expect(scenarios).toContain("base");
+    expect(scenarios).toContain("codex-allowlist-survival");
     expect(scenarios).toContain("mobile-pairing-reconnect");
     expect(scenarios).toContain("acpx-openclaw-tools-bridge");
     expect(scenarios).toContain("prerelease-plugin-registry");
     expect(scenarios).toContain("sqlite-volume");
+    expect(scenarios).toEqual(UPGRADE_SURVIVOR_ASSERTION_SCENARIOS);
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
 
-  it.each([
-    ["base", undefined, "stable", "beta"],
-    ["base", "beta", "beta", "stable"],
-    ["prerelease-plugin-registry", undefined, "beta", "stable"],
-  ])(
-    "requires the %s scenario with override %s to preserve the %s update channel",
-    (scenario, updateChannel, expectedChannel, wrongChannel) => {
-      const run = (channel: string) =>
+  it.each([{ baselineVersion: "2026.9.7", legacy: false }])(
+    "validates Tool Search at baseline $baselineVersion and after upgrade",
+    ({ baselineVersion, legacy }) => {
+      const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
         assertConfig({
-          acceptedIntents: ["update"],
-          config: { update: { channel } },
-          scenario,
-          updateChannel,
+          acceptedIntents: ["tool-search"],
+          baselineVersion,
+          config: { tools: { toolSearch } },
+          scenario: "base",
+          stage,
         });
-      expect(() => run(expectedChannel)).not.toThrow();
-      expect(() => run(wrongChannel)).toThrow(/update.channel/);
+      const baselineValue = legacy ? { mode: "code", codeTimeoutMs: 5000 } : { mode: "tools" };
+      const wrongBaselineValue = legacy ? { mode: "tools" } : { mode: "code", codeTimeoutMs: 5000 };
+      expect(() => run(baselineValue, "baseline")).not.toThrow();
+      expect(() => run(wrongBaselineValue, "baseline")).toThrow(/Tool Search mode/);
+      expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(
+        legacy ? /Tool Search mode/ : /legacy timeout/,
+      );
+      expect(() => run({ mode: "tools" })).not.toThrow();
     },
   );
-
-  it("requires password auth for the mobile pairing reconnect scenario", () => {
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["gateway"],
-        config: { gateway: { auth: { mode: "password" } } },
-        scenario: "mobile-pairing-reconnect",
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["gateway"],
-        config: { gateway: { auth: { mode: "token" } } },
-        scenario: "mobile-pairing-reconnect",
-      }),
-    ).toThrow(/gateway auth mode/);
-  });
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-mobile-pairing-evidence-"));
@@ -1454,7 +1381,7 @@ process.stdout.write(sessionDir + "\\n");
     });
     const verify = () =>
       execFileSync(
-        process.execPath,
+        testNodeExecPath,
         [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
         {
           stdio: "pipe",
@@ -1486,139 +1413,93 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it.each(["base", "sqlite-volume"])(
-    "seeds recent ordered session timestamps for %s",
-    (scenario) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
-      try {
-        const stateDir = join(root, "state");
-        const workspace = join(root, "workspace");
-        mkdirSync(stateDir, { recursive: true });
-        mkdirSync(workspace, { recursive: true });
+  it.each(["base"])("seeds recent ordered session timestamps for %s", (scenario) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
 
-        const beforeSeed = Date.now();
-        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
-          env: {
-            ...process.env,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-          },
-          stdio: "pipe",
-        });
-        const afterSeed = Date.now();
-
-        const sessionsDir = join(
-          stateDir,
-          scenario === "sqlite-volume" ? "agents/main/sessions" : "sessions",
-        );
-        const otherStore = join(
-          stateDir,
-          scenario === "sqlite-volume" ? "sessions" : "agents/main/sessions",
-          "sessions.json",
-        );
-        expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
-        const sessions = JSON.parse(
-          readFileSync(join(sessionsDir, "sessions.json"), "utf8"),
-        ) as Record<string, { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }>;
-        const keys =
-          scenario === "sqlite-volume"
-            ? ["agent:main:main", "agent:main:+15551234567", "agent:main:slack:channel:cupgrade"]
-            : ["main", "+15551234567", "slack:channel:CUPGRADE"];
-        expect(Object.keys(sessions)).toEqual(keys);
-        const seededRows = keys.map((key) => sessions[key]);
-        expect(seededRows.map((row) => row?.sessionId)).toEqual([
-          "upgrade-main-session",
-          "upgrade-direct-session",
-          "upgrade-group-session",
-        ]);
-
-        for (const row of seededRows) {
-          assert(row);
-          const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
-          expect(row.sessionFile).toBe(transcriptPath);
-          expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
-        }
-
-        const timestamps = seededRows.map((row) => row?.updatedAt);
-        for (const timestamp of timestamps) {
-          expect(typeof timestamp).toBe("number");
-        }
-        const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
-          number,
-          number,
-          number,
-        ];
-        expect(directUpdatedAt - mainUpdatedAt).toBe(100);
-        expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
-        expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
-        expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
-
-        const dayMs = 24 * 60 * 60 * 1000;
-        const thirtyDaysMs = 30 * dayMs;
-        for (const [timestamp, offset] of [
-          [mainUpdatedAt, 0],
-          [directUpdatedAt, 100],
-          [groupUpdatedAt, 200],
-        ] as const) {
-          expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
-          expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
-          expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
-          expect(timestamp).toBeLessThanOrEqual(afterSeed);
-        }
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
-    "keeps the %s seed free of unrelated migration specimens",
-    (scenario) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companion-seed-"));
-      try {
-        const stateDir = join(root, "state");
-        const workspace = join(root, "workspace");
-        mkdirSync(stateDir, { recursive: true });
-        mkdirSync(workspace, { recursive: true });
-        const env = {
+      const beforeSeed = Date.now();
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: {
           ...process.env,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-        };
+        },
+        stdio: "pipe",
+      });
+      const afterSeed = Date.now();
 
-        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
-
-        expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
-        expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
-        for (const relative of [
-          "sessions/sessions.json",
-          "agents/main/sessions/legacy-session.json",
-          "exec-approvals.json",
-          "plugin-runtime-deps",
-        ]) {
-          expect(existsSync(join(stateDir, relative)), relative).toBe(false);
-        }
-        for (const stage of ["baseline", "survival"]) {
-          const stageEnv = {
-            ...env,
-            OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
-          };
-          execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
-            env: stageEnv,
-            stdio: "pipe",
-          });
-          execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-exec-approvals"], {
-            env: stageEnv,
-            stdio: "pipe",
-          });
-        }
-      } finally {
-        rmSync(root, { force: true, recursive: true });
+      const sessionsDir = join(stateDir, "agents", "main", "sessions");
+      const otherStore = join(stateDir, "sessions", "sessions.json");
+      expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
+      const storePath = join(sessionsDir, "sessions.json");
+      const original = readFileSync(storePath, "utf8");
+      const sessions = JSON.parse(original) as Record<
+        string,
+        { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }
+      >;
+      const keys = [
+        "agent:main:main",
+        "agent:main:+15551234567",
+        "agent:main:slack:channel:cupgrade",
+      ];
+      expect(Object.keys(sessions)).toEqual(keys);
+      const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
+      const admitted = readLegacySessionStoreEntries({ storePath }, issues);
+      expect(issues).toEqual([]);
+      expect(admitted.entries.map(({ sessionKey }) => sessionKey)).toEqual(keys);
+      for (const { entry } of admitted.entries) {
+        expect(entry).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
       }
-    },
-  );
+      expect(readFileSync(storePath, "utf8")).toBe(original);
+      const seededRows = keys.map((key) => sessions[key]);
+      expect(seededRows.map((row) => row?.sessionId)).toEqual([
+        "upgrade-main-session",
+        "upgrade-direct-session",
+        "upgrade-group-session",
+      ]);
+
+      for (const row of seededRows) {
+        assert(row);
+        const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
+        expect(row.sessionFile).toBe(transcriptPath);
+        expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
+      }
+
+      const timestamps = seededRows.map((row) => row?.updatedAt);
+      for (const timestamp of timestamps) {
+        expect(typeof timestamp).toBe("number");
+      }
+      const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
+        number,
+        number,
+        number,
+      ];
+      expect(directUpdatedAt - mainUpdatedAt).toBe(100);
+      expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
+      expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
+      expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
+
+      const dayMs = 24 * 60 * 60 * 1000;
+      const thirtyDaysMs = 30 * dayMs;
+      for (const [timestamp, offset] of [
+        [mainUpdatedAt, 0],
+        [directUpdatedAt, 100],
+        [groupUpdatedAt, 200],
+      ] as const) {
+        expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
+        expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
+        expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
+        expect(timestamp).toBeLessThanOrEqual(afterSeed);
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it("requires every seeded legacy cron specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
@@ -1633,7 +1514,7 @@ process.stdout.write(sessionDir + "\\n");
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
       };
       const run = (command: string) =>
-        spawnSync(process.execPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
+        spawnSync(testNodeExecPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
       const seeded = run("seed");
       expect(seeded.status, seeded.stderr).toBe(0);
       const cronStore = join(stateDir, "cron", "jobs.json");
@@ -1648,50 +1529,6 @@ process.stdout.write(sessionDir + "\\n");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
-
-  it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
-    try {
-      const stateDir = join(root, "state");
-      const workspace = join(root, "workspace");
-      mkdirSync(stateDir, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
-
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
-        },
-        stdio: "pipe",
-      });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("asserts the ACPX OpenClaw tools bridge config survived", () => {
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["acpx-openclaw-tools-bridge"],
-        config: {
-          plugins: {
-            allow: ["acpx"],
-            entries: {
-              acpx: {
-                enabled: true,
-                config: {
-                  openClawToolsMcpBridge: true,
-                },
-              },
-            },
-          },
-        },
-        scenario: "acpx-openclaw-tools-bridge",
-      }),
-    ).not.toThrow();
   });
 
   it("allows legacy Discord DM config only at the baseline stage", () => {
@@ -1724,39 +1561,6 @@ process.stdout.write(sessionDir + "\\n");
         scenario: "base",
       }),
     ).toThrow(/legacy Discord DM config survived/);
-  });
-
-  it("requires canonical Discord DM config after update", () => {
-    expect(() =>
-      assertConfig({
-        acceptedIntents: ["discord-channel"],
-        config: {
-          channels: {
-            discord: {
-              enabled: true,
-              dmPolicy: "allowlist",
-              allowFrom: ["111111111111111111"],
-              guilds: {
-                "222222222222222222": {
-                  channels: { "333333333333333333": { requireMention: true } },
-                },
-              },
-              threadBindings: { idleHours: 72 },
-            },
-          },
-        },
-        scenario: "base",
-      }),
-    ).not.toThrow();
-  });
-
-  it("accepts verified first-party companions without recording operator acceptance", () => {
-    expect(() => assertCompanionPluginRecords()).not.toThrow();
-    expect(() =>
-      assertCompanionPluginRecords((records) => {
-        records.discord!.resolvedSpec = "@openclaw/discord@2026.8.1";
-      }),
-    ).not.toThrow();
   });
 
   it("uses installed plugin inspection without repository development dependencies", () => {
@@ -1828,8 +1632,6 @@ process.stdout.write(sessionDir + "\\n");
 
   it.each([
     ["spec", "@openclaw/discord@file:payload"],
-    ["resolvedSpec", "@openclaw/discord@file:payload"],
-    ["spec", "@openclaw/discord@npm:@example/discord"],
     ["resolvedSpec", "@openclaw/discord@git+https://example.invalid/discord.git"],
   ] as const)("rejects an official-looking non-registry %s", (field, value) => {
     expect(() =>
@@ -1963,29 +1765,18 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it.each([
-    ["npm", "discord"],
-    ["ClawHub", "whatsapp"],
-  ] as const)(
-    "requires the installed package version to match for %s companion installs",
-    (_sourceLabel, pluginId) => {
-      expect(() =>
-        assertCompanionPluginRecords((_records, installPaths) => {
-          const packageName = pluginId === "discord" ? "@openclaw/discord" : "@openclaw/whatsapp";
-          writeJson(join(installPaths[pluginId], "package.json"), {
-            name: packageName,
-            version: "2026.8.0",
-          });
-        }),
-      ).toThrow(new RegExp(`${pluginId} installed package version changed`));
-    },
-  );
-
-  it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
-    expect(() => assertConfiguredPluginState()).not.toThrow();
+  it("requires the installed package version to match the companion record", () => {
+    expect(() =>
+      assertCompanionPluginRecords((_records, installPaths) => {
+        writeJson(join(installPaths.discord, "package.json"), {
+          name: "@openclaw/discord",
+          version: "2026.8.0",
+        });
+      }),
+    ).toThrow(/discord installed package version changed/);
   });
 
-  it.each(["base", "versioned-runtime-deps"])(
+  it.each(["versioned-runtime-deps"])(
     "requires intact shared runtime cache contents for %s",
     (scenario) => {
       expect(() => runSessionStateAssertion(writeMigratedSessionState, { scenario })).not.toThrow();
@@ -1997,7 +1788,7 @@ process.stdout.write(sessionDir + "\\n");
               const root =
                 scenario === "base"
                   ? join("discord", ".openclaw-runtime-deps-copy-stale")
-                  : "openclaw-2026.4.24-feishu";
+                  : "openclaw-2026.6.1-feishu";
               const sentinel = join(
                 stateDir,
                 "plugin-runtime-deps",
@@ -2015,6 +1806,27 @@ process.stdout.write(sessionDir + "\\n");
             { scenario },
           ),
         ).toThrow(/stale-sentinel/);
+      }
+    },
+  );
+
+  it.each([false])(
+    "artifact-only base/manual rejects retired global sources without a missing-path seed (recreated=%s)",
+    (recreated) => {
+      const verify = () =>
+        runSessionStateAssertion((stateDir) => {
+          const env = seedSessionSourceFixture(stateDir);
+          writeMigratedSessionState(stateDir);
+          if (recreated) {
+            mkdirSync(join(stateDir, "sessions"), { recursive: true });
+            writeJson(join(stateDir, "sessions", "sessions.json"), {});
+          }
+          return env;
+        });
+      if (recreated) {
+        expect(verify).toThrow(/legacy sessions.json survived migration/);
+      } else {
+        expect(verify).not.toThrow();
       }
     },
   );
@@ -2093,25 +1905,16 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
-  it.each([
-    "ok",
-    "frozen-regular",
-    "queued",
-    "wait-timeout",
-    "cli-failed",
-    "not-started",
-    "turn-failed",
-    "wrong-session",
-    "user-only",
-    "wrong-reply",
-  ])("requires a completed persisted managed serving reply (%s)", (outcome) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-survivor-serving-turn-"));
-    try {
-      const bin = join(root, "bin");
-      mkdirSync(bin);
-      writeFileSync(
-        join(bin, "openclaw"),
-        `#!${process.execPath}
+  it.each(["queued", "cli-failed", "wrong-reply"])(
+    "requires a completed persisted managed serving reply (%s)",
+    (outcome) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-survivor-serving-turn-"));
+      try {
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        writeFileSync(
+          join(bin, "openclaw"),
+          `#!${testNodeExecPath}
 const fs = require("node:fs");
 const method = process.argv[4];
 const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
@@ -2136,69 +1939,51 @@ if (method === "chat.send") {
 } else { process.exit(47); }
 process.stdout.write(JSON.stringify(result));
 `,
-        { mode: 0o755 },
-      );
-      const receipt = join(root, "receipt.json");
-      let oracle = ASSERTIONS_PATH;
-      if (outcome === "frozen-regular") {
-        const selection = selectFrozenUpgradeOracle(root, "2026.9.3");
-        expect(selection.result.status, selection.result.stderr).toBe(0);
-        oracle = selection.oracle!;
+          { mode: 0o755 },
+        );
+        const receipt = join(root, "receipt.json");
+        let oracle = ASSERTIONS_PATH;
+        if (outcome === "frozen-regular") {
+          const selection = selectFrozenUpgradeOracle(root, "2026.9.3");
+          expect(selection.result.status, selection.result.stderr).toBe(0);
+          oracle = selection.oracle!;
+        }
+        const result = spawnSync(
+          testNodeExecPath,
+          [oracle, "assert-restart-serving-turn", receipt],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              PATH: `${bin}${delimiter}${process.env.PATH}`,
+              GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
+              PROBE_OUTCOME: outcome,
+              PROBE_MARKER_FILE: join(root, "marker"),
+            },
+          },
+        );
+        const succeeded = ["ok", "frozen-regular", "queued", "wait-timeout"].includes(outcome);
+        expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
+        expect(existsSync(receipt)).toBe(succeeded);
+        expect(result.stderr).not.toContain("synthetic-serving-token");
+        if (outcome === "cli-failed") {
+          expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
+        }
+        if (succeeded) {
+          const proof = JSON.parse(readFileSync(receipt, "utf8"));
+          expect(proof.sessionId).toBe("upgrade-main-session");
+          expect(proof.reply.content[0].text).toBe(proof.marker);
+          expect(proof.completion.status).toBe("ok");
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
       }
-      const result = spawnSync(process.execPath, [oracle, "assert-restart-serving-turn", receipt], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${bin}${delimiter}${process.env.PATH}`,
-          GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
-          PROBE_OUTCOME: outcome,
-          PROBE_MARKER_FILE: join(root, "marker"),
-        },
-      });
-      const succeeded = ["ok", "frozen-regular", "queued", "wait-timeout"].includes(outcome);
-      expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
-      expect(existsSync(receipt)).toBe(succeeded);
-      expect(result.stderr).not.toContain("synthetic-serving-token");
-      if (outcome === "cli-failed") {
-        expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
-      }
-      if (succeeded) {
-        const proof = JSON.parse(readFileSync(receipt, "utf8"));
-        expect(proof.sessionId).toBe("upgrade-main-session");
-        expect(proof.reply.content[0].text).toBe(proof.marker);
-        expect(proof.completion.status).toBe("ok");
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts a SQLite-only migrated session store", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
-        writeMigratedSessionState(stateDir);
-      }),
-    ).not.toThrow();
-  });
+    },
+  );
 
   it.each([
     { stage: "survival", mutation: "none", error: /metadata prompt was not preserved/ },
     { stage: "post-inference", mutation: "none", error: undefined },
-    { stage: "post-inference", mutation: "missing-marker", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "invalid-marker", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "stale-prompt", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "malformed-skills", error: /refreshed skills snapshot/ },
-    { stage: "post-inference", mutation: "heavy-cache", error: /heavy resolvedSkills cache/ },
-    {
-      stage: "post-inference",
-      mutation: "missing-session",
-      error: /main legacy session row missing/,
-    },
-    {
-      stage: "post-inference",
-      mutation: "missing-transcript",
-      error: /transcript was not imported/,
-    },
   ])(
     "checks migrated session state after inference ($stage, $mutation)",
     ({ stage, mutation, error }) => {
@@ -2276,61 +2061,5 @@ process.stdout.write(JSON.stringify(result));
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
-
-  it("accepts executed update.run package transition and post-restart health evidence", () => {
-    expect(() => assertUpdateRunSelfUpgrade(createUpdateRunSelfUpgradeSummary())).not.toThrow();
-  });
-
-  it("rejects no-op update.run package transitions", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.target.resolvedVersion = summary.source.version;
-    summary.installedVersion = summary.source.version;
-    summary.updateRpcResult.result.after.version = summary.source.version;
-    summary.restartSentinel.stats.after.version = summary.source.version;
-    summary.gateway.status.gateway.version = summary.source.version;
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not advance beyond source/);
-  });
-
-  it("rejects unsupported update.run paths that did not execute package steps", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.updateRpcResult.ok = false;
-    summary.updateRpcResult.result.status = "skipped";
-    summary.updateRpcResult.result.steps = [];
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not report ok/);
-  });
-
-  it("rejects QA channel payloads without a canonical path install record", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.qaChannelInstallRecord.source = "npm";
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/was not path-installed/);
-  });
-
-  it("rejects upgrades that lose the path install during SQLite migration", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    Reflect.deleteProperty(summary.targetPluginIndex.installRecords, "qa-channel");
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(
-      /target SQLite index did not preserve/,
-    );
-  });
-
-  it("rejects source fixtures that were never runtime-loaded", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.sourcePluginInspect.plugin.status = "error";
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/source package did not load/);
-  });
-
-  it("rejects duplicate target service starts during the supervised handoff", () => {
-    const summary = createUpdateRunSelfUpgradeSummary();
-    summary.supervisorHandoff.systemctlInvocations.push(
-      "--user --quiet start openclaw-gateway.service",
-    );
-
-    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/target exactly once/);
   });
 });

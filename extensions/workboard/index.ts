@@ -1,4 +1,3 @@
-// Workboard plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
@@ -10,12 +9,16 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
+import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
+import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
+import { createWorkboardSessionsBoardTools } from "./src/tools-sessions-board.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
   guardWorkboardToolsForWorkspaceAccess,
-  WORKBOARD_TOOL_NAMES,
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
 } from "./src/workspace-access.js";
 
 export default definePluginEntry({
@@ -23,25 +26,60 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.openSqlite();
-    const resourceServices: Array<{ stop(): void }> = [];
-    registerWorkboardStoreLifecycle(api, store, () => {
-      for (const service of resourceServices) {
-        service.stop();
-      }
+    api.registerCli(
+      async ({ program }) => {
+        const { registerWorkboardCli } = await import("./src/cli.js");
+        registerWorkboardCli({
+          program,
+          withStore: async (action) => {
+            const cliStore = WorkboardStore.openSqlite(
+              resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+            );
+            try {
+              return await action(cliStore);
+            } finally {
+              await cliStore.close();
+            }
+          },
+        });
+      },
+      {
+        descriptors: [
+          {
+            name: "workboard",
+            description: "Manage Workboard cards and worker dispatch",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
+    if (api.registrationMode === "cli-metadata") {
+      return;
+    }
+    const store = WorkboardStore.openSqlite(
+      resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+    );
+    const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
+    registerWorkboardStoreLifecycle(api, store, async () => {
+      await Promise.all(resourceServices.map(async (service) => await service.stop()));
     });
     const changeEvents = createWorkboardChangeEventService(store);
     resourceServices.push(changeEvents);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
-      gateway: api.runtime.gateway,
     });
     resourceServices.push(automationNudge);
+    const sessionsBoard = createWorkboardSessionsBoardService({
+      store,
+      gateway: api.runtime.gateway,
+    });
+    resourceServices.push(sessionsBoard);
     const lifecycleSync = createWorkboardLifecycleService({
       store,
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+      onMatched: automationNudge.nudge,
     });
     resourceServices.push(lifecycleSync);
     api.session.controls.registerControlUiDescriptor({
@@ -53,30 +91,24 @@ export default definePluginEntry({
       group: "control",
       requiredScopes: ["operator.read"],
     });
-    api.session.controls.registerControlUiDescriptor({
-      surface: "widget",
-      id: "board",
-      label: "Workboard board",
-      requiredScopes: ["operator.read"],
-    });
-    api.session.controls.registerControlUiDescriptor({
-      surface: "widget",
-      id: "card",
-      label: "Workboard card",
-      requiredScopes: ["operator.write"],
-    });
-    api.session.controls.registerControlUiDescriptor({
-      surface: "widget",
-      id: "mini",
-      label: "Workboard summary",
-      requiredScopes: ["operator.read"],
-    });
-    registerWorkboardGatewayMethods({ api, store });
+    for (const [id, label, scope] of [
+      ["board", "Workboard board", "operator.read"],
+      ["card", "Workboard card", "operator.write"],
+      ["mini", "Workboard summary", "operator.read"],
+    ] as const) {
+      api.session.controls.registerControlUiDescriptor({
+        surface: "widget",
+        id,
+        label,
+        requiredScopes: [scope],
+      });
+    }
+    registerWorkboardGatewayMethods({ api, store, sessionsBoard });
     registerWorkboardCommand({ api, store });
-    api.registerService(changeEvents);
-    api.registerService(automationNudge);
-    api.registerService(lifecycleSync);
-    api.on("gateway_start", () => lifecycleSync.onGatewayStart());
+    for (const service of [changeEvents, automationNudge, sessionsBoard, lifecycleSync]) {
+      api.registerService(service);
+    }
+    api.on("gateway_start", (_event, context) => lifecycleSync.onGatewayStart(context.abortSignal));
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
     api.on("subagent_ended", (event) =>
       store.runOperation(async () => {
@@ -94,24 +126,10 @@ export default definePluginEntry({
           store,
           event,
           context,
+          readSessions: lifecycleSync.readSessions,
           onMatched: automationNudge.nudge,
         });
       }),
-    );
-    api.registerCli(
-      async ({ program }) => {
-        const { registerWorkboardCli } = await import("./src/cli.js");
-        registerWorkboardCli({ program, store });
-      },
-      {
-        descriptors: [
-          {
-            name: "workboard",
-            description: "Manage Workboard cards and worker dispatch",
-            hasSubcommands: true,
-          },
-        ],
-      },
     );
     api.registerTool(
       (context) =>
@@ -121,9 +139,22 @@ export default definePluginEntry({
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),
       {
-        names: [...WORKBOARD_TOOL_NAMES],
+        names: [...WORKBOARD_CARD_TOOL_NAMES],
         optional: true,
       },
+    );
+    // The docked Board agent needs these without a tools.allow entry.
+    api.registerTool(
+      {
+        contextVersion: 2,
+        create: (ctx) =>
+          createWorkboardSessionsBoardTools({
+            store,
+            sessionsBoard,
+            caller: { assertCurrent: ctx.assertInvocationCurrent },
+          }),
+      },
+      { names: [...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES] },
     );
   },
 });

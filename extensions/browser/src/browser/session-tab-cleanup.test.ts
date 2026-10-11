@@ -71,12 +71,19 @@ describe("session tab cleanup timer", () => {
     const disabled = { browser: { tabCleanup: { enabled: false } } };
     setRuntimeConfigSnapshot(disabled, disabled);
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(1);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        ordinaryCleanup: false,
+        idleMs: undefined,
+        maxTabsPerSession: undefined,
+      }),
+    );
 
     const enabled = { browser: { tabCleanup: { enabled: true } } };
     setRuntimeConfigSnapshot(enabled, enabled);
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(3);
     await stop();
   });
 
@@ -99,5 +106,17 @@ describe("session tab cleanup timer", () => {
     expect(stopped).toHaveBeenCalledOnce();
     expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires a timer whose service generation is no longer current", async () => {
+    let current = true;
+    const onWarn = vi.fn();
+    const stop = startTrackedBrowserTabCleanupTimer({ isCurrent: () => current, onWarn });
+    current = false;
+    await vi.advanceTimersByTimeAsync(900_000);
+    expect(registryMocks.sweepTrackedBrowserTabs).not.toHaveBeenCalled();
+    expect(onWarn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    await stop();
   });
 });

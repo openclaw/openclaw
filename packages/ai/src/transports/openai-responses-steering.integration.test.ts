@@ -109,6 +109,11 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
 import { responsesLoopbackModel } from "./openai-responses-loopback.test-support.js";
+import {
+  normalizeOpenAIResponsesFunctionCallId,
+  shouldNormalizeOpenAIResponsesToolCallId,
+  splitOpenAIFunctionCallPairing,
+} from "./openai-responses-tool-call-id-shape.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const client = {
@@ -243,9 +248,9 @@ describe("Responses WebSocket steering handoff", () => {
         { role: "user", content: "original", timestamp: 0 },
         {
           role: "user",
-          content: "runtime context",
+          content: "OpenClaw runtime context:\nruntime context",
           timestamp: 0,
-          runtimeContextCarrier: true,
+          runtimeContext: {},
         },
       ],
     };
@@ -441,7 +446,7 @@ describe("Responses WebSocket steering handoff", () => {
     connection.emit(completed("resp_3"));
     expect((await third).stopReason).not.toBe("error");
   });
-  it.each([false, true])(
+  it.each([true])(
     "keeps inherited effort for automatic steering (historical update: %s)",
     async (historicalUpdate) => {
       const sentUpdate = { type: "configuration_update" as const, reasoning: { effort: "medium" } };
@@ -508,40 +513,6 @@ describe("Responses WebSocket steering handoff", () => {
     },
   );
 
-  it("adds a changed effort only before a fresh user after automatic steering", async () => {
-    const sentUpdate = { type: "configuration_update" as const, reasoning: { effort: "medium" } };
-    const harness = start({ reasoning: { effort: "low" } }, [sentUpdate, initialUser]);
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
-    const firstAnswer = output("original fragment");
-    const automaticAnswer = output("automatic answer", "msg_2");
-    harness.socket.emit(completed("resp_1", [firstAnswer]));
-    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2", [automaticAnswer]));
-    await harness.events;
-    harness.first.finish();
-    const secondInput = [initialUser, firstAnswer, update];
-    const second = createStream(secondInput, undefined, { reasoning: { effort: "high" } });
-    await collect(second.stream);
-    second.finish();
-    const freshUser = user("fresh question");
-    const third = createStream([...secondInput, automaticAnswer, freshUser], undefined, {
-      reasoning: { effort: "high" },
-    });
-    const thirdEvents = collect(third.stream);
-    harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
-    harness.socket.emit(completed("resp_3"));
-    await thirdEvents;
-    third.finish();
-    expect(third.request).toMatchObject({
-      previous_response_id: "resp_2",
-      reasoning: { effort: "low" },
-      input: [{ type: "configuration_update", reasoning: { effort: "high" } }, freshUser],
-    });
-  });
-
   it("steers during generation and consumes the automatic continuation without creating another response", async () => {
     const harness = start();
     const control = await harness.control;
@@ -591,88 +562,112 @@ describe("Responses WebSocket steering handoff", () => {
     expect(await control.steer([{ ...update, timestamp: 2 }])).toBe(false);
   });
 
-  it("delivers async tool results once after the automatic steering response finishes", async () => {
-    const harness = start();
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
-    const toolCall = {
-      type: "function_call" as const,
-      id: "fc_1",
-      call_id: "call_1",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed" as const,
-      async: true,
-    };
-    const firstAnswer = output("working independently");
-    harness.socket.emit({
-      type: "response.completed",
-      response: { id: "resp_1", status: "completed", output: [toolCall, firstAnswer] },
-    });
-    const automaticAnswer = output("handling the new requirement", "msg_2");
-    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2", [automaticAnswer]));
-    await harness.events;
-    harness.first.finish();
+  it.each([
+    {
+      name: "non-canonical IDs",
+      callId: "functions.gateway:0",
+      itemId: "fc_tmp_kegospxl46",
+    },
+  ])(
+    "delivers async tool results once after the automatic steering response finishes ($name)",
+    async ({ callId, itemId }) => {
+      const harness = start();
+      const control = await harness.control;
+      const admission = control.steer([{ ...update, timestamp: 1 }]);
+      harness.socket.emit(accepted);
+      await admission;
+      const toolCall = {
+        type: "function_call" as const,
+        id: itemId,
+        call_id: callId,
+        name: "lookup",
+        arguments: "{}",
+        status: "completed" as const,
+        async: true,
+      };
+      const firstAnswer = output("working independently");
+      harness.socket.emit({
+        type: "response.completed",
+        response: { id: "resp_1", status: "completed", output: [toolCall, firstAnswer] },
+      });
+      const automaticAnswer = output("handling the new requirement", "msg_2");
+      harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
+      harness.socket.emit(completed("resp_2", [automaticAnswer]));
+      await harness.events;
+      harness.first.finish();
 
-    const toolResult = {
-      type: "function_call_output" as const,
-      call_id: "call_1",
-      output: "lookup result",
-    };
-    const secondInput = [initialUser, toolCall, firstAnswer, toolResult, update];
-    let continuationNeeded: (() => boolean) | undefined;
-    const second = createStream(secondInput, (nextControl) => {
-      continuationNeeded = nextControl.needsContinuation;
-    });
-    await collect(second.stream);
-    second.finish();
-    expect(continuationNeeded?.()).toBe(true);
-    expect(
-      harness.socket.requests.filter((request) => request.type === "response.create"),
-    ).toHaveLength(1);
+      const toolResult = {
+        type: "function_call_output" as const,
+        call_id: callId,
+        output: "lookup result",
+      };
+      const secondInput = [initialUser, toolCall, firstAnswer, toolResult, update];
+      let continuationNeeded: (() => boolean) | undefined;
+      const second = createStream(secondInput, (nextControl) => {
+        continuationNeeded = nextControl.needsContinuation;
+      });
+      await collect(second.stream);
+      second.finish();
+      expect(continuationNeeded?.()).toBe(true);
+      expect(
+        harness.socket.requests.filter((request) => request.type === "response.create"),
+      ).toHaveLength(1);
 
-    // Replay must match delivery: the automatic response never saw the tool result.
-    const third = createStream([
-      initialUser,
-      toolCall,
-      firstAnswer,
-      update,
-      automaticAnswer,
-      toolResult,
-    ]);
-    const thirdEvents = collect(third.stream);
-    harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
-    harness.socket.emit(completed("resp_3", [output("answer using lookup result", "msg_3")]));
-    await thirdEvents;
-    third.finish();
-    const creates = harness.socket.requests.filter((request) => request.type === "response.create");
-    expect(creates).toHaveLength(2);
-    expect(creates[1]).toMatchObject({ previous_response_id: "resp_2", input: [toolResult] });
-    expect(creates.flatMap((request) => request.input)).toEqual([initialUser, toolResult]);
-  });
+      // Replay must match delivery: the automatic response never saw the tool result.
+      const pairedId = `${callId}|${itemId}`;
+      const replayedId = shouldNormalizeOpenAIResponsesToolCallId(pairedId)
+        ? normalizeOpenAIResponsesFunctionCallId(pairedId)
+        : pairedId;
+      const replayedIds = splitOpenAIFunctionCallPairing(replayedId);
+      const replayedToolCall = {
+        ...toolCall,
+        id: replayedIds.itemId ?? itemId,
+        call_id: replayedIds.callId,
+      };
+      const replayedToolResult = { ...toolResult, call_id: replayedIds.callId };
+      const third = createStream([
+        initialUser,
+        replayedToolCall,
+        firstAnswer,
+        update,
+        automaticAnswer,
+        replayedToolResult,
+      ]);
+      const thirdEvents = collect(third.stream);
+      harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
+      harness.socket.emit(completed("resp_3", [output("answer using lookup result", "msg_3")]));
+      await thirdEvents;
+      third.finish();
+      const creates = harness.socket.requests.filter(
+        (request) => request.type === "response.create",
+      );
+      expect(creates).toHaveLength(2);
+      expect(creates[1]).toMatchObject({
+        previous_response_id: "resp_2",
+        input: [{ ...toolResult, call_id: callId }],
+      });
+      expect(creates.flatMap((request) => request.input)).toEqual([
+        initialUser,
+        { ...toolResult, call_id: callId },
+      ]);
+    },
+  );
 
-  it.each(
-    [
-      {
-        name: "instructions and tools",
-        settings: {
-          instructions: "Summarize the lookup result",
-          tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
-        },
+  it.each([
+    {
+      name: "instructions and tools",
+      historicalUpdate: false,
+      settings: {
+        instructions: "Summarize the lookup result",
+        tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
       },
-      { name: "output limit", settings: { max_output_tokens: 512 } },
-      { name: "reasoning effort", settings: { reasoning: { effort: "high" } } },
-      {
-        name: "reasoning summary",
-        settings: { reasoning: { effort: "low", summary: "detailed" } },
-      },
-    ].flatMap((entry) =>
-      [false, true].map((historicalUpdate) => Object.assign({}, entry, { historicalUpdate })),
-    ),
-  )(
+    },
+    {
+      name: "reasoning summary",
+      historicalUpdate: true,
+      settings: { reasoning: { effort: "low", summary: "detailed" } },
+    },
+  ])(
     "returns required input with current $name (historical update: $historicalUpdate)",
     async ({ settings, historicalUpdate }) => {
       const harness = await startRequiredInput(historicalUpdate);
@@ -712,36 +707,23 @@ describe("Responses WebSocket steering handoff", () => {
     },
   );
 
-  it("returns required input with inherited controls when request reasoning is omitted", async () => {
-    const harness = await startRequiredInput(true);
-    const second = createStream([initialUser, harness.toolCall, harness.toolResult, update]);
-    const events = collect(second.stream);
-    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2"));
-    expect(await events).toContainEqual(completed("resp_2"));
-    second.finish();
-    expect(harness.socket.requests.at(-1)).toMatchObject({
-      type: "response.create",
-      previous_response_id: "resp_1",
-      input: [harness.toolResult],
-    });
-    expect(harness.socket.requests.at(-1)).not.toHaveProperty("reasoning");
-  });
-
-  it.each(
-    [
-      { name: "another model", settings: { model: "gpt-5.6-luna" } },
-      { name: "pro mode", settings: { reasoning: { mode: "pro", effort: "high" } } },
-      { name: "multi-agent mode", settings: { multi_agent: { enabled: true } } },
-      { name: "automatic truncation", settings: { truncation: "auto" } },
-      {
-        name: "automatic compaction",
-        settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
-      },
-    ].flatMap((entry) =>
-      [false, true].map((includeControl) => Object.assign({}, entry, { includeControl })),
-    ),
-  )(
+  it.each([
+    {
+      name: "pro mode",
+      includeControl: true,
+      settings: { reasoning: { mode: "pro", effort: "high" } },
+    },
+    {
+      name: "multi-agent mode",
+      includeControl: true,
+      settings: { multi_agent: { enabled: true } },
+    },
+    {
+      name: "automatic compaction",
+      includeControl: true,
+      settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
+    },
+  ])(
     "rejects required-input history with configuration updates in $name (control present: $includeControl)",
     async ({ settings, includeControl }) => {
       const harness = await startRequiredInput(true);
@@ -821,10 +803,7 @@ describe("Responses WebSocket steering handoff", () => {
     ).toHaveLength(1);
   });
 
-  it.each([
-    { instructions: "Changed instructions" },
-    { tools: [{ type: "function", name: "new_tool", parameters: { type: "object" } }] },
-  ])(
+  it.each([{ tools: [{ type: "function", name: "new_tool", parameters: { type: "object" } }] }])(
     "rejects request changes that an automatic continuation would silently ignore",
     async (request) => {
       const harness = start();

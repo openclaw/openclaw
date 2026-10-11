@@ -1,62 +1,50 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import {
-  createPluginCacheArtifacts,
-  createPluginRootArtifacts,
-  type PluginSourceCacheRecord,
-} from "./plugin-cache-artifacts.js";
-import type {
-  PluginDirectoryCacheEntry,
-  PluginEntryCheck,
-  PluginFileCacheEntry,
-  PluginPathCacheEntry,
-} from "./plugin-cache-files.types.js";
-import type { PluginCacheManagement } from "./plugin-cache-management.js";
-import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
-import { createPluginCacheSdk, type PluginCacheSdk } from "./plugin-cache-sdk.js";
-import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import type { PluginInstanceResource, PluginModuleLoaderOwner } from "./plugin-instance.types.js";
+  appendPluginInstanceCleanupFailures,
+  summarizePluginRetirementResults,
+} from "./host-hook-cleanup-result.js";
+import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
+import type { PluginSourceCacheRecord } from "./plugin-cache-artifacts.js";
+import type { PluginCacheFact } from "./plugin-cache-management.js";
+import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
+import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import {
+  createPluginExecutionFrame,
+  getPluginExecutionFrame,
+  pluginInstanceInvocation,
+  runWithPluginExecutionFrame,
+} from "./plugin-instance-invocation.js";
+import type { PluginInstanceResource } from "./plugin-instance.types.js";
 
-export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts> & {
-  rootDir: string;
-  files: Map<string, PluginFileCacheEntry>;
-  checkedEntries: Map<string, PluginEntryCheck>;
-  paths: Map<string, PluginPathCacheEntry>;
-  directory?: PluginDirectoryCacheEntry;
-};
+export type { PluginCache } from "./plugin-cache.types.js";
 
-export interface PluginCache
-  extends
-    PluginCacheMetadata,
-    PluginCacheManagement<PluginCache>,
-    ReturnType<typeof createPluginCacheArtifacts> {
-  kind: "process" | "operation";
-  roots: Map<string, PluginRootCacheRecord>;
-  rootAliases: Map<string, string>;
-  sdk: PluginCacheSdk;
-  retireRegistryLoads?: () => Promise<PluginHostCleanupResult>;
-  setupModules: Map<string, PluginModuleLoaderOwner>;
-  instances: Set<PluginInstanceResource>;
-  retirement?: Promise<PluginHostCleanupResult>;
-  [Symbol.asyncDispose](): Promise<void>;
+const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
+
+/** Read-scope invalidation cancels its preparation. */
+export class PluginCacheFactInvalidatedError extends Error {
+  readonly code = PLUGIN_CACHE_FACT_INVALIDATED;
 }
 
-type PluginCacheScope = { cache: PluginCache; parent?: PluginCacheScope };
+export function isPluginCacheFactInvalidatedError(error: unknown): boolean {
+  // Shared fact promises can originate in another source/require module graph.
+  return extractErrorCode(error) === PLUGIN_CACHE_FACT_INVALIDATED;
+}
 
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
-  scope: AsyncLocalStorage<PluginCacheScope>;
   snapshotOwners: WeakMap<object, PluginCache>;
   retirements: Array<{
     cache: PluginCache;
     completion: Promise<PromiseSettledResult<PluginHostCleanupResult>>;
   }>;
 }>(Symbol.for("openclaw.pluginCache"), () => ({
-  scope: new AsyncLocalStorage<PluginCacheScope>(),
   snapshotOwners: new WeakMap(),
   retirements: [],
 }));
@@ -74,6 +62,44 @@ const cacheRetainers = resolveGlobalSingleton(
       }
     >(),
 );
+
+const instanceCacheOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginInstanceCacheOwners"),
+  () => new WeakMap<PluginInstanceResource, Set<PluginCache>>(),
+);
+
+/** Inventories retain admitted instances until transfer or successful physical disposal. */
+export function retainPluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache = getPluginCache(),
+): void {
+  cache.instances.add(instance);
+  let owners = instanceCacheOwners.get(instance);
+  if (!owners) {
+    instanceCacheOwners.set(instance, (owners = new Set()));
+  }
+  owners.add(cache);
+}
+
+/** A retiring inventory releases its own custody; terminal disposal releases every birth cache. */
+export function releasePluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache?: PluginCache,
+): void {
+  const owners = instanceCacheOwners.get(instance);
+  if (cache) {
+    cache.instances.delete(instance);
+    owners?.delete(cache);
+  } else {
+    for (const owner of owners ?? []) {
+      owner.instances.delete(instance);
+    }
+    owners?.clear();
+  }
+  if (owners?.size === 0) {
+    instanceCacheOwners.delete(instance);
+  }
+}
 
 function getPluginCacheRetainers(cache: PluginCache) {
   let retained = cacheRetainers.get(cache);
@@ -122,6 +148,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       snapshot: undefined,
       owner: "operation",
       configFingerprint: undefined,
+      agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatiblePolicyHashes: undefined,
@@ -131,20 +158,26 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
     },
     snapshots: new Map(),
     discovery: new Map(),
+    sharedDiscovery: new Map(),
     projections: new WeakMap(),
     projectionSources: new WeakMap(),
     completions: new WeakMap(),
     indexFacts: new WeakMap(),
+    providerPolicyOwners: new WeakMap(),
     channelAdapters: new WeakMap(),
     bundledChannelCatalogs: new Map(),
+    bundledProviderPolicySurfaces: new WeakMap(),
     staticCatalogStates: new WeakMap(),
     modelSuppressionResolvers: new WeakMap(),
+    mcpAuthDeclarations: new WeakMap(),
   };
 }
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
+  cache.sdk.native.parents.clear();
   for (const root of cache.roots.values()) {
     root.files.clear();
     root.checkedEntries.clear();
@@ -158,6 +191,7 @@ export function invalidatePluginCacheMetadata(cache: PluginCache): void {
   cache.rootAliases.clear();
   cache.installRecords.clear();
   cache.persistedInstalledIndex.clear();
+  cache.preparedBundledDiscoveryModes.clear();
   cache.dependencyStatus = new WeakMap();
 }
 
@@ -176,8 +210,12 @@ export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}):
     metadata: createPluginMetadataCache(),
     installRecords: new Map(),
     persistedInstalledIndex: new Map(),
+    preparedBundledDiscoveryModes: new Map(),
     dependencyStatus: new WeakMap(),
-    ...createPluginCacheArtifacts(),
+    moduleLoaders: new Map(),
+    sources: new Map(),
+    sourceAliases: new Map(),
+    runtimeRecordRoots: new WeakMap(),
   };
 }
 
@@ -192,13 +230,13 @@ export function adoptProcessPluginCache(cache: PluginCache): void {
 }
 
 export function getScopedPluginCache(): PluginCache | undefined {
-  return state.scope.getStore()?.cache;
+  return getPluginExecutionFrame()?.cacheScope?.cache;
 }
 
-/** Installation refreshes every enclosing operation, including callers outside metadata phases. */
+/** An explicit install refreshes its enclosing command's metadata phases. */
 export function getScopedPluginCaches(): PluginCache[] {
   const caches: PluginCache[] = [];
-  for (let scope = state.scope.getStore(); scope; scope = scope.parent) {
+  for (let scope = getPluginExecutionFrame()?.cacheScope; scope; scope = scope.parent) {
     caches.push(scope.cache);
   }
   return caches;
@@ -209,11 +247,74 @@ export function getPluginCache(): PluginCache {
 }
 
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
-  return state.scope.run({ cache, parent: state.scope.getStore() }, run);
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    createPluginExecutionFrame(
+      { ...current, cacheScope: { cache, parent: current?.cacheScope } },
+      current,
+    ),
+    run,
+  );
+}
+
+/** Coalesce reads; an invalidated in-flight read may finish without repopulating the cache. */
+export async function preparePluginCacheFact<T>(
+  owner: PluginCache,
+  facts: Map<string, PluginCacheFact<T>>,
+  key: string,
+  read: () => Promise<T>,
+): Promise<{ value: T; assertCurrent: () => void }> {
+  const signal = getPluginCacheRetirementSignal(owner);
+  signal.throwIfAborted();
+  let current = facts.get(key);
+  if (!current) {
+    const release = retainPluginCache(owner);
+    let reading: Promise<T>;
+    try {
+      reading = read();
+    } catch (error) {
+      release();
+      throw error;
+    }
+    const pending: { pending: Promise<{ value: T }> } = {
+      pending: reading
+        .then((value) => {
+          signal.throwIfAborted();
+          const published = facts.get(key);
+          if (published && "value" in published) {
+            return published;
+          }
+          const ready = { value };
+          if (published === pending) {
+            facts.set(key, ready);
+          }
+          return ready;
+        })
+        .catch((error: unknown) => {
+          if (facts.get(key) === pending) {
+            facts.delete(key);
+          }
+          throw error;
+        })
+        .finally(release),
+    };
+    facts.set(key, pending);
+    current = pending;
+  }
+  const ready = "pending" in current ? await current.pending : current;
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+  };
+  assertCurrent();
+  return { value: ready.value, assertCurrent };
 }
 
 export function runOutsidePluginCache<T>(run: () => T): T {
-  return state.scope.exit(run);
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    createPluginExecutionFrame({ ...current, cacheScope: undefined }, current),
+    run,
+  );
 }
 
 /** Frozen views retain their producer so deferred access fills the same generation. */
@@ -249,14 +350,14 @@ export function retirePluginCacheInstance(
   instance: PluginInstanceResource,
   cache = getPluginCache(),
 ): Promise<void> {
-  cache.instances.add(instance);
+  retainPluginCacheInstance(instance, cache);
   // A registration caller may receive a self-retirement acknowledgment; this owner must join fully.
   const completion = pluginInstanceInvocation
     .exit(() => instance.dispose())
     .then((result) => {
       // Failed outcomes stay available to the cache's existing disposal aggregator.
       if (result.errors.length === 0) {
-        cache.instances.delete(instance);
+        releasePluginCacheInstance(instance, cache);
       }
     });
   void completion.catch(() => {});
@@ -274,19 +375,21 @@ export function retirePluginCache(
   }
   const completion = createDeferredCore<PluginHostCleanupResult>();
   retained.retirement = completion.promise;
-  // Abort listeners may reenter retirement or release the final generation immediately.
+  const retire = async () => {
+    // Cleanup owns its work after the requesting command has closed.
+    if (retained.references.size) {
+      await retained.settled.promise;
+    }
+    const work = new AsyncWorkScope();
+    try {
+      return await work.track(() => beginPluginCacheRetirement(cache, beforeRetire));
+    } finally {
+      await work.drain();
+    }
+  };
   retained.controller.abort();
-  // Lazy error frames otherwise retain the retiring callback's scope after cleanup.
-  try {
-    void retained.controller.signal.reason.stack;
-  } catch {
-    // A custom stack formatter must not interrupt retirement.
-  }
-  const begin = () => beginPluginCacheRetirement(cache, beforeRetire);
-  void (retained.references.size ? retained.settled.promise.then(begin) : begin()).then(
-    completion.resolve,
-    completion.reject,
-  );
+  materializeErrorStack(retained.controller.signal.reason);
+  void runOutsideAsyncWorkScope(retire).then(completion.resolve, completion.reject);
   return completion.promise;
 }
 
@@ -312,8 +415,30 @@ function beginPluginCacheRetirement(
     const outcomes = await Promise.allSettled(
       [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
     );
+    const nativeAdmissions = cache.sourceAdmissions;
+    if (nativeAdmissions) {
+      const pending = outcomes.flatMap((outcome) =>
+        outcome.status === "fulfilled"
+          ? outcome.value.result.errors.flatMap((error) =>
+              error instanceof PluginInstanceDrainTimeoutError ? [error.settled] : [],
+            )
+          : [],
+      );
+      if (pending.length > 0) {
+        // A bounded retirement report does not release files still used by timed-out calls.
+        void Promise.allSettled(pending)
+          .then(() => nativeAdmissions.dispose())
+          .catch((error: unknown) =>
+            process.emitWarning(`Plugin native capture cleanup failed: ${String(error)}`),
+          );
+      } else {
+        await nativeAdmissions.dispose();
+      }
+    }
     cache.setupModules.clear();
-    cache.instances.clear();
+    for (const instance of cache.instances) {
+      releasePluginCacheInstance(instance, cache);
+    }
     const unexpected = [
       ...(registry.status === "rejected" ? [registry.reason] : []),
       ...outcomes.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
@@ -328,19 +453,7 @@ function beginPluginCacheRetirement(
         continue;
       }
       const { resource, result } = outcome.value;
-      for (const error of result.errors) {
-        // A registry join may have already included this same instance's outcome.
-        if (
-          !failures.some(
-            (failure) =>
-              failure.pluginId === resource.pluginId &&
-              failure.hookId === "instance" &&
-              failure.error === error,
-          )
-        ) {
-          failures.push({ pluginId: resource.pluginId, hookId: "instance", error });
-        }
-      }
+      appendPluginInstanceCleanupFailures(failures, resource.pluginId, result);
     }
     return { cleanupCount: host?.cleanupCount ?? 0, failures };
   };
@@ -357,19 +470,7 @@ export async function waitForPluginCacheRetirement(
   );
   state.retirements = state.retirements.filter((retirement) => !ready.includes(retirement));
   const results = await Promise.all(ready.map((retirement) => retirement.completion));
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, "Plugin cache retirement failed");
-  }
-  const completed = results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
-  );
-  return {
-    cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
-    failures: completed.flatMap((result) => result.failures),
-  };
+  return summarizePluginRetirementResults(results, "Plugin cache retirement failed");
 }
 
 export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
@@ -388,7 +489,11 @@ export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
       files: new Map(),
       checkedEntries: new Map(),
       paths: new Map(),
-      ...createPluginRootArtifacts(),
+      artifactLoadsInProgress: new Set(),
+      artifacts: new Map(),
+      runtimeArtifacts: new Map(),
+      entryBoundaries: new Map(),
+      entryPaths: new Map(),
     };
     cache.roots.set(key, root);
   }

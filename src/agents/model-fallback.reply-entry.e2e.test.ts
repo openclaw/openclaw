@@ -20,6 +20,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "./embedded-agent-runner/run/types.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "./failover/user-copy.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import {
   makeModelFallbackConfig,
@@ -59,6 +60,7 @@ vi.mock("./models-config.js", () => ({
 function installReplyEntryMocks() {
   vi.doMock("../plugins/runtime.js", () => ({
     getActivePluginRegistry: () => null,
+    getActivePluginRegistryVersion: () => 0,
     getActivePluginRegistryWorkspaceDir: () => undefined,
     getPluginRegistryForContext: () => emptyPluginRegistry,
     requireActivePluginRegistry: () => emptyPluginRegistry,
@@ -178,7 +180,7 @@ describe("getReplyFromConfig fallback availability", () => {
             workspace: workspaceDir,
             model: { primary: `${provider}/mock-1`, fallbacks: ["anthropic/mock-2"] },
           },
-          list: [{ id: "test", agentDir, workspace: workspaceDir }],
+          entries: { test: { agentDir, workspace: workspaceDir } },
         },
         models: {
           ...baseConfig.models,
@@ -300,8 +302,8 @@ describe("getReplyFromConfig fallback availability", () => {
       expect(delivered[0]?.payload.text?.trim().length).toBeGreaterThan(0);
       if (errorMessage === RATE_LIMIT_ERROR_MESSAGE) {
         expect(countProviderAttempts("openai")).toBeGreaterThan(2);
-        expect(text).toContain("API rate limit reached");
-        expect(delivered[0]?.payload.text).toContain("API rate limit reached");
+        expect(text).toContain("The AI service needs a short break");
+        expect(delivered[0]?.payload.text).toContain("The AI service needs a short break");
       } else if (loginCommand) {
         expect(countProviderAttempts(provider)).toBe(1);
         if (reservedProviders.includes(provider)) {
@@ -357,7 +359,7 @@ describe("getReplyFromConfig fallback availability", () => {
         });
       } else {
         expect(countProviderAttempts(provider)).toBe(1);
-        expect(delivered[0]?.payload.text).toContain("Authentication failed");
+        expect(delivered[0]?.payload.text).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
         expect(delivered[0]?.payload.text).not.toContain("/login");
         expect(delivered[0]?.payload.presentation).toBeUndefined();
       }

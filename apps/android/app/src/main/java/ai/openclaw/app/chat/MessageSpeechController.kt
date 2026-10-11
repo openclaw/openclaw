@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "MessageSpeech"
@@ -41,21 +42,18 @@ internal fun interface MessageSpeechSynthesizing {
 
 /** Gateway tts.speak client using the general configured TTS provider chain. */
 internal class MessageSpeechClient(
-  private val session: GatewaySession? = null,
+  private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
   private val json: Json = Json { ignoreUnknownKeys = true },
-  private val requestDetailed: (suspend (String, String, Long) -> GatewaySession.RpcResult)? = null,
 ) : MessageSpeechSynthesizing {
   override suspend fun synthesize(text: String): TalkSpeakAudio? {
     val response =
-      try {
-        performRequest(
-          method = "tts.speak",
-          paramsJson = json.encodeToString(TtsSpeakRequest(text = text)),
-          timeoutMs = 60_000,
+      runCatchingCancellable {
+        requestDetailed(
+          "tts.speak",
+          buildJsonObject { put("text", text) }.toString(),
+          60_000,
         )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
+      }.getOrElse { err ->
         Log.d(TAG, "tts.speak request failed: ${err.message ?: err::class.simpleName}")
         return null
       }
@@ -81,29 +79,12 @@ internal class MessageSpeechClient(
     if (bytes.isEmpty()) return null
     return TalkSpeakAudio(
       bytes = bytes,
-      provider = payload.provider,
       outputFormat = payload.outputFormat,
-      voiceCompatible = null,
       mimeType = payload.mimeType,
       fileExtension = payload.fileExtension,
     )
   }
-
-  private suspend fun performRequest(
-    method: String,
-    paramsJson: String,
-    timeoutMs: Long,
-  ): GatewaySession.RpcResult {
-    requestDetailed?.let { return it(method, paramsJson, timeoutMs) }
-    val activeSession = session ?: throw IllegalStateException("session missing")
-    return activeSession.requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
-  }
 }
-
-@Serializable
-internal data class TtsSpeakRequest(
-  val text: String,
-)
 
 @Serializable
 private data class TtsSpeakResponse(
@@ -136,22 +117,6 @@ internal class MessageSpeechController(
       stop()
       return
     }
-    start(messageId = messageId, text = text)
-  }
-
-  fun stop() {
-    generation.incrementAndGet()
-    job?.cancel()
-    job = null
-    player.stop()
-    localSpeech.stop()
-    _state.value = null
-  }
-
-  private fun start(
-    messageId: String,
-    text: String,
-  ) {
     stop()
     val spoken = text.trim()
     if (spoken.isEmpty()) return
@@ -177,14 +142,21 @@ internal class MessageSpeechController(
       }
   }
 
+  fun stop() {
+    generation.incrementAndGet()
+    job?.cancel()
+    job = null
+    player.stop()
+    localSpeech.stop()
+    _state.value = null
+  }
+
   private suspend fun playClip(clip: TalkSpeakAudio?): Boolean {
     if (clip == null) return false
-    return try {
+    return runCatchingCancellable {
       player.play(clip)
       true
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
+    }.getOrElse { err ->
       Log.w(TAG, "clip playback failed: ${err.message ?: err::class.simpleName}")
       false
     }

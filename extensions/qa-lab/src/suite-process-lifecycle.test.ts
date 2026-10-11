@@ -2,9 +2,9 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { resolveTestNodeExecPath, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
@@ -16,10 +16,10 @@ const fixturePath = fileURLToPath(
 const artifactsRoot = path.join(repoRoot, ".artifacts", "qa-e2e");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcess>();
+const nodeExecPath = resolveTestNodeExecPath();
 
 const PROCESS_LIFECYCLE_SCENARIO = "channel-chat-baseline";
-// Suite execution contends with the surrounding extension shard; only the bounded
-// post-summary close window is the lifecycle contract this regression enforces.
+// Keep the enclosing test budget; readiness and teardown use owned process signals.
 const SUITE_COMPLETION_TIMEOUT_MS = 420_000;
 const POST_SUMMARY_EXIT_TIMEOUT_MS = 45_000;
 
@@ -109,16 +109,18 @@ afterEach(async () => {
 });
 
 function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", fixturePath, outputDir, ...scenarioIds],
-    {
-      cwd: repoRoot,
-      env: buildSuiteProcessEnv(outputDir),
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawn(nodeExecPath, ["--import", "tsx", fixturePath, outputDir, ...scenarioIds], {
+    cwd: repoRoot,
+    env: buildSuiteProcessEnv(outputDir),
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
   activeChildren.add(child);
+  const summaryWritten = Promise.withResolvers<void>();
+  child.on("message", (message: unknown) => {
+    if (message === "summary-written") {
+      summaryWritten.resolve();
+    }
+  });
   let stdout = "";
   let stderr = "";
   const gatewayPorts = new Set<number>();
@@ -145,6 +147,7 @@ function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
   return {
     child,
     closed,
+    summaryWritten: summaryWritten.promise,
     gatewayPorts,
     output: () => ({ stderr, stdout }),
   };
@@ -163,95 +166,21 @@ async function isTcpPortOpen(port: number) {
   });
 }
 
-async function waitForCompletedSummary(params: {
-  outputDir: string;
-  timeoutMs: number;
-  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
-  output: () => { stderr: string; stdout: string };
-}) {
-  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const deadline = Date.now() + params.timeoutMs;
-  const processState: {
-    error?: unknown;
-    outcome?: { code: number | null; signal: NodeJS.Signals | null };
-  } = {};
-  void params.closed.then(
-    (outcome) => {
-      processState.outcome = outcome;
-    },
-    (error: unknown) => {
-      processState.error = error;
-    },
-  );
-  const throwIfProcessClosed = () => {
-    if (!processState.error && !processState.outcome) {
-      return;
-    }
-    const output = params.output();
-    throw new Error(
-      `QA suite process exited before writing a completed summary: ${JSON.stringify(processState.outcome ?? { error: String(processState.error) })}\nstdout:\n${output.stdout.slice(-8_000)}\nstderr:\n${output.stderr.slice(-8_000)}`,
-    );
-  };
-  while (Date.now() < deadline) {
-    let summary: QaSuiteSummaryJson;
-    try {
-      summary = JSON.parse(await fs.readFile(summaryPath, "utf8")) as QaSuiteSummaryJson;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      throwIfProcessClosed();
-      await sleep(50);
-      continue;
-    }
-    const runStatus: unknown = summary.run.status;
-    if (runStatus === "completed") {
-      return summary;
-    }
-    if (runStatus !== "running") {
-      throw new Error(`QA suite summary is missing lifecycle status: ${String(runStatus)}`);
-    }
-    throwIfProcessClosed();
-    await sleep(50);
+async function readCompletedSummary(outputDir: string) {
+  const summary = JSON.parse(
+    await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
+  ) as QaSuiteSummaryJson;
+  if (summary.run.status !== "completed") {
+    throw new Error(`QA suite summary is missing lifecycle status: ${summary.run.status}`);
   }
-  const output = params.output();
-  throw new Error(
-    `QA suite did not write a completed summary within ${params.timeoutMs}ms\nstdout:\n${output.stdout.slice(-8_000)}\nstderr:\n${output.stderr.slice(-8_000)}`,
-  );
-}
-
-async function waitForProcessClose(
-  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>,
-  timeoutMs: number,
-) {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      closed,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `QA suite process did not exit within ${timeoutMs}ms of summary completion`,
-              ),
-            ),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return summary;
 }
 
 describe("qa suite command process lifecycle", () => {
   it(
     "exits after the terminal summary and leaves no gateway listener",
     { timeout: SUITE_COMPLETION_TIMEOUT_MS + POST_SUMMARY_EXIT_TIMEOUT_MS + 30_000 },
-    async () => {
+    async ({ signal }) => {
       await fs.mkdir(artifactsRoot, { recursive: true });
       const outputDir = tempDirs.make("suite-process-lifecycle-", artifactsRoot);
       const run = startSuiteProcess(outputDir, [PROCESS_LIFECYCLE_SCENARIO]);
@@ -263,13 +192,26 @@ describe("qa suite command process lifecycle", () => {
         );
       }, 30_000);
       heartbeat.unref();
-      const summary = await waitForCompletedSummary({
-        outputDir,
-        timeoutMs: SUITE_COMPLETION_TIMEOUT_MS,
-        closed: run.closed,
-        output: run.output,
-      }).finally(() => clearInterval(heartbeat));
-      const outcome = await waitForProcessClose(run.closed, POST_SUMMARY_EXIT_TIMEOUT_MS);
+      const summary = await withinTest(
+        Promise.race([
+          run.summaryWritten.then(() => readCompletedSummary(outputDir)),
+          // IPC and stdio close are separate signals; the durable summary decides
+          // when process close arrives before its publication receipt.
+          run.closed.then(async (outcome) => {
+            try {
+              return await readCompletedSummary(outputDir);
+            } catch (cause) {
+              const output = run.output();
+              throw new Error(
+                `QA suite process exited before writing a completed summary: ${JSON.stringify(outcome)}\nstdout:\n${output.stdout.slice(-8_000)}\nstderr:\n${output.stderr.slice(-8_000)}`,
+                { cause },
+              );
+            }
+          }),
+        ]),
+        signal,
+      ).finally(() => clearInterval(heartbeat));
+      const outcome = await withinTest(run.closed, signal);
       const output = run.output();
 
       expect(outcome, output.stderr).toEqual({ code: 0, signal: null });

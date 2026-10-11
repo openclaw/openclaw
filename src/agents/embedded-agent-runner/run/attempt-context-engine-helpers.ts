@@ -1,9 +1,6 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
-/**
- * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
- */
-import type { ContextEngine } from "../../../context-engine/types.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import {
   isHeartbeatLifecycleRunKind,
   type BootstrapContextRunKind,
@@ -13,12 +10,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-export type AttemptContextEngine = ContextEngine;
-
-type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
-  bootstrapFiles: TBootstrapFile[];
-  contextFiles: TContextFile[];
-};
 
 /**
  * Resolves bootstrap/context files for this attempt and reports whether the
@@ -26,21 +17,14 @@ type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> =
  * intentionally suppresses reinjection after a full bootstrap turn has already
  * been recorded for the session.
  */
-export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
+export async function resolveAttemptBootstrapContext(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
   hasCompletedBootstrapTurn: () => Promise<boolean>;
-  resolveBootstrapContextForRun: () => Promise<
-    AttemptBootstrapContext<TBootstrapFile, TContextFile>
-  >;
-}): Promise<
-  AttemptBootstrapContext<TBootstrapFile, TContextFile> & {
-    isContinuationTurn: boolean;
-    shouldRecordCompletedBootstrapTurn: boolean;
-  }
-> {
+  resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
+}) {
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&
@@ -57,12 +41,10 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     !isHeartbeatLifecycleRun &&
     params.bootstrapMode === "full";
 
-  const context = shouldSkipBootstrapInjection
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await params.resolveBootstrapContextForRun();
-
   return {
-    ...context,
+    ...(shouldSkipBootstrapInjection
+      ? { bootstrapFiles: [], contextFiles: [] }
+      : await params.resolveBootstrapContextForRun()),
     isContinuationTurn,
     shouldRecordCompletedBootstrapTurn,
   };
@@ -119,22 +101,16 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
-/**
- * Finds the assistant message produced by the current attempt, ignoring
- * historical messages that were present before prompt submission.
- */
+/** Excludes history that predates this attempt's prompt submission. */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {
   const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
-  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
-    const message = params.messagesSnapshot[i];
-    if (message?.role === "assistant") {
-      return message;
-    }
-  }
-  return undefined;
+  return params.messagesSnapshot.findLast(
+    (message, index): message is AssistantMessage =>
+      index >= firstAttemptIndex && message?.role === "assistant",
+  );
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
@@ -162,14 +138,7 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   prePromptMessageCount: number;
   compactionOccurred: boolean;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
-  if (params.compactionOccurred) {
-    return undefined;
-  }
-  return findLatestCurrentAttemptUsageSnapshot(params);
-}
-
-function parsePromptCacheTouchTimestamp(value: unknown): number | null {
-  return parseDateFirstTimestampMs(value) ?? null;
+  return params.compactionOccurred ? undefined : findLatestCurrentAttemptUsageSnapshot(params);
 }
 
 /**
@@ -185,31 +154,20 @@ export function resolvePromptCacheTouchTimestamp(params: {
   const hasCacheUsage =
     typeof params.lastCallUsage?.cacheRead === "number" ||
     typeof params.lastCallUsage?.cacheWrite === "number";
-  if (!hasCacheUsage) {
-    return params.fallbackLastCacheTouchAt ?? null;
-  }
   return (
-    parsePromptCacheTouchTimestamp(params.assistantTimestamp) ??
+    (hasCacheUsage ? parseDateFirstTimestampMs(params.assistantTimestamp) : undefined) ??
     params.fallbackLastCacheTouchAt ??
     null
   );
 }
 
-/**
- * Derives prompt-cache metadata from the loop transcript snapshot after a model
- * attempt finishes. It combines the current attempt assistant usage with the
- * carried-forward touch timestamp from earlier attempts.
- */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   retention?: "none" | "short" | "long";
   fallbackLastCacheTouchAt?: number | null;
 }): EmbeddedRunAttemptResult["promptCache"] {
-  const latestUsageSnapshot = findLatestCurrentAttemptUsageSnapshot({
-    messagesSnapshot: params.messagesSnapshot,
-    prePromptMessageCount: params.prePromptMessageCount,
-  });
+  const latestUsageSnapshot = findLatestCurrentAttemptUsageSnapshot(params);
   const lastCallUsage = latestUsageSnapshot?.usage;
 
   return buildContextEnginePromptCacheInfo({

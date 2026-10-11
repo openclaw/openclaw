@@ -13,11 +13,23 @@ export function findMatrixTableSourceRanges(
     }
   }
   lineStarts.push(markdown.length);
-  return tableParser.parse(markdown, {}).flatMap((token) => {
+  return matrixTableSourceRangesFromTokens(
+    tableParser.parse(markdown, {}),
+    lineStarts,
+    markdown.length,
+  );
+}
+
+export function matrixTableSourceRangesFromTokens(
+  tokens: ReturnType<typeof tableParser.parse>,
+  lineStarts: readonly number[],
+  sourceLength: number,
+): Array<{ start: number; end: number }> {
+  return tokens.flatMap((token) => {
     if (token.type !== "table_open" || !token.map) {
       return [];
     }
     const start = lineStarts[token.map[0]] ?? 0;
-    return [{ start, end: lineStarts[token.map[1]] ?? markdown.length }];
+    return [{ start, end: lineStarts[token.map[1]] ?? sourceLength }];
   });
 }

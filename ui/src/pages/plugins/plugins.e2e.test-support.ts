@@ -1,6 +1,12 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "playwright";
 import { describe } from "vitest";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
@@ -269,7 +275,10 @@ const calendarInspection = {
 } satisfies PluginsInspectResult;
 
 const matrixDetail = {
-  plugin: matrixDiscoveryPlugin,
+  plugin: {
+    ...matrixDiscoveryPlugin,
+    catalog: { ...matrixDiscoveryPlugin.catalog, latestVersion: "2.1.0" },
+  },
   detail: {
     origin: "clawhub",
     packageName: "matrix",
@@ -318,6 +327,7 @@ const matrixDetail = {
     security: {
       status: "clean",
       verdict: "benign",
+      auditUrl: "https://clawhub.ai/openclaw/plugins/matrix/security-audit",
       summary: "Capabilities match the stated purpose.",
       guidance: "Review the access token before enabling.",
       checkedAt: 1_780_000_000_000,
@@ -442,12 +452,6 @@ const localCalendarDisabled = {
   removable: false,
 } satisfies PluginCatalogItem;
 
-const localCalendarEnabled = {
-  ...localCalendarDisabled,
-  enabled: true,
-  state: "enabled",
-} satisfies PluginCatalogItem;
-
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -519,7 +523,11 @@ export function enabledWorkboardCapabilities() {
   };
 }
 
-async function captureScreenshot(page: Page, name: string): Promise<void> {
+async function captureScreenshot(
+  page: Page,
+  name: string,
+  target: "content" | "viewport" = "content",
+): Promise<void> {
   if (!updateScreenshots) {
     return;
   }
@@ -528,18 +536,22 @@ async function captureScreenshot(page: Page, name: string): Promise<void> {
     artifactDir = createControlUiE2eArtifactDir("plugins");
     artifacts.set(page, artifactDir);
   }
-  await page.locator(".content").screenshot({
+  await (target === "viewport" ? page : page.locator(".content")).screenshot({
     animations: "disabled",
     caret: "hide",
     path: path.join(artifactDir, name),
   });
 }
 
-async function newContext(viewport = desktopViewport): Promise<BrowserContext> {
+async function newContext(
+  viewport = desktopViewport,
+  options: Pick<BrowserContextOptions, "hasTouch" | "recordVideo"> = {},
+): Promise<BrowserContext> {
   return browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
+    ...options,
   });
 }
 
@@ -663,7 +675,6 @@ export {
   installMockGateway,
   inventory,
   localCalendarDisabled,
-  localCalendarEnabled,
   localOnlyDiscoveryPlugin,
   matrixConfigSchema,
   matrixDiscoveryPlugin,

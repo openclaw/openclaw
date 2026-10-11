@@ -1,102 +1,145 @@
-import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
-import type { PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
-  pathForPluginSettings,
   pathForRoute,
   pluginCatalogIdFromPath,
   pluginSettingsIdFromPath,
 } from "../../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
-import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
   type PluginListResult,
   type PluginMutationResult,
 } from "../../lib/plugins/index.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
 } from "../../lit/gateway-page-controller.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "../../styles/plugins.css";
-import type { PluginCatalogDetailTab } from "./catalog-detail.ts";
 import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { InstallWizardController } from "./install-wizard-controller.ts";
-import type { PluginInstallWizardState } from "./install-wizard-model.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
-import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
-import type { PluginRowMessage } from "./plugin-row-message.ts";
-import {
-  committedMutationMessage,
-  PluginsConsentController,
-} from "./plugins-consent-controller.ts";
+import { PluginHelpController } from "./plugin-help-controller.ts";
+import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
+import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
+import { PluginSettingsController } from "./plugin-settings-controller.ts";
+import { pluginMutationWarnings, PluginsConsentController } from "./plugins-consent-controller.ts";
+import { loadInstalledPluginDetail, loadPluginCatalogDetail } from "./plugins-detail-loader.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 import { PluginsPageIcons } from "./plugins-page-icons.ts";
 import {
+  installRequestForDiscoveryDetail,
   mergePluginCatalogItem,
   pluginMutationBlockedReason,
+  type PluginMutationAction,
   type PluginsPageCatalogDetail,
   type PluginsPageDetail,
 } from "./plugins-page-model.ts";
-import { renderPluginsPage } from "./plugins-page-view.ts";
 import type { PluginsRouteData } from "./route-data.ts";
-import type { PluginSettingsTab } from "./settings-view.ts";
+import type { PluginSettingsTab } from "./settings-view.tsx";
+import { PluginPreviewController } from "./skill-preview.tsx";
 
-type PluginsPageSurface = "discovery" | "settings";
+export class PluginsPageController implements ReactiveControllerHost {
+  private readonly controllers = new Set<ReactiveController>();
+  private active = false;
+  element!: HTMLElement;
+  routeData?: PluginsRouteData;
+  surface: "discovery" | "settings" = "settings";
 
-class PluginsPage extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
+  constructor(
+    private readonly options: {
+      context: () => ApplicationContext;
+      notify: () => void;
+    },
+  ) {}
 
-  @property({ attribute: false }) routeData?: PluginsRouteData;
-  @property({ attribute: false }) surface: PluginsPageSurface = "settings";
+  get context() {
+    return this.options.context();
+  }
+  get isConnected() {
+    return this.active;
+  }
+  addController(controller: ReactiveController) {
+    this.controllers.add(controller);
+    if (this.active) {
+      controller.hostConnected?.();
+    }
+  }
+  removeController(controller: ReactiveController) {
+    this.controllers.delete(controller);
+  }
+  requestUpdate() {
+    if (this.active) {
+      this.options.notify();
+    }
+  }
+  get updateComplete() {
+    return Promise.resolve(true);
+  }
 
-  @state() private result: PluginListResult | null = null;
-  @state() private error: string | null = null;
-  @state() private query = "";
-  @state() private settingsTab: PluginSettingsTab = "installed";
-  @state() private busy: Record<string, boolean> = {};
-  @state() private messages: Record<string, PluginRowMessage> = {};
-  @state() private detail: PluginsPageDetail | null = null;
-  @state() private iconUrls: Record<string, string> = {};
-  @state() private catalogIconUrls: Record<string, string> = {};
-  @state() private pageNotice: PluginRowMessage | null = null;
-  @state() private catalogDetail: PluginsPageCatalogDetail | null = null;
-  @state() private catalogDetailTab: PluginCatalogDetailTab = "readme";
-  @state() private installedDetailTab: InstalledPluginDetailTab = "readme";
-  @state() private installWizard: PluginInstallWizardState | null = null;
-  private configAutoSaveStatus = this.context?.runtimeConfig.state.configAutoSaveStatus ?? "idle";
-  private pluginConfigEditPending = false;
+  readonly state: {
+    result: PluginListResult | null;
+    error: string | null;
+    query: string;
+    settingsTab: PluginSettingsTab;
+    busy: Record<string, PluginMutationAction>;
+    messages: Record<string, PluginRowMessage>;
+    detail: PluginsPageDetail | null;
+    iconUrls: Record<string, string>;
+    catalogIconUrls: Record<string, string>;
+    pageNotice: PluginRowMessage | null;
+    catalogDetail: PluginsPageCatalogDetail | null;
+    installedDetailTab: InstalledPluginDetailTab;
+  } = {
+    result: null,
+    error: null,
+    query: "",
+    settingsTab: "installed",
+    busy: {},
+    messages: {},
+    detail: null,
+    iconUrls: {},
+    catalogIconUrls: {},
+    pageNotice: null,
+    catalogDetail: null,
+    installedDetailTab: "readme",
+  };
+
+  setState(patch: Partial<typeof this.state>) {
+    Object.assign(this.state, patch);
+    this.requestUpdate();
+  }
+
+  private installRequestGeneration = 0;
+  readonly help = new PluginHelpController(this);
+  private configAutoSaveStatus = "idle";
+  pluginConfigEditPending = false;
   private routeDataConsumed = false;
   private pluginGeneration: number | undefined;
-  private iconAuthCandidates: string[] = [];
-  private readonly icons = new PluginsPageIcons({
+  readonly icons = new PluginsPageIcons({
     getContext: () => this.context,
     isConnected: () => this.isConnected,
     onInstalledUrlsChange: (urls) => {
-      this.iconUrls = urls;
+      this.setState({ iconUrls: urls });
     },
     onCatalogUrlsChange: (urls) => {
-      this.catalogIconUrls = urls;
+      this.setState({ catalogIconUrls: urls });
     },
+    onLoadingChange: () => this.requestUpdate(),
   });
-  private readonly gateway = new GatewayPageController(this, {
+  readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
-      this.result = null;
-      this.error = null;
-      this.messages = {};
-      this.pageNotice = null;
+      this.setState({ result: null });
+      this.setState({ error: null });
+      this.setState({ messages: {} });
+      this.setState({ pageNotice: null });
     },
     invalidateRequests: (change) =>
       this.invalidateRequests(
@@ -104,59 +147,50 @@ class PluginsPage extends OpenClawLightDomElement {
       ),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
-  private readonly discovery = new PluginDiscoveryController(this, {
+  readonly skillPreview = new PluginPreviewController(this, this.gateway);
+  readonly mcpLogin = new PluginMcpLoginController(this, this.gateway, {
+    getDetail: () => this.state.detail,
+    getName: (pluginId) =>
+      this.state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
+    canSignIn: () => canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
+    refresh: (pluginId) => this.showDetails(pluginId),
+  });
+  readonly discovery = new PluginDiscoveryController(this, {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
-    onEntriesChanged: () => this.syncCatalogIcons(),
   });
-
-  private readonly consentController = new PluginsConsentController({
+  readonly settings = new PluginSettingsController({
     gateway: this.gateway,
     getContext: () => this.context,
-    getResult: () => this.result,
-    canMutate: () => this.canMutate(),
-    canReload: () => this.accessBlockedReason() === null,
-    isBusy: (rowKey) => Boolean(this.busy[rowKey]),
-    setBusy: (rowKey, busy) => this.setBusy(rowKey, busy),
-    setMessage: (rowKey, message) => this.setMessage(rowKey, message),
-    getMessages: () => this.messages,
-    clearPageNotice: () => {
-      this.pageNotice = null;
+    getDetail: () => this.state.detail,
+    canInspect: () => hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+    canEdit: () => this.canEditConfig(),
+    onEdit: () => {
+      this.pluginConfigEditPending = true;
     },
-    closeDetails: () => {
-      if (this.surface !== "settings") {
-        this.detail = null;
-      }
-    },
-    applyMutationResult: (result) => this.applyMutationResult(result),
-    refreshCatalogAfterMutation: (client) => this.refreshCatalogAfterMutation(client),
-    requestUpdate: () => this.requestUpdate(),
-  });
-  private readonly installWizardController = new InstallWizardController({
-    getState: () => this.installWizard,
-    setState: (wizard) => {
-      this.installWizard = wizard;
-    },
-    getCatalog: () => this.result,
-    getRuntimeConfig: () => this.context.runtimeConfig,
-    getConsentController: () => this.consentController,
-    getOwner: () => gatewayPresentationScope(this.context.gateway),
-    isConnected: () => this.gateway.connected,
-    canMutate: () => this.canMutate(),
-    canEditConfig: () => this.canEditConfig(),
-    refreshCatalog: () => this.refreshCatalog(),
-    onManage: (pluginId) => {
-      this.context.navigate("plugin-settings", {
-        pathname: pathForPluginSettings(pluginId, this.context.basePath),
-        search: "?from=plugins",
-      });
-    },
+    isSettings: () => this.state.installedDetailTab === "configuration",
   });
 
+  readonly consentController = new PluginsConsentController({
+    gateway: this.gateway,
+    getContext: () => this.context,
+    getResult: () => this.state.result,
+    canMutate: () => this.canMutate(),
+    isBusy: (rowKey) => Boolean(this.state.busy[rowKey]),
+    setBusy: (rowKey, busy) => this.setBusy(rowKey, busy),
+    setMessage: (rowKey, message) => this.setMessage(rowKey, message),
+    getMessages: () => this.state.messages,
+    clearPageNotice: () => {
+      this.setState({ pageNotice: null });
+    },
+    closeDetails: () => this.skillPreview.close(),
+    applyMutationResult: (result) => this.applyMutationResult(result),
+    refreshCatalogAfterMutation: (client) => this.refreshCatalog(client),
+    requestUpdate: () => this.requestUpdate(),
+  });
   private readonly catalogTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
+    task: ([client]: readonly [GatewayPageController["client"]], { signal }) =>
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
@@ -165,17 +199,13 @@ class PluginsPage extends OpenClawLightDomElement {
       }
     },
     onError: (error) => {
-      this.error = formatUiError(error);
+      this.setState({ error: formatUiError(error) });
     },
   });
 
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
     (runtimeConfig) => {
-      if (this.surface === "settings" || this.installWizard?.stage === "configuring") {
-        void runtimeConfig.ensureLoaded();
-        void runtimeConfig.ensureSchemaLoaded();
-      }
       this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
       return runtimeConfig.subscribe(() => {
         const nextStatus = runtimeConfig.state.configAutoSaveStatus;
@@ -190,65 +220,104 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   );
 
-  override willUpdate(changed: PropertyValues<this>) {
-    if (changed.has("routeData")) {
-      if (
-        !this.installWizard &&
-        changed.get("routeData")?.location.pathname !== this.routeData?.location.pathname
-      ) {
-        this.installWizardController.close();
+  update(routeData: PluginsRouteData | undefined, surface: "discovery" | "settings") {
+    const previous = this.routeData;
+    this.routeData = routeData;
+    this.surface = surface;
+    if (!this.active) {
+      this.active = true;
+      document.addEventListener("keydown", this.handleDocumentKeydown, true);
+      for (const controller of this.controllers) {
+        controller.hostConnected?.();
+      }
+    }
+    for (const controller of this.controllers) {
+      controller.hostUpdate?.();
+    }
+    if (previous !== routeData) {
+      this.skillPreview.close();
+      if (previous?.location.pathname !== routeData?.location.pathname) {
+        this.installRequestGeneration += 1;
+        this.mcpLogin.reset();
       }
       this.applyRouteData();
     }
+    this.requestUpdate();
   }
 
-  override updated() {
-    this.icons.syncInstalled(this.result, this);
+  afterCommit() {
+    this.icons.syncInstalled(this.state.result, this.element);
+    this.icons.syncCatalog(
+      this.discovery,
+      this.element,
+      this.state.detail?.catalog ?? this.state.catalogDetail?.result,
+    );
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-  }
-
-  override disconnectedCallback() {
+  dispose() {
+    this.active = false;
+    this.mcpLogin.reset();
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    this.installWizardController.disconnect();
+    this.skillPreview.close();
     this.discovery.disconnect();
     this.subscriptions.clear();
     this.icons.reset();
-    super.disconnectedCallback();
+    for (const controller of this.controllers) {
+      controller.hostDisconnected?.();
+    }
+    this.controllers.clear();
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (document.querySelector(".shell-nav[aria-modal='true']")) {
+    // WebAwesome dismisses its open dropdown at document bubble. Let that
+    // owner close the menu and restore focus before this page handles Escape.
+    if (
+      event.key !== "Escape" ||
+      isComposingKeyboardEvent(event) ||
+      document.querySelector(".shell-nav[aria-modal='true']") ||
+      (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
+    ) {
       return;
     }
-    if (event.key !== "Escape") {
+    if (
+      event.target instanceof Node &&
+      event.target !== document &&
+      event.target !== document.body &&
+      !this.element.contains(event.target)
+    ) {
+      return;
+    }
+    const progress = this.element.querySelector<
+      HTMLElementTagNameMap["openclaw-plugin-install-action"]
+    >("openclaw-plugin-install-action[open]");
+    if (progress) {
+      progress.dismiss();
+      event.stopPropagation();
       return;
     }
     if (this.consentController.consent) {
-      this.installWizardController.cancelConsent();
+      this.consentController.close();
       event.stopPropagation();
       return;
     }
-    if (this.installWizard && !this.installWizardController.busy) {
-      this.installWizardController.close();
+    // The file viewer owns Escape inside its shadow-root modal.
+    if (this.skillPreview.state || document.querySelector("openclaw-modal-dialog")) {
+      return;
+    }
+    // Firefox does not emit blur when a focused input is removed from the document.
+    this.element.querySelector<HTMLElement>(":focus")?.blur();
+    if (this.state.catalogDetail) {
+      this.closeCatalogDetail();
       event.stopPropagation();
       return;
     }
-    if (this.detail) {
-      this.detail = null;
+    if (this.state.detail) {
+      this.setState({ detail: null });
       if (this.surface === "settings") {
         this.context.replace("plugin-settings", {
           pathname: pathForRoute("plugin-settings", this.context.basePath),
         });
       }
-      event.stopPropagation();
-      return;
-    }
-    if (this.catalogDetail) {
-      this.closeCatalogDetail();
       event.stopPropagation();
     }
   };
@@ -258,17 +327,14 @@ class PluginsPage extends OpenClawLightDomElement {
     const generation = snapshot.pluginCapabilities?.generation;
     const pluginsChanged = generation !== undefined && generation !== this.pluginGeneration;
     this.pluginGeneration = generation;
-    const nextIconAuthCandidates = resolveControlUiAuthCandidates({
+    if (!change.initial && pluginsChanged) {
+      this.skillPreview.close();
+    }
+    const iconAuthChanged = this.icons.updateAuth({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },
       password: this.context.gateway.connection.password,
     });
-    const iconAuthChanged =
-      nextIconAuthCandidates.length !== this.iconAuthCandidates.length ||
-      nextIconAuthCandidates.some(
-        (candidate, index) => candidate !== this.iconAuthCandidates[index],
-      );
-    this.iconAuthCandidates = nextIconAuthCandidates;
     const shouldRefreshAfterChange =
       !change.initial &&
       (change.identityChanged || change.connectionChanged || iconAuthChanged || pluginsChanged) &&
@@ -288,14 +354,12 @@ class PluginsPage extends OpenClawLightDomElement {
       (change.identityChanged || change.connectionChanged || iconAuthChanged)
     ) {
       this.icons.reset();
-      this.busy = {};
+      this.setState({ busy: {} });
     }
     if (shouldRefreshAfterChange) {
-      void this.refreshCatalog().then(() => this.installWizardController.resume());
-      void this.refreshDiscovery();
-    } else {
-      this.ensureInitialData();
+      void this.refreshCatalog();
     }
+    this.ensureInitialData();
   }
 
   private applyRouteData() {
@@ -309,60 +373,91 @@ class PluginsPage extends OpenClawLightDomElement {
     // Route location is UI state, not Gateway data. Apply it even when the
     // catalog snapshot is stale so deep links do not fall back to Installed.
     if (this.surface === "settings" && !detailPluginId) {
-      this.settingsTab =
-        new URLSearchParams(data.location.search).get("tab") === "advanced"
-          ? "advanced"
-          : "installed";
+      this.setState({
+        settingsTab:
+          new URLSearchParams(data.location.search).get("tab") === "advanced"
+            ? "advanced"
+            : "installed",
+      });
     }
-    if (detailPluginId) {
-      this.installedDetailTab = installedPluginDetailTabFromHash(data.location.hash);
+    if (detailPluginId || catalogId) {
+      this.setState({
+        installedDetailTab:
+          new URLSearchParams(data.location.search).get("view") === "settings"
+            ? "configuration"
+            : installedPluginDetailTabFromHash(data.location.hash),
+      });
     }
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      this.ensureInitialData();
-      return;
+    if (this.gateway.isRouteDataCurrent(data)) {
+      // Route loading can complete after publication on the same connection.
+      if (
+        this.pluginGeneration !== undefined &&
+        (data.result?.generation ?? -1) < this.pluginGeneration
+      ) {
+        void this.refreshCatalog();
+      } else {
+        this.replaceResult(data.result);
+        this.setState({ error: data.error });
+      }
     }
-    // Route loading can complete after publication on the same connection.
-    if (
-      this.pluginGeneration !== undefined &&
-      (data.result?.generation ?? -1) < this.pluginGeneration
-    ) {
-      void this.refreshCatalog();
-    } else {
-      this.replaceResult(data.result);
-      this.error = data.error;
-    }
-    if (detailPluginId !== this.detail?.pluginId) {
+    if (this.surface === "settings" && detailPluginId !== this.state.detail?.pluginId) {
       void this.showDetails(detailPluginId);
     }
-    if (catalogId !== this.catalogDetail?.id) {
+    if (catalogId !== this.state.catalogDetail?.id) {
       void this.showCatalogDetail(catalogId);
     }
     this.ensureInitialData();
   }
 
-  private invalidateRequests(invalidateCatalog = true) {
+  private invalidateRequests(invalidateCatalog: boolean) {
+    this.mcpLogin.reset();
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
       this.discovery.invalidate();
     }
+    this.skillPreview.close();
     // Inspection results belong to one connection epoch, including same-client reconnects.
-    this.detail = null;
-    this.catalogDetail = null;
-    this.installWizardController.invalidate();
+    this.setState({ detail: null });
+    this.setState({ catalogDetail: null });
+    this.installRequestGeneration += 1;
     this.consentController.reset();
   }
 
-  private replaceResult(result: PluginListResult | null, preserveIcons = false) {
-    if (preserveIcons) {
-      this.icons.reconcileInstalled(result);
-    } else {
-      this.icons.resetInstalled();
+  private replaceResult(result: PluginListResult | null) {
+    // Uninstall publishes generations before its final result. Keep the selected
+    // view intact until settlement refreshes inventory and retires its detail.
+    if (this.uninstallingSelection) {
+      return;
     }
-    this.messages = this.consentController.reconcileInstallMessages(result);
-    this.result = result;
+    if (
+      this.state.detail &&
+      result &&
+      !result.plugins.some(
+        (plugin) => plugin.id === this.state.detail?.pluginId && plugin.installed,
+      )
+    ) {
+      // A late removal failure must survive the disappearance of its row.
+      this.setState({
+        pageNotice:
+          this.state.messages[pluginRowKey(this.state.detail.pluginId)] ?? this.state.pageNotice,
+      });
+    }
+    // Route changes reuse artwork; a new Gateway plugin generation retires it.
+    if (this.state.result?.generation === result?.generation) {
+      this.icons.installed.reconcile(result);
+    } else {
+      this.icons.installed.reset();
+    }
+    this.setState({ messages: this.consentController.reconcileInstallMessages(result) });
+    this.setState({ result });
+    // Both route loading and explicit refreshes publish the installed inventory.
+    // Retire any earlier catalog request before resolving its local identity.
+    if (result && this.surface === "discovery") {
+      void this.refreshDiscovery();
+    }
   }
 
-  private get loading(): boolean {
+  get loading(): boolean {
     return (
       this.gateway.connected &&
       (!this.routeDataConsumed || this.catalogTask.status === TaskStatus.PENDING)
@@ -376,31 +471,45 @@ class PluginsPage extends OpenClawLightDomElement {
       : pluginCatalogIdFromPath(pathname, this.context.basePath);
   }
 
+  private get uninstallingSelection(): boolean {
+    return Boolean(
+      this.state.detail &&
+      this.state.busy[pluginRowKey(this.state.detail.pluginId)] === "uninstall" &&
+      this.activeRoutePluginId ===
+        (this.surface === "settings" ? this.state.detail.pluginId : this.state.catalogDetail?.id),
+    );
+  }
+
   private ensureInitialData() {
+    // Category navigation needs neither installed inventory nor catalog cards.
+    // Start it as soon as this discovery page has a connection, even while the
+    // route's plugins.list request is pending.
+    if (this.surface === "discovery" && !this.activeRoutePluginId) {
+      void this.discovery.ensureCategories();
+    }
     // The route owns initial loading; a warm page module can render before its data arrives.
     if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;
     }
-    if (!this.loading && !this.result && !this.error) {
-      void this.refreshCatalog();
+    // A settings page can mount before connection; admit its reads through
+    // both route changes and connected snapshots, including Advanced.
+    if (
+      this.surface === "settings" ||
+      (this.activeRoutePluginId && this.state.installedDetailTab === "configuration")
+    ) {
+      void this.context.runtimeConfig.ensureLoaded();
+      void this.context.runtimeConfig.ensureSchemaLoaded();
     }
-    if (this.surface === "discovery") {
-      const catalogId = this.activeRoutePluginId;
-      if (catalogId) {
-        if (catalogId !== this.catalogDetail?.id) {
-          void this.showCatalogDetail(catalogId);
-        }
-      } else {
-        this.discovery.ensureInitial();
-      }
+    if (!this.loading && !this.state.result && !this.state.error) {
+      void this.refreshCatalog();
     }
   }
 
-  private async refreshCatalog(client = this.gateway.connected ? this.gateway.client : null) {
+  async refreshCatalog(client = this.gateway.connected ? this.gateway.client : null) {
     if (!client) {
       return;
     }
-    this.error = null;
+    this.setState({ error: null });
     await this.catalogTask.run([client]);
   }
 
@@ -409,326 +518,185 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     const catalogId = this.activeRoutePluginId;
-    if (catalogId) {
-      await this.showCatalogDetail(catalogId);
-    } else {
-      await this.discovery.refresh();
+    return catalogId ? this.showCatalogDetail(catalogId) : this.discovery.refresh();
+  }
+
+  selectHubTab(tab: PluginsHubTab) {
+    if (tab !== "plugins" || this.surface !== "discovery") {
+      this.context.navigate(tab);
     }
   }
 
-  private async refreshCatalogAfterMutation(client: NonNullable<GatewayPageController["client"]>) {
-    const scope = this.gateway.capture();
-    await this.refreshCatalog(client);
-    if (scope && scope.client === client && this.gateway.isCurrent(scope)) {
-      await this.refreshDiscovery();
-    }
-  }
-
-  private selectHubTab(tab: PluginsHubTab) {
-    if (tab === "plugins") {
-      if (this.surface !== "discovery") {
-        this.context.navigate("plugins");
-      }
-      return;
-    }
-    this.context.navigate(tab);
-  }
-
-  private accessBlockedReason(mutationAllowed?: boolean): string | null {
+  accessBlockedReason(
+    mutationAllowed?: boolean,
+    connected = this.gateway.connected,
+  ): string | null {
     return pluginMutationBlockedReason({
-      connected: this.gateway.connected,
+      connected,
       hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
       mutationAllowed,
     });
   }
 
-  private canMutate(): boolean {
-    return this.result?.mutationAllowed === true && this.accessBlockedReason() === null;
+  canMutate(): boolean {
+    return this.state.result?.mutationAllowed === true && this.accessBlockedReason() === null;
   }
 
-  private canEditConfig(): boolean {
-    return (
-      pluginMutationBlockedReason({
-        connected: this.context.runtimeConfig.state.connected,
-        hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-        mutationAllowed: this.context.runtimeConfig.canSet,
-      }) === null
-    );
+  canEditConfig(): boolean {
+    const runtimeConfig = this.context.runtimeConfig;
+    return this.accessBlockedReason(runtimeConfig.canSet, runtimeConfig.state.connected) === null;
   }
 
-  private setBusy(key: string, value: boolean) {
-    const next = { ...this.busy };
+  private setBusy(key: string, value: PluginMutationAction | null) {
+    const uninstallChanged = value === "uninstall" || this.state.busy[key] === "uninstall";
+    const next = { ...this.state.busy };
     if (value) {
-      next[key] = true;
+      next[key] = value;
     } else {
       delete next[key];
     }
-    this.busy = next;
+    this.setState({ busy: next });
+    if (uninstallChanged && this.state.detail && key === pluginRowKey(this.state.detail.pluginId)) {
+      // Retire reads admitted before removal. A failed uninstall refreshes the
+      // surviving plugin; success clears its detail before refreshing inventory.
+      if (value === "uninstall") {
+        this.setState({
+          catalogDetail: this.state.catalogDetail ? { ...this.state.catalogDetail } : null,
+        });
+        void this.showDetails(this.state.detail.pluginId);
+      } else {
+        void this.refreshCatalog();
+      }
+    }
   }
 
   private setMessage(key: string, message: PluginRowMessage | null) {
-    const next = { ...this.messages };
+    const next = { ...this.state.messages };
     if (message) {
       next[key] = message;
     } else {
       delete next[key];
     }
-    this.messages = next;
+    this.setState({ messages: next });
   }
 
   private applyMutationResult(result: PluginMutationResult) {
-    this.icons.invalidateInstalled(result.plugin.id);
-    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin), true);
+    this.icons.installed.invalidate(result.plugin.id);
+    this.replaceResult(mergePluginCatalogItem(this.state.result, result.plugin));
   }
 
-  private async showDetails(pluginId: string | null) {
-    let detail: PluginsPageDetail | null = pluginId
-      ? { pluginId, inspection: null, error: null }
-      : null;
-    this.detail = detail;
-    const plugin = this.result?.plugins.find((entry) => entry.id === pluginId);
-    const scope = this.gateway.capture();
-    if (!plugin?.installed || !detail || !scope) {
+  showDetails(pluginId: string | null) {
+    this.mcpLogin.select(pluginId);
+    return loadInstalledPluginDetail({
+      pluginId,
+      plugin: this.state.result?.plugins.find((entry) => entry.id === pluginId),
+      catalog: this.state.catalogDetail?.result,
+      gateway: this.gateway,
+      canInspect: !pluginId || this.state.busy[pluginRowKey(pluginId)] !== "uninstall",
+      getDetail: () => this.state.detail,
+      onChange: (detail) => {
+        this.setState({ detail });
+      },
+    });
+  }
+
+  async showCatalogDetail(id: string | null) {
+    if (this.surface !== "discovery") {
+      this.setState({ catalogDetail: null });
       return;
     }
+    return loadPluginCatalogDetail({
+      id,
+      gateway: this.gateway,
+      context: this.context,
+      location: this.routeData?.location,
+      inventory: this.state.result,
+      uninstalling: this.uninstallingSelection,
+      getDetail: () => this.state.catalogDetail,
+      onChange: (detail) => {
+        this.setState({ catalogDetail: detail });
+      },
+      showInstalled: (pluginId) => this.showDetails(pluginId),
+    });
+  }
+
+  async installCatalogEntry(id: string): Promise<void> {
+    const scope = this.gateway.capture();
+    const key = `install:${id}`;
+    if (!scope || !this.canMutate() || this.state.busy[key]) {
+      return;
+    }
+    const generation = ++this.installRequestGeneration;
+    this.setBusy(key, "install");
     try {
-      const inspection = await inspectPlugin(scope.client, plugin.id);
-      if (!this.gateway.isCurrent(scope) || this.detail !== detail) {
+      const result =
+        this.state.catalogDetail?.result?.plugin.id === id
+          ? this.state.catalogDetail.result
+          : await loadPluginDiscoveryDetail(scope.client, id);
+      if (!this.gateway.isCurrent(scope) || generation !== this.installRequestGeneration) {
         return;
       }
-      detail = { ...detail, inspection };
-      this.detail = detail;
-      if (!plugin.catalogId) {
-        return;
-      }
-      try {
-        const catalog = await loadPluginDiscoveryDetail(
-          scope.client,
-          plugin.catalogId,
-          undefined,
-          plugin.version,
-        );
-        if (this.gateway.isCurrent(scope) && this.detail === detail) {
-          this.detail = { ...detail, inspection: { ...inspection, catalog } };
-        }
-      } catch {
-        // ClawHub presentation is optional; local capabilities and controls are already visible.
+      const request = installRequestForDiscoveryDetail(result);
+      this.setBusy(key, null);
+      if (request) {
+        await this.consentController.install(request, key);
+      } else {
+        this.setMessage(key, {
+          kind: "warning",
+          text: t("pluginsPage.installAvailabilityChanged"),
+        });
       }
     } catch (error) {
-      if (this.gateway.isCurrent(scope) && this.detail === detail) {
-        this.detail = { ...detail, error: formatUiError(error) };
+      if (this.gateway.isCurrent(scope) && generation === this.installRequestGeneration) {
+        this.setMessage(key, { kind: "error", text: formatUiError(error) });
+      }
+    } finally {
+      if (this.gateway.isCurrent(scope)) {
+        this.setBusy(key, null);
       }
     }
   }
 
-  private async showCatalogDetail(id: string | null) {
-    const detail = id ? { id, result: null, error: null } : null;
-    this.catalogDetail = detail;
-    this.catalogDetailTab = "readme";
-    const scope = this.gateway.capture();
-    if (!detail || !scope) {
-      return;
-    }
-    try {
-      const result = await loadPluginDiscoveryDetail(scope.client, detail.id);
-      if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
-        this.catalogDetail = { ...detail, result };
-        this.syncCatalogIcons();
-        if (new URLSearchParams(this.routeData?.location.search).get("action") === "install") {
-          // A chat-card link opens review only; the existing wizard owns install consent.
-          this.context.replace("plugins", {
-            pathname: this.routeData?.location.pathname,
-            search: "",
-          });
-          this.installWizardController.open(result);
-        }
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
-        this.catalogDetail = { ...detail, error: formatUiError(error) };
-      }
-    }
-  }
-
-  private async installCatalogEntry(id: string): Promise<void> {
-    const scope = this.gateway.capture();
-    if (!scope || !this.canMutate()) {
-      return;
-    }
-    const opening = this.installWizardController.prepareOpen();
-    if (!opening) {
-      return;
-    }
-    try {
-      const result = await loadPluginDiscoveryDetail(scope.client, id);
-      if (!this.gateway.isCurrent(scope) || !opening.isCurrent()) {
-        return;
-      }
-      this.syncCatalogIcons(result);
-      opening.open(result);
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && opening.isCurrent()) {
-        this.discovery.error = formatUiError(error);
-        this.requestUpdate();
-      }
-    }
-  }
-
-  private closeCatalogDetail() {
-    this.catalogDetail = null;
-    this.catalogDetailTab = "readme";
+  closeCatalogDetail() {
+    this.setState({ catalogDetail: null });
+    this.setState({ detail: null });
     this.context.navigate("plugins", {
       pathname: pathForRoute("plugins", this.context.basePath),
     });
   }
 
-  private syncCatalogIcons(detail = this.catalogDetail?.result) {
-    this.icons.syncCatalog(this.discovery, detail);
-  }
-
-  private async uninstall(pluginId: string, rowKey: string): Promise<void> {
-    const name = this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+  async uninstall(pluginId: string, rowKey: string): Promise<void> {
+    const name =
+      this.state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client, _isCurrent, isLatest) => {
-        // Removal hides its row, so keep the operation outcome on the page.
+      async (result, refreshError, client, isLatest) => {
+        if (this.state.detail?.pluginId === pluginId) {
+          this.setState({ detail: null });
+        }
+        // Removal hides its row; any remaining warning belongs to the page.
         if (isLatest()) {
-          this.pageNotice = committedMutationMessage("removed", name, result, refreshError);
+          this.setState({ pageNotice: pluginMutationWarnings(result, refreshError) });
           const routePluginId = this.activeRoutePluginId;
           if (routePluginId === pluginId) {
-            this.detail = null;
             this.context.replace("plugin-settings", {
               pathname: pathForRoute("plugin-settings", this.context.basePath),
             });
           }
         }
-        await this.refreshCatalogAfterMutation(client);
+        await this.refreshCatalog(client);
       },
-      { confirm: () => confirmPluginUninstall(name) },
+      {
+        action: "uninstall",
+        confirm: () =>
+          showConfirmDialog({
+            title: t("pluginsPage.removeConfirmTitle", { name }),
+            message: t("pluginsPage.removeConfirmMessage"),
+            confirmLabel: t("pluginsPage.remove"),
+            danger: true,
+          }),
+      },
     );
   }
-
-  override render() {
-    const blockedReason = this.accessBlockedReason(this.result?.mutationAllowed);
-    return renderPluginsPage({
-      context: this.context,
-      routeData: this.routeData,
-      surface: this.surface,
-      connected: this.gateway.connected,
-      loading: this.loading,
-      result: this.result,
-      error: this.error,
-      query: this.query,
-      settingsTab: this.settingsTab,
-      busy: this.busy,
-      messages: this.messages,
-      detail: this.detail,
-      pageNotice: this.pageNotice,
-      iconUrls: this.iconUrls,
-      catalogIconUrls: this.catalogIconUrls,
-      catalogDetail: this.catalogDetail,
-      catalogDetailTab: this.catalogDetailTab,
-      installedDetailTab: this.installedDetailTab,
-      installWizard: this.installWizard,
-      canMutate: this.canMutate(),
-      reloadBlockedReason:
-        this.accessBlockedReason() ??
-        (isGatewayMethodAdvertised(this.context.gateway.snapshot, "plugins.reload") === true
-          ? null
-          : t("pluginsPage.reloadUnavailable")),
-      mutationBlockedReason: blockedReason,
-      canEditConfig: this.canEditConfig(),
-      discovery: this.discovery,
-      consentController: this.consentController,
-      installWizardController: this.installWizardController,
-      actions: {
-        selectHubTab: (tab) => this.selectHubTab(tab),
-        closeCatalogDetail: () => this.closeCatalogDetail(),
-        retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
-        installCatalogEntry: (id) => void this.installCatalogEntry(id),
-        selectCatalogDetailTab: (tab) => {
-          this.catalogDetailTab = tab;
-        },
-        setQuery: (query) => {
-          this.query = query;
-        },
-        refreshCatalog: () => void this.refreshCatalog(),
-        openPluginSettings: (pluginId, fromDiscovery) => {
-          this.context.navigate("plugin-settings", {
-            pathname: pluginId
-              ? pathForPluginSettings(pluginId, this.context.basePath)
-              : pathForRoute("plugin-settings", this.context.basePath),
-            search: fromDiscovery && pluginId ? "?from=plugins" : "",
-          });
-        },
-        handlePluginIconError: (pluginId) => this.icons.handleInstalledError(pluginId),
-        updateEnabled: (pluginId, enabled, rowKey) =>
-          void this.consentController.mutateInstalledPlugin(
-            pluginId,
-            enabled ? "enable" : "disable",
-            rowKey,
-          ),
-        reload: (pluginId, rowKey) =>
-          void this.consentController.mutateInstalledPlugin(pluginId, "reload", rowKey),
-        uninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
-        patchConfig: (path, value) => {
-          this.pluginConfigEditPending = true;
-          this.context.runtimeConfig.patchForm(path, value);
-        },
-        removeConfig: (path) => {
-          this.pluginConfigEditPending = true;
-          this.context.runtimeConfig.removeFormValue(path);
-        },
-        reloadConfig: () => {
-          this.pluginConfigEditPending = false;
-          void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
-        },
-        retryConfigRead: () => {
-          void this.context.runtimeConfig.refresh();
-          void this.context.runtimeConfig.refreshSchema();
-        },
-        retryConfigWrite: () => {
-          void this.context.runtimeConfig.retry();
-        },
-        closeSettingsDetail: (parentRoute) => {
-          this.detail = null;
-          this.installedDetailTab = "readme";
-          this.context.navigate(parentRoute, {
-            pathname: pathForRoute(parentRoute, this.context.basePath),
-          });
-        },
-        retrySettingsDetail: (pluginId) => void this.showDetails(pluginId),
-        selectInstalledDetailTab: (tab) => {
-          this.installedDetailTab = tab;
-          this.context.replace("plugin-settings", {
-            pathname: this.detail
-              ? pathForPluginSettings(this.detail.pluginId, this.context.basePath)
-              : this.routeData?.location.pathname,
-            search: this.routeData?.location.search,
-            hash: `#${tab}`,
-          });
-        },
-        selectSettingsTab: (tab) => {
-          this.settingsTab = tab;
-          this.context.replace("plugin-settings", {
-            pathname: pathForRoute("plugin-settings", this.context.basePath),
-            search: tab === "advanced" ? "?tab=advanced" : "",
-          });
-        },
-      },
-    });
-  }
 }
-
-if (!customElements.get("openclaw-plugins-page")) {
-  customElements.define("openclaw-plugins-page", PluginsPage);
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-plugins-page": PluginsPage;
-  }
-}
-
-export { PluginsPage };

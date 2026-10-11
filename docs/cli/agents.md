@@ -34,6 +34,12 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+For an explicit multi-agent roster, the default badge and JSON `isDefault` field
+use `agents.defaults.systemAgent.agentId`. Doctor preserves the migrated default
+there across restarts. Without a designation, every entry reports `isDefault: false`;
+set one with `openclaw config set agents.defaults.systemAgent.agentId <id>`.
+The Control UI's **Set Default** action writes the same designation.
+
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
 
@@ -53,11 +59,23 @@ and unreadable local images also fall back to the workspace avatar.
 
 Options: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
 
+Basic non-interactive creation uses the local Gateway while it is running. The
+command binds to that Gateway's state owner; an unsupported method, lost reply,
+or authentication failure never retries the write locally. Check `agents list`
+before retrying an uncertain result.
+
+Interactive setup, `--role`, `--agent-dir`, and `--bind` require the local Gateway
+to be stopped. These setup flows hold exclusive state ownership through workspace,
+credential, and config settlement. Stop the Gateway through its service owner,
+wait for it to exit, and rerun the same command.
+
 - The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires an agent name and, unless `--role` is supplied, `--workspace`.
 - `--json` alone keeps the guided wizard interactive. Prompts and status are written to stderr, and stdout contains one JSON summary after setup completes.
 - Non-interactive `--json` reports normalized agent IDs in the summary without extra stdout status messages.
+- If a requested binding belongs to another agent, non-interactive creation keeps the new agent and any non-conflicting bindings but exits with status 1. The summary names the conflicts; resolve them with `agents bind` and `agents unbind` instead of recreating the agent.
 - `main` is an ordinary agent id. Recreating it after another agent owns the installation can require `openclaw doctor --fix` to repair legacy session or shared-auth ownership first.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
+- An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until that deletion is retried.
 
 #### Role templates
 
@@ -80,6 +98,10 @@ skip the identity ceremony: no `BOOTSTRAP.md` is created. The bundled roles
 leave skills unchanged.
 Role delegation settings are also applied. A standalone chief of staff targets the
 standard specialist ids; use the team command to create and wire all four agents.
+When creating an agent through Ask OpenClaw, you can give a display name separately
+from its id, such as “QA Writer” with id `qa-writer`. The approval includes both.
+An explicit display name replaces the role's default name while keeping its
+emoji, theme, and operating instructions.
 Unknown roles are rejected with the available role names. A workspace with an
 unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
 adding role files; rejected adoption leaves workspace files and agent config
@@ -91,6 +113,9 @@ checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-prev
 to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
+
+Team creation requires the local Gateway to be stopped and holds exclusive state
+ownership until the created agents and config changes have settled.
 
 Options: `--preset <name>` (default and only bundled preset: `team`),
 `--coordinator <id>` (default: `coordinator`), `--prefix <p>`,
@@ -119,10 +144,10 @@ change global delegation defaults or tool policy. See [Team preset](/concepts/mu
 Delegation remains team wiring in config; the role Claws will carry these
 settings once the separate Claw profile support lands.
 
-The coordinator is an explicit chat target, not a universal default agent. If
+The coordinator is an explicit chat target. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
-coordinator for ambient system work. An existing ambient owner is preserved and
-reported. Channel routing still needs bindings to the intended agent.
+coordinator for ambient system work and default-compatible operations. An existing
+owner is preserved and reported. Channel bindings take precedence over this default.
 With `--json`, the summary includes `coordinatorId`, the created `agents` and
 their paths, `ambientOwnerId`, and a `note` when another ambient owner is retained.
 
@@ -152,9 +177,17 @@ Options: `--force`, `--json`.
 - If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command; `--json` reports `purgeFailed: true` until the purge succeeds.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
 - An agent that owns a session database still used by another configured agent cannot be deleted, even when retaining files. Keep that owner configured; moving shared history to another owner requires a supported migration, which is not currently available.
-- When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
+- When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the configured local Gateway cannot be reached before connecting, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If local Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
+- Deletion removes the agent's bindings but not the channel accounts they routed, and it removes only bindings that target the deleted agent. A surviving account-wide or channel-wide binding to another agent keeps the whole account routing; a surviving peer binding only covers messages from that peer, so messages from other peers on the account can still be left ownerless. If deletion leaves a single configured agent, routing falls back to that sole agent. Unbound traffic is left undispatched when no fallback owner resolves; a configured `agents.defaults.systemAgent.agentId`, retained legacy owner, or caller-supplied owner can still catch it. A channel that keeps inbound messages for retry (Telegram, for example) may deliver a still-queued message after rebinding; see the [routing retry limits](/concepts/multi-agent#routing-rules). To retire the agent's bot as well, remove its channel account before deleting the agent, naming a surviving agent so channel-plugin discovery has a workspace owner: `openclaw channels remove --agent <surviving-agent-id> --channel <channel> --account <id> --delete`. Without `--agent`, a multi-agent config with no fallback owner fails with `AgentSelectionRequiredError`. Skip account removal if another agent's binding still uses that account.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
 - Cleanup also retains directories containing another agent's registered database, so deleting a parent directory cannot discard the survivor's history.
+- Cleanup resolves symlink targets using their filesystem meaning, including `..` segments, so a dangling workspace link cannot select an unrelated neighboring directory.
+
+Automatic local fallback never applies to a remote Gateway or an
+`OPENCLAW_GATEWAY_URL` override, including loopback SSH tunnels. Connection or
+credential failures exit with an error and leave local config, workspace, and
+session state alone. Restore the Gateway connection and credentials, or run the
+command on the Gateway host.
 
 ## Routing bindings
 
@@ -198,6 +231,7 @@ If you omit `--agent` for `bind` or `unbind`, OpenClaw targets the current defau
 
 - A stored binding without `accountId` matches the literal `default` account key only.
 - `accountId: "*"` is the channel-wide fallback (all accounts) and is less specific than an explicit account binding.
+- Binding conflicts, duplicate detection, and removal compare normalized account IDs, just like message routing; account ID casing does not create a separate route.
 - If the same agent already has a matching channel binding without `accountId`, and you later bind with an explicit or resolved `accountId`, OpenClaw upgrades that existing binding in place instead of adding a duplicate.
 
 Examples:
@@ -271,7 +305,6 @@ Config sample:
   agents: {
     entries: {
       main: {
-        default: true,
         identity: {
           name: "OpenClaw",
           theme: "space lobster",

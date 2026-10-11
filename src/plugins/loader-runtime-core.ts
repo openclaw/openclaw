@@ -1,20 +1,23 @@
+import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
-import {
-  recordPluginInstallOwnerLookup,
-  resolvePluginCandidateInstallOwner,
-} from "./candidate-install-owner.js";
+import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
-import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import {
   resolvePluginLoadCacheContext,
   resolveRuntimeSubagentMode,
 } from "./loader-load-context.js";
 import { createLazyPluginRuntime, createPluginModuleLoader } from "./loader-module-runtime.js";
-import { warnAboutUntrackedLoadedPlugins } from "./loader-provenance.js";
+import {
+  buildProvenanceIndex,
+  warnAboutUntrackedLoadedPlugins,
+  warnWhenAllowlistIsOpen,
+} from "./loader-provenance.js";
 import { formatPluginFailureSummary } from "./loader-records.js";
 import {
   loadRuntimePluginCandidate,
@@ -24,11 +27,13 @@ import {
 } from "./loader-runtime-candidate.js";
 import {
   activatePluginRegistry,
+  createPluginCandidatesFromManifestRegistry,
   matchesScopedPluginOrDreamingSidecar,
   maybeThrowOnPluginLoadError,
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
@@ -36,19 +41,77 @@ import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
+  isPluginRecordActive,
+  isPluginRecordBorrowed,
   isPluginRegistryActivated,
+  markPluginRecordBorrowed,
   withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
-import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import type { PluginRecord } from "./registry-types.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { degradedPluginMatchesRoot, findActiveDegradedPlugin } from "./runtime-degraded-state.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
 
-type PluginLoadInput = { source: string; signature: string; config: PreparedPluginConfig };
+type PluginLoadInput = {
+  source: string;
+  signature: string | undefined;
+  /** Load-mode-free identity recorded by side-effect runtime loads for non-activating borrowers. */
+  borrowSignature?: string;
+  config: PreparedPluginConfig;
+};
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
+
+/** Captured JSON inputs ignore object key order, but preserve array order and values. */
+function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      isDeepStrictEqual(JSON.parse(left), JSON.parse(right)))
+  );
+}
+
+/**
+ * Same-mode predecessors transfer to the candidate at publication. A live side-effect
+ * runtime lends active records to a non-activating load and keeps their custody.
+ */
+function resolvePluginRecordRetention(
+  { previousRegistry, borrowRegistry }: PluginLoadOptions,
+  pluginId: string,
+  params: { signature?: string; borrowSignature?: string; replaced: boolean },
+): { registry: PluginRegistry; record: PluginRecord; input: PluginLoadInput } | undefined {
+  const previous = previousRegistry?.plugins.find((record) => record.id === pluginId);
+  const previousInput = previousRegistry && registryInputs.get(previousRegistry)?.get(pluginId);
+  if (
+    previousRegistry &&
+    previous &&
+    previousInput &&
+    // A predecessor can transfer only its own instances, not another owner's loans.
+    // Reborrow from the supplied lender so callbacks never retain the old borrower.
+    !isPluginRecordBorrowed(previousRegistry, previous) &&
+    params.signature !== undefined &&
+    !params.replaced &&
+    samePluginLoadInput(previousInput.signature, params.signature)
+  ) {
+    return { registry: previousRegistry, record: previous, input: previousInput };
+  }
+  const lent = borrowRegistry?.plugins.find((record) => record.id === pluginId);
+  const lentInput = borrowRegistry && registryInputs.get(borrowRegistry)?.get(pluginId);
+  return borrowRegistry &&
+    lent &&
+    lentInput?.borrowSignature !== undefined &&
+    isPluginRecordActive(borrowRegistry, lent) &&
+    samePluginLoadInput(lentInput.borrowSignature, params.borrowSignature)
+    ? { registry: borrowRegistry, record: lent, input: lentInput }
+    : undefined;
+}
 
 type PluginModuleLoaderOverrides = Pick<
   Parameters<typeof createPluginModuleLoader>[0],
@@ -60,13 +123,15 @@ export type InternalPluginLoadOverrides = {
 };
 
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
-  return {
+  const subagent: PluginRuntime["subagent"] = {
     complete: (...args) => runtime.subagent.complete(...args),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
     deleteSession: (...args) => runtime.subagent.deleteSession(...args),
   };
+  bindGatewayContextResolver(subagent, getGatewayContextResolver(runtime));
+  return subagent;
 }
 
 function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntime["nodes"] {
@@ -78,14 +143,23 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
 }
 
 export type NativePluginLoadBindings = Pick<PluginRuntime, "modelAuth" | "modelConfig"> & {
-  capabilityCatalogContext: NonNullable<PluginLoadOptions["capabilityCatalogContext"]>;
+  capabilityCatalogContext: PluginCapabilityCatalogHostContext;
 };
+
+function createCapabilityCatalogContextResolver(
+  context: NativePluginLoadBindings["capabilityCatalogContext"],
+) {
+  // Registrars retain this callback. Keep it outside the loader's lexical scope so
+  // a live replacement cannot retain options.previousRegistry and all older generations.
+  return () => context;
+}
 
 export function loadOpenClawPluginsCore(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,
   inspectionResources?: PluginRegistryInspectionResources,
+  trackActivationCleanup?: (completion: Promise<void>) => void,
 ): PluginRegistry {
   if (getPluginCache().retirement) {
     throw new Error("Plugin inventory has retired; begin a new plugin operation.");
@@ -102,6 +176,8 @@ export function loadOpenClawPluginsCore(
         `empty-plugin-scope::${runtimeSubagentMode}::${options.workspaceDir ?? ""}`,
         runtimeSubagentMode,
         options.workspaceDir,
+        undefined,
+        trackActivationCleanup,
       );
     }
     return emptyRegistry;
@@ -111,7 +187,11 @@ export function loadOpenClawPluginsCore(
   const logger = options.logger ?? createSubsystemLogger("plugins");
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
-  const cacheEnabled = !options.previousRegistry && isPluginRegistryCacheEnabled(options);
+  const cacheEnabled =
+    !options.previousRegistry &&
+    !options.borrowRegistry &&
+    !options.moduleRecoveries &&
+    isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
     const cached = context.cacheState.get(context.cacheKey);
     if (cached) {
@@ -122,6 +202,8 @@ export function loadOpenClawPluginsCore(
           context.cacheKey,
           context.runtimeSubagentMode,
           options.workspaceDir,
+          undefined,
+          trackActivationCleanup,
         );
       }
       return cached;
@@ -138,18 +220,11 @@ export function loadOpenClawPluginsCore(
       expectedSourceDigests: options.expectedSourceDigests,
       ...overrides?.moduleLoader,
     });
-    const activeRuntime =
-      options.runtimeOptions?.allowGatewaySubagentBinding === true
-        ? getActivePluginRegistry()
-        : undefined;
-    const activeGatewayRuntime = activeRuntime
-      ? getPluginRegistryRuntime(activeRuntime)
+    const borrowedSubagent = context.borrowedGatewayRuntime
+      ? createDeferredGatewaySubagentRuntime(context.borrowedGatewayRuntime)
       : undefined;
-    const borrowedSubagent = activeGatewayRuntime
-      ? createDeferredGatewaySubagentRuntime(activeGatewayRuntime)
-      : undefined;
-    const borrowedNodes = activeGatewayRuntime
-      ? createDeferredGatewayNodesRuntime(activeGatewayRuntime)
+    const borrowedNodes = context.borrowedGatewayRuntime
+      ? createDeferredGatewayNodesRuntime(context.borrowedGatewayRuntime)
       : undefined;
     const runtime =
       options.mode === "cli-metadata"
@@ -171,7 +246,6 @@ export function loadOpenClawPluginsCore(
                 subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
-              loadPluginModule,
             });
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??
@@ -180,7 +254,8 @@ export function loadOpenClawPluginsCore(
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
-      resolveCapabilityCatalogContext: () => capabilityCatalogContext,
+      resolveCapabilityCatalogContext:
+        createCapabilityCatalogContextResolver(capabilityCatalogContext),
       allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,
       coreGatewayHandlers: options.coreGatewayHandlers,
       ...(options.coreGatewayMethodNames !== undefined && {
@@ -192,16 +267,64 @@ export function loadOpenClawPluginsCore(
     const builder = registryBuilder;
     const { registry } = builder;
     inspectionResources?.attach(registry);
-    const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
-      resolvePluginLoadDiscovery({
-        options,
-        context,
-        diagnostics: registry.diagnostics,
-        logger,
-        onlyPluginIdSet,
-        emitWarning: context.shouldActivate,
-        warningCacheKey: context.cacheKey,
+    // The load context has verified the current generation's workspace, config, and scope.
+    const suppliedManifestRegistry =
+      options.manifestRegistry ??
+      (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
+    const discovery: PluginDiscoveryResult = suppliedManifestRegistry
+      ? {
+          candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
+          diagnostics: [],
+        }
+      : (options.discovery ??
+        discoverOpenClawPlugins({
+          workspaceDir: options.workspaceDir,
+          extraPaths: context.normalized.loadPaths,
+          env: context.env,
+          installRecords: context.installRecords,
+        }));
+    const manifestRegistry =
+      suppliedManifestRegistry ??
+      loadPluginManifestRegistryCore({
+        config: context.cfg,
+        workspaceDir: options.workspaceDir,
+        env: context.env,
+        candidates: discovery.candidates,
+        diagnostics: discovery.diagnostics,
+        installRecords:
+          Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
       });
+    registry.diagnostics.push(...manifestRegistry.diagnostics);
+    warnWhenAllowlistIsOpen({
+      emitWarning: context.shouldActivate,
+      logger,
+      pluginsEnabled: context.normalized.enabled,
+      allow: context.normalized.allow,
+      warningCacheKey: context.cacheKey,
+      warningCache: context.cacheState,
+      explicitlyEnabledPluginIds: new Set(
+        Object.entries(context.normalized.entries)
+          .filter(([, entry]) => entry.enabled === true)
+          .map(([pluginId]) => pluginId),
+      ),
+      // Partial snapshots should only warn about plugins intentionally in scope.
+      discoverablePlugins: manifestRegistry.plugins.filter(
+        (plugin) => !onlyPluginIdSet || onlyPluginIdSet.has(plugin.id),
+      ),
+    });
+    const provenance = buildProvenanceIndex({
+      normalizedLoadPaths: context.normalized.loadPaths,
+      env: context.env,
+      installRecords: context.installRecords,
+    });
+    const manifestBySource = new Map(
+      manifestRegistry.plugins.map((record) => [record.source, record]),
+    );
+    // Manifest selection owns duplicate precedence; runtime consumes only its winners.
+    const orderedCandidates = discovery.candidates.flatMap((candidate) => {
+      const manifest = manifestBySource.get(candidate.source);
+      return manifest ? [{ candidate, manifest }] : [];
+    });
     const loaderCacheIdentity = Object.freeze({
       requestKey: context.cacheKey,
       resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
@@ -222,9 +345,11 @@ export function loadOpenClawPluginsCore(
         preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
       },
       context.registrationConfigKey,
-      loaderCacheIdentity,
     );
-    const replacedIds = new Set(options.replacePluginIds ?? []);
+    const replacedIds = new Set([
+      ...(options.replacePluginIds ?? []),
+      ...(options.moduleRecoveries?.keys() ?? []),
+    ]);
     const memorySlot = context.normalized.slots.memory;
     const dreamingSidecar = resolveAuthorizedDreamingSidecar({
       cfg: context.cfg,
@@ -235,10 +360,8 @@ export function loadOpenClawPluginsCore(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
-    for (const candidate of orderedCandidates) {
-      const manifest = manifestBySource.get(candidate.source);
+    for (const { candidate, manifest } of orderedCandidates) {
       if (
-        !manifest ||
         inputs.has(manifest.id) ||
         !matchesScopedPluginOrDreamingSidecar({
           onlyPluginIdSet,
@@ -263,11 +386,16 @@ export function loadOpenClawPluginsCore(
         context.normalized.entries[normalizePluginPolicyId(manifest.id)] ?? {};
       const preparedConfig: PreparedPluginConfig = { input: JSON.stringify(pluginConfig) };
       const degradedPlugin = findActiveDegradedPlugin(manifest.id);
-      const signature = JSON.stringify([
+      // Control UI builds apply through the UI-only plugins.controlUi.reload owner. An in-place
+      // `openclaw plugins build` rewrites controlUi paths and the byte-derived schemaCacheKey, which
+      // must not force an unrelated backend replacement. Declaration presence still decides
+      // whether the browser catalog serves this record, and configSchema is compared by value.
+      const { controlUi, schemaCacheKey: _schemaCacheKey, ...runtimeManifest } = manifest;
+      const identityInputs = [
         candidate.source,
         candidate.origin,
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
-        manifest,
+        { ...runtimeManifest, controlUi: controlUi !== undefined },
         activation,
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)
@@ -275,25 +403,59 @@ export function loadOpenClawPluginsCore(
           : undefined,
         hasKind(manifest.kind, "memory") ? memorySlot : undefined,
         manifest.id === dreamingSidecar?.engineId ? dreamingSidecar : undefined,
-        context.artifactPreference,
-        context.runtimeSideEffects,
         context.channelPluginLoadIntent,
         context.includeSetupOnlyChannelPlugins,
         context.forceSetupOnlyChannelPlugins,
         validateOnly,
-        options.toolDiscovery === true,
-        options.mode,
-      ]);
-      inputs.set(manifest.id, { source: candidate.source, signature, config: preparedConfig });
-      const previous = options.previousRegistry?.plugins.find(
-        (record) => record.id === manifest.id,
-      );
-      const previousInput =
-        options.previousRegistry && registryInputs.get(options.previousRegistry)?.get(manifest.id);
-      if (previous && !replacedIds.has(manifest.id) && previousInput?.signature === signature) {
+      ];
+      // Side-effect runtime loads lend their records; non-activating runtime loads borrow them.
+      const runtimeRegistration =
+        !validateOnly && options.mode !== "cli-metadata" && options.toolDiscovery !== true;
+      const lends = runtimeRegistration && context.runtimeSideEffects;
+      const borrows =
+        runtimeRegistration && !context.runtimeSideEffects && options.borrowRegistry !== undefined;
+      let signature: string | undefined;
+      let borrowSignature: string | undefined;
+      try {
+        signature = JSON.stringify([
+          ...identityInputs,
+          context.artifactPreference,
+          context.runtimeSideEffects,
+          options.toolDiscovery === true,
+          options.mode,
+        ]);
+        borrowSignature = lends || borrows ? JSON.stringify(identityInputs) : undefined;
+      } catch (error) {
+        // A malformed external schema must reach the validation diagnostic, not abort
+        // sibling loading while preparing an optional runtime-retention signature.
+        if (
+          !(error instanceof RangeError) ||
+          candidate.origin === "bundled" ||
+          prepareRuntimePluginConfig({
+            candidate,
+            manifestRecord: manifest,
+            context,
+            preparedConfig,
+          }).ok
+        ) {
+          throw error;
+        }
+      }
+      inputs.set(manifest.id, {
+        source: candidate.source,
+        signature,
+        ...(lends ? { borrowSignature } : {}),
+        config: preparedConfig,
+      });
+      const retention = resolvePluginRecordRetention(options, manifest.id, {
+        signature,
+        borrowSignature: borrows ? borrowSignature : undefined,
+        replaced: replacedIds.has(manifest.id),
+      });
+      if (retention) {
         // Reserve retained contributions before newcomers register. Reuse validation only after
         // matching policy/admission inputs, leaving excluded candidates on their existing path.
-        if (previousInput.config.validation) {
+        if (retention.input.config.validation) {
           prepareRuntimePluginConfig({
             candidate,
             manifestRecord: manifest,
@@ -301,26 +463,29 @@ export function loadOpenClawPluginsCore(
             preparedConfig,
           });
         }
-        if (previousInput.config.input === preparedConfig.input) {
-          retained.set(manifest.id, previous);
-          projectPluginContributions(options.previousRegistry!, previous, registry);
+        if (samePluginLoadInput(retention.input.config.input, preparedConfig.input)) {
+          retained.set(manifest.id, retention.record);
+          if (retention.registry === options.borrowRegistry) {
+            markPluginRecordBorrowed(registry, retention.record);
+          }
+          projectPluginContributions(retention.registry, retention.record, registry);
         }
       }
     }
-    if (options.previousRegistry) {
+    for (const source of [options.previousRegistry, options.borrowRegistry]) {
       registry.diagnostics.push(
-        ...options.previousRegistry.diagnostics.filter(
-          (entry) => entry.pluginId && retained.has(entry.pluginId),
-        ),
+        ...(source?.diagnostics.filter((entry) => {
+          const record = entry.pluginId && retained.get(entry.pluginId);
+          return record && source.plugins.includes(record);
+        }) ?? []),
       );
     }
     const selectedMiddlewareOwnerManifests = new Map<
       string,
       (typeof manifestRegistry.plugins)[number]
     >();
-    for (const candidate of orderedCandidates) {
-      const record = manifestBySource.get(candidate.source);
-      if (record && !selectedMiddlewareOwnerManifests.has(record.id)) {
+    for (const { manifest: record } of orderedCandidates) {
+      if (!selectedMiddlewareOwnerManifests.has(record.id)) {
         selectedMiddlewareOwnerManifests.set(record.id, record);
       }
     }
@@ -358,11 +523,7 @@ export function loadOpenClawPluginsCore(
       pluginLoadAttemptCount: 0,
     };
     const pluginLoadStartMs = performance.now();
-    for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestBySource.get(candidate.source);
-      if (!manifestRecord) {
-        continue;
-      }
+    for (const { candidate, manifest: manifestRecord } of orderedCandidates) {
       const previous = retained.get(manifestRecord.id);
       if (previous && !state.seenIds.has(manifestRecord.id)) {
         registry.plugins.push(previous);
@@ -414,27 +575,28 @@ export function loadOpenClawPluginsCore(
       });
     }
     if (options.mode !== "cli-metadata") {
-      warnAboutUntrackedLoadedPlugins(
-        recordPluginInstallOwnerLookup(
-          {
-            registry,
-            provenance,
-            allowlist: context.normalized.allow,
-            emitWarning: context.shouldActivate,
-            logger,
-            env: context.env,
-          },
-          new Map(
-            orderedCandidates.flatMap((candidate) => {
-              const pluginId = manifestBySource.get(candidate.source)?.id;
-              const installOwner = resolvePluginCandidateInstallOwner(candidate);
-              return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
-            }),
-          ),
+      warnAboutUntrackedLoadedPlugins({
+        registry,
+        provenance,
+        allowlist: context.normalized.allow,
+        emitWarning: context.shouldActivate,
+        logger,
+        env: context.env,
+        installOwnerByPluginId: new Map(
+          orderedCandidates.flatMap(({ candidate, manifest }) => {
+            const installOwner = resolvePluginCandidateInstallOwner(candidate);
+            return manifest.id && installOwner ? [[manifest.id, installOwner] as const] : [];
+          }),
         ),
-      );
+      });
     }
-    maybeThrowOnPluginLoadError(registry, options.throwOnLoadError, retained);
+    maybeThrowOnPluginLoadError(
+      registry,
+      options.throwOnLoadError,
+      retained,
+      options.previousRegistry,
+      replacedIds,
+    );
     if (context.shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
       if (failedPlugins.length > 0) {
@@ -445,6 +607,8 @@ export function loadOpenClawPluginsCore(
         );
       }
     }
+    // Presence of this identity also admits immutable private-registry policy caching.
+    getPluginRuntimeLoadContextState(registry)!.loaderCacheIdentity = loaderCacheIdentity;
     if (context.shouldActivate) {
       // Install the complete bundle before hook-runner initialization.
       activatePluginRegistry(
@@ -452,6 +616,8 @@ export function loadOpenClawPluginsCore(
         context.cacheKey,
         context.runtimeSubagentMode,
         options.workspaceDir,
+        undefined,
+        trackActivationCleanup,
       );
     }
     // Publish only complete registries: failed activation restores the prior runtime selection,
@@ -469,7 +635,10 @@ export function loadOpenClawPluginsCore(
     // Construction rollback owns only new records, never retained predecessor instances.
     if (registryBuilder && !isPluginRegistryActivated(registryBuilder.registry)) {
       for (const plugin of registryBuilder.registry.plugins.toReversed()) {
-        if (!options.previousRegistry?.plugins.includes(plugin)) {
+        if (
+          !options.previousRegistry?.plugins.includes(plugin) &&
+          !options.borrowRegistry?.plugins.includes(plugin)
+        ) {
           registryBuilder.rollbackPluginGlobalSideEffects(plugin.id, plugin);
         }
       }

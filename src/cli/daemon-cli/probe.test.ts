@@ -1,4 +1,5 @@
 // Daemon probe tests cover gateway probe command behavior and output.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { assert, describe, expect, it, vi } from "vitest";
 import { gatewayProbeResultSawGateway } from "../../commands/gateway-health-auth-diagnostic.js";
 import { probeGatewayStatus } from "./probe.js";
@@ -95,6 +96,7 @@ describe("probeGatewayStatus", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(probeGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
+      configuredRemote: false,
       auth: {
         token: "temp-token",
         password: undefined,
@@ -627,6 +629,56 @@ describe("probeGatewayStatus", () => {
       error: "missing scope: operator.admin",
     });
     expect(probeGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves event-loop evidence when an admitted status RPC times out", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk({
+        auth: { role: "operator", scopes: ["operator.read"] },
+        server: { version: "2026.9.17", connId: "conn-busy" },
+        snapshot: {
+          health: {
+            eventLoop: {
+              degraded: true,
+              reasons: ["event_loop_delay", "event_loop_utilization"],
+              intervalMs: 5_000,
+              delayP99Ms: 5_079,
+              delayMaxMs: 5_100,
+              utilization: 1,
+              cpuCoreRatio: 0.94,
+            },
+          },
+        },
+      });
+      const error = new Error("gateway timeout after 5000ms");
+      error.name = "GatewayTransportError";
+      Object.assign(error, {
+        kind: "timeout",
+        connectionDetails: { url: "ws://127.0.0.1:19191" },
+      });
+      throw error;
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      kind: "read",
+      gatewayReached: true,
+      timedOut: true,
+      eventLoop: {
+        degraded: true,
+        delayP99Ms: 5_079,
+        utilization: 1,
+      },
+    });
   });
 
   it("passes a service-derived url as serviceTargetUrl without triggering the explicit-override guard", async () => {

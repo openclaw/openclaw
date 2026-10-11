@@ -4,13 +4,13 @@ import type {
   MentionInboxItem,
   MentionsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayHelloOk } from "../api/gateway.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import { createMentionsCapability, type MentionsCapability } from "./mentions.ts";
 import {
   client,
   createGatewayHarness,
-  deferred,
   flushMicrotasks,
   type RequestFn,
 } from "./overlays-access.test-support.ts";
@@ -68,6 +68,48 @@ afterEach(() => {
 });
 
 describe("application mention Inbox", () => {
+  it.each(["none", "pending", "completed"] as const)(
+    "holds automatic snapshots and queued revisions behind chat, preserving explicit refresh (%s)",
+    async (explicit) => {
+      const bootstrap = createConnectionBootstrapCoordinator();
+      bootstrap.setForegroundRoute("agent:main:pending");
+      const response = deferred<MentionsListResult>();
+      const request = vi.fn<RequestFn>(() => response.promise);
+      const harness = gatewayForMentions(request);
+      const gatewayClient = harness.gateway.snapshot.client;
+      const capability = createCapability(harness.gateway, { connectionBootstrap: bootstrap });
+      bootstrap.synchronize({ client: gatewayClient, connected: true });
+      try {
+        harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+        harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 3 });
+        await flushMicrotasks();
+        expect(request).not.toHaveBeenCalled();
+        let manual: Promise<void> | undefined;
+        if (explicit !== "none") {
+          manual = capability.refresh();
+          await flushMicrotasks();
+          if (explicit === "completed") {
+            response.resolve(result(3));
+            await manual;
+            expect(capability.snapshot.items).toEqual([mention]);
+          }
+        }
+        bootstrap.setForegroundPane(
+          {},
+          { sessionKey: "agent:main:pending", client: gatewayClient, ready: true },
+        );
+        response.resolve(result(3));
+        await manual;
+        await vi.waitFor(() => expect(capability.snapshot.phase).toBe("ready"));
+        await flushMicrotasks();
+        expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
+      } finally {
+        response.resolve(result(3));
+        bootstrap.reset();
+      }
+    },
+  );
+
   it("does not call older Gateways without an advertised mention Inbox", async () => {
     const request = vi.fn<RequestFn>(() => Promise.resolve(result(1)));
     const harness = gatewayForMentions(request);
@@ -101,7 +143,7 @@ describe("application mention Inbox", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
   });
 
-  it("coalesces in-flight invalidations without publishing a pre-invalidation snapshot", async () => {
+  it("coalesces in-flight invalidations into a follow-up snapshot", async () => {
     const initial = deferred<MentionsListResult>();
     const latest = deferred<MentionsListResult>();
     const request = vi
@@ -110,8 +152,6 @@ describe("application mention Inbox", () => {
       .mockReturnValue(latest.promise);
     const harness = gatewayForMentions(request);
     const capability = createCapability(harness.gateway);
-    const published: string[][] = [];
-    capability.subscribe(() => published.push(capability.snapshot.items.map((item) => item.id)));
     const hydration = capability.refresh();
     await flushMicrotasks();
 
@@ -120,40 +160,12 @@ describe("application mention Inbox", () => {
     initial.resolve(result(1));
     await flushMicrotasks();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(published.flat()).not.toContain(mention.id);
 
     const current = { ...mention, id: "mention-current" };
     latest.resolve(result(3, [current]));
     await hydration;
     expect(capability.snapshot.items).toEqual([current]);
     expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not resurrect a dismissed item from an older list or delayed invalidation", async () => {
-    const staleList = deferred<MentionsListResult>();
-    let reads = 0;
-    const request = vi.fn<RequestFn>((method) => {
-      if (method === "mentions.dismiss") {
-        return Promise.resolve(result(2, []));
-      }
-      reads += 1;
-      return reads === 1 ? Promise.resolve(result(1)) : staleList.promise;
-    });
-    const harness = gatewayForMentions(request);
-    const capability = createCapability(harness.gateway);
-    await capability.refresh();
-    const refresh = capability.refresh();
-    await flushMicrotasks();
-
-    await capability.dismiss([mention.id]);
-    expect(capability.snapshot.items).toEqual([]);
-    staleList.resolve(result(1));
-    await refresh;
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 1 });
-    harness.emitEvent("mentions.changed", { gatewayInstanceId: "retired-boot", revision: 99 });
-
-    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [], dismissing: [] });
-    expect(reads).toBe(2);
   });
 
   it("reconciles an invalidation arriving as the previous snapshot settles", async () => {

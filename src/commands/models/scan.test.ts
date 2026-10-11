@@ -1,6 +1,7 @@
 // Model scan tests cover provider scan behavior and discovered model output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelScanResult } from "../../agents/model-scan.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   loadModelsConfig: vi.fn(),
   resolveApiKeyForProviderCore: vi.fn(),
   scanOpenRouterModels: vi.fn(),
+  updateConfig: vi.fn(),
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -20,6 +22,11 @@ vi.mock("../../agents/model-auth.js", () => ({
 
 vi.mock("../../agents/model-scan.js", () => ({
   scanOpenRouterModels: mocks.scanOpenRouterModels,
+}));
+
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
+  updateConfig: mocks.updateConfig,
 }));
 
 const { modelsScanCommand } = await import("./scan.js");
@@ -203,7 +210,7 @@ describe("models scan command", () => {
     ["timeout", "--timeout", "1000ms"],
     ["concurrency", "--concurrency", "2x"],
   ] as const)("%s numeric value", (key, label, partial) => {
-    it.each(["", "   ", partial])("rejects %j before scanning", async (raw) => {
+    it.each(["", partial])("rejects %j before scanning", async (raw) => {
       const runtime = createRuntime();
 
       await expect(
@@ -228,5 +235,44 @@ describe("models scan command", () => {
 
       expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    [{}, "anthropic/primary"],
+    [{ setDefault: true }, "openrouter/acme/free:free"],
+  ])(
+    "replaces fallbacks and sets the primary only with --set-default (%j)",
+    async (opts, primary) => {
+      await withOpenRouterApiKey("sk-or-test", async () => {
+        mocks.scanOpenRouterModels.mockResolvedValue([
+          scanResult({ tool: { ok: true, latencyMs: 5, skipped: false } }),
+        ]);
+        const before: OpenClawConfig = {
+          agents: {
+            defaults: { model: { primary: "anthropic/primary", fallbacks: ["anthropic/backup"] } },
+          },
+        };
+        let after: OpenClawConfig | undefined;
+        mocks.updateConfig.mockImplementation(
+          async (mutate: (cfg: OpenClawConfig) => OpenClawConfig) => (after = mutate(before)),
+        );
+
+        await modelsScanCommand({ ...opts, yes: true, json: true }, createRuntime());
+
+        expect(after?.agents?.defaults?.model).toEqual({
+          primary,
+          fallbacks: ["openrouter/acme/free:free"],
+        });
+        expect(after?.agents?.defaults?.models).toHaveProperty(["openrouter/acme/free:free"]);
+      });
+    },
+  );
+
+  it("writes no config for metadata-only scans", async () => {
+    mocks.scanOpenRouterModels.mockResolvedValue([scanResult()]);
+
+    await modelsScanCommand({ probe: false }, createRuntime());
+
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 });

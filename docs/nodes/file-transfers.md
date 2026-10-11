@@ -20,6 +20,95 @@ The [File Transfer plugin](/plugins/reference/file-transfer) provides independen
 selectable directory-listing, fetch, and write tools. Allowing one tool does not
 make the others available; node-command and path policies still apply.
 
+### Gateway workspace files
+
+The File Transfer plugin can connect Gateway workspace-file callers to an
+already paired node. Configure the agent ID, exact node ID, and the node's
+absolute POSIX workspace path:
+
+```json5 validate=false
+// plugins.entries.file-transfer.config
+{
+  policyVersion: 2,
+  workspaces: {
+    main: { nodeId: "<paired-node-id>", remoteRoot: "/workspace" },
+  },
+  nodes: {
+    "<paired-node-id>": {
+      ask: "off",
+      allowReadPaths: ["/workspace/AGENTS.md"],
+      allowWritePaths: ["/workspace/AGENTS.md"],
+      followSymlinks: false,
+    },
+  },
+}
+```
+
+Placement does not grant access. Authorize the required node commands and file
+paths separately; the example grants only `AGENTS.md`. Gateway callers retain
+their own document allowlists. Use the resolved workspace root. Document reads
+and writes reject symlinks. Bootstrap reads can follow directory aliases inside
+that root when the node policy permits it; final-file symlinks remain rejected.
+There is no local-file fallback while the
+configured node is unavailable or its workspace service is stopped.
+Agents sharing a Gateway workspace must use the same node and remote root;
+identical mappings share one binding, while conflicting mappings fail startup.
+
+| Workspace operation                       | Node command |
+| ----------------------------------------- | ------------ |
+| Read bytes and their resolved source path | `file.fetch` |
+| Write bytes                               | `file.write` |
+| List directory entries                    | `dir.list`   |
+| Read type, size, and modification time    | `file.stat`  |
+
+`file.stat` adds no model tool. It accepts regular files and directories without
+fetching contents or listing the parent, under the existing read-path policy.
+For bootstrap reads, `file.fetch.rootPath` confines parent-alias resolution to
+the resolved workspace root; it does not grant access beyond the node policy.
+Unary reads and writes retain the 16 MiB transfer limit; directory reads consume
+the existing `dir.list` pages. `file.write.expectedSha256` verifies the submitted bytes, not
+the previous file version. Owner-document conflict checks remain in the Gateway.
+
+This mapping covers workspace files only. Memory search, skill management, and
+attachment staging require their respective workspace capabilities; this mapping
+alone does not enable a complete storage split or launch an agent harness.
+
+### Workspace Skill installation
+
+A paired workspace uses the native Skill installers for source publication,
+source records, and ClawHub update and removal. Gateway keeps installation
+policy and change hooks; the node keeps installed files and provenance. Local
+workspaces keep their existing installation path.
+
+Allow `workspace.skills` and `file.create`, read access to the workspace, and
+write access to these paths (replace `/workspace` with the configured root):
+
+- `/workspace/skills` and `/workspace/skills/**`, including native replacement staging.
+- `/workspace/.clawhub/lock.json` for installation tracking.
+- `/workspace/.openclaw/skill-installs/**` for temporary source uploads.
+
+The adapter opens an admitted node operation before uploading a bounded source
+archive. The node extracts a private copy and waits for Gateway's installation
+policy decision before publishing it. It retires staging when that operation
+ends. Source transfers retain the file plugin's archive and extraction limits;
+links and special files are rejected. A disconnected node fails explicitly.
+
+ClawHub updates and removal retain native version and local-modification
+checks. An installed Skill is discovered through the existing workspace catalog;
+this does not add remote Skills to channel command menus.
+
+### Binary transfers for services
+
+Plugin services can use the existing node channel to transfer file bytes:
+
+- `file.fetch` accepts binary transfer when both hosts support it, bounded by the caller's byte limit and node policy. Existing unary calls keep their current behavior.
+- `file.create` receives bytes over that channel and publishes a complete file without replacing an existing file. It checks the admitted size and SHA-256 digest before publishing.
+
+Both commands retain node pairing, file-path authorization, and approval checks.
+These transport commands do not automatically stage task attachments; the workspace adapter supplies that integration.
+
+### Transferred files
+
 Every successful file fetch saves the bytes in the Gateway's file-transfer media
 store and returns both `localPath` and `mediaId`, including for inlined text and
 images. Fetched files keep a sanitized filename stem in saved copies and forwarded
@@ -55,7 +144,7 @@ and newline names retain their exact spelling, and producer-added AppleDouble
 files are checked rather than hidden. Parent paths are checked even when the
 archive omits directory headers. The 5000-descendant cap includes those implicit
 directories, counting shared parents only once. A denied path rejects the whole transfer.
-Canonical source path/device/inode binding, byte-count and SHA-256 verification,
+Resolved source path/device/inode binding, byte-count and SHA-256 verification,
 link/traversal/collision checks, and extraction limits still apply. Malformed
 archive headers and destination-platform filename restrictions still reject;
 filenames are not truncated or repaired to make an archive pass.

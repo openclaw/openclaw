@@ -1,11 +1,14 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../../i18n/index.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
+
+registerChatMessageMetadataEnglish();
 
 export type TranscriptAnnouncement = {
   key: string;
@@ -38,23 +41,6 @@ function assistantMessageAnnouncementText(message: unknown): string | null {
   return [failureText, text].filter(Boolean).join(" ") || null;
 }
 
-function assistantGroupAnnouncementSource(
-  group: MessageGroup,
-  messageText: (message: unknown) => string | null = assistantMessageAnnouncementText,
-): { key: string; text: string } | null {
-  if (group.role.toLowerCase() !== "assistant") {
-    return null;
-  }
-  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
-    const source = group.messages[index];
-    const text = messageText(source?.message);
-    if (text) {
-      return { key: source?.key ?? group.key, text };
-    }
-  }
-  return null;
-}
-
 export function latestTranscriptAnnouncement(
   items: readonly ChatRenderItem[],
 ): TranscriptAnnouncement | null {
@@ -67,6 +53,7 @@ export function latestTranscriptAnnouncement(
     if (!item) {
       continue;
     }
+    let messageText = assistantMessageAnnouncementText;
     if (item.kind === "agent-run-frame") {
       if (item.outcome.kind === "completed") {
         const owner = item.outcome.actionOwner;
@@ -74,60 +61,56 @@ export function latestTranscriptAnnouncement(
         if (owner && text) {
           return announcement(owner.key, text);
         }
-        for (const part of item.parts.toReversed()) {
-          if (part.kind === "stream-run") {
-            continue;
-          }
-          const groups = part.kind === "group" ? [part] : part.groups.toReversed();
-          for (const group of groups) {
-            const source = assistantGroupAnnouncementSource(
-              group,
-              assistantMessageAttachmentFailureText,
-            );
-            if (source) {
-              return announcement(source.key, source.text);
-            }
-          }
-        }
-        continue;
+        messageText = assistantMessageAttachmentFailureText;
       }
       if (item.outcome.kind === "failed") {
         continue;
       }
-      for (let partIndex = item.parts.length - 1; partIndex >= 0; partIndex -= 1) {
-        const part = item.parts[partIndex];
-        if (!part) {
-          continue;
-        }
-        if (part.kind === "stream-run") {
+    }
+    for (const part of item.kind === "agent-run-frame" ? item.parts.toReversed() : [item]) {
+      if (part.kind === "stream-run") {
+        if (item.kind === "agent-run-frame" && item.outcome.kind !== "completed") {
           const text = part.parts.findLast(
             (streamPart) => streamPart.kind === "stream" && streamPart.text.trim(),
           );
           if (text?.kind === "stream") {
             return announcement(text.key, text.text.trim());
           }
+        }
+        continue;
+      }
+      for (const group of chatItemGroups(part).toReversed()) {
+        if (isSessionActivityGroup(group)) {
+          const count = group.messages.reduce(
+            (total, entry) => total + (entry.duplicateCount ?? 1),
+            0,
+          );
+          const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
+          const label = t(
+            source
+              ? count === 1
+                ? "chat.messages.interSessionUpdateFrom"
+                : "chat.messages.interSessionUpdatesFrom"
+              : count === 1
+                ? "chat.messages.interSessionUpdate"
+                : "chat.messages.interSessionUpdates",
+            { count: String(count) },
+          );
+          return announcement(
+            group.messages.at(-1)?.key ?? group.key,
+            source ? `${label} ${source}` : label,
+          );
+        }
+        if (group.role.toLowerCase() !== "assistant") {
           continue;
         }
-        const groups = part.kind === "group" ? [part] : part.groups.toReversed();
-        for (const group of groups) {
-          const source = assistantGroupAnnouncementSource(group);
-          if (source) {
-            return announcement(source.key, source.text);
+        for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+          const source = group.messages[index];
+          const text = messageText(source?.message);
+          if (text) {
+            return announcement(source?.key ?? group.key, text);
           }
         }
-      }
-      continue;
-    }
-    const groups =
-      item.kind === "group"
-        ? [item]
-        : item.kind === "work-group" || item.kind === "activity-run"
-          ? item.groups.toReversed()
-          : [];
-    for (const group of groups) {
-      const source = assistantGroupAnnouncementSource(group);
-      if (source) {
-        return announcement(source.key, source.text);
       }
     }
   }

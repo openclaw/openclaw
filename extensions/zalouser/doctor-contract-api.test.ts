@@ -2,9 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -15,9 +20,13 @@ import type {
 import {
   listSessionEntries,
   normalizeSessionDeliveryState,
+  resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { setZalouserRuntime } from "./src/runtime.js";
@@ -29,6 +38,10 @@ import {
   ZALOUSER_CREDENTIALS_NAMESPACE,
   type StoredZaloCredentials,
 } from "./src/session-state.js";
+
+type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
+// Doctor state migrations receive raw pre-migration config, including retired rosters.
+type RawLegacyDoctorAgents = AuthoredAgents & { list?: Array<{ id: string }> };
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -66,6 +79,7 @@ describe("zalouser doctor state migration", () => {
     // resetPluginStateStoreForTests only releases plugin state plus shared state, so the
     // cached agent handles must be closed here or Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -131,13 +145,17 @@ describe("zalouser doctor state migration", () => {
       }),
     );
     const runtime = createPluginRuntimeMock();
-    runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("zalouser", {
-        ...options,
-        env: options.env ?? env,
-      });
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
+      createPluginStateKeyedStoreV2ForTests<T>(
+        "zalouser",
+        { ...options, env: options.env ?? env },
+        authority ?? { assertCurrent() {} },
+      );
     setZalouserRuntime(runtime);
-    clearStoredZaloCredentials(profile, env);
+    await clearStoredZaloCredentials(profile, env);
     const context = createDoctorContext(env);
     const params = {
       config: {},
@@ -161,7 +179,7 @@ describe("zalouser doctor state migration", () => {
   it("does not inspect agent session stores when zalouser has never been configured", async () => {
     const migration = findMigration("zalouser-direct-session-keys");
     const context = createDoctorContext(env);
-    const config = { agents: { list: [{ id: "worker-1" }] } };
+    const config = { agents: { entries: { "worker-1": {} } } };
 
     await expect(
       migration.detectLegacyState({ config, env, stateDir, oauthDir: stateDir, context }),
@@ -173,17 +191,32 @@ describe("zalouser doctor state migration", () => {
     }
   });
 
-  it("moves legacy group-shaped DM sessions to canonical direct keys", async () => {
-    const legacyKey = "agent:main:zalouser:group:user-1";
-    const canonicalKey = "agent:main:zalouser:direct:user-1";
+  it.each<{ roster: string; agentId: string; agents: RawLegacyDoctorAgents }>([
+    { roster: "implicit main", agentId: "main", agents: {} },
+    {
+      roster: "legacy list",
+      agentId: "worker-1",
+      agents: { list: [{ id: "worker-1" }] },
+    },
+    {
+      roster: "keyed entries",
+      agentId: "worker-1",
+      agents: { entries: { "worker-1": {} } },
+    },
+  ])("moves legacy DM sessions to direct keys for $roster", async ({ agentId, agents }) => {
+    const legacyKey = `agent:${agentId}:zalouser:group:user-1`;
+    const canonicalKey = `agent:${agentId}:zalouser:direct:user-1`;
+    const groupKey = `agent:${agentId}:zalouser:group:room-1`;
+    const agentStorePath = resolveStorePath(undefined, { agentId, env });
     const config = {
+      agents,
       channels: { zalouser: {} },
-      session: { store: storePath, dmScope: "per-channel-peer" as const },
+      session: { dmScope: "per-channel-peer" as const },
     };
     await upsertSessionEntry({
-      agentId: "main",
+      agentId,
       env,
-      storePath,
+      storePath: agentStorePath,
       sessionKey: legacyKey,
       entry: {
         sessionId: "session-1",
@@ -195,10 +228,10 @@ describe("zalouser doctor state migration", () => {
       },
     });
     await upsertSessionEntry({
-      agentId: "main",
+      agentId,
       env,
-      storePath,
-      sessionKey: "agent:main:zalouser:group:room-1",
+      storePath: agentStorePath,
+      sessionKey: groupKey,
       entry: { sessionId: "group-session", updatedAt: 2, chatType: "group" },
     });
     const migration = findMigration("zalouser-direct-session-keys");
@@ -212,13 +245,12 @@ describe("zalouser doctor state migration", () => {
     ).resolves.toMatchObject({ changes: [expect.stringContaining("Migrated 1")], warnings: [] });
 
     const entries = new Map(
-      listSessionEntries({ agentId: "main", env, storePath }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntries({ agentId, env, storePath: agentStorePath }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
     expect(entries.has(legacyKey)).toBe(false);
-    expect(entries.has("agent:main:zalouser:group:room-1")).toBe(true);
+    expect(entries.has(groupKey)).toBe(true);
     expect(entries.get(canonicalKey)).toMatchObject({ sessionId: "session-1", chatType: "direct" });
   });
 

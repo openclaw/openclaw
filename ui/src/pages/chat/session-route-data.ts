@@ -2,7 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { MissingSessionRouteData } from "./route-loader-session-reference.ts";
 
-export type SessionRouteCandidate = {
+type SessionRouteCandidate = {
   agentId: string;
   displayName: string;
   href: string;
@@ -13,6 +13,7 @@ export type ChatRouteData =
   | {
       kind: "session";
       sessionKey: string;
+      creation?: Readonly<{ admitted: boolean }>;
       agentId?: string;
       draft?: string;
       focusComposer?: boolean;
@@ -20,6 +21,7 @@ export type ChatRouteData =
       face: BoardFace;
       shortId?: string;
       routeLoadingSkeleton?: true;
+      sessionResolutionFromCache?: true;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
       canonicalLocationSource?: RouteLocation;

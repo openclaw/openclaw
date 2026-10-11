@@ -19,7 +19,9 @@ export type ChatPaneElement = HTMLElement & {
   discardStagedAttachments?: () => void;
   paneId?: string;
   prepareForEviction?: () => void;
+  hasQueuedMessageEdit?: boolean;
   presented?: boolean;
+  captureNavigationFace?: () => BoardFace | undefined;
   routeFace?: BoardFace;
   sessionKey?: string;
   transcriptLoading?: boolean;
@@ -46,11 +48,8 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
 
 export class RouteDraftComposerFocus {
   private timer: number | undefined;
-  private readonly host: HTMLElement;
 
-  constructor(host: HTMLElement) {
-    this.host = host;
-  }
+  constructor(private readonly host: HTMLElement) {}
 
   rendered(
     data: SessionChatRouteData | undefined,

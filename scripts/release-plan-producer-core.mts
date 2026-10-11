@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { compareAscii } from "./lib/canonical-json.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import {
@@ -9,6 +9,11 @@ import {
   type PluginPackageJson,
 } from "./lib/plugin-publication-collector.ts";
 import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
+import {
+  resolveSource,
+  resolveCommit,
+  type ReleaseInventorySource,
+} from "./lib/release-plan-source.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   canonicalReleasePlanJson,
@@ -21,7 +26,6 @@ import {
   type ReleasePlanLock,
   type ReleasePlanPurpose,
 } from "./release-plan-contract.mjs";
-import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   releaseValidationIntentForPurpose,
   resolveReleaseValidationIntent,
@@ -34,13 +38,8 @@ type MainQualificationValidationIntent = Extract<
   "main-daily" | "main-weekly"
 >;
 
-type ReleasePlanSource = {
-  repoRoot?: string;
-  candidateSha: string;
+type ReleasePlanSource = ReleaseInventorySource & {
   candidateRef: string;
-  toolingSha: string;
-  toolingFullRef: string;
-  runGh?: (args: string[]) => string;
   intent: ReleasePlanIntent;
   validationIntent?: MainQualificationValidationIntent;
 };
@@ -54,50 +53,27 @@ type CorePackagePolicy = {
 type ReleasePlanRuntime = {
   parseYamlDocuments: (sources: [string, string, string]) => [unknown, unknown, unknown];
   runGh: (args: string[]) => string;
+  downloadArchive?: (args: string[]) => Uint8Array;
 };
 
 type ReleasePlanProducerRequest =
   | { operation: "produce" | "produce-lock"; params: ReleasePlanSource }
+  | { operation: "produce-inventory" | "verify-inventory-identity"; params: ReleaseInventorySource }
   | { operation: "verify-lock"; lockJson: string; params: ReleasePlanSource };
 
 const REPOSITORY = "openclaw/openclaw";
 const VALIDATION_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-release-publish.yml";
 const NPM_CORE_PACKAGE_POLICY_PATH = "scripts/lib/npm-core-release-packages.json";
-const YAML_PACKAGE_VERSION = "2.9.0";
+const YAML_PACKAGE_VERSION = "2.9.1";
 const YAML_PACKAGE_INTEGRITY =
-  "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
+  "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==";
 function git(repoRoot: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
-
-function resolveCommit(repoRoot: string, revision: string, label: string): string {
-  let resolved: string;
-  try {
-    resolved = git(repoRoot, ["rev-parse", "--verify", `${revision}^{commit}`]);
-  } catch {
-    throw new Error(`${label} does not resolve to a commit: ${revision}`);
-  }
-  if (!/^[a-f0-9]{40}$/u.test(resolved)) {
-    throw new Error(`${label} did not resolve to an exact lowercase commit SHA`);
-  }
-  return resolved;
-}
-function requireExactSha(value: string, label: string): string {
-  if (!/^[a-f0-9]{40}$/u.test(value)) {
-    throw new Error(`${label} must be an exact lowercase 40-character commit SHA`);
-  }
-  return value;
-}
-function requireQualifiedRef(value: string, label: string): string {
-  if (!/^refs\/(?:heads|tags)\/[A-Za-z0-9._/-]+$/u.test(value)) {
-    throw new Error(`${label} must be a qualified branch or tag ref`);
-  }
-  return value;
 }
 
 function readGitBytes(repoRoot: string, commit: string, path: string): Buffer {
@@ -438,7 +414,12 @@ function collectPackageInventory(
     .toSorted((left, right) => compareAscii(left.name, right.name));
 }
 
-function collectPlatformSources(workflowText: string, workflowDocument: unknown) {
+function collectPlatformSources(
+  repoRoot: string,
+  toolingSha: string,
+  workflowText: string,
+  workflowDocument: unknown,
+) {
   const platforms = new Map<string, string>();
   const addPlatform = (id: string, source: string) => {
     const existing = platforms.get(id);
@@ -449,21 +430,81 @@ function collectPlatformSources(workflowText: string, workflowDocument: unknown)
     }
     platforms.set(id, source);
   };
-  const promotionPattern = /promote_([a-z0-9_]+)_release_assets?\(\)\s*\{([\s\S]*?)^\s*\}/gmu;
+  const platformHelperPattern =
+    /(?:promote|dispatch)_([a-z0-9_]+)_release_assets?\(\)\s*\{([\s\S]*?)^\s*\}/gmu;
   const dispatchPattern =
-    /dispatch_workflow(?:_at_ref)?\s+(?:(?:"[^"]+"|'[^']+')\s+){0,2}([a-z0-9][a-z0-9-]+\.yml)/u;
-  for (const match of workflowText.matchAll(promotionPattern)) {
+    /dispatch_workflow(?:_at_ref)?\s+(?:(?:"[^"]+"|'[^']+'|main)\s+){0,2}([a-z0-9][a-z0-9-]+\.yml)/u;
+  let linkedHelper: string | undefined;
+  const readLinkedHelper = () => {
+    if (linkedHelper !== undefined) {
+      return linkedHelper;
+    }
+    const path = "scripts/lib/release-publish-children.sh";
+    const entry = git(repoRoot, ["ls-tree", "-z", toolingSha, "--", path]);
+    if (
+      !/^100(?:644|755) blob [a-f0-9]{40}\tscripts\/lib\/release-publish-children\.sh\0$/u.test(
+        entry,
+      )
+    ) {
+      throw new Error(`linked platform helper must be a regular committed blob: ${path}`);
+    }
+    linkedHelper = new TextDecoder("utf-8", { fatal: true }).decode(
+      readGitBytes(repoRoot, toolingSha, path),
+    );
+    return linkedHelper;
+  };
+  for (const match of workflowText.matchAll(platformHelperPattern)) {
     const id = match[1]?.replaceAll("_", "-");
     const workflowName = dispatchPattern.exec(match[2] ?? "")?.[1];
     if (!id || !workflowName) {
-      throw new Error(`${PUBLICATION_WORKFLOW_PATH} has an invalid platform promotion function`);
+      throw new Error(`${PUBLICATION_WORKFLOW_PATH} has an invalid platform publication function`);
     }
     addPlatform(id, `.github/workflows/${workflowName}`);
   }
   const workflow = workflowDocument as {
-    jobs?: Record<string, { uses?: unknown }>;
+    jobs?: Record<string, { uses?: unknown; steps?: { run?: unknown }[] }>;
   };
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
+    for (const step of job.steps ?? []) {
+      if (typeof step.run !== "string") {
+        continue;
+      }
+      for (const call of step.run.matchAll(
+        /^[ \t]*((?:promote|dispatch)_([a-z0-9_]+)_release_assets?)[ \t]*(?:#.*)?$/gmu,
+      )) {
+        const beforeCall = step.run.slice(0, call.index);
+        const sources = [
+          ...beforeCall.matchAll(
+            /^[ \t]*source scripts\/lib\/release-publish-children\.sh[ \t]*$/gmu,
+          ),
+        ];
+        const inline = [...beforeCall.matchAll(platformHelperPattern)].some((definition) =>
+          definition[0].startsWith(`${call[1]}()`),
+        );
+        if (inline && sources.length === 0) {
+          continue;
+        }
+        if (sources.length !== 1) {
+          throw new Error(
+            `platform call ${call[1]} requires one preceding static source in its run step`,
+          );
+        }
+        const definitions = [...readLinkedHelper().matchAll(platformHelperPattern)].filter(
+          (definition) => definition[0].startsWith(`${call[1]}()`),
+        );
+        if (definitions.length !== 1) {
+          throw new Error(`linked platform helper must define ${call[1]} exactly once`);
+        }
+        const dispatches = [
+          ...(definitions[0]?.[2] ?? "").matchAll(new RegExp(dispatchPattern.source, "gu")),
+        ];
+        const workflowName = dispatches[0]?.[1];
+        if (dispatches.length !== 1 || !workflowName) {
+          throw new Error(`linked platform helper has an ambiguous dispatch for ${call[1]}`);
+        }
+        addPlatform(call[2]!.replaceAll("_", "-"), `.github/workflows/${workflowName}`);
+      }
+    }
     if (!jobId.startsWith("publish_") || typeof job.uses !== "string") {
       continue;
     }
@@ -488,12 +529,14 @@ function collectPlatformInventory(
   workflowText: string,
   workflowDocument: unknown,
 ) {
-  return collectPlatformSources(workflowText, workflowDocument).map(([id, source]) => {
-    if (!gitPathExists(repoRoot, toolingSha, source)) {
-      throw new Error(`release platform workflow does not exist at tooling SHA: ${source}`);
-    }
-    return { id, source };
-  });
+  return collectPlatformSources(repoRoot, toolingSha, workflowText, workflowDocument).map(
+    ([id, source]) => {
+      if (!gitPathExists(repoRoot, toolingSha, source)) {
+        throw new Error(`release platform workflow does not exist at tooling SHA: ${source}`);
+      }
+      return { id, source };
+    },
+  );
 }
 
 function readCandidateInventory(
@@ -513,34 +556,11 @@ function readCandidateInventory(
   });
 }
 
-function resolveSource(params: ReleasePlanSource) {
-  const repoRoot = resolve(params.repoRoot ?? ".");
-  const candidateSha = requireExactSha(params.candidateSha, "candidate SHA");
-  const toolingSha = requireExactSha(params.toolingSha, "tooling SHA");
-  const toolingFullRef = requireQualifiedRef(params.toolingFullRef, "tooling full ref");
-  if (resolveCommit(repoRoot, candidateSha, "candidate SHA") !== candidateSha) {
-    throw new Error("candidate SHA does not resolve to itself");
-  }
-  const toolingRef = toolingFullRef.replace(/^refs\/(?:heads|tags)\//u, "");
-  const verifiedTooling = verifyReleaseToolingIdentity({
-    repository: REPOSITORY,
-    workflowFullRef: toolingFullRef,
-    workflowRef: toolingRef,
-    workflowSha: toolingSha,
-    ...(params.runGh ? { runGh: params.runGh } : {}),
-  });
-  if (
-    params.intent !== "diagnostic" &&
-    params.intent !== "main-qualification" &&
-    verifiedTooling.route !== "protected-tag"
-  ) {
-    throw new Error(`${params.intent} tooling must use a release-publish tag bound to its SHA`);
-  }
-  return { candidateSha, repoRoot, toolingFullRef, toolingSha };
-}
-
-function produceReleasePlan(params: ReleasePlanSource, runtime: ReleasePlanRuntime): ReleasePlan {
-  const { candidateSha, repoRoot, toolingFullRef, toolingSha } = resolveSource(params);
+function collectVerifiedInventory(
+  source: ReturnType<typeof resolveSource>,
+  runtime: ReleasePlanRuntime,
+) {
+  const { candidateSha, repoRoot, toolingSha } = source;
   const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
   const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
   const npmCorePackagePolicy = readGitText(repoRoot, toolingSha, NPM_CORE_PACKAGE_POLICY_PATH);
@@ -556,6 +576,61 @@ function produceReleasePlan(params: ReleasePlanSource, runtime: ReleasePlanRunti
     candidateSha,
     collectCorePackagePolicy(npmCorePackageDocument),
   );
+  const parsed = parseReleaseVersion(candidate.version);
+  if (!parsed || parsed.version !== candidate.version) {
+    throw new Error(`unsupported release version: ${candidate.version}`);
+  }
+  const inventory = {
+    packages: candidate.packages,
+    platforms: collectPlatformInventory(
+      repoRoot,
+      toolingSha,
+      publicationWorkflow,
+      publicationDocument,
+    ),
+  };
+  // Collectors own source semantics and uniqueness; generated values must also
+  // satisfy the printable fields required by both inventory and ReleasePlan.
+  const fields = [
+    ...inventory.packages.flatMap(({ name, version }) => [name, version]),
+    ...inventory.platforms.flatMap(({ id, source: workflowPath }) => [id, workflowPath]),
+  ];
+  if (fields.some((value) => !/^[\x20-\x7e]+$/u.test(value))) {
+    throw new Error("release inventory fields must be non-empty printable ASCII strings");
+  }
+  return { version: candidate.version, inventory, validationDocument };
+}
+
+function produceVerifiedReleaseInventory(
+  params: ReleaseInventorySource,
+  runtime: ReleasePlanRuntime,
+) {
+  const source = resolveSource(params, true);
+  const { version, inventory } = collectVerifiedInventory(source, runtime);
+  return {
+    candidateSha: source.candidateSha,
+    tooling: {
+      repository: REPOSITORY,
+      workflow_path: VALIDATION_WORKFLOW_PATH,
+      ref: source.toolingFullRef,
+      sha: source.toolingSha,
+    },
+    version,
+    inventory,
+  };
+}
+
+function produceReleasePlan(params: ReleasePlanSource, runtime: ReleasePlanRuntime): ReleasePlan {
+  const source = resolveSource(params);
+  const { candidateSha, repoRoot, toolingFullRef, toolingSha, verifiedTooling } = source;
+  if (
+    params.intent !== "diagnostic" &&
+    params.intent !== "main-qualification" &&
+    verifiedTooling.route !== "protected-tag"
+  ) {
+    throw new Error(`${params.intent} tooling must use a release-publish tag bound to its SHA`);
+  }
+  const candidate = collectVerifiedInventory(source, runtime);
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
   // ReleasePlan binds the candidate bytes. A branch used only to make the FRV
   // workflow reachable is dispatch state and must not become plan authority.
@@ -590,17 +665,9 @@ function produceReleasePlan(params: ReleasePlanSource, runtime: ReleasePlanRunti
       intent: policy.intent,
       profile: policy.profile,
       soak: policy.soak,
-      allowed_groups: collectAllowedGroups(validationDocument),
+      allowed_groups: collectAllowedGroups(candidate.validationDocument),
     },
-    inventory: {
-      packages: candidate.packages,
-      platforms: collectPlatformInventory(
-        repoRoot,
-        toolingSha,
-        publicationWorkflow,
-        publicationDocument,
-      ),
-    },
+    inventory: candidate.inventory,
   });
 }
 
@@ -620,13 +687,31 @@ function verifyReleasePlanLock(
 export function runReleasePlanProducerOperation(
   request: ReleasePlanProducerRequest,
   runtime: ReleasePlanRuntime,
-): ReleasePlan | ReleasePlanLock | string {
-  const params = { ...request.params, runGh: runtime.runGh };
-  if (request.operation === "produce") {
-    return produceReleasePlan(params, runtime);
+): ReleasePlan | ReleasePlanLock | string | ReturnType<typeof produceVerifiedReleaseInventory> {
+  if (request.operation === "verify-inventory-identity") {
+    return resolveSource(
+      { ...request.params, runGh: runtime.runGh, downloadArchive: runtime.downloadArchive },
+      true,
+    ).verifiedTooling.sha;
+  }
+  if (request.operation === "produce-inventory") {
+    return produceVerifiedReleaseInventory(
+      { ...request.params, runGh: runtime.runGh, downloadArchive: runtime.downloadArchive },
+      runtime,
+    );
+  }
+  if (request.operation === "produce" || request.operation === "produce-lock") {
+    const plan = produceReleasePlan({ ...request.params, runGh: runtime.runGh }, runtime);
+    return request.operation === "produce"
+      ? plan
+      : canonicalReleasePlanLockJson(createReleasePlanLock(plan));
   }
   if (request.operation === "verify-lock") {
-    return verifyReleasePlanLock(request.lockJson, params, runtime);
+    return verifyReleasePlanLock(
+      request.lockJson,
+      { ...request.params, runGh: runtime.runGh },
+      runtime,
+    );
   }
-  return canonicalReleasePlanLockJson(createReleasePlanLock(produceReleasePlan(params, runtime)));
+  throw new Error("unsupported release plan producer operation");
 }

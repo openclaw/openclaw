@@ -1,96 +1,83 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import {
-  buildDraftSessionCreateParams,
-  type DraftSessionCreateSelection,
-} from "./create-params.ts";
-import {
-  projectDevicePlacements,
-  resolveAutomaticDevicePlacementDisabledReason,
-} from "./device-placement.ts";
+import { projectDevicePlacements, resolveSelectedDevicePlacement } from "./device-placement.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
-import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import type { DraftPlaceCallbacks, DraftPlaceSnapshot } from "./draft-place-contract.ts";
+import {
+  adoptDraftPlaceRestorePreference,
+  canAdoptDraftPlaceDefaults,
+  createDraftPlaceRestoreState,
+  draftPlacePreferenceReady,
+  markDraftPlaceProjectChoice,
+  restoreDraftPlacePreferences,
+  resolveDraftPlacePreferenceSelection,
+} from "./draft-place-restore.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { PendingPlacementPlace } from "./draft-session-placement.ts";
+import { DraftTerminalHostState } from "./draft-terminal-host-state.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
-import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
+import {
+  environmentDeviceDisabledReason,
+  environmentCloudDisabledReason,
+} from "./hosted-environments.ts";
+import { newSessionSearch } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { resolveNewSessionWhere, type NewSessionWhere } from "./preferences.ts";
+import {
+  resolveNewSessionFolderPreference,
+  resolveNewSessionWhere,
+  type NewSessionPreference,
+} from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
-type DraftPlaceSnapshot = Readonly<{
-  context: ApplicationContext | undefined;
-  data: NewSessionRouteData | undefined;
-  submitting: boolean;
-  pendingPlacementSessionKey: string;
-}>;
-
-type DraftPlaceCallbacks = {
-  requestUpdate: () => void;
-  onError: (error: string | null) => void;
-  onClearError: (error: string) => void;
-};
+registerNewSessionSetupEnglish();
 
 export class DraftPlaceState {
-  terminalHostId = "gateway:local";
-  private terminalHostInitialized = false;
+  private readonly terminalHost = new DraftTerminalHostState();
+
+  get terminalHostId(): string {
+    return this.terminalHost.hostId;
+  }
 
   get terminalOnNode(): boolean {
-    return this.terminalHostId.startsWith("node:");
+    return this.terminalHost.onNode;
   }
 
   selectTerminalHost(hostId: string) {
-    if (this.read().submitting) {
-      return;
-    }
-    this.terminalHostInitialized = true;
-    if (hostId === this.terminalHostId) {
-      return;
-    }
-    this.terminalHostId = hostId;
-    this.folderValidation.cancel();
-    this.browser.clearProjectSelection();
-    this.repositoryState.reset();
-    this.folderValue = this.terminalOnNode ? "" : this.workspacePath();
-    this.folderSelectedByUser = true;
-    if (!this.terminalOnNode) {
-      this.repositoryState.load();
-    }
-    this.callbacks.requestUpdate();
+    this.terminalHost.select(hostId, this.read().submitting, () => {
+      this.folderValidation.cancel();
+      this.browser.clearProjectSelection();
+      this.repositoryState.reset();
+      this.folderValue = this.terminalOnNode ? "" : this.workspacePath();
+      this.selection.folderSelectedByUser = true;
+      if (!this.terminalOnNode) {
+        this.repositoryState.load();
+      }
+      this.callbacks.requestUpdate();
+    });
   }
 
   synchronizeTerminalHosts() {
-    const hosts = this.read().data?.terminalHosts;
-    if (this.terminalHostInitialized || !hosts?.length) {
-      return;
-    }
-    this.selectTerminalHost(
-      hosts.find((host) => host.hostId === this.terminalHostId)?.hostId ?? hosts[0]!.hostId,
+    this.terminalHost.synchronize(this.read().data?.terminalHosts, (hostId) =>
+      this.selectTerminalHost(hostId),
     );
   }
   private agentIdValue = "";
   private folderValue = "";
-  private deviceIdValue = "";
-  private autoDeviceValue = false;
-  private cloudProfileIdValue = "";
   readonly cloudMachines = new DraftCloudMachineState();
-  private gatewayApprovedWorkspaceRoots: string[] = [];
   private agentsHydratedValue = false;
   private agentSelectedByUser = false;
-  private folderSelectedByUser = false;
-  private preferredWhereRestore: NewSessionWhere | null = null;
-  private preferredProjectRestore = "";
-  private whereSelectedByUser = false;
-  private projectSelectedByUser = false;
+  private routeModelIntentActive = true;
 
+  private readonly selection = createDraftPlaceRestoreState();
   readonly modelControl: NewSessionModelControl;
   private readonly repositoryState: DraftRepositoryController;
   private readonly folderValidation: DraftRestoredFolderValidation;
@@ -105,21 +92,29 @@ export class DraftPlaceState {
       () => ({
         gateway: this.read().context?.gateway.snapshot,
         folder: this.folderValue,
-        selectedByUser: this.folderSelectedByUser,
+        selectedByUser: this.selection.folderSelectedByUser,
         isAdmin: this.isAdmin(),
       }),
       {
-        onApprovedListing: (listing) => this.recordGatewayApprovedListing(listing),
+        onApprovedRootsChange: callbacks.requestUpdate,
         onVerified: () => {
           this.callbacks.onClearError(t("newSession.browserLoadFailed"));
           this.repositoryState.load();
         },
-        onMissing: () => this.restoreWorkspaceFolder(),
+        onMissing: () => {
+          this.callbacks.onClearError(t("newSession.browserLoadFailed"));
+          this.folderValue = this.workspacePath();
+          this.repositoryState.rejectPreferredWorktree();
+          this.persistPreference({ folder: this.folderValue, worktree: false });
+          this.repositoryState.load();
+        },
         onFailed: () => this.callbacks.onError(t("newSession.browserLoadFailed")),
       },
     );
     this.repositoryState = new DraftRepositoryController(
       () => ({
+        agentId: this.agentIdValue,
+        agents: this.agents(),
         remotePlacement: this.remotePlacement,
         selectedProject: this.browser.selectedProject(),
         remoteProject: this.browser.remoteProject,
@@ -131,6 +126,8 @@ export class DraftPlaceState {
       {
         requestUpdate: callbacks.requestUpdate,
         persistPreference: (patch) => this.persistPreference(patch),
+        capturePreferenceConsumption: (owner, expected) =>
+          this.gateway.capturePreferenceConsumption(owner.agentId, owner.workspace, expected),
       },
     );
     this.modelControl = new NewSessionModelControl(
@@ -143,26 +140,6 @@ export class DraftPlaceState {
     );
   }
 
-  buildSessionCreateParams(params: DraftSessionCreateSelection): SessionCreateParams {
-    return buildDraftSessionCreateParams({
-      ...params,
-      deferInitialTurn: this.remotePlacement,
-      agentId: this.agentId,
-      model: this.modelControl.modelForSubmission(),
-      contextWindow: this.modelControl.contextWindow,
-      thinkingLevel: this.modelControl.thinkingLevel,
-      fastMode: this.modelControl.fastMode,
-      projectId: this.browser.remoteProject?.projectId ?? this.browser.projectId,
-      projectGitUrl: this.browser.remoteProject?.cloneUrl,
-      repository: this.remoteRepository,
-      worktree: this.worktree,
-      baseRef: this.baseRef,
-      worktreeName: this.worktreeName,
-      cwd: this.folder,
-      workspace: this.workspacePath(),
-    });
-  }
-
   get agentId(): string {
     return this.agentIdValue;
   }
@@ -171,25 +148,60 @@ export class DraftPlaceState {
     return this.folderValue;
   }
 
+  get hostedEnvironment() {
+    return this.requiredPlacement || catalog.isTarget(this.read().data)
+      ? undefined
+      : this.modelControl.resolveAgentRuntime()?.workspaceEnvironment;
+  }
+
+  selectHostedEnvironment(runtimeId: string) {
+    const snapshot = this.read();
+    if (
+      snapshot.submitting ||
+      snapshot.pendingPlacementSessionKey ||
+      !this.canWrite() ||
+      this.requiredPlacement ||
+      catalog.isTarget(snapshot.data)
+    ) {
+      return;
+    }
+    if (this.modelControl.selectHostedEnvironment(runtimeId)) {
+      this.browser.close();
+      this.callbacks.onError(null);
+      this.callbacks.requestUpdate();
+    }
+  }
+
   get worktree(): boolean {
-    return this.repositoryState.worktree && !this.remoteRepository;
+    return (
+      !this.hostedEnvironment &&
+      (this.remotePlacement || this.repositoryState.worktree) &&
+      !this.remoteRepository
+    );
+  }
+
+  get checkoutVisible(): boolean {
+    return (
+      !this.freshWorkspace &&
+      this.repository.kind !== "direct" &&
+      (this.worktreeAvailable() || this.worktree)
+    );
+  }
+
+  get freshWorkspace(): boolean {
+    return this.requiredPlacement || (this.remotePlacement && this.selection.freshWorkspace);
   }
 
   get remoteRepository(): SessionCreateParams["repository"] {
-    const project = this.browser.remoteProject;
-    if (!this.remotePlacement || !project) {
-      return undefined;
-    }
-    const ref = this.baseRef.trim();
-    return { url: project.cloneUrl, ...(ref ? { ref } : {}) };
+    return this.requiredPlacement ? undefined : this.repositoryState.remoteRepository;
   }
 
   get worktreeName(): string {
-    return this.repositoryState.worktreeName;
+    return this.freshWorkspace ? "" : this.repositoryState.worktreeName;
   }
 
   get baseRef(): string {
-    return this.repositoryState.baseRef;
+    return this.freshWorkspace ? "" : this.repositoryState.baseRef;
   }
 
   get repository() {
@@ -197,40 +209,67 @@ export class DraftPlaceState {
   }
 
   get deviceId(): string {
-    return this.deviceIdValue;
+    return this.requiredPlacement || this.hostedEnvironment ? "" : this.selection.deviceId;
   }
 
   get autoDevice(): boolean {
-    return this.autoDeviceValue;
+    return !this.requiredPlacement && !this.hostedEnvironment && this.selection.autoDevice;
   }
 
   get remotePlacement(): boolean {
-    return Boolean(this.deviceIdValue || this.autoDeviceValue || this.cloudProfileIdValue);
+    return Boolean(
+      this.requiredPlacement ||
+      (!this.hostedEnvironment &&
+        (this.selection.deviceId || this.selection.autoDevice || this.selection.cloudProfileId)),
+    );
+  }
+
+  get requiredPlacement(): boolean {
+    return DraftGatewayState.requiredPlacement(this.gateway, this.read().data);
   }
 
   get cloudProfileId(): string {
-    return this.cloudProfileIdValue;
+    return this.requiredPlacement
+      ? this.gateway.requiredProfile!
+      : this.hostedEnvironment
+        ? ""
+        : this.selection.cloudProfileId;
   }
 
   get cloudSelection() {
-    return this.cloudMachines.selection(this.cloudProfileIdValue);
+    return this.requiredPlacement
+      ? { os: "", machineClass: "" }
+      : this.cloudMachines.selection(this.selection.cloudProfileId, this.gateway.cloudProfiles);
   }
 
   get agentsHydrated(): boolean {
     return this.agentsHydratedValue;
   }
 
+  preferenceSelection(): NewSessionPreference {
+    return resolveDraftPlacePreferenceSelection(
+      this.selection,
+      this.browser,
+      this.repositoryState,
+      this.workspacePath(),
+      this.folderValue,
+    );
+  }
+
   get placementPreferenceReady(): boolean {
-    return this.repositoryState.preferenceReady && this.preferredWhereRestore === null;
+    return (
+      Boolean(this.hostedEnvironment) ||
+      draftPlacePreferenceReady(
+        this.selection,
+        this.freshWorkspace || this.repositoryState.preferenceReady,
+        this.browser.projectsLoading || this.browser.projectsReady,
+        this.requiredPlacement,
+      )
+    );
   }
 
   canAdoptGroupDefaults(): boolean {
-    return (
-      !this.folderSelectedByUser &&
-      !this.whereSelectedByUser &&
-      !this.projectSelectedByUser &&
-      !this.repositoryState.hasUserSelection
-    );
+    return canAdoptDraftPlaceDefaults(this.selection, this.repositoryState);
   }
 
   adoptGroupDefaults() {
@@ -268,27 +307,8 @@ export class DraftPlaceState {
     );
   }
 
-  private findDevice(deviceId: string) {
-    return this.devices().find((device) => device.deviceId === deviceId);
-  }
-
-  devicePlacementReady(): boolean {
-    return this.autoDeviceValue
-      ? this.devices().some((device) => device.selectable)
-      : !this.deviceIdValue || this.findDevice(this.deviceIdValue)?.selectable === true;
-  }
-
-  devicePlacementDisabledReason(): string | undefined {
-    if (this.autoDeviceValue) {
-      return resolveAutomaticDevicePlacementDisabledReason(
-        this.gateway.environments,
-        this.devices(),
-      );
-    }
-    if (!this.deviceIdValue) {
-      return undefined;
-    }
-    return this.findDevice(this.deviceIdValue)?.disabledReason ?? t("newSession.nodeUnavailable");
+  devicePlacement() {
+    return resolveSelectedDevicePlacement(this.devices(), this.gateway.environments, this);
   }
 
   isAdmin(): boolean {
@@ -304,28 +324,17 @@ export class DraftPlaceState {
   }
 
   knownWorkspaceRoots(): string[] {
-    const configuredWorkspace = this.workspacePath();
-    return configuredWorkspace
-      ? [configuredWorkspace, ...this.gatewayApprovedWorkspaceRoots]
-      : this.gatewayApprovedWorkspaceRoots;
+    return this.folderValidation.knownWorkspaceRoots(this.workspacePath());
   }
 
   recordGatewayApprovedListing(listing: FsListDirResult) {
-    if (this.isAdmin()) {
-      return;
-    }
-    const roots = new Set(this.gatewayApprovedWorkspaceRoots);
-    roots.add(listing.path);
-    if (listing.parent) {
-      roots.add(listing.parent);
-    }
-    if (roots.size !== this.gatewayApprovedWorkspaceRoots.length) {
-      this.gatewayApprovedWorkspaceRoots = [...roots];
-      this.callbacks.requestUpdate();
-    }
+    this.folderValidation.recordApprovedListing(listing);
   }
 
   folderSubmissionBlocked(): boolean {
+    if (this.hostedEnvironment || this.freshWorkspace) {
+      return false;
+    }
     if (this.browser.projectId || this.browser.remoteProject) {
       return !this.browser.remoteProject && !this.browser.selectedProject();
     }
@@ -355,53 +364,45 @@ export class DraftPlaceState {
       return;
     }
     const preference = this.agentIdValue ? this.gateway.readPreference(this.agentIdValue) : null;
-    const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
+    const keepSelectedFolder =
+      options.preserveSelectedFolder && this.selection.folderSelectedByUser;
     if (!keepSelectedFolder && !snapshot.pendingPlacementSessionKey) {
       const workspace = this.workspacePath();
-      const storedFolder = preference?.folder ?? "";
-      const storedWorkspaceMoved =
-        Boolean(storedFolder) &&
-        storedFolder === preference?.workspace &&
-        preference.workspace !== workspace;
-      const storedFolderUsable = Boolean(storedFolder) && !storedWorkspaceMoved;
+      const savedFolder = resolveNewSessionFolderPreference(preference, workspace);
       const groupTarget = Boolean(snapshot.data?.group);
       const groupFolder = snapshot.data?.groupCwd ?? "";
       const groupWorktree = snapshot.data?.groupWorktree === true;
-      this.folderValue = groupTarget
-        ? groupFolder || workspace
-        : storedFolderUsable
-          ? storedFolder
-          : workspace;
-      this.folderSelectedByUser = false;
-      this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
-      const preferredWhere =
-        groupTarget || catalog.isTarget(snapshot.data)
-          ? { kind: "local" as const }
-          : (preference?.where ?? { kind: "local" as const });
-      if (!this.whereSelectedByUser) {
-        this.preferredWhereRestore = preferredWhere.kind === "local" ? null : preferredWhere;
+      this.folderValue = groupTarget ? groupFolder || workspace : savedFolder.folder;
+      if (!this.selection.projectSelectedByUser) {
+        this.selection.freshWorkspace = !groupTarget && savedFolder.freshWorkspace;
       }
-      this.preferredProjectRestore =
-        groupTarget || catalog.isTarget(snapshot.data) ? "" : (preference?.projectId ?? "");
-      this.projectSelectedByUser = false;
-      if (storedWorkspaceMoved && !groupTarget) {
+      this.selection.folderSelectedByUser = false;
+      this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
+      adoptDraftPlaceRestorePreference(
+        this.selection,
+        preference,
+        groupTarget,
+        catalog.isTarget(snapshot.data),
+      );
+      if (savedFolder.workspaceMoved && !groupTarget) {
         this.persistPreference({ folder: workspace });
       }
     }
     if (keepSelectedFolder && !snapshot.pendingPlacementSessionKey && this.agentIdValue) {
       this.persistPreference({ folder: this.folderValue, worktree: this.worktree });
     }
-    if (this.remotePlacement) {
-      this.repositoryState.forceWorktree(true);
-    }
     this.modelControl.load(snapshot.context, this.agentIdValue, !catalog.isTarget(snapshot.data), {
       agent: this.selectedAgent(),
       preference,
+      configuredDefaults: this.requiredPlacement,
+      initialModel: this.routeModelIntentActive
+        ? catalog.requestedModelForAgent(snapshot.data, this.agentIdValue)
+        : undefined,
     });
-    if (this.preferredProjectRestore) {
+    if (this.selection.preferredProjectRestore) {
       this.folderValidation.cancel();
     } else if (
-      !this.folderSelectedByUser &&
+      !this.selection.folderSelectedByUser &&
       this.folderValue !== this.workspacePath() &&
       !snapshot.pendingPlacementSessionKey
     ) {
@@ -414,27 +415,19 @@ export class DraftPlaceState {
   }
 
   private resetPlaceSelection() {
-    this.folderSelectedByUser = false;
-    this.gatewayApprovedWorkspaceRoots = [];
-    this.preferredWhereRestore = null;
-    this.preferredProjectRestore = "";
-    this.whereSelectedByUser = false;
-    this.projectSelectedByUser = false;
-    this.deviceIdValue = "";
-    this.autoDeviceValue = false;
-    this.cloudProfileIdValue = "";
+    this.folderValidation.reset();
+    Object.assign(this.selection, createDraftPlaceRestoreState());
     this.repositoryState.reset();
   }
 
   resetDraft() {
-    this.terminalHostId = "gateway:local";
-    this.terminalHostInitialized = false;
+    this.routeModelIntentActive = true;
+    this.terminalHost.reset();
     this.agentSelectedByUser = false;
     this.folderValue = "";
     this.browser.clearProjectSelection();
     this.resetPlaceSelection();
     this.browser.resetProjectSearch();
-    this.folderValidation.cancel();
     this.modelControl.reset();
     this.cloudMachines.clear();
     this.callbacks.requestUpdate();
@@ -445,8 +438,7 @@ export class DraftPlaceState {
     this.agentsHydratedValue = false;
     this.modelControl.invalidate(resetHostSelection);
     this.browser.close();
-    this.folderValidation.cancel();
-    this.gatewayApprovedWorkspaceRoots = [];
+    this.folderValidation.reset();
     this.browser.resetProjectSearch();
     this.browser.resetProjects(resetHostSelection);
     if (!resetHostSelection) {
@@ -463,25 +455,28 @@ export class DraftPlaceState {
 
   applyPendingPlacement(params: PendingPlacementPlace) {
     this.agentIdValue = params.agentId;
-    this.deviceIdValue = params.deviceId ?? "";
-    this.autoDeviceValue = params.autoDevice === true;
-    this.cloudProfileIdValue = params.profileId;
+    this.selection.deviceId = params.deviceId ?? "";
+    this.selection.autoDevice = params.autoDevice === true;
+    this.selection.cloudProfileId = params.profileId;
     this.cloudMachines.applyPending(params.profileId, params.machineClass, params.os);
-    this.repositoryState.forceWorktree(true);
     this.folderValue = params.cwd ?? "";
+    this.selection.freshWorkspace = params.worktreeSource === "empty";
+    if (this.selection.freshWorkspace) {
+      this.browser.clearProjectSelection();
+    }
     if (params.repository) {
       this.browser.selectProject({
         kind: "remote",
         project: { identity: params.repository.url, cloneUrl: params.repository.url },
       });
-      this.repositoryState.setBaseRef(params.repository.ref ?? "", false);
+      this.repositoryState.setDetail("baseRef", params.repository.ref ?? "", false);
       this.repositoryState.load();
     }
     this.callbacks.requestUpdate();
   }
 
   clearCloudProfile() {
-    this.cloudProfileIdValue = "";
+    this.selection.cloudProfileId = "";
     this.browser.close();
     this.callbacks.requestUpdate();
   }
@@ -491,6 +486,12 @@ export class DraftPlaceState {
       this.repositoryState.clearDetails(true);
     }
     this.browser.clearProjectSelection();
+    markDraftPlaceProjectChoice(this.selection, true);
+    this.persistPreference({
+      projectId: "",
+      remoteProject: null,
+      defaultRepositoryOptOut: true,
+    });
     this.repositoryState.load();
     this.callbacks.requestUpdate();
   }
@@ -508,7 +509,7 @@ export class DraftPlaceState {
       return;
     }
     this.agentIdValue = normalizeAgentId(agentId);
-    this.folderValidation.cancel();
+    this.routeModelIntentActive = false;
     this.modelControl.reset();
     this.callbacks.onError(null);
     this.agentSelectedByUser = true;
@@ -527,22 +528,51 @@ export class DraftPlaceState {
     this.folderValidation.cancel();
     this.callbacks.onError(null);
     this.folderValue = folder.trim();
-    this.folderSelectedByUser = true;
-    this.projectSelectedByUser = true;
-    this.preferredProjectRestore = "";
+    this.selection.freshWorkspace = false;
+    this.selection.folderSelectedByUser = true;
+    markDraftPlaceProjectChoice(this.selection, true);
     if (catalog.isTarget(snapshot.data) && this.terminalOnNode) {
       this.callbacks.requestUpdate();
       return;
     }
-    this.repositoryState.selectWorktree(this.remotePlacement);
+    this.repositoryState.selectWorktree(false);
     if (this.agentsHydratedValue) {
       this.persistPreference({
         folder: this.folderValue,
         projectId: "",
+        remoteProject: null,
+        defaultRepositoryOptOut: true,
         worktree: this.worktree,
+        freshWorkspace: false,
       });
     }
     this.repositoryState.load();
+  }
+
+  selectNewWorkspace() {
+    const snapshot = this.read();
+    if (snapshot.submitting || snapshot.pendingPlacementSessionKey || !this.remotePlacement) {
+      return;
+    }
+    this.folderValidation.cancel();
+    this.browser.clearProjectSelection();
+    this.browser.resetProjectSearch();
+    this.callbacks.onError(null);
+    this.folderValue = this.workspacePath();
+    this.selection.folderSelectedByUser = true;
+    markDraftPlaceProjectChoice(this.selection, true);
+    this.selection.freshWorkspace = true;
+    this.repositoryState.selectWorktree(false);
+    this.persistPreference({
+      folder: this.folderValue,
+      projectId: "",
+      remoteProject: null,
+      defaultRepositoryOptOut: true,
+      worktree: true,
+      freshWorkspace: true,
+    });
+    this.browser.close();
+    this.callbacks.requestUpdate();
   }
 
   selectProjectId(projectId: string) {
@@ -563,24 +593,24 @@ export class DraftPlaceState {
       return;
     }
     this.browser.selectProject(selection);
+    this.selection.freshWorkspace = false;
     this.folderValidation.cancel();
     this.browser.resetProjectSearch();
     this.callbacks.onError(null);
-    this.folderSelectedByUser = false;
-    this.projectSelectedByUser = true;
-    this.preferredProjectRestore = "";
-    this.repositoryState.selectWorktree(this.remotePlacement);
-    if (selection.kind === "local") {
-      this.persistPreference({
-        projectId: selection.id,
-        where: resolveNewSessionWhere({
-          cloudProfileId: this.cloudProfileIdValue,
-          deviceId: this.deviceIdValue,
-          autoDevice: this.autoDeviceValue,
-        }),
-        worktree: this.worktree,
-        worktreeName: "",
-      });
+    this.selection.folderSelectedByUser = false;
+    markDraftPlaceProjectChoice(this.selection, false);
+    this.repositoryState.selectWorktree(false);
+    this.persistPreference({
+      projectId: selection.kind === "local" ? selection.id : "",
+      remoteProject: selection.kind === "remote" ? selection.project : null,
+      defaultRepositoryOptOut: false,
+      ...(selection.kind === "local" ? { where: resolveNewSessionWhere(this) } : {}),
+      worktree: this.worktree,
+      ...(selection.kind === "local" ? { worktreeName: "" } : {}),
+      freshWorkspace: false,
+    });
+    if (selection.kind === "remote" && selection.project.defaultBranch) {
+      this.repositoryState.setDetail("baseRef", selection.project.defaultBranch, false);
     }
     this.repositoryState.load();
     this.browser.close();
@@ -588,43 +618,47 @@ export class DraftPlaceState {
 
   selectDevice(deviceId: string, autoDevice = false) {
     const snapshot = this.read();
-    if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
+    if (this.requiredPlacement || snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
     }
     if (
-      (deviceId && this.findDevice(deviceId)?.selectable !== true) ||
+      this.hostedEnvironment &&
+      (deviceId || autoDevice) &&
+      environmentDeviceDisabledReason(this.modelControl)
+    ) {
+      return;
+    }
+    if (!this.modelControl.selectHostEnvironment()) {
+      return;
+    }
+    if (
+      (deviceId &&
+        this.devices().find((device) => device.deviceId === deviceId)?.selectable !== true) ||
       (autoDevice && !this.devices().some((device) => device.selectable))
     ) {
       return;
     }
+    this.selection.whereSelectedByUser = true;
+    this.selection.preferredWhereRestore = null;
     if (
-      deviceId === this.deviceIdValue &&
-      autoDevice === this.autoDeviceValue &&
-      !this.cloudProfileIdValue
+      deviceId === this.selection.deviceId &&
+      autoDevice === this.selection.autoDevice &&
+      !this.selection.cloudProfileId
     ) {
+      this.browser.close();
+      this.callbacks.requestUpdate();
       return;
     }
     this.folderValidation.cancel();
-    this.deviceIdValue = deviceId;
-    this.autoDeviceValue = autoDevice;
-    this.cloudProfileIdValue = "";
-    this.whereSelectedByUser = true;
-    this.preferredWhereRestore = null;
-    if ((deviceId || autoDevice) && !this.worktreeAvailable()) {
-      if (this.folderValue !== this.workspacePath() || this.browser.projectId) {
-        this.repositoryState.clearDetails(true);
-      }
-      this.folderValue = this.workspacePath();
-      this.folderSelectedByUser = false;
-      this.browser.clearProjectSelection();
-      this.projectSelectedByUser = true;
-    }
-    this.repositoryState.forceWorktree(Boolean(deviceId || autoDevice));
+    this.selection.deviceId = deviceId;
+    this.selection.autoDevice = autoDevice;
+    this.selection.cloudProfileId = "";
     this.persistPreference({
       where: resolveNewSessionWhere({ cloudProfileId: "", deviceId, autoDevice }),
       projectId: this.browser.projectId,
       folder: this.folderValue,
       worktree: Boolean(deviceId || autoDevice) || this.worktree,
+      freshWorkspace: this.selection.freshWorkspace,
     });
     this.browser.close();
     this.repositoryState.synchronize();
@@ -637,110 +671,84 @@ export class DraftPlaceState {
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
+      this.requiredPlacement ||
       !this.isAdmin() ||
-      !this.worktreeAvailable() ||
       !profile ||
-      Boolean(this.modelControl.cloudRuntimeUnsupportedReason(profile))
+      Boolean(environmentCloudDisabledReason(this.modelControl, profile)) ||
+      !this.modelControl.selectHostEnvironment()
     ) {
       return;
     }
-    this.cloudProfileIdValue = profileId;
-    this.deviceIdValue = "";
-    this.autoDeviceValue = false;
-    this.whereSelectedByUser = true;
-    this.preferredWhereRestore = null;
+    this.selection.cloudProfileId = profileId;
+    this.selection.deviceId = "";
+    this.selection.autoDevice = false;
+    this.selection.whereSelectedByUser = true;
+    this.selection.preferredWhereRestore = null;
     this.callbacks.onError(null);
-    this.repositoryState.forceWorktree(true);
     this.persistPreference({
       where: { kind: "cloud", id: profileId },
       projectId: this.browser.projectId,
       worktree: true,
+      freshWorkspace: this.selection.freshWorkspace,
     });
     this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
 
   selectWorktree(value: boolean) {
-    this.repositoryState.select(value);
+    if (this.read().submitting || !this.repositoryState.select(value)) {
+      return;
+    }
+    if (value && this.selection.freshWorkspace) {
+      this.selection.freshWorkspace = false;
+      this.persistPreference({ freshWorkspace: false });
+    }
   }
 
   setBaseRef(baseRef: string) {
-    this.repositoryState.setBaseRef(baseRef, this.read().submitting);
+    this.repositoryState.setDetail("baseRef", baseRef, this.read().submitting);
   }
 
   setWorktreeName(worktreeName: string) {
-    this.repositoryState.setWorktreeName(worktreeName, this.read().submitting);
+    this.repositoryState.setDetail("worktreeName", worktreeName, this.read().submitting);
+  }
+
+  captureSubmittedWorktreeName(
+    params: Parameters<DraftRepositoryController["captureSubmittedName"]>[0],
+    agentId: string,
+    recovered = false,
+  ) {
+    return this.repositoryState.captureSubmittedName(params, { agentId, recovered });
   }
 
   restorePreferenceSelections() {
-    let changed = false;
-    const preferredWhere = this.whereSelectedByUser ? null : this.preferredWhereRestore;
-    let preferredProject = this.projectSelectedByUser ? "" : this.preferredProjectRestore;
-
-    if (
-      preferredWhere?.kind !== "device" &&
-      preferredWhere?.kind !== "auto-device" &&
-      preferredProject
-    ) {
-      const project = this.browser.projects.find((candidate) => candidate.id === preferredProject);
-      if (project) {
-        this.browser.selectProject({ kind: "local", id: project.id });
-        this.folderSelectedByUser = false;
-        this.preferredProjectRestore = "";
-        changed = true;
-      } else if (this.browser.projectsReady) {
-        this.preferredProjectRestore = "";
-        preferredProject = "";
-        changed = true;
-      }
+    if (this.hostedEnvironment) {
+      return;
     }
-
-    if (
-      (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
-      this.gateway.cloudProfilesReady
-    ) {
-      const automatic = preferredWhere.kind === "auto-device";
-      this.autoDeviceValue = automatic;
-      this.deviceIdValue = preferredWhere.kind === "device" ? preferredWhere.id : "";
-      this.cloudProfileIdValue = "";
-      this.repositoryState.forceWorktree(this.remotePlacement);
-      this.preferredWhereRestore = null;
-      changed = true;
-    } else if (preferredWhere?.kind === "cloud" && this.gateway.cloudProfilesReady) {
-      const preferredProfile = this.gateway.cloudProfiles.find(
-        (profile) => profile.id === preferredWhere.id,
-      );
-      const profileAvailable = Boolean(
-        this.isAdmin() &&
-        preferredProfile &&
-        !this.modelControl.cloudRuntimeUnsupportedReason(preferredProfile),
-      );
-      const repositoryReady =
-        (!preferredProject || this.browser.projectId === preferredProject) &&
-        this.repositoryState.matchesCurrentRepo() &&
-        this.repository.kind !== "checking";
-      if (profileAvailable && repositoryReady && this.worktreeAvailable()) {
-        this.deviceIdValue = "";
-        this.autoDeviceValue = false;
-        this.cloudProfileIdValue = preferredWhere.id;
-        this.repositoryState.forceWorktree(true);
-        this.preferredWhereRestore = null;
-        changed = true;
-      } else if (!profileAvailable || repositoryReady) {
-        this.cloudProfileIdValue = "";
-        changed = true;
-        this.preferredWhereRestore = null;
-        // A failed Git probe drops this draft's restore, not the saved destination.
-        if (!profileAvailable || this.repository.kind === "direct") {
-          this.persistPreference({ where: { kind: "local" } });
-        }
-      }
-    }
-
-    if (changed) {
-      this.repositoryState.synchronize();
-      this.callbacks.requestUpdate();
-    }
+    restoreDraftPlacePreferences({
+      state: this.selection,
+      browser: this.browser,
+      gateway: this.gateway,
+      where: resolveNewSessionWhere(this),
+      modelControl: this.modelControl,
+      repositoryState: this.repositoryState,
+      isAdmin: () => this.isAdmin(),
+      persistPreference: (patch) => this.persistPreference(patch),
+      requestUpdate: this.callbacks.requestUpdate,
+      requiredPlacement: this.requiredPlacement,
+      loadConfiguredDefaults: (configuredDefaults) => {
+        this.modelControl.load(
+          this.read().context,
+          this.agentId,
+          !catalog.isTarget(this.read().data),
+          {
+            agent: this.selectedAgent(),
+            preference: this.gateway.readPreference(this.agentId),
+            configuredDefaults,
+          },
+        );
+      },
+    });
   }
 
   browseAvailable(): boolean {
@@ -748,18 +756,10 @@ export class DraftPlaceState {
   }
 
   worktreeAvailable(): boolean {
-    return this.repositoryState.available();
+    return !this.hostedEnvironment && this.repositoryState.available();
   }
 
   private persistPreference(patch: Parameters<DraftGatewayState["persistPreference"]>[2]) {
-    this.gateway.persistPreference(this.agentIdValue, this.workspacePath(), patch);
-  }
-
-  private restoreWorkspaceFolder() {
-    this.callbacks.onClearError(t("newSession.browserLoadFailed"));
-    this.folderValue = this.workspacePath();
-    this.repositoryState.rejectPreferredWorktree();
-    this.persistPreference({ folder: this.folderValue, worktree: false });
-    this.repositoryState.load();
+    void this.gateway.persistPreference(this.agentIdValue, this.workspacePath(), patch);
   }
 }

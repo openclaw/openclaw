@@ -3,11 +3,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
-import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv } from "../test-utils/env.js";
+import * as secretStore from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { createWorkerPlacementTools } from "../worker/worker-placement-tools.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 
 const mocks = vi.hoisted(() => ({
   egressActive: false,
@@ -31,16 +34,20 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../secrets/egress-proxy/registry.js", () => ({
   isSecretEgressProxyActive: () => mocks.egressActive,
-  registerSecretEgressProxyRun: (_run: unknown, bindings: unknown) => {
+  registerSecretEgressProxyProcess: (bindings: unknown) => {
     mocks.proxyBindings.push(bindings);
     return {
-      HTTPS_PROXY: mocks.proxyUrl,
-      HTTP_PROXY: mocks.proxyUrl,
-      NODE_USE_ENV_PROXY: "1",
-      NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
-      SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
-      CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
-      REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+      revoke: () => {},
+      env: {
+        HTTPS_PROXY: mocks.proxyUrl,
+        HTTP_PROXY: mocks.proxyUrl,
+        NODE_USE_ENV_PROXY: "1",
+        NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
+        SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
+        CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
+      },
     };
   },
 }));
@@ -95,16 +102,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         runId: "mock-run",
         startedAtMs: Date.now(),
         stdin: undefined,
-        wait: async () => ({
-          reason: "exit" as const,
-          exitCode: 0,
-          exitSignal: null,
-          durationMs: 0,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        }),
+        wait: async () => createRunExit({ durationMs: 0 }),
         cancel: vi.fn(),
       };
     },
@@ -123,7 +121,7 @@ type StoreEntry = {
   allowedHosts?: string[];
 };
 
-type StoreEnvHost = "gateway" | "sandbox" | "node";
+type StoreEnvHost = "gateway" | "sandbox";
 
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
@@ -133,25 +131,17 @@ const EGRESS_ENV = {
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
   CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
   REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+  GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
 } as const;
 
-async function withTeamStoreEntries(
-  entries: StoreEntry[],
-  run: () => Promise<void>,
-): Promise<void> {
-  const tempDirs = createTempDirTracker();
-  const stateDir = tempDirs.make("openclaw-exec-store-env-");
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    for (const entry of entries) {
-      writeSecretStoreEntry({ scope: { kind: "team" }, ...entry, updatedBy: "test" });
-    }
-    await run();
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
-    tempDirs.cleanup();
+const tempDirs = createTempDirTracker();
+async function writeEntries(entries: StoreEntry[]) {
+  for (const entry of entries) {
+    await secretStore.writeSecretStoreEntry({
+      scope: { kind: "team" },
+      ...entry,
+      updatedBy: "test",
+    });
   }
 }
 
@@ -188,76 +178,64 @@ async function captureStoreExecEnvironment(params: {
   });
   await tool.execute(params.callId, { command: "echo ok", yieldMs: 120_000 });
   if (params.host === "gateway") {
-    return mocks.gatewayParams.at(-1)?.env ?? {};
-  }
-  if (params.host === "node") {
-    return mocks.nodeHostParams.at(-1)?.env ?? {};
+    return mocks.spawnInputs.at(-1)?.env ?? {};
   }
   return sandboxEnv ?? {};
 }
 
 describe("exec store environment", () => {
-  it.each(["gateway", "sandbox", "node"] as const)(
+  it.each(["gateway", "node"] as const)(
     "retains a lazy tool's local target outside its construction scope and fences %s",
     async (host) => {
-      await withTeamStoreEntries([], async () => {
-        const target = {
-          stateDir: "/fixture/diagnosed",
-          configPath: "/fixture/custom.json",
-          defaultWorkspaceDir: "/fixture/default-workspace",
-        };
-        const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>();
-        const tool = withInstallationTarget(target, () =>
-          createLazyExecTool({
-            host,
-            security: "full",
-            ask: "off",
-            ...(host === "sandbox"
-              ? {
-                  sandbox: {
-                    containerName: "fixture-sandbox",
-                    workspaceDir: process.cwd(),
-                    containerWorkdir: "/workspace",
-                    buildExecSpec,
-                  },
-                }
-              : {}),
-          }),
+      const target = {
+        stateDir: "/fixture/diagnosed",
+        configPath: "/fixture/custom.json",
+        defaultWorkspaceDir: "/fixture/default-workspace",
+      };
+      const tool = withInstallationTarget(target, () =>
+        createLazyExecTool({
+          host,
+          security: "full",
+          ask: "off",
+        }),
+      );
+      const run = tool.execute("target-probe", { command: "echo ok", yieldMs: 120_000 });
+      if (host === "gateway") {
+        await run;
+        expect(mocks.spawnInputs.at(-1)?.env).toMatchObject({
+          OPENCLAW_STATE_DIR: target.stateDir,
+          OPENCLAW_CONFIG_PATH: target.configPath,
+          OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
+        });
+        const ordinary = createLazyExecTool({ host, security: "full", ask: "off" });
+        await withInstallationTarget(target, () =>
+          ordinary.execute("ordinary-probe", { command: "echo ok", yieldMs: 120_000 }),
         );
-        const run = tool.execute("target-probe", { command: "echo ok", yieldMs: 120_000 });
-        if (host === "gateway") {
-          await run;
-          expect(mocks.spawnInputs.at(-1)?.env).toMatchObject({
-            OPENCLAW_STATE_DIR: target.stateDir,
-            OPENCLAW_CONFIG_PATH: target.configPath,
-            OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
-          });
-          const ordinary = createLazyExecTool({ host, security: "full", ask: "off" });
-          await withInstallationTarget(target, () =>
-            ordinary.execute("ordinary-probe", { command: "echo ok", yieldMs: 120_000 }),
-          );
-          expect(mocks.spawnInputs.at(-1)?.env?.OPENCLAW_STATE_DIR).toBe(
-            process.env.OPENCLAW_STATE_DIR,
-          );
-          expect(mocks.spawnInputs.at(-1)?.env?.OPENCLAW_WORKSPACE_DIR).toBe(
-            process.env.OPENCLAW_WORKSPACE_DIR,
-          );
-        } else {
-          await expect(run).rejects.toThrow("saved prompt");
-          expect(buildExecSpec).not.toHaveBeenCalled();
-          expect(mocks.nodeHostParams).toEqual([]);
-          expect(mocks.spawnInputs).toEqual([]);
-        }
-      });
+        expect(mocks.spawnInputs.at(-1)?.env?.OPENCLAW_STATE_DIR).toBe(
+          process.env.OPENCLAW_STATE_DIR,
+        );
+        expect(mocks.spawnInputs.at(-1)?.env?.OPENCLAW_WORKSPACE_DIR).toBe(
+          process.env.OPENCLAW_WORKSPACE_DIR,
+        );
+      } else {
+        await expect(run).rejects.toThrow("saved prompt");
+        expect(mocks.nodeHostParams).toEqual([]);
+        expect(mocks.spawnInputs).toEqual([]);
+      }
     },
   );
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    vi.unstubAllEnvs();
+    tempDirs.cleanup();
+  });
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec-run.js"));
     ({ createLazyExecTool } = await import("./lazy-exec-tool.js"));
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-exec-store-env-"));
     vi.stubEnv("AWS_REGION", undefined);
     mocks.egressActive = false;
     mocks.gatewayParams.length = 0;
@@ -266,254 +244,189 @@ describe("exec store environment", () => {
     mocks.proxyBindings.length = 0;
   });
 
-  it("adds only team env-kind entries to gateway exec subprocesses", async () => {
-    await withTeamStoreEntries(
-      [
-        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-        { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
-      ],
-      async () => {
-        const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
+  it("reuses a lazy exec instance's store snapshot and refreshes it for a new run", async () => {
+    await writeEntries([
+      { name: "AWS_REGION", value: "us-west-2", kind: "env" },
+      { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
+    ]);
+    const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
 
-        await tool.execute("call-store-env", { command: "echo ok", yieldMs: 120_000 });
+    await tool.execute("code-mode-first", { command: "echo one", yieldMs: 120_000 });
+    await writeEntries([{ name: "AWS_REGION", value: "eu-west-1", kind: "env" }]);
+    await tool.execute("code-mode-nested", { command: "echo two", yieldMs: 120_000 });
 
-        expect(mocks.gatewayParams[0]?.env.AWS_REGION).toBe("us-west-2");
-        expect(mocks.gatewayParams[0]?.env).not.toHaveProperty("INTERNAL_VALUE");
-      },
-    );
+    expect(mocks.gatewayParams).toHaveLength(2);
+    for (const params of mocks.gatewayParams) {
+      expect(params.env.AWS_REGION).toBe("us-west-2");
+      expect(params.env).not.toHaveProperty("INTERNAL_VALUE");
+    }
+    const nextRun = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
+    await nextRun.execute("code-mode-next-run", { command: "echo three", yieldMs: 120_000 });
+    expect(mocks.gatewayParams.at(-1)?.env.AWS_REGION).toBe("eu-west-1");
   });
 
-  it("applies store env when code mode invokes exec through the hidden tool catalog", async () => {
-    // Code mode never runs shell itself: its guest calls `openclaw:core:exec`, which
-    // re-enters this same tool object. Re-executing one instance is what that nested
-    // route does, so store env must land on every call, not only the first.
-    await withTeamStoreEntries(
-      [
-        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-        { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
-      ],
-      async () => {
-        const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
-
-        await tool.execute("code-mode-first", { command: "echo one", yieldMs: 120_000 });
-        await tool.execute("code-mode-nested", { command: "echo two", yieldMs: 120_000 });
-
-        expect(mocks.gatewayParams).toHaveLength(2);
-        for (const params of mocks.gatewayParams) {
-          expect(params.env.AWS_REGION).toBe("us-west-2");
-          expect(params.env).not.toHaveProperty("INTERNAL_VALUE");
-        }
-      },
-    );
-  });
-
-  it("lets explicitly requested env override a store entry", async () => {
-    await withTeamStoreEntries(
-      [{ name: "AWS_REGION", value: "us-west-2", kind: "env" }],
-      async () => {
-        const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
-
-        await tool.execute("call-store-env-override", {
-          command: "echo ok",
-          env: { AWS_REGION: "eu-central-1" },
-          yieldMs: 120_000,
-        });
-
-        expect(mocks.gatewayParams[0]?.env.AWS_REGION).toBe("eu-central-1");
-        expect(mocks.gatewayParams[0]?.requestedEnv?.AWS_REGION).toBe("eu-central-1");
-      },
-    );
-  });
-
-  it("ignores protected store entries without replacing inherited network settings", async () => {
-    const envSnapshot = captureEnv(["PATH", "HTTPS_PROXY", "NODE_EXTRA_CA_CERTS"]);
-    process.env.PATH = "/inherited/bin";
-    process.env.HTTPS_PROXY = "http://inherited-proxy.test:8080";
-    process.env.NODE_EXTRA_CA_CERTS = "/inherited/ca.pem";
+  it("runs worker placement exec without reading or projecting its scratch secret store", async () => {
+    await writeEntries([
+      { name: "AWS_REGION", value: "synthetic-worker-store-value", kind: "env" },
+    ]);
+    const workspaceDir = tempDirs.make("worker-exec-store-env-");
+    const read = vi.spyOn(secretStore, "readSecretStoreExecEnvironment");
     try {
-      await withTeamStoreEntries(
-        [
-          { name: "PATH", value: "/store/bin", kind: "env" },
-          { name: "HTTPS_PROXY", value: "http://store-proxy.test:8080", kind: "env" },
-          { name: "NODE_EXTRA_CA_CERTS", value: "/store/ca.pem", kind: "env" },
-        ],
-        async () => {
-          const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tools = createWorkerPlacementTools({
+        policy: prepareCoreToolPolicy({}),
+        cwd: workspaceDir,
+        containmentRoot: workspaceDir,
+        execAuthority: { host: "gateway", security: "full", ask: "off" },
+        agentId: "main",
+        sessionKey: "worker:store-env",
+        sessionId: "store-env",
+        runId: "worker-store-env",
+      });
+      const exec = tools.find((tool) => tool.name === "exec");
+      if (!exec) {
+        throw new Error("Worker placement exec tool is unavailable");
+      }
 
-          const result = await tool.execute("call-protected-store-env", {
-            command: "echo ok",
-            yieldMs: 120_000,
-          });
+      const result = await exec.execute("worker-store-env", {
+        command: "echo ok",
+        yieldMs: 120_000,
+      });
 
-          expect(mocks.gatewayParams[0]?.env).toMatchObject({
-            PATH: "/inherited/bin",
-            HTTPS_PROXY: "http://inherited-proxy.test:8080",
-            NODE_EXTRA_CA_CERTS: "/inherited/ca.pem",
-          });
-          expect(mocks.gatewayParams[0]?.requestedEnv).toBeUndefined();
-          expect(result.content[0]).toMatchObject({
-            type: "text",
-            text: expect.stringMatching(/HTTPS_PROXY, NODE_EXTRA_CA_CERTS, PATH/u),
-          });
-        },
-      );
+      expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(mocks.spawnInputs).toHaveLength(1);
+      expect(mocks.spawnInputs[0]?.env).not.toHaveProperty("AWS_REGION");
+      expect(read).not.toHaveBeenCalled();
     } finally {
-      envSnapshot.restore();
+      read.mockRestore();
     }
   });
 
-  it("keeps agent-readable store environment out of sandbox exec", async () => {
-    await withTeamStoreEntries(
-      [
-        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-        { name: "FOO_TOKEN", value: "operator-forced-env", kind: "env" },
-      ],
-      async () => {
-        const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
-          async (params) => ({
-            argv: ["remote-shell", params.command],
-            env: {},
-            stdinMode: "pipe-open" as const,
-          }),
-        );
-        const tool = createLazyExecTool({
-          host: "sandbox",
-          security: "full",
-          ask: "off",
-          cwd: process.cwd(),
-          sandbox: {
-            containerName: "store-env-sandbox",
-            workspaceDir: process.cwd(),
-            containerWorkdir: "/workspace",
-            buildExecSpec,
-          },
-        });
+  it("refuses a cancelled exec after its store read without cancelling the run's shared snapshot", async () => {
+    await writeEntries([{ name: "AWS_REGION", value: "us-west-2", kind: "env" }]);
+    const replyReady = createDeferredCore();
+    const releaseReply = createDeferredCore();
+    const readStore = secretStore.readSecretStoreExecEnvironment;
+    const read = vi
+      .spyOn(secretStore, "readSecretStoreExecEnvironment")
+      .mockImplementationOnce(async (params) => {
+        const environment = await readStore(params);
+        replyReady.resolve();
+        await releaseReply.promise;
+        return environment;
+      });
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const controller = new AbortController();
+    const execution = tool
+      .execute("cancelled-store-read", { command: "echo cancelled" }, controller.signal)
+      .then(
+        (value) => ({ status: "completed" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+    void execution.then((outcome) => {
+      replyReady.reject(
+        outcome.status === "rejected"
+          ? outcome.error
+          : new Error("Exec completed before the store reply"),
+      );
+    });
+    try {
+      await replyReady.promise;
+      controller.abort(new Error("synthetic exec cancellation"));
+      releaseReply.resolve();
+      expect(await execution).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: "synthetic exec cancellation" }),
+      });
+      expect(mocks.gatewayParams).toEqual([]);
+      expect(mocks.spawnInputs).toEqual([]);
 
-        const result = await tool.execute("call-sandbox-store-env", {
-          command: "echo ok",
-          yieldMs: 120_000,
-        });
-
-        expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("AWS_REGION");
-        expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("FOO_TOKEN");
-        expect(result.content[0]).not.toMatchObject({ text: expect.stringContaining("FOO_TOKEN") });
-      },
-    );
+      const later = await tool.execute("shared-store-read", { command: "echo later" });
+      expect(later.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(mocks.spawnInputs).toHaveLength(1);
+      expect(mocks.spawnInputs[0]?.env?.AWS_REGION).toBe("us-west-2");
+      expect(read).toHaveBeenCalledOnce();
+    } finally {
+      releaseReply.resolve();
+      await execution;
+      read.mockRestore();
+    }
   });
 
-  it("keeps an empty store snapshot byte-identical to direct exec env assembly", async () => {
-    await withTeamStoreEntries([], async () => {
-      const directTool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      await directTool.execute("call-direct-empty-store-baseline", {
-        command: "echo ok",
-        env: { REQUEST_SAFE: "request" },
-        yieldMs: 120_000,
-      });
-      const baseline = JSON.stringify({
-        gateway: mocks.gatewayParams[0],
-        spawn: mocks.spawnInputs[0],
-      });
-      mocks.gatewayParams.length = 0;
-      mocks.spawnInputs.length = 0;
+  it("ignores protected store entries without replacing inherited network settings", async () => {
+    vi.stubEnv("PATH", "/inherited/bin");
+    vi.stubEnv("HTTPS_PROXY", "http://inherited-proxy.test:8080");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "/inherited/ca.pem");
+    await writeEntries([
+      { name: "PATH", value: "/store/bin", kind: "env" },
+      { name: "HTTPS_PROXY", value: "http://store-proxy.test:8080", kind: "env" },
+      { name: "NODE_EXTRA_CA_CERTS", value: "/store/ca.pem", kind: "env" },
+    ]);
+    const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
 
-      const lazyTool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
-      await lazyTool.execute("call-lazy-empty-store", {
-        command: "echo ok",
-        env: { REQUEST_SAFE: "request" },
-        yieldMs: 120_000,
-      });
+    const result = await tool.execute("call-protected-store-env", {
+      command: "echo ok",
+      yieldMs: 120_000,
+    });
 
-      expect(JSON.stringify({ gateway: mocks.gatewayParams[0], spawn: mocks.spawnInputs[0] })).toBe(
-        baseline,
-      );
+    expect(mocks.gatewayParams[0]?.env).toMatchObject({
+      PATH: "/inherited/bin",
+      HTTPS_PROXY: "http://inherited-proxy.test:8080",
+      NODE_EXTRA_CA_CERTS: "/inherited/ca.pem",
+    });
+    expect(mocks.gatewayParams[0]?.requestedEnv).toBeUndefined();
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/HTTPS_PROXY, NODE_EXTRA_CA_CERTS, PATH/u),
     });
   });
 
-  it.each(["gateway", "sandbox", "node"] as const)(
-    "keeps disabled secret egress byte-identical for %s exec",
+  it.each(["gateway", "sandbox"] as const)(
+    "applies enabled secret egress only to gateway exec (%s)",
     async (host) => {
-      await withTeamStoreEntries(
-        [
-          { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-          {
-            name: "SERVICE_API_KEY",
-            value: "disabled-secret",
-            kind: "secret",
-            allowedHosts: ["api.example.com"],
-          },
-        ],
-        async () => {
-          const baseline = await captureStoreExecEnvironment({
-            host,
-            callId: `call-egress-absent-${host}`,
-          });
-          const explicitFalse = await captureStoreExecEnvironment({
-            host,
-            callId: `call-egress-disabled-${host}`,
-            config: { secrets: { egressProxy: { enabled: false } } },
-          });
-
-          expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(baseline));
+      vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "false");
+      await writeEntries([
+        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
+        {
+          name: "SERVICE_API_KEY",
+          value: "enabled-secret",
+          kind: "secret",
+          allowedHosts: ["API.EXAMPLE.COM"],
         },
-      );
-    },
-  );
+      ]);
+      mocks.egressActive = true;
+      const env = await captureStoreExecEnvironment({
+        host,
+        callId: `call-egress-enabled-${host}`,
+        config: { secrets: { egressProxy: { enabled: true } } },
+      });
+      if (host === "gateway") {
+        expect(env.AWS_REGION).toBe("us-west-2");
+        expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
+        expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
+        expect(env).toMatchObject(EGRESS_ENV);
+        const childEnv = mocks.spawnInputs.at(-1)?.env;
+        expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
+        expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
+        expect(JSON.stringify(env)).not.toContain("enabled-secret");
+        expect(mocks.proxyBindings).toEqual([
+          [
+            expect.objectContaining({
+              name: "SERVICE_API_KEY",
+              allowedHosts: ["api.example.com"],
+              sentinel: env.SERVICE_API_KEY,
+            }),
+          ],
+        ]);
+        return;
+      }
 
-  it.each(
-    (["gateway", "sandbox", "node"] as const).flatMap((host) =>
-      [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
-    ),
-  )(
-    "applies enabled secret egress for $host exec with provider sentinels $sentinelMode",
-    async ({ host, sentinelMode }) => {
-      vi.stubEnv("OPENCLAW_SECRET_SENTINELS", sentinelMode);
-      await withTeamStoreEntries(
-        [
-          { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-          {
-            name: "SERVICE_API_KEY",
-            value: "enabled-secret",
-            kind: "secret",
-            allowedHosts: ["API.EXAMPLE.COM"],
-          },
-        ],
-        async () => {
-          mocks.egressActive = true;
-          const env = await captureStoreExecEnvironment({
-            host,
-            callId: `call-egress-enabled-${host}`,
-            config: { secrets: { egressProxy: { enabled: true } } },
-          });
-          if (host === "gateway") {
-            expect(env.AWS_REGION).toBe("us-west-2");
-            expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
-            expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
-            expect(env).toMatchObject(EGRESS_ENV);
-            const childEnv = mocks.spawnInputs.at(-1)?.env;
-            expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
-            expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
-            expect(JSON.stringify(env)).not.toContain("enabled-secret");
-            expect(mocks.proxyBindings).toEqual([
-              [
-                expect.objectContaining({
-                  name: "SERVICE_API_KEY",
-                  allowedHosts: ["api.example.com"],
-                  sentinel: env.SERVICE_API_KEY,
-                }),
-              ],
-            ]);
-            return;
-          }
-
-          expect(env).not.toHaveProperty("AWS_REGION");
-          expect(env).not.toHaveProperty("SERVICE_API_KEY");
-          expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
-          for (const [key, value] of Object.entries(EGRESS_ENV)) {
-            expect(env[key]).not.toBe(value);
-          }
-          expect(mocks.proxyBindings).toEqual([]);
-        },
-      );
+      expect(env).not.toHaveProperty("AWS_REGION");
+      expect(env).not.toHaveProperty("SERVICE_API_KEY");
+      expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
+      for (const [key, value] of Object.entries(EGRESS_ENV)) {
+        expect(env[key]).not.toBe(value);
+      }
+      expect(mocks.proxyBindings).toEqual([]);
     },
   );
 });

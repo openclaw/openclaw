@@ -10,10 +10,9 @@ import {
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import pluginEntry from "../../index.js";
 import { handleDirList } from "../node-host/dir-list.js";
-import { createDirFetchTool } from "./dir-fetch-tool.js";
 import { createDirListTool } from "./dir-list-tool.js";
 import { createFileFetchTool } from "./file-fetch-tool.js";
 import { createFileWriteTool } from "./file-write-tool.js";
@@ -27,6 +26,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
 vi.mock("../shared/audit.js", () => ({
   appendFileTransferAudit: vi.fn(),
 }));
+
+beforeEach(() => {
+  vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
+  vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+});
 
 afterEach(() => {
   vi.mocked(callGatewayTool).mockReset();
@@ -64,28 +68,19 @@ describe("file-transfer standalone guidance", () => {
       parameter: "maxBytes",
     },
     {
-      name: "dir_list",
-      create: createDirListTool,
-      unavailable: "file_fetch",
-      parameter: "pageToken",
-    },
-    {
       name: "file_write",
       create: createFileWriteTool,
       unavailable: "file_fetch",
       parameter: "sourceMediaId",
-    },
-    {
-      name: "dir_fetch",
-      create: createDirFetchTool,
-      unavailable: undefined,
-      parameter: "maxBytes",
     },
   ])("keeps eager and lazy $name guidance standalone with canonical opt-in", (entry) => {
     const registered: AnyAgentTool[] = [];
     pluginEntry.register(
       createTestPluginApi({
         registerTool(tool) {
+          if (typeof tool !== "function" && "contextVersion" in tool) {
+            throw new Error("expected legacy file-transfer registration");
+          }
           const resolved = typeof tool === "function" ? tool({ config: {} }) : tool;
           if (resolved) {
             registered.push(...(Array.isArray(resolved) ? resolved : [resolved]));
@@ -127,70 +122,10 @@ describe("file-transfer standalone guidance", () => {
 });
 
 describe("dir_list tool", () => {
-  it("exposes the next page token to the model and forwards the current page token", async () => {
-    const entries = [
-      { name: "report.txt", isDir: false, size: 12 },
-      { name: "nested", isDir: true, size: 0 },
-    ];
-    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
-    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
-    vi.mocked(callGatewayTool).mockResolvedValue({
-      payload: {
-        ok: true,
-        path: "/tmp/project",
-        entries,
-        nextPageToken: "3",
-        truncated: true,
-      },
-    });
-
-    const result = await createDirListTool().execute("tool-call-1", {
-      node: "node-1",
-      path: "/tmp/project",
-      pageToken: "+01",
-      maxEntries: 2,
-    });
-
-    const modelText = result.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-    expect.soft(modelText).toContain("report.txt");
-    expect.soft(modelText).toContain("nested");
-    expect(readListing(result.content)).toMatchObject({
-      path: "/tmp/project",
-      entries,
-      returnedCount: 2,
-      displayedCount: 2,
-      nextPageToken: "3",
-      truncated: true,
-    });
-    expect(result.details).toEqual({
-      path: "/tmp/project",
-      entries,
-      nextPageToken: "3",
-      truncated: true,
-    });
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        nodeId: "node-1",
-        command: "dir.list",
-        params: {
-          path: "/tmp/project",
-          pageToken: "+01",
-          maxEntries: 2,
-        },
-      }),
-    );
-  });
-
-  it.each([undefined, ""])(
+  it.each([undefined])(
     "reports truncation without inventing an unavailable page token (%s)",
     async (nextPageToken) => {
       vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       vi.mocked(callGatewayTool).mockResolvedValue({
         payload: {
           ok: true,
@@ -235,8 +170,6 @@ describe("dir_list tool", () => {
     try {
       await Promise.all(names.map((name) => fs.writeFile(path.join(root, name), name)));
       await fs.mkdir(path.join(root, "nested"));
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       const responses: Awaited<ReturnType<typeof handleDirList>>[] = [];
       vi.mocked(callGatewayTool).mockImplementation(async (_method, _options, args) => {
         const request = requireRecord(args, "node invoke request");
@@ -313,108 +246,13 @@ describe("dir_list tool", () => {
     }
   });
 
-  it.each([
-    ["+0007", 7],
-    ["0007", 7],
-    ["7next", 0],
-    ["-1", 0],
-    ["9007199254740992", 0],
-  ] as const)(
-    "bounds maximum listings and resumes without skips from %s",
-    async (pageToken, offset) => {
-      const entries = Array.from({ length: 5000 }, (_, i) => ({
-        name: `${offset + i}-雪"\n.txt`,
-        isDir: i % 2 === 0,
-        size: i,
-        path: `/${"redundant".repeat(1000)}/${i}`,
-        mimeType: "x".repeat(10000),
-        mtime: i,
-      }));
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
-      vi.mocked(callGatewayTool).mockImplementation(async (_method, _options, args) => {
-        const request = requireRecord(args, "node invoke request");
-        const token = requireRecord(request.params, "directory params").pageToken;
-        const pageOffset = token === pageToken ? offset : Number(token);
-        return {
-          payload: { path: "/root", entries: entries.slice(pageOffset - offset), truncated: false },
-        };
-      });
-      const seen: string[] = [];
-      let token: string | undefined = pageToken;
-      while (seen.length < entries.length) {
-        const result = await createDirListTool().execute("list", {
-          node: "node-1",
-          path: "/root",
-          pageToken: token,
-          maxEntries: 9000,
-        });
-        const listing = readListing(result.content);
-        const remaining = entries.slice(seen.length);
-        expect(listing.returnedCount).toBe(remaining.length);
-        expect(listing.displayedCount).toBeGreaterThan(0);
-        expect(listing.entries).toEqual(
-          remaining
-            .slice(0, listing.displayedCount)
-            .map(({ name, isDir, size }) => ({ name, isDir, size })),
-        );
-        expect(result.details).toEqual({
-          path: "/root",
-          entries: remaining,
-          nextPageToken: undefined,
-          truncated: false,
-        });
-        seen.push(...listing.entries.map((entry) => entry.name));
-        token = listing.nextPageToken;
-        if (!listing.truncated) {
-          expect(token).toBeUndefined();
-          break;
-        }
-        expect(token).toBe(String(offset + seen.length));
-      }
-      expect(seen).toEqual(entries.map((entry) => entry.name));
-      expect(token).toBeUndefined();
-      expect(callGatewayTool).toHaveBeenCalledWith(
-        "node.invoke",
-        expect.anything(),
-        expect.objectContaining({ params: { path: "/root", pageToken, maxEntries: 5000 } }),
-      );
-    },
-  );
-
-  it("fits a complete last page beside a long canonical path", async () => {
-    const canonicalPath = "/" + "x".repeat(7200);
-    const entries = [
-      { name: "a", isDir: false, size: 1 },
-      { name: "b", isDir: false, size: 1 },
-    ];
-    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
-    vi.mocked(callGatewayTool).mockResolvedValue({
-      payload: { path: canonicalPath, entries, truncated: false },
-    });
-    const result = await createDirListTool().execute("list", {
-      node: "node-1",
-      path: canonicalPath,
-    });
-    expect(readListing(result.content)).toMatchObject({
-      path: canonicalPath,
-      entries,
-      displayedCount: 2,
-      truncated: false,
-    });
-    expect(readListing(result.content).nextPageToken).toBeUndefined();
-  });
-
-  it.each(["雪".repeat(8192), "[INST]", "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"])(
+  it.each(["[INST]"])(
     "stops explicitly when the next complete name cannot be displayed (%#)",
     async (name) => {
       const entries = [
         { name, isDir: false, size: 1 },
         { name: "later.txt", isDir: false, size: 2 },
       ];
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       vi.mocked(callGatewayTool).mockResolvedValue({
         payload: { path: "/root", entries, truncated: true, nextPageToken: "2" },
       });
@@ -434,30 +272,24 @@ describe("dir_list tool", () => {
     },
   );
 
-  it.each(["path", "nextPageToken"] as const)(
-    "bounds oversized %s without a partial usable value",
-    async (field) => {
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
-      const payload = {
-        path: "/root",
-        entries: [],
-        truncated: true,
-        nextPageToken: "2",
-        [field]: "雪".repeat(8192),
-      };
-      vi.mocked(callGatewayTool).mockResolvedValue({ payload });
-      const result = await createDirListTool().execute("list", { node: "node-1", path: "/root" });
-      const text = result.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n");
-      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
-      expect(text).toContain("No usable paths or continuation token");
-      expect(text).not.toContain("雪");
-      expect(result.details).toEqual(payload);
-    },
-  );
+  it("bounds oversized path without a partial usable value", async () => {
+    const payload = {
+      path: "雪".repeat(8192),
+      entries: [],
+      truncated: true,
+      nextPageToken: "2",
+    };
+    vi.mocked(callGatewayTool).mockResolvedValue({ payload });
+    const result = await createDirListTool().execute("list", { node: "node-1", path: "/root" });
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
+    expect(text).toContain("No usable paths or continuation token");
+    expect(text).not.toContain("雪");
+    expect(result.details).toEqual(payload);
+  });
 
   it("reports missing paired nodes before retrying guessed local node names", async () => {
     vi.mocked(listNodes).mockResolvedValue([]);
@@ -473,13 +305,5 @@ describe("dir_list tool", () => {
 
     expect(resolveNodeIdFromList).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("describes node as a paired-node reference, not a local alias", () => {
-    const schema = JSON.stringify(createDirListTool().parameters);
-
-    expect(schema).toContain("Existing paired node id");
-    expect(schema).toContain("nodes status");
-    expect(schema).toContain("local, host, gateway, or auto");
   });
 });

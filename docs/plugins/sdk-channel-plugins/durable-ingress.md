@@ -52,6 +52,17 @@ the same `event_id` is rejected durably for the tombstone retention window.
 See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
 for the monitor API and shutdown contract.
 
+The dispatch lifecycle optionally exposes
+`readLaneBacklog(): Promise<readonly ChannelIngressQueueRecord<unknown, unknown>[]>`.
+It reads same-lane durable rows that have not yet been handed off, excluding the
+current event, retry-delayed pending rows, and locally released or ended claims.
+Channel buffers can match their own payloads to wait for already-admitted input;
+the core drain remains the owner of lane state. The SDK inbound debouncer's
+optional `shouldHoldFlush(items)` hook can defer a quiet-timer flush until its
+existing deadline. Appends during a check join the same batch; a check may
+flush it without waiting for another quiet window. Explicit flushes bypass
+the check.
+
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
 replay guard only when the guard's identity or retention exceeds the queue's
@@ -64,6 +75,16 @@ to cover the old guard window instead. Non-dedupe protections such as age
 fences are unrelated to this rule. Stable outbound message IDs use the shared
 outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
 channel-local TTL cache.
+
+Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
+migration in the shared state worker. Competing records are compared again in the
+write transaction; clearing memory or forgetting a key fences older asynchronous
+cache fills. Await commits and deletions before acknowledging adoption or finishing
+cleanup. Error hooks retain their existing policy: a throwing hook rejects the
+operation, while a nonthrowing hook permits the guard's memory fallback. Worker
+failures never switch persistence to synchronous SQLite. Multi-key commits and
+deletions settle every accepted write before returning an error, so rollback and
+shutdown cannot race a still-running sibling mutation.
 
 ### Transport classes and retention
 
@@ -126,6 +147,15 @@ pending.
 
 ### Dynamic policy publication
 
+Gateway reply dispatch selects the current committed model-runtime config and
+catalog for each new turn, including low-level `channel.reply.dispatchReplyFromConfig`
+calls from a monitor that retained its startup config. Dispatch waits for an
+in-progress model-runtime publication before admission. Channel transport and
+access-policy freshness still belong to the account monitor; reply dispatch does
+not replace durable ingress or its append-before-ack contract.
+The legacy `usePublishedModelRuntime` argument remains accepted for SDK
+compatibility but no longer controls Gateway model admission.
+
 Use `reload.noopPrefixes` only for fields whose consumers read the committed
 runtime config without replacing a channel resource. These writes still publish
 the validated runtime snapshot; “noop” means no component restart. A `*` path
@@ -182,6 +212,23 @@ must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial
 drain recovers undispatched durable rows. Do not add a second reload-specific
 replay pass; queue recovery is the canonical restart path.
+
+When replacing a known transport identity whose event IDs can overlap the previous
+identity, await the core-provided queue's `purge()` before resetting its transport
+cursor. The operation deletes all pending, claimed, completed, and failed rows
+for that queue's channel and account in one transaction and returns the deleted
+row count. Stop the account's producers and drain before calling it. Keep the
+previous identity marker until the purge commits so an interrupted reset is
+detected again on startup. Same-identity restarts and token rotations retain the
+queue, as do legacy offsets without a known previous identity. `purge` is optional
+on the structural queue type for compatibility with plugin-supplied queues; a
+caller requiring an identity reset must fail rather than skip an unavailable purge.
+Runtime-provided purge handles recheck plugin lifecycle authority at worker
+admission and before commit, and reject after their plugin runtime is retired.
+Account monitors pass their signal to `purge({ signal })` so cancellation before
+the commit is authorized preserves the rows. An authorized commit still settles.
+They must also check cancellation before resetting the cursor, retaining the old
+identity if cancellation interrupts the reset.
 
 Treat this flag as a capability claim, not a performance preference. Contract
 tests should prove that adding and editing one named account leaves a sibling's

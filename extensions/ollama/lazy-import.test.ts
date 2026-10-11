@@ -140,7 +140,11 @@ describe("ollama lazy imports", () => {
         },
         registerNodeHostCommand: (command) => nodeCommands.push(command),
         registerTool: (tool) => {
-          if (typeof tool !== "function" && tool.name === "node_inference") {
+          if (
+            typeof tool !== "function" &&
+            !("contextVersion" in tool) &&
+            tool.name === "node_inference"
+          ) {
             nodeInferenceTool = tool;
           }
         },

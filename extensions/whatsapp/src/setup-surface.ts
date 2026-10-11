@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements setup surface behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   setSetupChannelEnabled,
@@ -13,12 +12,7 @@ const t = createSetupTranslator();
 
 const channel = "whatsapp" as const;
 
-type WhatsAppSetupLinkState = "linked" | "not-linked" | "unstable";
-
-async function readWhatsAppSetupLinkState(
-  cfg: OpenClawConfig,
-  accountId: string,
-): Promise<WhatsAppSetupLinkState> {
+async function readWhatsAppSetupLinkState(cfg: OpenClawConfig, accountId: string) {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
   return await readWebAuthState(authDir);
 }

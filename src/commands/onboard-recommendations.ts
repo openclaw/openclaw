@@ -11,14 +11,6 @@ import {
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 
-type OnboardRecommendationsDeps = {
-  read?: () => OnboardingRecommendationsRecord | null;
-  acknowledge?: () => OnboardingRecommendationsRecord | null;
-  updatePending?: OnboardingRecommendationsStore["updatePending"];
-  clearPending?: OnboardingRecommendationsStore["clearPending"];
-  clear?: () => boolean;
-};
-
 type AcknowledgeOnboardRecommendationsOptions = {
   agent?: string;
   retry?: readonly string[];
@@ -54,11 +46,6 @@ function createDefaultOnboardingRecommendationsStore(
   return createOnboardingRecommendationsStore({ workspaceDir });
 }
 
-function createDefaultStoreAccessor(agentId?: string): () => OnboardingRecommendationsStore {
-  let store: OnboardingRecommendationsStore | undefined;
-  return () => (store ??= createDefaultOnboardingRecommendationsStore(agentId));
-}
-
 function isLegacyBareClawHubId(match: OnboardingRecommendationsRecord["matches"][number]): boolean {
   return (
     match.candidate.source === "clawhub-skill" &&
@@ -92,16 +79,15 @@ function bootstrapRecommendations(
   return [...byInstall.values()];
 }
 
-export function onboardRecommendationsCommand(
+export async function onboardRecommendationsCommand(
   opts: OnboardRecommendationsOptions,
   runtime: RuntimeEnv,
-  deps: OnboardRecommendationsDeps = {},
-): void {
-  const defaultStore = createDefaultStoreAccessor(opts.agent);
-  const stored = (deps.read ?? defaultStore().read)();
+): Promise<void> {
+  const store = createDefaultOnboardingRecommendationsStore(opts.agent);
+  const stored = await store.read();
   const hasLegacyClawHubId = stored?.matches.some(isLegacyBareClawHubId);
   if (hasLegacyClawHubId && stored && stored.acceptedAt == null) {
-    const cleared = (deps.clearPending ?? defaultStore().clearPending)({
+    const cleared = await store.clearPending({
       expected: stored,
     });
     if (!cleared) {
@@ -132,15 +118,14 @@ export function onboardRecommendationsCommand(
   );
 }
 
-export function acknowledgeOnboardRecommendationsCommand(
+export async function acknowledgeOnboardRecommendationsCommand(
   opts: AcknowledgeOnboardRecommendationsOptions,
   runtime: RuntimeEnv,
-  deps: OnboardRecommendationsDeps = {},
-): void {
-  const defaultStore = createDefaultStoreAccessor(opts.agent);
+): Promise<void> {
+  const store = createDefaultOnboardingRecommendationsStore(opts.agent);
   const retryIds = [...new Set(opts.retry ?? [])];
   if (retryIds.length > 0) {
-    const record = (deps.read ?? defaultStore().read)();
+    const record = await store.read();
     if (!record || record.acceptedAt != null) {
       runtime.error("No pending onboarding recommendations to retry.");
       runtime.exit(1);
@@ -155,9 +140,8 @@ export function acknowledgeOnboardRecommendationsCommand(
       return;
     }
     const retryIdSet = new Set(retryIds);
-    const retryMatches =
-      record?.matches.filter((match) => retryIdSet.has(match.candidate.id)) ?? [];
-    const updated = (deps.updatePending ?? defaultStore().updatePending)({
+    const retryMatches = record.matches.filter((match) => retryIdSet.has(match.candidate.id));
+    const updated = await store.updatePending({
       matches: retryMatches,
       expected: record,
     });
@@ -169,17 +153,16 @@ export function acknowledgeOnboardRecommendationsCommand(
     runtime.log(`Onboarding recommendations updated; ${retryIds.length} left pending for retry.`);
     return;
   }
-  const record = (deps.acknowledge ?? defaultStore().acknowledge)();
+  const record = await store.acknowledge();
   runtime.log(record ? "Onboarding recommendations acknowledged." : "No stored recommendations.");
 }
 
-export function refreshOnboardRecommendationsCommand(
+export async function refreshOnboardRecommendationsCommand(
   opts: RefreshOnboardRecommendationsOptions,
   runtime: RuntimeEnv,
-  deps: OnboardRecommendationsDeps = {},
-): void {
-  const defaultStore = createDefaultStoreAccessor(opts.agent);
-  const cleared = (deps.clear ?? defaultStore().clear)();
+): Promise<void> {
+  const store = createDefaultOnboardingRecommendationsStore(opts.agent);
+  const cleared = await store.clear();
   runtime.log(
     cleared
       ? "Onboarding recommendations cleared. The next onboarding run will rescan."

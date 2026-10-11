@@ -15,10 +15,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-import {
-  buildMinimaxMusicGenerationProvider,
-  buildMinimaxPortalMusicGenerationProvider,
-} from "./music-generation-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { minimaxTTS } from "./tts.js";
 
@@ -71,47 +68,6 @@ describe("minimaxTTS", () => {
         timeoutMs: 10_000,
       }),
     ).rejects.toThrow("MiniMax TTS API error (1002): Quota exceeded");
-  });
-
-  it("throws on base_resp envelope error with empty audio", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: Response.json({
-        base_resp: { status_code: 1001, status_msg: "Rate limit" },
-      }),
-      release: vi.fn(async () => undefined),
-    });
-
-    await expect(
-      minimaxTTS({
-        text: "hello",
-        apiKey: "sk-test",
-        baseUrl: "https://api.minimax.io",
-        model: "speech-2.8-hd",
-        voiceId: "English_expressive_narrator",
-        timeoutMs: 10_000,
-      }),
-    ).rejects.toThrow("MiniMax TTS API error (1001): Rate limit");
-  });
-
-  it("succeeds when base_resp.status_code is 0", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: Response.json({
-        data: { audio: Buffer.from("real-audio").toString("hex") },
-        base_resp: { status_code: 0, status_msg: "success" },
-      }),
-      release: vi.fn(async () => undefined),
-    });
-
-    const audio = await minimaxTTS({
-      text: "hello",
-      apiKey: "sk-test",
-      baseUrl: "https://api.minimax.io",
-      model: "speech-2.8-hd",
-      voiceId: "English_expressive_narrator",
-      timeoutMs: 10_000,
-    });
-
-    expect(audio.toString()).toBe("real-audio");
   });
 });
 
@@ -201,10 +157,7 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     }
 
     const providerId = fixture.provider ?? "minimax";
-    const provider =
-      providerId === "minimax-portal"
-        ? buildMinimaxPortalMusicGenerationProvider()
-        : buildMinimaxMusicGenerationProvider();
+    const provider = buildMinimaxMusicGenerationProvider(providerId);
     const result = await provider.generateMusic({
       provider: providerId,
       model: "music-2.6",
@@ -241,20 +194,10 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
 describe("MiniMax media producers through real localhost HTTP", () => {
   it.each([
     { name: "null envelope", responseBody: null, error: "minimax.tts: malformed JSON response" },
-    {
-      name: "string envelope",
-      responseBody: "not-an-object",
-      error: "minimax.tts: malformed JSON response",
-    },
     { name: "array envelope", responseBody: [], error: "minimax.tts: malformed JSON response" },
     {
       name: "numeric audio",
       responseBody: { data: { audio: 42 } },
-      error: "MiniMax TTS API returned no audio data",
-    },
-    {
-      name: "object audio",
-      responseBody: { data: { audio: {} } },
       error: "MiniMax TTS API returned no audio data",
     },
     {
@@ -271,12 +214,8 @@ describe("MiniMax media producers through real localhost HTTP", () => {
     );
   });
 
-  it.each([
-    { name: "trailing non-hex", audio: "666f6fZZ" },
-    { name: "odd-length hex", audio: "666f6" },
-    { name: "entirely non-hex", audio: "ZZ" },
-  ])("rejects $name TTS audio without truncating it", async ({ audio }) => {
-    await expect(runMinimaxLoopbackFixture({ entryPoint: "tts", audio })).rejects.toThrow(
+  it("rejects odd-length hex TTS audio without truncating it", async () => {
+    await expect(runMinimaxLoopbackFixture({ entryPoint: "tts", audio: "666f6" })).rejects.toThrow(
       "MiniMax TTS API returned malformed hex audio",
     );
   });

@@ -2,8 +2,20 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
-import { requireGitCommandOutput } from "../../infra/git-exec.js";
-import { requireGit, requireGitBuffer, runGit, WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
+import { createGitCommandError, requireGitCommandOutput } from "../../infra/git-exec.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { rawPathStat } from "./git-path-inventory.js";
+import type { GitWorktreeOperations } from "./git-worktree-operations.js";
+import {
+  requireGit,
+  requireGitBuffer,
+  runGit,
+  runGitBuffered,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
+} from "./git.js";
+
+const log = createSubsystemLogger("agents/worktrees");
 
 async function missingCommitObjects(repoRoot: string, commit: string): Promise<string[]> {
   const objects = (
@@ -32,13 +44,16 @@ function missingObjectsError(commit: string, count: number): Error {
   );
 }
 
-export async function estimateCheckoutObjectBytes(repoRoot: string, ref: string): Promise<number> {
-  const commit = await requireGit(repoRoot, [
+async function resolveCommit(repoRoot: string, ref: string): Promise<string> {
+  return await requireGit(repoRoot, [
     "rev-parse",
     "--verify",
     "--end-of-options",
     `${ref === "-" ? "@{-1}" : ref}^{commit}`,
   ]);
+}
+
+async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<void> {
   const missing = await missingCommitObjects(repoRoot, commit);
   if (missing.length > 0) {
     const remote =
@@ -54,12 +69,79 @@ export async function estimateCheckoutObjectBytes(repoRoot: string, ref: string)
       throw missingObjectsError(commit, missing.length);
     }
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
+    // Shared commits do not prove that their promised blobs are present.
+    // --refetch hints auto-maintenance to repack (gc.autoPackLimit=1); that repack must
+    // never run inside the allocation lease.
     await requireGit(
       repoRoot,
-      ["fetch", remote, "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--stdin"],
+      [
+        "fetch",
+        "--refetch",
+        "--no-auto-maintenance",
+        remote,
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--stdin",
+      ],
       { input: Buffer.from(`${missing.join("\n")}\n`), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
+    ).catch((error: unknown) => {
+      log.warn(
+        `worktree prefetch failed: ${missing.length} missing objects for ${commit}; check the promisor remote.`,
+      );
+      throw error;
+    });
+  }
+}
+
+function allocatedBlobBytes(size: string): number {
+  const value = Number(size);
+  if (!size || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      "Cannot estimate worktree checkout size; inspect the repository objects and retry.",
     );
   }
+  return Math.max(4096, Math.ceil(value / 4096) * 4096);
+}
+
+// This projection belongs to the Git worker and disappears when that worker
+// idles out or the Gateway closes it. Hydration is reusable only by its live creation cohort.
+const checkoutSizeFacts = new Map<string, { bytes: number; preparationKey?: string }>();
+const MAX_CHECKOUT_SIZE_FACTS = 32;
+
+async function commitObjectBytes(
+  repoRoot: string,
+  commit: string,
+  replacementRefBase: string | undefined,
+  preparationKey?: string,
+): Promise<number> {
+  const replacements =
+    replacementRefBase === undefined
+      ? undefined
+      : await requireGit(repoRoot, [
+          "for-each-ref",
+          "--format=%(refname)",
+          "--",
+          replacementRefBase,
+        ]);
+  let cacheKey: string | undefined;
+  let cached: { bytes: number; preparationKey?: string } | undefined;
+  if (replacements === "") {
+    const canonicalRoot = await fs.realpath(repoRoot);
+    const identity = await fs.stat(canonicalRoot);
+    cacheKey = JSON.stringify([canonicalRoot, identity.dev, identity.ino, commit]);
+    cached = checkoutSizeFacts.get(cacheKey);
+    if (cached && preparationKey && cached.preparationKey === preparationKey) {
+      return cached.bytes;
+    }
+  }
+
+  await hydrateCommitObjects(repoRoot, commit);
+  if (cached && cacheKey) {
+    checkoutSizeFacts.set(cacheKey, { bytes: cached.bytes, preparationKey });
+    return cached.bytes;
+  }
+
   try {
     const sizes = (
       await requireGitBuffer(repoRoot, ["ls-tree", "-r", "--format=%(objectsize)", commit, "--"], {
@@ -71,13 +153,11 @@ export async function estimateCheckoutObjectBytes(repoRoot: string, ref: string)
       if (!size || size === "-") {
         continue;
       }
-      const value = Number(size);
-      if (!Number.isSafeInteger(value) || value < 0) {
-        throw new Error(
-          "Cannot estimate worktree checkout size; inspect the repository objects and retry.",
-        );
-      }
-      bytes += Math.max(4096, Math.ceil(value / 4096) * 4096);
+      bytes += allocatedBlobBytes(size);
+    }
+    if (cacheKey) {
+      checkoutSizeFacts.set(cacheKey, { bytes, preparationKey });
+      pruneMapToMaxSize(checkoutSizeFacts, MAX_CHECKOUT_SIZE_FACTS);
     }
     return bytes;
   } catch (error) {
@@ -87,6 +167,114 @@ export async function estimateCheckoutObjectBytes(repoRoot: string, ref: string)
     }
     throw error;
   }
+}
+
+export async function estimateCheckoutObjectBytes(
+  repoRoot: string,
+  ref: string,
+  replacementRefBase?: string,
+  preparationKey?: string,
+): Promise<number> {
+  const commit = await resolveCommit(repoRoot, ref);
+  return await commitObjectBytes(repoRoot, commit, replacementRefBase, preparationKey);
+}
+
+export async function estimateCheckoutTransitionBytes(
+  repoRoot: string,
+  baseRef: string,
+  targetRef: string,
+  replacementRefBase?: string,
+): Promise<GitWorktreeOperations["worktree.checkout-transition-size"]["output"]> {
+  const base = await resolveCommit(repoRoot, baseRef);
+  const target = await resolveCommit(repoRoot, targetRef);
+  // Template validation can need blobs that the target deletes. Hydrate both
+  // histories, while sharing identical commits within this admitted operation.
+  if (target !== base) {
+    await hydrateCommitObjects(repoRoot, base);
+  }
+  const targetBytes = await commitObjectBytes(repoRoot, target, replacementRefBase);
+  if (target === base) {
+    return { targetBytes, changedBytes: 0, requiresFullCheckout: false };
+  }
+  const diff = await runGitBuffered(
+    repoRoot,
+    [
+      "diff-tree",
+      "--no-commit-id",
+      "--raw",
+      "-z",
+      "--no-renames",
+      "--no-abbrev",
+      "-r",
+      base,
+      target,
+      "--",
+    ],
+    { env: { GIT_NO_LAZY_FETCH: "1" } },
+  );
+  if (diff.termination === "output-limit") {
+    // A large diff cannot justify a partial allocation estimate or rule out
+    // attribute changes. Keep the buffer bounded and materialize the full target.
+    return { targetBytes, changedBytes: targetBytes, requiresFullCheckout: true };
+  }
+  if (diff.termination !== "exit" || diff.code !== 0) {
+    throw createGitCommandError("git diff-tree", diff);
+  }
+  const changes = diff.stdout.toString("utf8").split("\0");
+  if (changes.at(-1) !== "" || changes.length % 2 !== 1) {
+    throw new Error(
+      "Cannot estimate worktree overlay size; inspect the repository diff and retry.",
+    );
+  }
+  const blobs: string[] = [];
+  let checkoutAttributesChanged = false;
+  for (let offset = 0; offset < changes.length - 1; offset += 2) {
+    // --no-renames gives one metadata record and one raw path per change.
+    // Count every destination path, even when multiple paths share one blob.
+    const metadata = /^:[0-7]{6} ([0-7]{6}) [a-f0-9]+ ([a-f0-9]+) [AMDT]$/u.exec(changes[offset]!);
+    if (!metadata || changes[offset + 1] === undefined) {
+      throw new Error(
+        "Cannot estimate worktree overlay size; inspect the repository diff and retry.",
+      );
+    }
+    const changedPath = changes[offset + 1]!;
+    checkoutAttributesChanged ||=
+      changedPath === ".gitattributes" || changedPath.endsWith("/.gitattributes");
+    if (metadata[1] !== "000000" && metadata[1] !== "160000") {
+      blobs.push(metadata[2]!);
+    }
+  }
+  // read-tree does not rewrite unchanged paths when attributes change. The
+  // caller must rematerialize the target so its checkout transforms apply.
+  if (checkoutAttributesChanged) {
+    return {
+      targetBytes,
+      changedBytes: targetBytes,
+      requiresFullCheckout: true,
+    };
+  }
+  if (blobs.length === 0) {
+    return { targetBytes, changedBytes: 0, requiresFullCheckout: false };
+  }
+  const sizes = (
+    await requireGitBuffer(repoRoot, ["cat-file", "--batch-check=%(objecttype) %(objectsize)"], {
+      input: Buffer.from(`${blobs.join("\n")}\n`),
+      env: { GIT_NO_LAZY_FETCH: "1" },
+    })
+  )
+    .toString("utf8")
+    .trimEnd()
+    .split("\n");
+  if (sizes.length !== blobs.length || sizes.some((size) => !size.startsWith("blob "))) {
+    throw new Error(
+      "Cannot estimate worktree overlay size; inspect the repository objects and retry.",
+    );
+  }
+  return {
+    targetBytes,
+    changedBytes: sizes.reduce((bytes, size) => bytes + allocatedBlobBytes(size.slice(5)), 0),
+    requiresFullCheckout: false,
+  };
 }
 
 /** Measure without following links; unreadable trees must never be counted as empty. */
@@ -106,16 +294,10 @@ export async function measureDirectoryTreeBytes(root: string, excludeGit = false
       continue;
     }
     const child = path.join(root, entry.name);
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+    if (entry.isDirectory()) {
       total += await measureDirectoryTreeBytes(child, excludeGit);
     } else {
-      try {
-        total += (await fs.lstat(child)).size;
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+      total += (await rawPathStat(child))?.size ?? 0;
     }
   }
   return total;

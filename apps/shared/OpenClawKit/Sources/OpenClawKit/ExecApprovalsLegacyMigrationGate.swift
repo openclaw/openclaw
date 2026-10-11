@@ -23,15 +23,9 @@ public struct ExecApprovalsLegacyMigrationRequiredError: LocalizedError, Equatab
 enum ExecApprovalsLegacyMigrationGate {
     private static let doctorClaimSuffix = ".doctor-importing"
 
-    static func assertReady(stateDirectoryURL: URL) throws {
-        try self.assertReady(
-            stateDirectoryURL: stateDirectoryURL,
-            pathMayExist: self.pathMayExist)
-    }
-
     static func assertReady(
         stateDirectoryURL: URL,
-        pathMayExist: (URL) -> Bool) throws
+        pathMayExist: (URL) -> Bool = ExecApprovalsLegacyMigrationGate.pathMayExist) throws
     {
         let sourceURL = stateDirectoryURL.appendingPathComponent(
             "exec-approvals.json",

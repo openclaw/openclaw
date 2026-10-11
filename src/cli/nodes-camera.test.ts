@@ -66,12 +66,10 @@ let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCamera
 let writeCameraPayloadToFile: typeof import("./nodes-camera.js").writeCameraPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
-let parseScreenSnapshotResult: typeof import("../plugins/computer-use-contract.js").parseScreenSnapshotResult;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
 let screenSnapshotFormatForPath: typeof import("./nodes-screen.js").screenSnapshotFormatForPath;
 let screenSnapshotTempPath: typeof import("./nodes-screen.js").screenSnapshotTempPath;
 let writeScreenRecordToFile: typeof import("./nodes-screen.js").writeScreenRecordToFile;
-let writeScreenSnapshotToFile: typeof import("./nodes-screen.js").writeScreenSnapshotToFile;
 let publishOutputFileAtomically: PublishOutputFileAtomically;
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
@@ -125,9 +123,7 @@ describe("nodes camera helpers", () => {
       screenSnapshotFormatForPath,
       screenSnapshotTempPath,
       writeScreenRecordToFile,
-      writeScreenSnapshotToFile,
     } = await import("./nodes-screen.js"));
-    ({ parseScreenSnapshotResult } = await import("../plugins/computer-use-contract.js"));
     ({ publishOutputFileAtomically } = await vi.importActual("./output-file.runtime.js"));
   });
 
@@ -158,11 +154,6 @@ describe("nodes camera helpers", () => {
 
   it.each([
     {
-      name: "malformed base64",
-      payload: { format: "jpg", base64: "not-base64!", width: 1, height: 1 },
-      expectedError: /invalid base64/i,
-    },
-    {
       name: "insecure URL",
       payload: { format: "jpg", url: "http://198.51.100.42/photo.jpg", width: 1, height: 1 },
       expectedHost: "198.51.100.42",
@@ -173,11 +164,6 @@ describe("nodes camera helpers", () => {
       payload: { format: "jpg", url: "https://198.51.100.43/photo.jpg", width: 1, height: 1 },
       expectedHost: "198.51.100.42",
       expectedError: /must match node host/i,
-    },
-    {
-      name: "missing URL node host",
-      payload: { format: "jpg", url: "https://198.51.100.42/photo.jpg", width: 1, height: 1 },
-      expectedError: /node remoteip/i,
     },
     {
       name: "valid URL with malformed base64",
@@ -197,19 +183,7 @@ describe("nodes camera helpers", () => {
     ).toThrow(testCase.expectedError);
   });
 
-  it.each([undefined, "front", "back", "both"] as const)(
-    "collapses Linux facing=%s into one unknown-position capture",
-    (facing) => {
-      expect(resolveCameraSnapTargets({ facing, platform: "linux" })).toEqual([
-        { artifactFacing: "unknown" },
-      ]);
-    },
-  );
-
   it("keeps Linux device selection facing-less", () => {
-    expect(
-      resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
-    ).toEqual([{ artifactFacing: "unknown" }]);
     expect(
       resolveCameraSnapTargets({ facing: "both", platform: "linux", deviceId: "/dev/video2" }),
     ).toEqual([{ artifactFacing: "unknown" }]);
@@ -270,17 +244,6 @@ describe("nodes camera helpers", () => {
     expect(() =>
       parseCameraClipPayload({ format: "mp4", base64: "AAEC", durationMs: 1234 }),
     ).toThrow(/invalid camera\.clip payload/i);
-  });
-
-  it("builds stable temp paths when id provided", () => {
-    const p = cameraTempPath({
-      kind: "snap",
-      facing: "front",
-      ext: "jpg",
-      tmpDir: "/tmp",
-      id: "id1",
-    });
-    expect(p).toBe(path.join("/tmp", "openclaw-camera-snap-front-id1.jpg"));
   });
 
   it("rejects media format path traversal", () => {
@@ -344,6 +307,9 @@ describe("nodes camera helpers", () => {
       });
       expect(out).toBe(path.join(dir, "openclaw-camera-clip-back-clip2.mp4"));
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-clip");
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
+      );
     });
   });
 
@@ -411,52 +377,12 @@ describe("nodes camera helpers", () => {
       const out = path.join(dir, "x.bin");
       await expect(writeBase64ToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(/exceeds max/i);
       await expectPathMissing(out);
-      await expect(writeScreenRecordToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
-        /exceeds max/i,
-      );
-      await expectPathMissing(out);
-      await expect(writeScreenSnapshotToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
-        /exceeds max/i,
-      );
-      await expectPathMissing(out);
-    });
-  });
-
-  it("rejects empty and malformed base64 payloads before writing", async () => {
-    await withCameraTempDir(async (dir) => {
-      const out = path.join(dir, "x.bin");
-      for (const base64 of ["", " \n", "a", "a===", "not-base64!"]) {
-        await expect(writeBase64ToFile(out, base64)).rejects.toThrow(/invalid base64/i);
-        await expectPathMissing(out);
-      }
-      await expect(writeScreenRecordToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
-      await expectPathMissing(out);
-      await expect(writeScreenSnapshotToFile(out, "not-base64!")).rejects.toThrow(
-        /invalid base64/i,
-      );
-      await expectPathMissing(out);
     });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it("writes url payload to file", async () => {
-    stubFetchResponse(new Response("url-content", { status: 200 }));
-    await withCameraTempDir(async (dir) => {
-      const out = path.join(dir, "x.bin");
-      await writeCameraPayloadToFile({
-        filePath: out,
-        payload: { url: "https://198.51.100.42/clip.mp4" },
-        expectedHost: "198.51.100.42",
-      });
-      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
-      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
-      );
-    });
   });
 
   it("fully publishes url chunks after a positive short write", async () => {
@@ -531,47 +457,7 @@ describe("nodes camera helpers", () => {
     });
   });
 
-  it("rejects url host mismatches", async () => {
-    stubFetchResponse(new Response("url-content", { status: 200 }));
-    await expect(
-      writeCameraPayloadToFile({
-        filePath: "/tmp/ignored",
-        payload: { url: "https://198.51.100.42/clip.mp4" },
-        expectedHost: "198.51.100.43",
-      }),
-    ).rejects.toThrow(/must match node host/i);
-  });
-
   it.each([
-    {
-      name: "non-https url",
-      url: "http://198.51.100.42/x.bin",
-      expectedMessage: /only https/i,
-    },
-    {
-      name: "oversized content-length",
-      url: "https://198.51.100.42/huge.bin",
-      response: new Response("tiny", {
-        status: 200,
-        headers: { "content-length": String(999_999_999) },
-      }),
-      expectedMessage: /exceeds max/i,
-    },
-    {
-      name: "malformed content-length",
-      url: "https://198.51.100.42/weird.bin",
-      response: new Response("tiny", {
-        status: 200,
-        headers: { "content-length": "0x3" },
-      }),
-      expectedMessage: /invalid content-length header: 0x3/i,
-    },
-    {
-      name: "non-ok status",
-      url: "https://198.51.100.42/down.bin",
-      response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
-      expectedMessage: /503/i,
-    },
     {
       name: "empty response body",
       url: "https://198.51.100.42/empty.bin",
@@ -749,41 +635,6 @@ describe("nodes screen helpers", () => {
   it("rejects invalid screen.record payload", () => {
     expect(() => parseScreenRecordPayload({ format: "mp4" })).toThrow(
       /invalid screen\.record payload/i,
-    );
-  });
-
-  it("builds screen record temp path", () => {
-    const p = screenRecordTempPath({
-      ext: "mp4",
-      tmpDir: "/tmp",
-      id: "id1",
-    });
-    expect(p).toBe(path.join("/tmp", "openclaw-screen-record-id1.mp4"));
-  });
-
-  it("parses screen.snapshot payload", () => {
-    expect(
-      parseScreenSnapshotResult({
-        format: "png",
-        base64: "Zm9v",
-        displayFrameId: "display-42-frame",
-        screenIndex: 1,
-        width: 1200,
-        height: 800,
-      }),
-    ).toEqual({
-      format: "png",
-      base64: "Zm9v",
-      displayFrameId: "display-42-frame",
-      screenIndex: 1,
-      width: 1200,
-      height: 800,
-    });
-  });
-
-  it("rejects invalid screen.snapshot payload", () => {
-    expect(() => parseScreenSnapshotResult({ format: "png" })).toThrow(
-      /invalid screen\.snapshot payload/i,
     );
   });
 

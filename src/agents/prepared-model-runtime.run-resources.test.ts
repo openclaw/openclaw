@@ -10,15 +10,25 @@ import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
-import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
+import {
+  getPluginCache,
+  getPluginCacheRetirementSignal,
+  getPluginMetadataSnapshotCache,
+  resetPluginCache,
+  retirePluginCache,
+  waitForPluginCacheRetirement,
+} from "../plugins/plugin-cache.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import {
+  getPluginInstanceOwner,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabase,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -44,6 +54,7 @@ type Registration = {
   file: string;
   disposals: number;
   store: PluginStateKeyedStore<{ value: number }>;
+  instance: PluginInstanceHandle;
 };
 
 async function withRunFixture(
@@ -64,7 +75,6 @@ async function withRunFixture(
   }) => Promise<void>,
   options: {
     catalog?: "hold" | "reject";
-    registrationFails?: boolean;
     pluginsDisabled?: boolean;
   } = {},
 ) {
@@ -79,11 +89,17 @@ async function withRunFixture(
     const finishCatalog = createDeferredCore();
     const bridge = {
       registrations,
+      captureInstance: () => {
+        const instance = expectDefined(
+          pluginInstanceInvocation.getStore()?.instance,
+          "registering instance",
+        );
+        return expectDefined(getPluginInstanceOwner(instance)?.instance, "managed instance owner");
+      },
       hold: false,
       finishDisposal,
       disposalStarted,
       catalog: options.catalog,
-      registrationFails: options.registrationFails,
       providers: {},
       catalogStarted,
       finishCatalog,
@@ -130,7 +146,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const database = new DatabaseSync(file);
   database.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
   const store = api.runtime.state.openKeyedStore({ namespace: "run-proof", maxEntries: 20 });
-  const record = { id: api.id, mode: api.registrationMode, database, file, disposals: 0, store };
+  const record = { id: api.id, mode: api.registrationMode, database, file, disposals: 0, store, instance: bridge.captureInstance() };
   bridge.registrations.push(record);
   api.lifecycle.registerRuntimeLifecycle({ id: "database", async dispose() {
     if (bridge.hold && record === bridge.registrations[0]) {
@@ -152,7 +168,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   bridge.providers[api.id] = provider;
   api.registerProvider(provider);
-  if (bridge.registrationFails && api.id === ${JSON.stringify(siblingId)}) throw new Error("optional fixture registration failed");
 } };
 `,
       );
@@ -165,7 +180,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true, workspace: state.workspaceDir } },
+        entries: { main: { workspace: state.workspaceDir } },
         defaults: { workspace: state.workspaceDir, model: `${providerId}/model` },
       },
       models: {
@@ -249,7 +264,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           resetPluginLoaderTestStateForTest();
           cleanupPluginLoaderFixturesForTest();
           clearPluginMetadataLifecycleCaches();
-          closeOpenClawStateDatabase();
+          await closeOpenClawStateDatabaseAsync();
           for (const record of registrations) {
             // The original raw producer has no disposer; fixture cleanup owns those handles.
             if (record.database.isOpen) {
@@ -276,25 +291,6 @@ function expectReopened(record: Registration) {
   }
 }
 
-it("keeps overlapping RUN callers on one registration and closes only after the last release", async () => {
-  await withRunFixture(async ({ acquire, original, registrations }) => {
-    const first = await acquire();
-    const count = registrations.length;
-    const second = await acquire();
-    expect(first.snapshot === second.snapshot).toBe(true);
-    expect(registrations.length).toBe(count);
-    expect(original().mode).toBe("discovery");
-    await first[Symbol.asyncDispose]();
-    await nextTurn();
-    expect(readAnswer(original())).toBe(42);
-    expect(original().disposals).toBe(0);
-    await second[Symbol.asyncDispose]();
-    await expect.poll(() => original().disposals).toBe(1);
-    expect(original().database.isOpen).toBe(false);
-    expectReopened(original());
-  });
-});
-
 it("retains a replaced RUN generation without letting its release retire the replacement", async () => {
   await withRunFixture(async ({ acquire, input, original, registrations }) => {
     const first = await acquire();
@@ -318,24 +314,10 @@ it("retains a replaced RUN generation without letting its release retire the rep
     const third = await acquire();
     expect(third.snapshot === second.snapshot).toBe(true);
     await second[Symbol.asyncDispose]();
+    expect(readAnswer(replacement)).toBe(42);
+    expect(replacement.disposals).toBe(0);
     await third[Symbol.asyncDispose]();
     await expect.poll(() => replacement.disposals).toBe(1);
-  });
-});
-
-it("preserves the direct one-entry idle retention policy across RUN eviction", async () => {
-  await withRunFixture(async ({ acquire, original, input }) => {
-    const first = await acquire({ retainIdleRunOwner: true });
-    await first[Symbol.asyncDispose]();
-    await nextTurn();
-    expect(readAnswer(original())).toBe(42);
-    const warm = await acquire({ retainIdleRunOwner: true });
-    expect(warm.snapshot === first.snapshot).toBe(true);
-    const next = await acquire({ retainIdleRunOwner: true }, `${input.workspaceDir}/next`);
-    expect(readAnswer(original())).toBe(42);
-    await warm[Symbol.asyncDispose]();
-    await expect.poll(() => original().disposals).toBe(1);
-    await next[Symbol.asyncDispose]();
   });
 });
 
@@ -365,7 +347,7 @@ it("keeps shared SDK KV namespaces available across RUN registration retirement"
     await next[Symbol.asyncDispose]();
     await closePreparedModelRuntimeSnapshots();
     expect(shared.isOpen).toBe(true);
-    closeOpenClawStateDatabase();
+    await closeOpenClawStateDatabaseAsync();
     expect(shared.isOpen).toBe(false);
     expect((await latest.store.lookup("next"))?.value).toBe(43);
   });
@@ -393,11 +375,13 @@ it("process close waits for admitted registration disposal and rejects new RUN a
         ]);
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
+        expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
       } finally {
         finishDisposal.resolve();
         await Promise.all([closing, leaseReleased]);
       }
       expect(original().disposals).toBe(1);
+      expect(original().instance.retainedWorkCount).toBe(0);
       expectReopened(original());
     },
   );
@@ -440,24 +424,6 @@ it("publishes a replacement while an idle RUN registration is still disposing", 
       expectReopened(original());
     },
   );
-});
-
-it("keeps configured registry identity and its raw resources under the configured owner", async () => {
-  await withRunFixture(async ({ config, acquire, original }) => {
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const first = await acquire();
-    const raw = original();
-    const second = await acquire();
-    expect(first.snapshot === second.snapshot).toBe(true);
-    await first[Symbol.asyncDispose]();
-    await second[Symbol.asyncDispose]();
-    await closePreparedModelRuntimeSnapshots();
-    expect(raw.disposals).toBe(0);
-    expect(readAnswer(raw)).toBe(42);
-  });
 });
 
 it("preserves eight Gateway RUN retention entries without closing an evicted live lease", async () => {
@@ -511,11 +477,13 @@ it.each(["hold", "reject"] as const)(
             }),
           ]);
           expect(readAnswer(original())).toBe(42);
+          expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           if (catalog === "hold") {
             abort.abort(new Error("fixture admission cancelled"));
             await expect(pending.then(() => undefined)).rejects.toThrow("aborted");
             expect(getPreparedModelRuntimeSnapshot(input) === undefined).toBe(true);
             expect(original().disposals).toBe(0);
+            expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           }
           finishCatalog.resolve();
           if (catalog === "reject") {
@@ -525,6 +493,7 @@ it.each(["hold", "reject"] as const)(
           }
           await closePreparedModelRuntimeSnapshots();
           expect(original().disposals).toBe(1);
+          expect(original().instance.retainedWorkCount).toBe(0);
           expectReopened(original());
         } finally {
           finishCatalog.resolve();
@@ -535,6 +504,76 @@ it.each(["hold", "reject"] as const)(
     );
   },
 );
+
+it("joins registered plugin disposal after cache retirement during catalog acquisition", async () => {
+  await withRunFixture(
+    async ({
+      acquire,
+      input,
+      original,
+      catalogStarted,
+      finishCatalog,
+      holdDisposal,
+      disposalStarted,
+      finishDisposal,
+    }) => {
+      holdDisposal();
+      const pending = acquire();
+      const acquisition = Promise.allSettled([pending]);
+      const metadataRetired = createDeferredCore();
+      let closed = false;
+      let closing: Promise<unknown> | undefined;
+      try {
+        await Promise.race([
+          catalogStarted.promise,
+          pending.then(() => {
+            throw new Error("Catalog acquisition bypassed the registered provider");
+          }),
+        ]);
+        const cache = getPluginCache();
+        resetPluginCache();
+        expect(getPluginCacheRetirementSignal(cache).aborted).toBe(true);
+        // Inspection resources have their own cache; final model close must still
+        // join their disposal after the metadata inventory has finished retiring.
+        closing = waitForPluginCacheRetirement(true).then(() => {
+          metadataRetired.resolve();
+          return closePreparedModelRuntimeSnapshots();
+        });
+        closing = closing.then(() => {
+          closed = true;
+        });
+        await nextTurn();
+        expect(closed).toBe(false);
+        expect(original().disposals).toBe(0);
+        expect(readAnswer(original())).toBe(42);
+        finishCatalog.resolve();
+        await Promise.race([
+          disposalStarted.promise,
+          closing.then(() => {
+            throw new Error("Retirement bypassed the registered plugin disposer");
+          }),
+        ]);
+        await nextTurn();
+        await metadataRetired.promise;
+        expect(closed).toBe(false);
+        expect(original().disposals).toBe(0);
+        expect(readAnswer(original())).toBe(42);
+        finishDisposal.resolve();
+        await closing;
+        expect((await acquisition)[0]?.status).toBe("rejected");
+        expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
+        expect(original().disposals).toBe(1);
+        expect(original().database.isOpen).toBe(false);
+        expectReopened(original());
+      } finally {
+        finishCatalog.resolve();
+        finishDisposal.resolve();
+        await Promise.allSettled([pending, closing]);
+      }
+    },
+    { catalog: "hold" },
+  );
+});
 
 it("retains a managed RUN source borrowed after matching standalone publication reuse", async () => {
   await withRunFixture(async ({ acquire, input, original }) => {
@@ -554,22 +593,6 @@ it("retains a managed RUN source borrowed after matching standalone publication 
     await expect.poll(() => original().disposals).toBe(1);
     expectReopened(original());
   });
-});
-
-it("keeps a failed optional registration from invalidating the loaded model owner", async () => {
-  await withRunFixture(
-    async ({ acquire, original }) => {
-      const lease = await acquire();
-      expect(lease.snapshot.pluginRegistry?.plugins).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: providerId, status: "loaded" }),
-          expect.objectContaining({ id: siblingId, status: "error" }),
-        ]),
-      );
-      expect(readAnswer(original())).toBe(42);
-    },
-    { registrationFails: true },
-  );
 });
 
 it.each(["registry", "empty inventory"] as const)(

@@ -121,9 +121,11 @@ The compaction safeguard can summarize session history using the current model, 
 
 See [Session management and compaction](/reference/session-management-compaction).
 
-### Model scan / probe
+<a id="model-scan-probe" />
 
-`openclaw models scan` can probe OpenRouter models and uses `OPENROUTER_API_KEY` when probing is enabled.
+### Model scan / check
+
+`openclaw models scan` can check OpenRouter models and uses `OPENROUTER_API_KEY` when checking is enabled.
 
 See [Models CLI](/cli/models).
 

@@ -1,15 +1,16 @@
-// Control UI tool icon set, split from icons.ts to keep both under the max-lines cap.
-import { html, svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { html, nothing, svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { neutralMark } from "./neutral-mark.ts";
 
 // Shared Lucide icon shell. Inline presentation attributes keep icons visible
 // inside shadow roots that global stylesheet icon rules cannot reach; CSS
 // rules still override them where a surface wants a different stroke width.
 // Bodies must be svg`` fragments: html`` would parse the shapes outside the
 // SVG namespace and they would silently render as nothing.
-export function strokeIcon(body: SVGTemplateResult): TemplateResult {
+export function strokeIcon(body: SVGTemplateResult, style?: string): TemplateResult {
   return html`
     <svg
       viewBox="0 0 24 24"
+      style=${style ?? nothing}
       fill="none"
       stroke="currentColor"
       stroke-width="2"
@@ -21,7 +22,24 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
   `;
 }
 
+// Lucide geometry shared by toolbar icons and keyboard symbols.
+export const keyboardIconShapes = {
+  "⌘": svg`<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />`,
+  "⌥": svg`<path d="M3 3h6l6 18h6M14 3h7" />`,
+  "⇧": svg`<path d="M9 19a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-6a1 1 0 0 1 1-1h3.293a.707.707 0 0 0 .5-1.207l-7.086-7.086a1 1 0 0 0-1.414 0l-7.086 7.086a.707.707 0 0 0 .5 1.207H8a1 1 0 0 1 1 1z" />`,
+  "⌃": svg`<path d="m18 15-6-6-6 6" />`,
+  "⏎": svg`<polyline points="9 10 4 15 9 20" /><path d="M20 4v7a4 4 0 0 1-4 4H4" />`,
+  "↑": svg`<path d="M12 19V5m-7 7 7-7 7 7" />`,
+  "↓": svg`<path d="M12 5v14m7-7-7 7-7-7" />`,
+  "←": svg`<path d="m12 19-7-7 7-7M19 12H5" />`,
+  "→": svg`<path d="M5 12h14m-7-7 7 7-7 7" />`,
+};
+
 export const toolIcons = {
+  bookOpenText: strokeIcon(svg`<path d="M12 5v16M16 13h2M16 9h2" />
+    <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
+    <path d="M6 13h2M6 9h2" />`),
+  mark: neutralMark,
   shieldCheck: strokeIcon(
     svg`<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9 12l2 2 4-4" />`,
   ),
@@ -37,6 +55,11 @@ export const toolIcons = {
   wrench: strokeIcon(svg` <path
     d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
   />`),
+  lightbulb: strokeIcon(svg`<path
+      d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"
+    />
+    <path d="M9 18h6" />
+    <path d="M10 22h4" />`),
   fileCode: strokeIcon(svg` <path
       d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"
     />

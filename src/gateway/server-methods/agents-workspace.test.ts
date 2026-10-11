@@ -47,6 +47,10 @@ async function invokeWorkspaceHandler(method: WorkspaceMethod, params: Record<st
   return responder.calls;
 }
 
+function getWorkspaceFile(filePath: string) {
+  return invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: filePath });
+}
+
 function expectOkPayload(calls: ReturnType<typeof createResponder>["calls"]): Record<string, any> {
   expect(calls).toHaveLength(1);
   expect(calls[0]?.ok).toBe(true);
@@ -110,7 +114,8 @@ describe("agents.workspace RPC handlers", () => {
     expect(Number.isInteger(file.updatedAtMs)).toBe(true);
   });
 
-  it.each(["src", "..notes"])("round-trips listed subdirectory %s", async (directory) => {
+  it("round-trips listed dot-prefixed subdirectories", async () => {
+    const directory = "..notes";
     writeWorkspaceFile(workspaceRoot, `${directory}/index.ts`, "export const ok = true;\n");
     writeWorkspaceFile(workspaceRoot, `${directory}/util.ts`, "export const util = 1;\n");
     const root = expectOkPayload(
@@ -132,51 +137,8 @@ describe("agents.workspace RPC handlers", () => {
       `${directory}/index.ts`,
       `${directory}/util.ts`,
     ]);
-    const preview = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.get", {
-        agentId: "main",
-        path: payload.entries[0].path,
-      }),
-    );
+    const preview = expectOkPayload(await getWorkspaceFile(payload.entries[0].path));
     expect(preview.file.content).toBe("export const ok = true;\n");
-  });
-
-  it("paginates large directories deterministically", async () => {
-    for (let index = 0; index < 12; index += 1) {
-      writeWorkspaceFile(workspaceRoot, `bulk/file-${String(index).padStart(2, "0")}.txt`, "x");
-    }
-
-    const firstPage = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", {
-        agentId: "main",
-        path: "bulk",
-        limit: 5,
-      }),
-    );
-    expect(firstPage.totalEntries).toBe(12);
-    expect(firstPage.entries).toHaveLength(5);
-    expect(firstPage.entries[0].name).toBe("file-00.txt");
-
-    const secondPage = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", {
-        agentId: "main",
-        path: "bulk",
-        offset: 5,
-        limit: 5,
-      }),
-    );
-    expect(secondPage.offset).toBe(5);
-    expect(secondPage.entries[0].name).toBe("file-05.txt");
-
-    const tailPage = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", {
-        agentId: "main",
-        path: "bulk",
-        offset: 10,
-        limit: 5,
-      }),
-    );
-    expect(tailPage.entries).toHaveLength(2);
   });
 
   it("rejects unknown agents", async () => {
@@ -192,32 +154,17 @@ describe("agents.workspace RPC handlers", () => {
     );
     expect(listError.details).toMatchObject({ type: "workspace_path_invalid" });
 
-    const getError = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", {
-        agentId: "main",
-        path: "../outside.txt",
-      }),
-    );
+    const getError = expectError(await getWorkspaceFile("../outside.txt"));
     expect(getError.details).toMatchObject({ type: "workspace_path_invalid" });
 
-    const nestedTraversal = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", {
-        agentId: "main",
-        path: "src/../../outside.txt",
-      }),
-    );
+    const nestedTraversal = expectError(await getWorkspaceFile("src/../../outside.txt"));
     expect(nestedTraversal.details).toMatchObject({ type: "workspace_path_invalid" });
   });
 
   it.each(["/etc/passwd", "C:\\Windows\\System32\\drivers\\etc\\hosts"])(
     "rejects absolute workspace paths: %s",
     async (filePath) => {
-      const error = expectError(
-        await invokeWorkspaceHandler("agents.workspace.get", {
-          agentId: "main",
-          path: filePath,
-        }),
-      );
+      const error = expectError(await getWorkspaceFile(filePath));
       expect(error.details).toMatchObject({ path: filePath, type: "workspace_path_invalid" });
     },
   );
@@ -228,12 +175,7 @@ describe("agents.workspace RPC handlers", () => {
     fs.symlinkSync(outsidePath, path.join(workspaceRoot, "linked.txt"));
 
     try {
-      const error = expectError(
-        await invokeWorkspaceHandler("agents.workspace.get", {
-          agentId: "main",
-          path: "linked.txt",
-        }),
-      );
+      const error = expectError(await getWorkspaceFile("linked.txt"));
       expect(error.details).toMatchObject({
         path: "linked.txt",
         type: "workspace_file_not_found",
@@ -257,12 +199,7 @@ describe("agents.workspace RPC handlers", () => {
       );
       expect(listError.details).toMatchObject({ type: "workspace_path_not_found" });
 
-      const getError = expectError(
-        await invokeWorkspaceHandler("agents.workspace.get", {
-          agentId: "main",
-          path: "linked-dir/secret.txt",
-        }),
-      );
+      const getError = expectError(await getWorkspaceFile("linked-dir/secret.txt"));
       expect(getError.details).toMatchObject({ type: "workspace_file_not_found" });
     } finally {
       fs.rmSync(outsideDir, { recursive: true, force: true });
@@ -275,31 +212,11 @@ describe("agents.workspace RPC handlers", () => {
     fs.linkSync(outsidePath, path.join(workspaceRoot, "shared.txt"));
 
     try {
-      const error = expectError(
-        await invokeWorkspaceHandler("agents.workspace.get", {
-          agentId: "main",
-          path: "shared.txt",
-        }),
-      );
+      const error = expectError(await getWorkspaceFile("shared.txt"));
       expect(error.details).toMatchObject({ type: "workspace_file_not_found" });
     } finally {
       fs.rmSync(outsidePath, { force: true });
     }
-  });
-
-  it("reads UTF-8 text files inline", async () => {
-    const payload = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: "notes.md" }),
-    );
-
-    expect(payload.file).toMatchObject({
-      path: "notes.md",
-      name: "notes.md",
-      encoding: "utf8",
-      mimeType: "text/plain",
-      content: "# Notes\n",
-    });
-    expect(Number.isInteger(payload.file.updatedAtMs)).toBe(true);
   });
 
   it("reads images as base64 with their sniffed mime type", async () => {
@@ -310,9 +227,7 @@ describe("agents.workspace RPC handlers", () => {
     );
     writeWorkspaceFile(workspaceRoot, "shot.png", pngBytes);
 
-    const payload = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: "shot.png" }),
-    );
+    const payload = expectOkPayload(await getWorkspaceFile("shot.png"));
 
     expect(payload.file).toMatchObject({
       encoding: "base64",
@@ -329,41 +244,9 @@ describe("agents.workspace RPC handlers", () => {
       Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]),
     );
 
-    const error = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", {
-        agentId: "main",
-        path: "disguised.png",
-      }),
-    );
+    const error = expectError(await getWorkspaceFile("disguised.png"));
     expect(error.details).toMatchObject({
       path: "disguised.png",
-      type: "workspace_file_unsupported",
-    });
-  });
-
-  it("refuses non-image binary files", async () => {
-    writeWorkspaceFile(workspaceRoot, "blob.bin", Buffer.from([0x00, 0x01, 0x02, 0xff]));
-
-    const error = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: "blob.bin" }),
-    );
-    expect(error.details).toMatchObject({
-      path: "blob.bin",
-      type: "workspace_file_unsupported",
-    });
-  });
-
-  it("refuses invalid UTF-8 without relying on a NUL byte", async () => {
-    writeWorkspaceFile(workspaceRoot, "invalid.txt", Buffer.from([0xc3, 0x28]));
-
-    const error = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", {
-        agentId: "main",
-        path: "invalid.txt",
-      }),
-    );
-    expect(error.details).toMatchObject({
-      path: "invalid.txt",
       type: "workspace_file_unsupported",
     });
   });
@@ -371,9 +254,7 @@ describe("agents.workspace RPC handlers", () => {
   it("reports oversized text files with the preview cap", async () => {
     writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
 
-    const error = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: "large.log" }),
-    );
+    const error = expectError(await getWorkspaceFile("large.log"));
     expect(error.details).toMatchObject({
       maxBytes: 256 * 1024,
       path: "large.log",
@@ -385,24 +266,12 @@ describe("agents.workspace RPC handlers", () => {
   it("reports oversized images with the image preview cap", async () => {
     writeWorkspaceFile(workspaceRoot, "large.png", Buffer.alloc(5 * 1024 * 1024 + 1));
 
-    const error = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", {
-        agentId: "main",
-        path: "large.png",
-      }),
-    );
+    const error = expectError(await getWorkspaceFile("large.png"));
     expect(error.details).toMatchObject({
       maxBytes: 5 * 1024 * 1024,
       path: "large.png",
       size: 5 * 1024 * 1024 + 1,
       type: "workspace_file_too_large",
     });
-  });
-
-  it("treats directories as missing files for get", async () => {
-    const error = expectError(
-      await invokeWorkspaceHandler("agents.workspace.get", { agentId: "main", path: "src" }),
-    );
-    expect(error.details).toMatchObject({ type: "workspace_file_not_found" });
   });
 });

@@ -6,7 +6,7 @@ import { insideGitCheckout, runGit } from "./git.js";
 export async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<string> {
+): Promise<{ root: string; commit: string }> {
   const rootResult = await runGit(requested, [
     "rev-parse",
     "--show-toplevel",
@@ -15,9 +15,22 @@ export async function resolveCheckoutRootFromRealPath(
   ]);
   if (rootResult.code !== 0) {
     if (rootResult.termination === "exit" && rootResult.stdout.trim()) {
-      throw new WorktreeRepositoryError(
-        `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
-      );
+      const head = await runGit(requested, ["symbolic-ref", "--quiet", "HEAD"]);
+      const ref = head.stdout.trim();
+      if (
+        head.termination === "exit" &&
+        head.code === 0 &&
+        !head.stderr.trim() &&
+        ref.startsWith("refs/heads/")
+      ) {
+        const target = await runGit(requested, ["show-ref", "--verify", "--quiet", ref]);
+        if (target.termination === "exit" && target.code === 1 && !target.stderr.trim()) {
+          throw new WorktreeRepositoryError(
+            `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
+            { reason: "unborn" },
+          );
+        }
+      }
     }
     if (insideGitCheckout(requested)) {
       throw new Error(
@@ -32,5 +45,8 @@ export async function resolveCheckoutRootFromRealPath(
   if (!root) {
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  return await fs.realpath(normalizeGitPathForFilesystem(root));
+  return {
+    root: await fs.realpath(normalizeGitPathForFilesystem(root)),
+    commit: output.slice(separator + 1),
+  };
 }

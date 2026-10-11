@@ -1,4 +1,5 @@
 // Builds provider-aware auth-choice options and grouped onboarding menus.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
@@ -37,40 +38,6 @@ export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup):
   );
 }
 
-function resolveProviderChoiceOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoiceOption[] {
-  return resolveProviderSetupFlowContributions({
-    ...params,
-    scope: "text-inference",
-  }).map((contribution) =>
-    Object.assign(
-      {},
-      { value: contribution.option.value as AuthChoice, label: contribution.option.label },
-      { providerId: contribution.providerId },
-      contribution.option.hint ? { hint: contribution.option.hint } : {},
-      contribution.option.assistantPriority !== undefined
-        ? { assistantPriority: contribution.option.assistantPriority }
-        : {},
-      contribution.option.assistantVisibility
-        ? { assistantVisibility: contribution.option.assistantVisibility }
-        : {},
-      contribution.option.group
-        ? {
-            groupId: contribution.option.group.id as AuthChoiceGroupId,
-            groupLabel: contribution.option.group.label,
-            ...(contribution.option.group.hint
-              ? { groupHint: contribution.option.group.hint }
-              : {}),
-          }
-        : {},
-      contribution.option.onboardingFeatured ? { onboardingFeatured: true } : {},
-    ),
-  );
-}
-
 /**
  * Format every accepted `--auth-choice` value for CLI help and validation.
  *
@@ -80,13 +47,12 @@ function resolveProviderChoiceOptions(params?: {
  * them before any surface sees them.
  */
 export function formatAuthChoiceChoicesForCli(params?: {
-  includeSkip?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
-    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...formatStaticAuthChoiceChoicesForCli().split("|"),
     ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
       (contribution) => contribution.option.value,
     ),
@@ -95,43 +61,11 @@ export function formatAuthChoiceChoicesForCli(params?: {
   return uniqueStrings(values).join("|");
 }
 
-/** Build flat auth-choice options from core choices plus provider setup flows. */
-function buildAuthChoiceOptions(params: {
-  includeSkip: boolean;
-  assistantVisibleOnly?: boolean;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoiceOption[] {
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
-  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
-    optionByValue.set(option.value, option);
-  }
-  for (const option of resolveProviderChoiceOptions({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })) {
-    optionByValue.set(option.value, option);
-  }
-
-  const options: AuthChoiceOption[] = Array.from(optionByValue.values())
-    .toSorted(compareOptionLabels)
-    .filter((option) =>
-      params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
-    );
-
-  if (params.includeSkip) {
-    options.push({ value: "skip", label: "Skip for now" });
-  }
-
-  return options;
-}
-
 /** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
+  detectedProviderIds?: ReadonlySet<string>;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -139,11 +73,45 @@ export function buildAuthChoiceGroups(params: {
   groups: AuthChoiceGroup[];
   skipOption?: AuthChoiceOption;
 } {
-  const options = buildAuthChoiceOptions({
-    ...params,
-    includeSkip: false,
-    assistantVisibleOnly: params.assistantVisibleOnly ?? true,
-  });
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
+    CORE_AUTH_CHOICE_OPTIONS.map((option) => [option.value, option]),
+  );
+  for (const {
+    option: { group, ...option },
+    providerId,
+  } of resolveProviderSetupFlowContributions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    scope: "text-inference",
+  })) {
+    optionByValue.set(option.value, {
+      ...option,
+      providerId,
+      ...(group
+        ? {
+            groupId: group.id,
+            groupLabel: group.label,
+            ...(group.hint ? { groupHint: group.hint } : {}),
+          }
+        : {}),
+    });
+  }
+
+  const detectedProviders = new Set(
+    [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
+  );
+  const options = Array.from(optionByValue.values())
+    .toSorted(compareOptionLabels)
+    .filter(
+      (option) =>
+        option.assistantVisibility !== "detected-only" ||
+        (option.providerId !== undefined &&
+          detectedProviders.has(normalizeProviderId(option.providerId))),
+    )
+    .filter((option) =>
+      params.assistantVisibleOnly !== false ? option.assistantVisibility !== "manual-only" : true,
+    );
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
   for (const option of options) {
@@ -167,11 +135,10 @@ export function buildAuthChoiceGroups(params: {
       options: [option],
     });
   }
-  const groups = Array.from(groupsById.values())
-    .map((group) =>
-      Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
-    )
-    .toSorted(compareAuthChoiceGroups);
+  for (const group of groupsById.values()) {
+    group.options = group.options.toSorted(compareAssistantOptions);
+  }
+  const groups = Array.from(groupsById.values()).toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

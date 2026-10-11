@@ -1,19 +1,8 @@
-// Incremental line reader for streaming E2E logs.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 function readSlice(filePath, start, length) {
-  if (length <= 0) {
-    return "";
-  }
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
+  return readBufferSlice(filePath, start, length).toString("utf8");
 }
 
 function readBufferSlice(filePath, start, length) {
@@ -87,7 +76,6 @@ export function createIncrementalLineReader(filePath, options = {}) {
           pending = "";
           reset = true;
         } else {
-          contentFingerprint = nextContentFingerprint;
           return { lines: [], reset: false };
         }
       }
@@ -103,18 +91,12 @@ export function createIncrementalLineReader(filePath, options = {}) {
 
       let start = offset;
       let discardFirstLine = false;
-      let clamped = false;
-      if (start === 0 && stats.size > maxReadBytes) {
+      if (stats.size - start > maxReadBytes) {
         start = stats.size - maxReadBytes;
         pending = "";
-        clamped = true;
-      } else if (stats.size - start > maxReadBytes) {
-        start = stats.size - maxReadBytes;
-        pending = "";
-        clamped = true;
-      }
-      if (clamped && start > 0) {
-        discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        if (start > 0) {
+          discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        }
       }
 
       const text = readSlice(filePath, start, stats.size - start);

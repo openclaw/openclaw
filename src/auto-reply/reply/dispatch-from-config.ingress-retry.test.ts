@@ -6,6 +6,7 @@ import {
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
 import {
   createTestIngressQueue,
+  observeChannelIngressQueueWrite,
   withTempState,
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import type { MsgContext } from "../templating.js";
@@ -17,16 +18,17 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import {
   withDispatchProcessedOutcomeSink,
   type DispatchProcessedNote,
 } from "./dispatch-processed-outcome.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
-import { clearSessionQueues, enqueueFollowupRun, type FollowupRun } from "./queue.js";
+import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -64,6 +66,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           BodyForAgent: "Please deliver this queued message",
         });
         const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const released = observeChannelIngressQueueWrite(queue, "release");
         await queue.enqueue(
           messageId,
           { text: "Please deliver this queued message" },
@@ -87,6 +90,17 @@ describe("dispatch retry after queued ingress abandonment", () => {
           });
           run.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
           run.abortSignal = options?.turnAdoptionLifecycle?.abortSignal;
+          let renewalFailed = false;
+          const lifecycle = run.turnAdoptionLifecycle;
+          const heartbeat = lifecycle?.onDeferredHeartbeat;
+          if (lifecycle) {
+            lifecycle.onDeferredHeartbeat = () => {
+              if (renewalFailed) {
+                throw new Error("deferred heartbeat owner failed");
+              }
+              heartbeat?.();
+            };
+          }
           expect(
             enqueueFollowupRun(
               key,
@@ -103,6 +117,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
             ),
           ).toBe(true);
           if (abandonment === "watchdog-after-commit") {
+            renewalFailed = true;
             expect(
               enqueueFollowupRun(
                 key,
@@ -123,7 +138,8 @@ describe("dispatch retry after queued ingress abandonment", () => {
           }
           runState.admission = { status: "accepted", mode: "followup" };
           if (abandonment === "abandon-before-commit") {
-            clearSessionQueues([key]);
+            clearFollowupQueue(key);
+            clearFollowupDrainCallback(key);
           }
           return undefined;
         });
@@ -159,6 +175,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
             await drain.waitForIdle();
             expect(lifecycles[0]?.abortSignal.aborted).toBe(true);
           }
+          await expect(released).resolves.toBe(true);
           expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
           clock += 1_000;
           expect(await drain.drainOnce()).toEqual({ started: 1 });
@@ -194,7 +211,8 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect(duplicateDispatcher.sendFinalReply).not.toHaveBeenCalled();
         } finally {
           drain.dispose();
-          clearSessionQueues([key]);
+          clearFollowupQueue(key);
+          clearFollowupDrainCallback(key);
         }
       });
     },

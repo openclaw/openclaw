@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements live timeout behavior.
 import type { QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 
@@ -14,8 +13,6 @@ export function resolveQaLiveTurnTimeoutMs(
   modelRef = profile.primaryModel,
 ) {
   return getQaProvider(profile.providerMode).resolveTurnTimeoutMs({
-    primaryModel: profile.primaryModel,
-    alternateModel: profile.alternateModel,
     modelRef,
     fallbackMs,
   });

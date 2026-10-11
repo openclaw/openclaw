@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_opener::OpenerExt;
@@ -20,6 +20,55 @@ const RELEASE_URL: &str = "https://github.com/openclaw/openclaw/releases/latest"
 const DESKTOP_TEST_UPDATE_ENDPOINT: &str =
     "https://github.com/openclaw/openclaw/releases/download/desktop-test/latest-desktop-test.json";
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(3);
+
+#[cfg(any(target_os = "linux", test))]
+fn calendar_release_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
+    // Keep recognition and safe integer bounds aligned with scripts/lib/release-version.mjs.
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    let positive_part = |part: &str| {
+        if part.is_empty() || part.starts_with('0') || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        part.parse::<u64>().ok().filter(|n| *n <= MAX_SAFE_INTEGER)
+    };
+    let (base, prerelease) = match version.split_once('-') {
+        Some((base, prerelease)) => (base, Some(prerelease)),
+        None => (version, None),
+    };
+    let mut parts = base.split('.');
+    let year = parts.next()?;
+    if year.len() != 4 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let year = year.parse().ok()?;
+    let month = positive_part(parts.next()?)?;
+    let patch = positive_part(parts.next()?)?;
+    if month > 12 || parts.next().is_some() {
+        return None;
+    }
+    let (rank, sequence) = match prerelease {
+        None => (2, 0),
+        Some(value) => match value.split_once('.') {
+            Some(("alpha", number)) => (0, positive_part(number)?),
+            Some(("beta", number)) => (1, positive_part(number)?),
+            Some(_) => return None,
+            None => (2, positive_part(value)?),
+        },
+    };
+    Some((year, month, patch, rank, sequence))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn release_is_newer<T: Ord + std::fmt::Display>(current: &T, candidate: &T) -> bool {
+    match (
+        calendar_release_key(&current.to_string()),
+        calendar_release_key(&candidate.to_string()),
+    ) {
+        (Some(current), Some(candidate)) => candidate > current,
+        // Preserve Tauri's exact comparator, including build metadata, outside the calendar grammar.
+        _ => candidate > current,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InstallKind {
@@ -73,6 +122,14 @@ pub struct UpdaterState {
     // silent startup auto-check is running still surfaces a result instead of
     // being coalesced away into silence.
     manual_pending: Arc<AtomicBool>,
+}
+
+impl UpdaterState {
+    fn lifecycle(&self) -> MutexGuard<'_, UpdateLifecycle> {
+        self.lifecycle
+            .lock()
+            .expect("updater lifecycle lock poisoned")
+    }
 }
 
 #[derive(Debug)]
@@ -148,16 +205,17 @@ impl<T> UpdateLifecycle<T> {
         if self.operation_in_progress {
             return ClaimedAction::None;
         }
-        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+        if relaunch || self.ready.is_some() {
             self.operation_in_progress = true;
             return match self.ready.take() {
                 Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
                 Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
             };
         }
-        match self.action() {
-            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
-            _ => ClaimedAction::None,
+        if self.download_available {
+            ClaimedAction::OpenDownloadPage
+        } else {
+            ClaimedAction::None
         }
     }
 
@@ -207,8 +265,8 @@ struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManualUpdateInfo {
-    version: String,
-    notes: Option<String>,
+    #[serde(flatten)]
+    update: UpdateInfo,
     release_url: &'static str,
 }
 
@@ -271,9 +329,7 @@ pub(crate) fn perform_action(app: &AppHandle) {
 fn activate(app: &AppHandle, relaunch: bool) {
     let action = app
         .state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .claim_action(relaunch);
     refresh_action(app);
     match action {
@@ -291,9 +347,7 @@ fn activate(app: &AppHandle, relaunch: bool) {
                 Ok(()) => app.restart(),
                 Err(error) => {
                     app.state::<UpdaterState>()
-                        .lifecycle
-                        .lock()
-                        .expect("updater lifecycle lock poisoned")
+                        .lifecycle()
                         .restore_failed_install(deferred);
                     deliver_error(&app, true, TerminalResultKind::RelaunchFailed, error);
                 }
@@ -319,7 +373,10 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     let manual_requested = || manual_pending.load(Ordering::Acquire);
     #[cfg(target_os = "linux")]
-    let updater = app.updater();
+    let updater = app
+        .updater_builder()
+        .version_comparator(|current, candidate| release_is_newer(&current, &candidate.version))
+        .build();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let updater = app
         .updater_builder()
@@ -327,19 +384,7 @@ async fn run_check(app: AppHandle, manual: bool) {
             .parse()
             .expect("desktop test updater endpoint is valid")])
         .and_then(|builder| builder.build());
-    let updater = match updater {
-        Ok(updater) => updater,
-        Err(error) => {
-            deliver_error(
-                &app,
-                manual_requested(),
-                TerminalResultKind::CheckFailed,
-                error,
-            );
-            return;
-        }
-    };
-    let update = match updater.check().await {
+    let update = match async { updater?.check().await }.await {
         Ok(Some(update)) => update,
         Ok(None) => {
             deliver_result(
@@ -367,24 +412,18 @@ async fn run_check(app: AppHandle, manual: bool) {
         notes: update.body.clone(),
     };
 
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .download_started();
+    app.state::<UpdaterState>().lifecycle().download_started();
     refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
-        let version = info.version.clone();
-        let notification_body = manual_notification_body(&version);
+        let notification_body = manual_notification_body(&info.version);
         deliver_result(
             &app,
             manual_requested(),
             TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
-                version: info.version,
-                notes: info.notes,
+                update: info,
                 release_url: RELEASE_URL,
             },
             &notification_body,
@@ -393,15 +432,9 @@ async fn run_check(app: AppHandle, manual: bool) {
     }
 
     emit(&app, AVAILABLE_EVENT, info.clone());
-    let result = update.download(progress_callback(app.clone()), || {}).await;
-    let result = match result {
+    let result = match update.download(progress_callback(app.clone()), || {}).await {
         Ok(bytes) if install_kind == InstallKind::SelfInstall => {
-            let admitted = app
-                .state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
-                .begin_self_install();
+            let admitted = app.state::<UpdaterState>().lifecycle().begin_self_install();
             if !admitted {
                 // A relaunch already owns the process; do not replace files beneath it.
                 return;
@@ -409,17 +442,13 @@ async fn run_check(app: AppHandle, manual: bool) {
             refresh_action(&app);
             let result = update.install(&bytes);
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .finish_self_install(result.is_ok());
             result
         }
         Ok(bytes) => {
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .replace_ready(ReadyUpdate::Deferred(DeferredUpdate { update, bytes }));
             Ok(())
         }
@@ -427,8 +456,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     match result {
         Ok(()) => {
-            let version = info.version.clone();
-            let notification_body = ready_notification_body(&version);
+            let notification_body = ready_notification_body(&info.version);
             deliver_result(
                 &app,
                 manual_requested(),
@@ -476,11 +504,7 @@ fn result_delivery(
 }
 
 pub(crate) fn current_action(app: &AppHandle) -> UpdateAction {
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .action()
+    app.state::<UpdaterState>().lifecycle().action()
 }
 
 fn refresh_action(app: &AppHandle) {
@@ -530,10 +554,6 @@ fn install_kind_from_appimage_env(appimage: Option<OsString>, platform: Platform
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<Webview> {
-    app.get_webview("main")
-}
-
 fn main_content_is_remote(app: &AppHandle, window: Option<&Webview>) -> bool {
     !window.is_some_and(|window| {
         app.state::<crate::DesktopState>()
@@ -550,7 +570,7 @@ fn progress_callback(app: AppHandle) -> impl FnMut(usize, Option<u64>) {
 }
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
-    if let Some(window) = main_window(app) {
+    if let Some(window) = app.get_webview("main") {
         if !main_content_is_remote(app, Some(&window)) {
             let _ = window.emit(event, payload);
         }
@@ -566,12 +586,10 @@ fn deliver_result<S: Serialize + Clone>(
     notification_body: &str,
 ) {
     app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .record_result(result);
     refresh_action(app);
-    let window = main_window(app);
+    let window = app.get_webview("main");
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
     if matches!(
         destination,
@@ -631,6 +649,116 @@ fn manual_notification_body(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct ReleaseVersionCases {
+        ordered: Vec<ReleaseVersionCase>,
+        unrecognized: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ReleaseVersionCase {
+        current: String,
+        candidate: String,
+        ordering: i8,
+    }
+
+    fn release_version_cases() -> ReleaseVersionCases {
+        serde_json::from_str(include_str!("../../tests/release_version_cases.json")).unwrap()
+    }
+
+    fn remote_release(
+        version: &str,
+    ) -> Result<tauri_plugin_updater::RemoteRelease, serde_json::Error> {
+        serde_json::from_value(serde_json::json!({
+            "version": version,
+            "platforms": {},
+        }))
+    }
+
+    #[test]
+    fn release_version_correction_replaces_base() {
+        let current = remote_release("2026.9.3").unwrap().version;
+        let candidate = remote_release("2026.9.3-1").unwrap().version;
+        assert!(
+            candidate < current,
+            "the locked vendor default treats the correction as a prerelease"
+        );
+        assert!(
+            release_is_newer(&current, &candidate),
+            "base -> correction must offer the correction"
+        );
+    }
+
+    #[test]
+    fn release_version_shared_calendar_cases() {
+        for case in release_version_cases().ordered {
+            let current = remote_release(&case.current).unwrap().version;
+            let candidate = remote_release(&case.candidate).unwrap().version;
+            assert_eq!(
+                release_is_newer(&current, &candidate),
+                case.ordering > 0,
+                "{} -> {}",
+                case.current,
+                case.candidate,
+            );
+            assert_eq!(
+                release_is_newer(&candidate, &current),
+                case.ordering < 0,
+                "{} -> {}",
+                case.candidate,
+                case.current,
+            );
+        }
+    }
+
+    #[test]
+    fn release_version_unrecognized_versions_keep_vendor_order() {
+        for version in release_version_cases().unrecognized {
+            let candidate = remote_release(&version).unwrap().version;
+            assert_eq!(
+                calendar_release_key(&candidate.to_string()),
+                None,
+                "{version}"
+            );
+            for current in ["2026.9.3", "2026.9.3-1", version.as_str()] {
+                let current = remote_release(current).unwrap().version;
+                assert_eq!(
+                    release_is_newer(&current, &candidate),
+                    candidate > current,
+                    "{current} -> {candidate}",
+                );
+                assert_eq!(
+                    release_is_newer(&candidate, &current),
+                    current > candidate,
+                    "{candidate} -> {current}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn release_version_vendor_parsing_is_preserved() {
+        for version in [
+            "2026.9",
+            "2026.09.3",
+            "2026.9.03",
+            "2026.9.3-01",
+            "2026.9.3-beta.01",
+            "2026.9.3-",
+            "2026.9.3+",
+            "2026.9.18446744073709551616",
+            " 2026.9.3",
+            "2026.9.3 ",
+            "V2026.9.3",
+        ] {
+            assert!(remote_release(version).is_err(), "{version}");
+        }
+        let current = remote_release("2026.9.3").unwrap().version;
+        let candidate = remote_release("v2026.9.3-1").unwrap().version;
+        assert_eq!(candidate.to_string(), "2026.9.3-1");
+        assert!(release_is_newer(&current, &candidate));
+    }
 
     #[test]
     fn install_kind_covers_every_platform_path() {

@@ -4,10 +4,15 @@ import { EventEmitter } from "node:events";
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -75,10 +80,7 @@ export function createResponse(): {
 } {
   const setHeader = vi.fn();
   let body = "";
-  let resolveEnd!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    resolveEnd = resolve;
-  });
+  const { promise: ended, resolve: resolveEnd } = createDeferred();
   const end = vi.fn((chunk?: unknown) => {
     res.writableFinished = true;
     res.emit("finish");
@@ -155,6 +157,11 @@ export function createTestGatewayServer(options: {
   resolvedAuth: ResolvedGatewayAuth;
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
+  const context = createGatewayRequestContext({
+    ...makeContextParams(),
+    configRevisionProjector: loadGatewayConfigRevisionProjector(),
+  });
+  context.resolveGatewayContext = () => context;
   return createGatewayHttpServer({
     clients: new Set(),
     controlUiEnabled: false,
@@ -162,6 +169,8 @@ export function createTestGatewayServer(options: {
     openAiChatCompletionsEnabled: false,
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
+    getGatewayRequestContext: context.resolveGatewayContext,
+    httpRequestLifetime: context,
     ...options.overrides,
     resolvedAuth: options.resolvedAuth,
   });
@@ -217,8 +226,10 @@ export function createHooksHandler(
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
+  const hooksConfig = createHooksConfig();
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    getHooksConfig: () => hooksConfig,
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {

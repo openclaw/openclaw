@@ -1,11 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import type { AgentEntryConfig } from "../config/types.agents.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
-import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import {
+  resolveUpdateCandidateAvatar,
+  resolveUpdateCandidateStatePath,
+} from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
+import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -22,30 +30,33 @@ import {
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateCandidateRehearsal = {
-  sourceConfig: OpenClawConfig;
-  sourceConfigHash: string | null | undefined;
   stateDir: string;
   configPath: string;
   workspaceDir: string;
   env: NodeJS.ProcessEnv;
   port: number;
   snapshotCapacity: UpdateSnapshotCapacity;
+  snapshotDiagnostics?: string[];
+  snapshotWarnings?: string[];
   cleanupDirectories: string[];
-  cleanup: () => Promise<void>;
+  pluginCodeLinks?: UpdateCandidatePluginCodeLink[];
+  cleanup: (assertDirectoryCurrent?: (directory: string) => void) => Promise<void>;
 };
 
 function isolatedConfig(
-  config: OpenClawConfig,
+  config: OpenClawConfigWithLegacyRoster,
   sourceRoot: string,
   stateDir: string,
   port: number,
   sourceEnv: NodeJS.ProcessEnv,
   pluginPaths: Record<string, string>,
-): OpenClawConfig {
+  migrationPolicy?: "rehearse" | "startup-only",
+): OpenClawConfigWithLegacyRoster {
   const copied = structuredClone(config);
   const projectPluginPath = (value: string) => {
     const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
@@ -68,30 +79,51 @@ function isolatedConfig(
   const workspace = path.join(stateDir, "workspace");
   const entries =
     copied.agents?.entries ??
-    Object.fromEntries((copied.agents?.list ?? []).map(({ id, ...agent }) => [id, agent]));
+    (migrationPolicy === "startup-only"
+      ? undefined
+      : Object.fromEntries((copied.agents?.list ?? []).map(({ id, ...agent }) => [id, agent])));
+  const isolateAgent = (id: string, agent: AgentEntryConfig): AgentEntryConfig => ({
+    ...agent,
+    // Pre-Doctor input can be malformed; validation reports non-string avatars.
+    ...(typeof agent.identity?.avatar === "string"
+      ? {
+          identity: {
+            ...agent.identity,
+            avatar: resolveUpdateCandidateAvatar(
+              resolveAgentWorkspaceDir(config, id, sourceEnv),
+              agent.identity.avatar,
+            ),
+          },
+        }
+      : {}),
+    workspace: path.join(workspace, id),
+    cwd: path.join(workspace, id),
+    agentDir: agent.agentDir
+      ? resolveUpdateCandidateStatePath(
+          sourceRoot,
+          stateDir,
+          resolveUserPath(agent.agentDir, sourceEnv),
+        )
+      : path.join(stateDir, "agents", id, "agent"),
+    heartbeat: { every: "0m" },
+  });
   copied.agents = {
     ...copied.agents,
     defaults: { ...copied.agents?.defaults, workspace, cwd: workspace, heartbeat: { every: "0m" } },
-    entries: Object.fromEntries(
-      Object.entries(entries).map(([id, agent]) => [
-        id,
-        {
-          ...agent,
-          workspace: path.join(workspace, id),
-          cwd: path.join(workspace, id),
-          agentDir: agent.agentDir
-            ? resolveUpdateCandidateStatePath(
-                sourceRoot,
-                stateDir,
-                resolveUserPath(agent.agentDir, sourceEnv),
-              )
-            : path.join(stateDir, "agents", id, "agent"),
-          heartbeat: { every: "0m" },
-        },
-      ]),
-    ),
+    ...(entries
+      ? {
+          entries: Object.fromEntries(
+            Object.entries(entries).map(([id, agent]) => [id, isolateAgent(id, agent)]),
+          ),
+        }
+      : {}),
+    ...(migrationPolicy === "startup-only" && copied.agents?.list
+      ? { list: copied.agents.list.map(({ id, ...agent }) => ({ id, ...isolateAgent(id, agent) })) }
+      : {}),
   };
-  delete copied.agents.list;
+  if (migrationPolicy !== "startup-only") {
+    delete copied.agents.list;
+  }
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
   delete copied.diagnostics;
@@ -123,16 +155,19 @@ function isolatedConfig(
   return copied;
 }
 
-/** One disposable generation, shared by candidate diagnostics and every turn of a repair run. */
+/** Prepare one disposable generation for candidate diagnostics. */
 export async function prepareUpdateCandidateRehearsal(params: {
-  config: OpenClawConfig;
-  sourceConfigHash?: string | null;
+  config: OpenClawConfigWithLegacyRoster;
   candidateRoot: string;
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
+  migrationPolicy?: "rehearse" | "startup-only";
 }): Promise<UpdateCandidateRehearsal> {
   const sourceEnv = params.env ?? process.env;
   const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
@@ -191,7 +226,10 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const {
     stateDir: tempDir,
     pluginPaths,
+    pluginCodeLinks,
     snapshotCapacity,
+    snapshotDiagnostics,
+    snapshotWarnings,
     cleanupDirectories,
   } = await prepareUpdateCandidateStateSnapshot({
     ...params,
@@ -201,13 +239,22 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
-  const cleanup = async () => {
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir });
+  const cleanup = async (assertDirectoryCurrent?: (directory: string) => void) => {
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../state/openclaw-state-db-cache.js");
+    assertDirectoryCurrent?.(tempDir);
+    // Read-only inventory can retain a worker actor after its native reader closes.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
     for (const directory of cleanupDirectories) {
+      // Revalidate physical custody after worker drainage and before removal.
+      assertDirectoryCurrent?.(directory);
       await fs.rm(directory, { recursive: true, force: true });
     }
   };
   try {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
@@ -221,20 +268,26 @@ export async function prepareUpdateCandidateRehearsal(params: {
         port,
         sourceEnv,
         pluginPaths,
+        params.migrationPolicy,
       ),
     );
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.writeFile(configPath, serialized, { mode: 0o600 });
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
-      sourceConfig: params.config,
-      sourceConfigHash: params.sourceConfigHash,
       stateDir: tempDir,
       configPath,
       workspaceDir,
       env,
       port,
       snapshotCapacity,
+      snapshotDiagnostics,
+      snapshotWarnings,
       cleanupDirectories,
+      pluginCodeLinks,
       cleanup,
     };
   } catch (error) {

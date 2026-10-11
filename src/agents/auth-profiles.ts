@@ -51,12 +51,14 @@ export {
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
+export { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
 export {

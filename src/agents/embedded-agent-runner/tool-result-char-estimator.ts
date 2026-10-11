@@ -1,6 +1,4 @@
-/**
- * Estimates message and tool-result character costs for context guards.
- */
+import { collectTextContentBlocks } from "../content-blocks.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
@@ -9,7 +7,7 @@ import {
   COMPACTION_SUMMARY_SUFFIX,
   bashExecutionToText,
 } from "../runtime/index.js";
-import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
+import { isToolResultTextBlock, prepareToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
@@ -17,27 +15,9 @@ export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKE
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
-function isTextBlock(block: unknown): block is { type: "text"; text: string } {
-  return (
-    Boolean(block) &&
-    typeof block === "object" &&
-    (block as { type?: unknown }).type === "text" &&
-    typeof (block as { text?: unknown }).text === "string"
-  );
-}
-
-function isImageBlock(block: unknown): boolean {
-  return (
-    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
-  );
-}
-
 function estimateUnknownChars(value: unknown): number {
   if (typeof value === "string") {
     return value.length;
-  }
-  if (value === undefined) {
-    return 0;
   }
   try {
     const serialized = JSON.stringify(value);
@@ -64,48 +44,40 @@ function getToolResultContent(msg: AgentMessage): unknown[] {
   return Array.isArray(content) ? content : [];
 }
 
-function estimateContentBlockChars(content: unknown[]): number {
+function estimateContentBlockChars(content: unknown[], toolResult = false): number {
+  const weight = toolResult ? TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE : 1;
   let chars = 0;
   for (const block of content) {
-    if (isTextBlock(block)) {
-      chars += block.text.length;
-    } else if (isImageBlock(block)) {
-      chars += IMAGE_CHAR_ESTIMATE;
+    if (isToolResultTextBlock(block) && block.type === "text") {
+      chars += toolResult
+        ? prepareToolResultTextChars(block, block.text, weight)
+        : block.text.length;
+    } else if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "image"
+    ) {
+      chars += IMAGE_CHAR_ESTIMATE * weight;
     } else {
-      chars += estimateUnknownChars(block);
+      chars += estimateUnknownChars(block) * weight;
     }
   }
   return chars;
 }
 
-function estimateToolResultContentChars(content: unknown[]): number {
-  let chars = 0;
-  for (const block of content) {
-    if (isTextBlock(block)) {
-      chars += estimateToolResultTextChars(block.text, {
-        minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
-      });
-    } else if (isImageBlock(block)) {
-      chars += TOOL_IMAGE_CHARS;
-    } else {
-      chars += estimateUnknownChars(block) * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
-    }
-  }
-  return chars;
+function estimateMessageContentChars(content: unknown): number {
+  return typeof content === "string"
+    ? content.length
+    : Array.isArray(content)
+      ? estimateContentBlockChars(content)
+      : 0;
 }
 
 export function getToolResultText(msg: AgentMessage): string {
-  const content = getToolResultContent(msg);
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (isTextBlock(block)) {
-      chunks.push(block.text);
-    }
-  }
-  return chunks.join("\n");
+  return collectTextContentBlocks(getToolResultContent(msg)).join("\n");
 }
 
-function estimateMessageChars(msg: AgentMessage): number {
+export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknown[]): number {
   if (
     !msg ||
     typeof msg !== "object" ||
@@ -115,19 +87,12 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (msg.role === "user") {
-    const content = msg.content;
-    if (typeof content === "string") {
-      return content.length;
-    }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateMessageContentChars(contentOverride ?? msg.content);
   }
 
   if (msg.role === "assistant") {
     let chars = 0;
-    const content = (msg as { content?: unknown }).content;
+    const content = contentOverride ?? (msg as { content?: unknown }).content;
     if (Array.isArray(content)) {
       for (const block of content) {
         if (!block || typeof block !== "object") {
@@ -159,8 +124,8 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (isToolResultMessage(msg)) {
     // `details` is stripped before provider conversion; estimate only visible content.
-    const content = getToolResultContent(msg);
-    return estimateToolResultContentChars(content);
+    const content = contentOverride ?? getToolResultContent(msg);
+    return estimateContentBlockChars(content, true);
   }
 
   const role: unknown = Reflect.get(msg, "role");
@@ -169,27 +134,16 @@ function estimateMessageChars(msg: AgentMessage): number {
     return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 
-  if (role === "branchSummary") {
+  if (role === "branchSummary" || role === "compactionSummary") {
     const rawSummary = Reflect.get(msg, "summary");
     const summary = typeof rawSummary === "string" ? rawSummary : "";
-    return (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length;
-  }
-
-  if (role === "compactionSummary") {
-    const rawSummary = Reflect.get(msg, "summary");
-    const summary = typeof rawSummary === "string" ? rawSummary : "";
-    return (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
+    return role === "branchSummary"
+      ? (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length
+      : (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
   }
 
   if (role === "custom") {
-    const content = Reflect.get(msg, "content");
-    if (typeof content === "string") {
-      return content.length;
-    }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateMessageContentChars(contentOverride ?? Reflect.get(msg, "content"));
   }
 
   return 256;

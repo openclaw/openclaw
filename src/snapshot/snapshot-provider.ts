@@ -11,24 +11,10 @@ export type SnapshotDatabaseRef = {
   readonly identity: SnapshotDatabaseIdentity;
 };
 
-export type SnapshotDatabaseManifest =
-  | {
-      readonly role: "global";
-      readonly basename: string;
-      readonly userVersion: number;
-    }
-  | {
-      readonly role: "agent";
-      readonly agentId: string;
-      readonly basename: string;
-      readonly userVersion: number;
-    }
-  | {
-      readonly role: "generic";
-      readonly id: string;
-      readonly basename: string;
-      readonly userVersion: number;
-    };
+export type SnapshotDatabaseManifest = SnapshotDatabaseIdentity & {
+  readonly basename: string;
+  readonly userVersion: number;
+};
 
 export type SnapshotManifest = {
   readonly schemaVersion: 1;
@@ -57,10 +43,3 @@ export type SnapshotVerificationResult = {
 };
 
 export type SnapshotSummary = SnapshotResult;
-
-export type SqliteSnapshotProvider = {
-  create(database: SnapshotDatabaseRef): Promise<SnapshotResult>;
-  list(): Promise<SnapshotSummary[]>;
-  restoreFresh(snapshot: SnapshotRef, targetPath: string): Promise<SnapshotVerificationResult>;
-  verify(snapshot: SnapshotRef): Promise<SnapshotVerificationResult>;
-};

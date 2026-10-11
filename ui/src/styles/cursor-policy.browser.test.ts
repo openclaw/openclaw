@@ -7,7 +7,8 @@ import postcss from "postcss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { controlUiHoverGuardPlugin } from "../../config/control-ui-hover-guard.ts";
-import { dockPanelStyles } from "../components/dock-layout-controller.ts";
+import { dockPanelStyles } from "../components/dock-panel-styles.ts";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -48,7 +49,6 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "default", selector: ".sidebar-issues-panel__navigation-link" },
   { expected: "default", selector: ".sidebar-approval-row__open-session" },
   { expected: "default", selector: ".sidebar-footer-build" },
-  { expected: "default", selector: ".sidebar-more-menu a" },
   // Links and explicit new-tab controls keep the hand.
   { expected: "pointer", selector: "#real-link" },
   { expected: "pointer", selector: "#sidebar-external-link" },
@@ -86,8 +86,11 @@ function readUiCss(): string {
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/skill-workshop.css",
+    "ui/src/styles/rail-header.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
     "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/split-view.css",
     "ui/src/styles/chat/text.css",
@@ -153,7 +156,6 @@ function fixtureDocument(): string {
         <a class="settings-sidebar__subitem" href="/settings#theme">Theme</a>
         <a class="sidebar-footer-build" href="/settings/about">Build</a>
       </aside>
-      <div class="sidebar-more-menu"><div class="sidebar-customize-menu__item"><a href="/activity">Activity</a></div></div>
       <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item"><a id="sidebar-help-link" href="https://example.com/docs" target="_blank">Docs</a></div></div>
       <a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>
       <button id="new-tab-button" class="btn" type="button" data-new-tab-action>New tab</button>
@@ -252,8 +254,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
     { theme: "light", hasTouch: true },
     { theme: "dark", hasTouch: true },
   ])("underlines content, not controls ($theme, touch=$hasTouch)", async ({ theme, hasTouch }) => {
-    const page = await tabBrowser.newPage({ hasTouch });
-    try {
+    await withBrowserPage(tabBrowser.newPage({ hasTouch }), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       await page.evaluate((mode) => {
         document.documentElement.dataset.themeMode = mode;
@@ -357,27 +358,21 @@ describeCursorPolicy("Control UI cursor policy", () => {
       expect(
         await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
       ).toBe("none");
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses semantic cursors in a browser tab", async () => {
-    const page = await tabBrowser.newPage();
-    try {
+    await withBrowserPage(tabBrowser.newPage(), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       const probe = await probeWindow(page);
 
       expect(probe.displayMode).toBe("browser");
       expect(probe.cursors).toEqual(expectedCursors());
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses the same semantic cursors in a native app host", async () => {
-    const page = await tabBrowser.newPage();
-    try {
+    await withBrowserPage(tabBrowser.newPage(), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       // The macOS dashboard is a plain web view, so it reports display-mode
       // browser and marks itself with these classes at document end instead.
@@ -388,9 +383,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
 
       expect(probe.displayMode).toBe("browser");
       expect(probe.cursors).toEqual(expectedCursors());
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses the same semantic cursors in an installed window", async () => {

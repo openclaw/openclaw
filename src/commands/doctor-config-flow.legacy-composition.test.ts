@@ -1,278 +1,129 @@
-// Exercises legacy values through the actual snapshot, Doctor, atomic write, and reread.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  createBuiltRuntime,
+  runBuiltRuntime,
+} from "./doctor-config-preflight.process.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+
+const CLI_CHILD_TIMEOUT_MS = 60_000;
+const runtimeDirs = useAutoCleanupTempDirTracker(afterAll);
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 async function repairConfig(configPath: string) {
-  const ctx = await prepareDoctorContext(configPath);
+  await using ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
-  return { ...ctx.configResult, configWriteRefusal: ctx.configWriteRefusal };
+  return {
+    shouldWriteConfig: ctx.configResult.shouldWriteConfig,
+    configWriteRefusal: ctx.configWriteRefusal,
+  };
 }
 
 describe("Doctor legacy config composition", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
-  it.each([
-    "list",
-    "entries",
-    "included list",
-    "included entries",
-    "list with env agent id",
-    "list with normalized agent id",
-    "list with config env",
-    "list with included identity",
-  ])("preserves memory search settings from %s", async (shape) => {
+  it("preserves the July TTS preference locator before retiring its config keys", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          DOCTOR_AGENT_ID: "research",
-          DOCTOR_TOOL: "read",
-          DOCTOR_AGENT_WORKSPACE: path.join(home, "agent-workspace"),
-          DOCTOR_MEMORY_KEY: shape === "list with config env" ? undefined : "memory-secret-canary",
-        },
-        async () => {
-          const includedIdentity = shape === "list with included identity";
-          const normalizedId = shape === "list with normalized agent id";
-          const identityRaw =
-            '{\n   "name": "${DOCTOR_AGENT_ID}",\n   "theme": "$${DOCTOR_MEMORY_KEY}"\n}\n';
-          const toolsRaw = '{\n   "deny": ["browser"]\n}\n';
-          const entries = {
-            ops: {
-              memorySearch: { enabled: false, provider: "openai", query: { maxResults: 7 } },
-            },
-            research: {
-              workspace: "${DOCTOR_AGENT_WORKSPACE}",
-              ...(includedIdentity
-                ? {
-                    identity: { $include: "identity.json" },
-                    tools: { $include: "tools.json", allow: ["${DOCTOR_TOOL}"] },
-                  }
-                : {}),
-              memorySearch: {
-                enabled: true,
-                provider: "gemini",
-                extraPaths: ["notes"],
-                remote: { apiKey: "${DOCTOR_MEMORY_KEY}" },
-              },
-            },
-          };
-          const agents = {
-            ...(includedIdentity ? {} : { ownership: "explicit" }),
-            ...(shape.endsWith("entries")
-              ? { entries }
-              : {
-                  list: Object.entries(entries).map(([id, entry]) =>
-                    Object.assign(
-                      {
-                        id:
-                          shape === "list with env agent id" && id === "research"
-                            ? "${DOCTOR_AGENT_ID}"
-                            : normalizedId && id === "research"
-                              ? "Research"
-                              : id,
-                      },
-                      entry,
-                    ),
-                  ),
-                }),
-          };
-          const included = shape.startsWith("included");
-          const configPath = await writeOpenClawConfig(home, {
-            agents: included ? { $include: "agents.json" } : agents,
-            gateway: normalizedId ? { $include: "gateway.json" } : { mode: "local" },
-            plugins: { enabled: false },
-            ...(shape === "list with config env"
-              ? { env: { vars: { DOCTOR_MEMORY_KEY: "memory-secret-canary" } } }
-              : {}),
-          });
-          const gatewayPath = path.join(path.dirname(configPath), "gateway.json");
-          const gatewayRaw = '{\n   "mode": "local"\n}\n';
-          if (normalizedId) {
-            await fs.writeFile(gatewayPath, gatewayRaw);
-          }
-          const includePath = path.join(path.dirname(configPath), "agents.json");
-          if (included) {
-            await fs.writeFile(includePath, JSON.stringify(agents));
-          }
-          const identityPath = path.join(path.dirname(configPath), "identity.json");
-          const toolsPath = path.join(path.dirname(configPath), "tools.json");
-          if (includedIdentity) {
-            await fs.writeFile(identityPath, identityRaw);
-            await fs.writeFile(toolsPath, toolsRaw);
-          }
-          const before = await readConfigFileSnapshot();
-          expect(before.valid).toBe(false);
-          if (normalizedId) {
-            expect(before.sourceConfig.agents).toHaveProperty("list");
-          } else {
-            expect(before.sourceConfig.agents).not.toHaveProperty("list");
-          }
-          if (includedIdentity) {
-            expect(before.sourceConfig.agents?.entries?.research?.tools).toEqual({
-              deny: ["browser"],
-              allow: ["read"],
-            });
-          }
-          const repaired = await repairConfig(configPath);
-          expect(repaired.cfg.agents?.entries?.research?.memory?.search?.remote?.apiKey).toBe(
-            "memory-secret-canary",
-          );
-          const savedRootRaw = await fs.readFile(configPath, "utf8");
-          const savedRoot = JSON.parse(savedRootRaw);
-          if (normalizedId) {
-            expect(savedRoot.gateway).toEqual({ $include: "gateway.json" });
-            expect(await fs.readFile(gatewayPath, "utf8")).toBe(gatewayRaw);
-          }
-          if (included) {
-            expect(savedRoot.agents).toEqual({ $include: "agents.json" });
-          }
-          const saved = {
-            agents: included
-              ? JSON.parse(await fs.readFile(includePath, "utf8"))
-              : savedRoot.agents,
-          };
-          expect(saved.agents).not.toHaveProperty("list");
-          if (includedIdentity) {
-            expect(saved.agents.entries.research.identity).toEqual({ $include: "identity.json" });
-            expect(saved.agents.entries.research.tools).toEqual({
-              $include: "tools.json",
-              allow: ["${DOCTOR_TOOL}"],
-            });
-            expect(await fs.readFile(identityPath, "utf8")).toBe(identityRaw);
-            expect(await fs.readFile(toolsPath, "utf8")).toBe(toolsRaw);
-          }
-          for (const [id, entry] of Object.entries(entries)) {
-            expect(saved.agents.entries[id].memory?.search).toEqual(entry.memorySearch);
-            expect(saved.agents.entries[id]).not.toHaveProperty("memorySearch");
-          }
-          expect(saved.agents.ownership).toBe("explicit");
-          const reread = await readConfigFileSnapshot();
-          expect(reread.valid).toBe(true);
-          if (shape === "list") {
-            expect(repaired.sourceConfigValid).toBe(true);
-          }
-          expect(saved.agents.entries.research.workspace).toBe("${DOCTOR_AGENT_WORKSPACE}");
-          expect(reread.sourceConfig.agents?.entries?.research?.workspace).toBe(
-            path.join(home, "agent-workspace"),
-          );
-          expect(
-            reread.sourceConfig.agents?.entries?.research?.memory?.search?.remote?.apiKey,
-          ).toBe("memory-secret-canary");
-          if (includedIdentity) {
-            expect(reread.sourceConfig.agents?.entries?.research?.identity).toEqual({
-              name: "research",
-              theme: "${DOCTOR_MEMORY_KEY}",
-            });
-            expect(reread.sourceConfig.agents?.entries?.research?.tools).toEqual({
-              deny: ["browser"],
-              allow: ["read"],
-            });
-          }
-          expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
-          if (normalizedId) {
-            expect(await fs.readFile(configPath, "utf8")).toBe(savedRootRaw);
-            expect(await fs.readFile(gatewayPath, "utf8")).toBe(gatewayRaw);
-          }
-          if (includedIdentity) {
-            expect(await fs.readFile(configPath, "utf8")).toBe(savedRootRaw);
-            expect(await fs.readFile(identityPath, "utf8")).toBe(identityRaw);
-            expect(await fs.readFile(toolsPath, "utf8")).toBe(toolsRaw);
-          }
-        },
-      );
+      const prefsPath = path.join(home, "speech-preferences.json");
+      const preferences = '{"tts":{"auto":"off","maxLength":1200}}\n';
+      await fs.writeFile(prefsPath, preferences);
+      const configPath = await writeOpenClawConfig(home, {
+        agents: { list: [{ id: "main" }] },
+        messages: { tts: { prefsPath, personas: { narrator: { prompt: { style: "calm" } } } } },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      await repairConfig(configPath);
+      expect((await readConfigFileSnapshot()).valid).toBe(true);
+      expect(readConfigMachineState("tts.prefsPath")).toBe(prefsPath);
+      expect(await fs.readFile(prefsPath, "utf8")).toBe(preferences);
+      const first = await fs.readFile(configPath, "utf8");
+      expect(JSON.parse(first)).not.toHaveProperty("messages.tts");
+      expect(JSON.parse(first)).not.toHaveProperty("tts.prefsPath");
+      expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+      expect(await fs.readFile(configPath, "utf8")).toBe(first);
     });
   });
 
-  it.each(["unnamed", "duplicate", "malformed"])(
-    "repairs %s local agents beside an unrelated include",
-    async (shape) => {
+  it(
+    "converges the July upgrade fixture with an explicit local model",
+    async () => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const workspace = path.join(home, "shared-agent-workspace");
-        await withEnvAsync(
-          {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            DOCTOR_TRUSTED_PROXY: "127.0.0.2",
-            FIRST_WORKSPACE: workspace,
-            SECOND_WORKSPACE: workspace,
-          },
-          async () => {
-            const first = {
-              name: "First agent",
-              workspace: "${FIRST_WORKSPACE}",
-              memorySearch: { enabled: false, query: { maxResults: 7 } },
-            };
-            const second = {
-              name: "Second agent",
-              workspace: "${SECOND_WORKSPACE}",
-              memorySearch: { enabled: true, query: { maxResults: 9 } },
-            };
-            const expectedEntries: Record<string, typeof first> =
-              shape === "unnamed"
-                ? { agent: first }
-                : shape === "duplicate"
-                  ? { research: first, "research-2": second }
-                  : { research: first };
-            const configPath = await writeOpenClawConfig(home, {
-              agents: {
-                list:
-                  shape === "unnamed"
-                    ? [first]
-                    : shape === "duplicate"
-                      ? [
-                          { id: "Research", ...first },
-                          { id: "Research", ...second },
-                        ]
-                      : [null, { id: "Research", ...first }],
-              },
-              gateway: { $include: "gateway.json", trustedProxies: ["${DOCTOR_TRUSTED_PROXY}"] },
-              plugins: { enabled: false },
-            });
-            const includePath = path.join(path.dirname(configPath), "gateway.json");
-            const includeRaw = '{\n   "mode": "local",\n   "trustedProxies": ["127.0.0.1"]\n}\n';
-            await fs.writeFile(includePath, includeRaw);
-            expect((await readConfigFileSnapshot()).valid).toBe(false);
-            await repairConfig(configPath);
-            const savedRaw = await fs.readFile(configPath, "utf8");
-            const saved = JSON.parse(savedRaw);
-            expect(saved.agents).not.toHaveProperty("list");
-            expect(Object.keys(saved.agents.entries)).toEqual(Object.keys(expectedEntries));
-            for (const [id, entry] of Object.entries(expectedEntries)) {
-              expect(saved.agents.entries[id]).toMatchObject({
-                name: entry.name,
-                workspace: entry.workspace,
-                memory: { search: entry.memorySearch },
-              });
-              expect(saved.agents.entries[id]).not.toHaveProperty("memorySearch");
-            }
-            expect(saved.gateway).toEqual({
-              $include: "gateway.json",
-              trustedProxies: ["${DOCTOR_TRUSTED_PROXY}"],
-            });
-            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-            const reread = await readConfigFileSnapshot();
-            expect(reread.valid).toBe(true);
-            expect(reread.sourceConfig.gateway?.trustedProxies).toEqual(["127.0.0.1", "127.0.0.2"]);
-            for (const [id, entry] of Object.entries(expectedEntries)) {
-              expect(reread.sourceConfig.agents?.entries?.[id]?.workspace).toBe(workspace);
-              expect(reread.sourceConfig.agents?.entries?.[id]?.memory?.search).toEqual(
-                entry.memorySearch,
-              );
-            }
-            expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
-            expect(await fs.readFile(configPath, "utf8")).toBe(savedRaw);
-            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-          },
+        const raw = JSON.parse(
+          await fs.readFile(
+            new URL("../../test/fixtures/doctor-2026.7.1.json", import.meta.url),
+            "utf8",
+          ),
         );
+        raw.agents.defaults.memorySearch.local = { modelPath: "/synthetic/embedding.gguf" };
+        raw.gateway.port = await getFreePort();
+        const configPath = await writeOpenClawConfig(home, raw);
+        const cliRuntime = createBuiltRuntime(runtimeDirs.make("openclaw-doctor-legacy-runtime-"));
+        await fs.unlink(path.join(cliRuntime, "src"));
+        const env: NodeJS.ProcessEnv = {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR,
+          ComSpec: process.env.ComSpec,
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: home,
+          OPENCLAW_STATE_DIR: path.dirname(configPath),
+          OPENCLAW_CONFIG_PATH: configPath,
+          NODE_COMPILE_CACHE: path.join(cliRuntime, "node-compile-cache"),
+          NO_COLOR: "1",
+        };
+        const run = async (args: string[], expected = 0) => {
+          const result = await runBuiltRuntime(cliRuntime, env, args, CLI_CHILD_TIMEOUT_MS);
+          const output = `${result.stdout}\n${result.stderr}`;
+          expect(result.code, output).toBe(expected);
+        };
+        const doctorArgs = ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"];
+        await run(["config", "validate"], 1);
+        await run(doctorArgs);
+        const first = await fs.readFile(configPath, "utf8");
+        const saved = JSON.parse(first);
+        await run(["config", "validate"]);
+        expect(saved.agents).not.toHaveProperty("list");
+        expect(saved.agents.ownership).toBe("explicit");
+        expect(Object.keys(saved.agents.entries)).toEqual(["main", "research"]);
+        expect(saved.agents.defaults.systemAgent.agentId).toBe("main");
+        expect(saved.meta.migrations.modelPolicyAllowlist).toBe(true);
+        expect(saved.agents.defaults.modelPolicy.allow).toEqual([
+          "anthropic/claude-sonnet-4-6",
+          "anthropic/claude-opus-4-7",
+        ]);
+        expect(saved.memory.search).toEqual({ ...raw.agents.defaults.memorySearch });
+        expect(saved.tools.media.models).toEqual([
+          { ...raw.tools.media.audio.models[0], capabilities: ["audio"] },
+        ]);
+        expect(saved.gateway.nodes.commands.deny).toEqual(["system.run"]);
+        expect(saved.channels.telegram.groupAllowFrom).toEqual(["123456789"]);
+        expect(saved.channels.telegram.accounts.secondary.groupAllowFrom).toEqual(["987654321"]);
+        expect(saved.plugins.entries.browser.enabled).toBe(true);
+        expect(saved.meta).not.toHaveProperty("lastTouchedAt");
+        expect(saved.gateway.tailscale).not.toHaveProperty("resetOnExit");
+        await run(doctorArgs);
+        expect(await fs.readFile(configPath, "utf8")).toBe(first);
       });
     },
+    getCliProcessTestTimeout(
+      CLI_CHILD_TIMEOUT_MS,
+      CLI_CHILD_TIMEOUT_MS,
+      CLI_CHILD_TIMEOUT_MS,
+      CLI_CHILD_TIMEOUT_MS,
+    ),
   );
 
   it.each(["duplicate ids", "whole-entry include"])(
@@ -326,31 +177,6 @@ describe("Doctor legacy config composition", () => {
     },
   );
 
-  it.each(["root", "list", "entries"])("preserves message policy from %s", async (scope) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const message = { allowCrossContextSend: true, broadcast: { enabled: false } };
-        const agent = scope === "root" ? {} : { tools: { message } };
-        const configPath = await writeOpenClawConfig(home, {
-          agents:
-            scope === "list" ? { list: [{ id: "ops", ...agent }] } : { entries: { ops: agent } },
-          ...(scope === "root" ? { tools: { message } } : {}),
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-        });
-        expect((await readConfigFileSnapshot()).valid).toBe(false);
-        await repairConfig(configPath);
-        const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
-        const owner = scope === "root" ? saved : saved.agents.entries.ops;
-        expect(owner.tools.message).toEqual({
-          broadcast: { enabled: false },
-          crossContext: { allowWithinProvider: true, allowAcrossProviders: true },
-        });
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
-      });
-    });
-  });
   it("preserves inherited message policy when an agent opts out of the legacy bypass", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -379,20 +205,43 @@ describe("Doctor legacy config composition", () => {
       });
     });
   });
-  it.each(["${DOCTOR_MEMORY_KEY}", "$${DOCTOR_MEMORY_KEY}"])(
-    "preserves migrated default memory references %s and explicit canonical values",
-    async (apiKey) => {
+  it.each([
+    { apiKey: "$${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "${DOCTOR_MEMORY_PROVIDER}",
+      canonicalApiKey: undefined,
+    },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "auto",
+      canonicalApiKey: "${DOCTOR_CANONICAL_MEMORY_KEY}",
+    },
+  ])(
+    "preserves migrated $apiKey and canonical $canonicalApiKey references while canonicalizing $provider",
+    async ({ apiKey, provider, canonicalApiKey }) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await withEnvAsync(
-          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", DOCTOR_MEMORY_KEY: "memory-secret-canary" },
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            DOCTOR_MEMORY_KEY: "memory-secret-canary",
+            DOCTOR_MEMORY_PROVIDER: "auto",
+            DOCTOR_CANONICAL_MEMORY_KEY: "canonical-secret-canary",
+          },
           async () => {
             const configPath = await writeOpenClawConfig(home, {
-              memory: { search: { enabled: false, query: { maxResults: 9 } } },
+              memory: {
+                search: {
+                  enabled: false,
+                  query: { maxResults: 9 },
+                  ...(canonicalApiKey ? { remote: { apiKey: canonicalApiKey } } : {}),
+                },
+              },
               agents: {
                 defaults: {
                   memorySearch: {
                     enabled: true,
-                    provider: "auto",
+                    provider,
                     query: { maxResults: 7 },
                     remote: { apiKey },
                   },
@@ -407,16 +256,40 @@ describe("Doctor legacy config composition", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
-            const repaired = await repairConfig(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
+            await withEnvAsync(
+              {
+                DOCTOR_MEMORY_KEY: "rotated-memory-secret-canary",
+                DOCTOR_CANONICAL_MEMORY_KEY: "rotated-canonical-secret-canary",
+              },
+              async () => {
+                await runInitialConfigWriteHealth(ctx);
+                const snapshot = await readConfigFileSnapshot();
+                expect(snapshot.valid).toBe(true);
+                expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+                  canonicalApiKey
+                    ? "rotated-canonical-secret-canary"
+                    : apiKey.startsWith("$$")
+                      ? "${DOCTOR_MEMORY_KEY}"
+                      : "rotated-memory-secret-canary",
+                );
+              },
+            );
+            const repaired = ctx.configResult;
+            expect(ctx.configWriteRefusal).toBeUndefined();
             expect(repaired.cfg.memory?.search?.remote?.apiKey).toBe(
-              apiKey.startsWith("$$") ? "${DOCTOR_MEMORY_KEY}" : "memory-secret-canary",
+              canonicalApiKey
+                ? "canonical-secret-canary"
+                : apiKey.startsWith("$$")
+                  ? "${DOCTOR_MEMORY_KEY}"
+                  : "memory-secret-canary",
             );
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved.memory.search).toEqual({
               enabled: false,
               provider: "openai",
               query: { maxResults: 9 },
-              remote: { apiKey },
+              remote: { apiKey: canonicalApiKey ?? apiKey },
             });
             expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
             expect(saved.agents.entries.ops.memory.search).toEqual({

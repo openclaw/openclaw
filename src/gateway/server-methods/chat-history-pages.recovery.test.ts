@@ -1,15 +1,21 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installSessionToolResultGuard } from "../../agents/session-tool-result-guard.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as nestedActivity from "../../sessions/nested-tool-activity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as historySanitize from "../chat-display-projection.sanitize.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
-import * as anchorReader from "../session-transcript-anchor-reader.js";
+import * as anchorReader from "../session-transcript-readers.js";
 import { readSessionMessagesAsync } from "../session-transcript-readers.js";
-import { readChatHistoryPage } from "./chat-history-pages.js";
+import { createChatHistoryActivityProjection } from "./chat-history-budget.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -28,7 +34,8 @@ const answer = {
   __openclaw: { runId: "recovered-run" },
 };
 
-type PageOptions = Pick<Parameters<typeof readChatHistoryPage>[0], "offset" | "messageId"> & {
+type PageOptions = Pick<Parameters<typeof readChatHistoryPageKernel>[0], "offset" | "messageId"> & {
+  max?: number;
   maxHistoryBytes?: number;
 };
 
@@ -36,9 +43,10 @@ async function withTranscript(
   messages: Array<[id: string, message: Record<string, unknown>]>,
   use: (fixture: {
     append: (id: string, message: Record<string, unknown>) => Promise<unknown>;
-    read: (options: PageOptions) => ReturnType<typeof readChatHistoryPage>;
+    read: (options: PageOptions) => ReturnType<typeof readChatHistoryPageKernel>;
     raw: () => ReturnType<typeof readSessionMessagesAsync>;
   }) => Promise<void>,
+  entryOptions: { sessionStartedAt?: number } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
@@ -47,7 +55,7 @@ async function withTranscript(
       sessionId: "page-recovery",
       storePath: path.join(state.sessionsDir(), "sessions.json"),
     };
-    const entry = { sessionId: scope.sessionId, updatedAt: 1 };
+    const entry = { sessionId: scope.sessionId, updatedAt: 1, ...entryOptions };
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
@@ -61,25 +69,340 @@ async function withTranscript(
     await use({
       append: (id, message) => appendTranscriptMessage(scope, { eventId: id, message }),
       read: (options) =>
-        readChatHistoryPage({
-          entry,
-          provider: "openai",
-          sessionId: scope.sessionId,
-          storePath: scope.storePath,
-          sessionAgentId: scope.agentId,
-          canonicalKey: scope.sessionKey,
-          max: 1,
-          maxHistoryBytes: 100_000,
-          effectiveMaxChars: 10_000,
-          ignoreCliSessionImports: true,
-          ...options,
-        }),
+        readChatHistoryPageKernel(
+          {
+            entry,
+            provider: "openai",
+            sessionId: scope.sessionId,
+            storePath: scope.storePath,
+            sessionAgentId: scope.agentId,
+            canonicalKey: scope.sessionKey,
+            max: 1,
+            maxHistoryBytes: 100_000,
+            effectiveMaxChars: 10_000,
+            ignoreCliSessionImports: true,
+            ...options,
+          },
+          { readers: anchorReader, resolveCurrentUserProfileDisplay },
+        ),
       raw: () => readSessionMessagesAsync(scope, { mode: "full", reason: "recovery immutability" }),
     });
   });
 }
 
 describe("historical page recovery context", () => {
+  it("includes bounded off-page originals once for repeated reply references", async () => {
+    const originalText = "q".repeat(600);
+    await withTranscript(
+      [
+        [
+          "original",
+          {
+            role: "assistant",
+            content: originalText,
+            provider: "example",
+            model: "historical",
+          },
+        ],
+        ["reply-one", { ...user, __openclaw: { replyToId: "original" } }],
+        [
+          "reply-two",
+          {
+            role: "assistant",
+            content: "Second reply",
+            openclawDelivery: { replyToId: "original" },
+          },
+        ],
+      ],
+      async ({ read, raw }) => {
+        const persisted = await raw();
+        const exactReads = vi.spyOn(anchorReader, "readSessionMessageByIdAsync");
+        const sourceReads = vi.spyOn(anchorReader, "readSessionMessagesWithSourceAsync");
+        const page = await read({ max: 2, offset: 0, messageId: undefined });
+
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["reply-one", "reply-two"]);
+        for (const message of page.messages) {
+          expect(message).toHaveProperty("__openclaw.replyToMessage", {
+            ok: true,
+            message: expect.objectContaining({
+              role: "assistant",
+              content: `${"q".repeat(500)}\n...(truncated)...`,
+              __openclaw: expect.objectContaining({ id: "original", truncated: true }),
+            }),
+          });
+          expect(message).not.toHaveProperty("__openclaw.replyToMessage.message.provider");
+          expect(message).not.toHaveProperty("__openclaw.replyToMessage.message.model");
+        }
+        expect(exactReads).toHaveBeenCalledTimes(1);
+        expect(sourceReads).not.toHaveBeenCalled();
+        expect(await raw()).toEqual(persisted);
+      },
+    );
+  });
+
+  it("carries unavailable reply previews without exposing hidden or oversized originals", async () => {
+    const sessionStartedAt = 10_000;
+    const references = [
+      ["missing", "not_found"],
+      ["announce", "not_found"],
+      ["announce-reply", "not_found"],
+      ["pending:missing", "not_found"],
+      ["oversized", "oversized"],
+    ] as const;
+    await withTranscript(
+      [
+        [
+          "announce",
+          {
+            role: "user",
+            content: "Old announce",
+            timestamp: sessionStartedAt - 2_000,
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          },
+        ],
+        [
+          "announce-reply",
+          { role: "assistant", content: "Old paired reply", timestamp: sessionStartedAt - 1_000 },
+        ],
+        ["oversized", { ...user, attachmentMetadata: { description: "x".repeat(9_000) } }],
+        ["pending:missing", { ...user, content: "Transcript row is not pending custody" }],
+        ...references.map(([target]): [string, Record<string, unknown>] => [
+          `reply-${target}`,
+          {
+            ...user,
+            timestamp: sessionStartedAt + 1,
+            __openclaw: { replyToId: target },
+          },
+        ]),
+      ],
+      async ({ read }) => {
+        const sourceReads = vi.spyOn(anchorReader, "readSessionMessagesWithSourceAsync");
+        const page = await read({ max: references.length, offset: 0, messageId: undefined });
+
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(
+          references.map(([target]) => `reply-${target}`),
+        );
+        for (const [index, [, unavailableReason]] of references.entries()) {
+          expect(page.messages[index]).toHaveProperty("__openclaw.replyToMessage", {
+            ok: false,
+            unavailableReason,
+          });
+        }
+        expect(sourceReads).not.toHaveBeenCalled();
+      },
+      { sessionStartedAt },
+    );
+  });
+
+  it("classifies isolated poll results before display sanitation", async () => {
+    const poll = {
+      status: "completed",
+      sessionId: "job",
+      aggregated: "private output",
+      exitCode: 0,
+    };
+    const rows = [
+      { id: "poll", details: poll, quiet: true },
+      { id: "kill", details: { status: "completed" }, quiet: false },
+      {
+        id: "log",
+        details: {
+          status: "completed",
+          sessionId: "job",
+          output: "output",
+          totalLines: 1,
+          total: 1,
+          totalChars: 6,
+          truncated: false,
+        },
+        quiet: false,
+      },
+      {
+        id: "failed-poll",
+        details: { ...poll, status: "failed", exitCode: 2 },
+        quiet: false,
+      },
+      {
+        id: "large-poll",
+        details: {
+          status: "running",
+          sessionId: "job",
+          persistedDetailsTruncated: true,
+          originalDetailKeys: ["status", "sessionId", "aggregated"],
+        },
+        quiet: true,
+      },
+    ];
+    await withTranscript(
+      [
+        ["user", user],
+        ...rows.map(({ id, details }): [string, Record<string, unknown>] => [
+          id,
+          {
+            role: "toolResult",
+            toolCallId: id,
+            toolName: "process",
+            isError: false,
+            details,
+            content: [{ type: "text", text: "Raw result retained" }],
+          },
+        ]),
+      ],
+      async ({ read, raw }) => {
+        const original = await raw();
+        for (const { id, quiet } of rows) {
+          const page = await read({ messageId: id, offset: undefined });
+          const descriptor = createChatHistoryActivityProjection(page.messages, page.activity).get(
+            page.messages[0],
+          );
+          expect(descriptor?.messageId).toBe(id);
+          expect(descriptor?.items.length === 0).toBe(quiet);
+          expect(page.messages[0]).not.toHaveProperty("details.aggregated");
+          expect(page.messages[0]).toMatchObject({ content: [{ text: "Raw result retained" }] });
+        }
+        expect(await raw()).toEqual(original);
+      },
+    );
+  });
+
+  it("keeps a capped nonzero result neutral when its stop reason was not retained", async () => {
+    const session = SessionManager.inMemory();
+    installSessionToolResultGuard(session);
+    session.appendMessage({
+      role: "toolResult",
+      toolCallId: "stopped",
+      toolName: "process",
+      isError: false,
+      timestamp: 1,
+      content: [{ type: "text", text: "Stopped process" }],
+      details: {
+        status: "completed",
+        sessionId: "job",
+        exitCode: 143,
+        exitReason: "manual-cancel",
+        aggregated: "x".repeat(20_000),
+      },
+    });
+    const result = session.getEntries().find((entry) => entry.type === "message");
+    if (result?.type !== "message") {
+      throw new Error("Expected persisted result");
+    }
+    expect(result.message).toMatchObject({
+      details: {
+        persistedDetailsTruncated: true,
+        originalDetailKeys: expect.arrayContaining(["exitReason"]),
+      },
+    });
+    expect(result.message).not.toHaveProperty("details.exitReason");
+    await withTranscript([["stopped", { ...result.message }]], async ({ read }) => {
+      const page = await read({ offset: undefined, messageId: undefined });
+      const item = page.activity?.[0]?.items[0];
+      expect(item).toMatchObject({ phase: "end", summary: "Outcome unknown" });
+      expect(item).not.toHaveProperty("status");
+    });
+  });
+
+  it("projects isolated waits and approvals from executed outcomes before sanitation", async () => {
+    const nested = nestedActivity.createNestedToolActivity({
+      runId: "run",
+      scopeId: "nested",
+      afterEntryId: "requested",
+      startOrder: 0,
+      parentToolCallId: "outer",
+      toolCallId: "nested-poll",
+      toolName: "process",
+      input: { action: "poll", sessionId: "process-1" },
+      result: { content: [{ type: "text", text: "still running" }] },
+      isError: false,
+      startedAt: 10,
+      timestamp: 11,
+    });
+    const approval = nestedActivity.createNestedToolActivity({
+      runId: "run",
+      scopeId: "nested",
+      afterEntryId: "user",
+      startOrder: 0,
+      toolCallId: "exec",
+      toolName: "exec",
+      input: { command: "private command" },
+      result: {
+        content: [{ type: "text", text: "Approval needed" }],
+        details: { status: "approval-pending", approvalId: "approval", approvalSlug: "approve" },
+      },
+      isError: false,
+      startedAt: 10,
+      timestamp: 11,
+    });
+    await withTranscript(
+      [
+        ["user", user],
+        [
+          "requested",
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "requested-poll",
+                name: "process",
+                arguments: { action: "poll" },
+              },
+            ],
+          },
+        ],
+        [
+          "unknown-execution",
+          {
+            role: "toolResult",
+            toolName: "process",
+            toolCallId: "requested-poll",
+            isError: false,
+            content: "executed action unavailable",
+          },
+        ],
+        ["approval", approval],
+        ["nested", nested],
+        [
+          "native",
+          {
+            role: "toolResult",
+            toolName: "collab.wait",
+            toolCallId: "native-wait",
+            isError: false,
+            content: "finished waiting",
+          },
+        ],
+      ],
+      async ({ read, raw }) => {
+        const original = await raw();
+        for (const [offset, id, quiet] of [
+          [0, "native", true],
+          [1, "nested", true],
+          [2, "approval", false],
+          [3, "unknown-execution", false],
+        ] as const) {
+          const page = await read({ offset, messageId: undefined });
+          const activity = [
+            ...createChatHistoryActivityProjection(page.messages, page.activity).values(),
+          ];
+          expect(page.messages.map(readChatHistoryMessageId)).toEqual([id]);
+          expect(activity).toHaveLength(1);
+          expect(activity[0]?.messageId).toBe(id);
+          if (quiet) {
+            expect(activity).toEqual([{ messageId: id, items: [] }]);
+          } else if (id === "approval") {
+            expect(activity[0]?.items).toMatchObject([
+              { status: "blocked", approvalId: "approval", approvalSlug: "approve" },
+            ]);
+          } else {
+            expect(activity[0]?.items).toMatchObject([{ name: "process", status: "completed" }]);
+          }
+        }
+        expect(await raw()).toEqual(original);
+      },
+    );
+  });
+
   it.each([
     { offset: 1, messageId: undefined, expectedIds: ["user"] },
     { offset: undefined, messageId: "failed", expectedIds: [] },
@@ -95,7 +418,6 @@ describe("historical page recovery context", () => {
         async ({ read, raw }) => {
           const original = await raw();
           const page = await read(options);
-
           expect(page.messages.map(readChatHistoryMessageId)).toEqual(expectedIds);
           if (options.offset !== undefined) {
             expect(page.pagination).toEqual({ offset: 1, totalMessages: 3, rawPageMessages: 2 });
@@ -106,24 +428,43 @@ describe("historical page recovery context", () => {
     },
   );
 
-  it("does not use a later turn to hide an unrecovered historical failure", async () => {
-    await withTranscript(
-      [
-        ["user", user],
-        ["failed", failed],
-        ["next-user", user],
-        ["answer", answer],
-      ],
-      async ({ read }) => {
-        const page = await read({ offset: 2, messageId: undefined });
+  it.each([
+    { reason: "later turn", offset: 2, messageId: undefined },
+    { reason: "byte budget", offset: 1, messageId: undefined },
+    { reason: "ordinary offset", offset: 1, messageId: undefined },
+    { reason: "ordinary anchor", offset: undefined, messageId: "answer" },
+  ])("selects recovery context for $reason", async ({ reason, offset, messageId }) => {
+    const ordinary = reason.startsWith("ordinary");
+    const messages: Array<[string, Record<string, unknown>]> = [["user", user]];
+    if (!ordinary) {
+      messages.push(["failed", failed]);
+    }
+    if (reason === "later turn") {
+      messages.push(["next-user", user]);
+    }
+    messages.push(["answer", answer]);
+    if (ordinary) {
+      messages.push(["next-user", user]);
+    }
+    await withTranscript(messages, async ({ read }) => {
+      const reads = vi.spyOn(anchorReader, "readSessionMessagesAroundIdWithStatsAsync");
+      const page = await read({
+        offset,
+        messageId,
+        ...(reason === "byte budget" ? { maxHistoryBytes: 1 } : {}),
+      });
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual([ordinary ? "answer" : "failed"]);
+      if (ordinary) {
+        expect(reads).toHaveBeenCalledTimes(messageId ? 1 : 0);
+      } else {
         expect(page.messages).toEqual([
           expect.objectContaining({
             stopReason: "error",
             __openclaw: expect.objectContaining({ id: "failed" }),
           }),
         ]);
-      },
-    );
+      }
+    });
   });
 
   it("keeps original page boundaries when messages append during recovery lookahead", async () => {
@@ -151,37 +492,63 @@ describe("historical page recovery context", () => {
     );
   });
 
-  it("keeps the failure when newer recovery evidence exceeds the read byte budget", async () => {
-    await withTranscript(
-      [
-        ["user", user],
-        ["failed", failed],
-        ["answer", answer],
-      ],
-      async ({ read }) => {
-        const page = await read({ offset: 1, messageId: undefined, maxHistoryBytes: 1 });
-        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["failed"]);
-      },
-    );
-  });
-
-  it.each([
-    { offset: 1, messageId: undefined, expectedReads: 0 },
-    { offset: undefined, messageId: "answer", expectedReads: 1 },
-  ])(
-    "does not read recovery context for an ordinary page (offset=$offset, anchor=$messageId)",
-    async ({ expectedReads, ...options }) => {
-      await withTranscript(
-        [
-          ["user", user],
-          ["answer", answer],
-          ["next-user", user],
+  it.each(["offset", "anchor"] as const)(
+    "finds recovery across multiple newer pages without repeatedly rendering them (%s)",
+    async (mode) => {
+      const progress: Array<[string, Record<string, unknown>]> = Array.from(
+        { length: 1000 },
+        (_, index) => [
+          `progress-${index}`,
+          { role: "toolResult", content: "Still working", toolCallId: `tool-${index}` },
         ],
-        async ({ read }) => {
-          const reads = vi.spyOn(anchorReader, "readSessionMessagesAroundIdWithStatsAsync");
-          const page = await read(options);
-          expect(page.messages.map(readChatHistoryMessageId)).toEqual(["answer"]);
-          expect(reads).toHaveBeenCalledTimes(expectedReads);
+      );
+      await withTranscript(
+        [["user", user], ["failed", failed], ...progress, ["answer", answer]],
+        async ({ read, raw }) => {
+          const original = await raw();
+          const sanitize = historySanitize.sanitizeChatHistoryMessages;
+          let renderedMessages = 0;
+          let decodedMessages = 0;
+          const readActivity = nestedActivity.readNestedToolActivity;
+          const activityReads = vi
+            .spyOn(nestedActivity, "readNestedToolActivity")
+            .mockImplementation((message) => {
+              decodedMessages++;
+              return readActivity(message);
+            });
+          vi.spyOn(historySanitize, "sanitizeChatHistoryMessages").mockImplementation((...args) => {
+            renderedMessages += args[0].length;
+            return sanitize(...args);
+          });
+          const page = await read({
+            ...(mode === "offset"
+              ? { offset: progress.length + 1, messageId: undefined }
+              : { offset: undefined, messageId: "failed" }),
+            maxHistoryBytes: 8 * 1024 * 1024,
+          });
+
+          activityReads.mockRestore();
+          expect(page.messages.map(readChatHistoryMessageId)).toEqual(
+            mode === "offset" ? ["user"] : [],
+          );
+          if (mode === "offset") {
+            expect(page.pagination).toEqual({
+              offset: progress.length + 1,
+              totalMessages: progress.length + 3,
+              rawPageMessages: 2,
+            });
+          } else {
+            expect(page.pagination).toBeUndefined();
+            expect(page.anchor).toMatchObject({
+              oldestMessageId: "failed",
+              newestMessageId: "failed",
+              hasOlder: true,
+              hasNewer: true,
+            });
+          }
+          expect(await raw()).toEqual(original);
+          expect(renderedMessages).toBeLessThanOrEqual(original.length * 5);
+          expect(decodedMessages).toBeLessThanOrEqual(original.length * 8);
         },
       );
     },

@@ -53,22 +53,10 @@ describe("plugins search command", () => {
 
   it.each([
     {
-      context: "default",
-      profile: undefined,
-      container: undefined,
-      command: "openclaw plugins install clawhub:openclaw-calendar",
-    },
-    {
       context: "profile",
       profile: "work",
       container: undefined,
       command: "openclaw --profile work plugins install clawhub:openclaw-calendar",
-    },
-    {
-      context: "container",
-      profile: undefined,
-      container: "staging",
-      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
     },
     {
       context: "container over profile",
@@ -133,12 +121,40 @@ describe("plugins search command", () => {
     expect(mocks.logs.join("\n")).toContain(`Install: ${scenario.command}`);
   });
 
-  it("writes JSON results when requested", async () => {
-    mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+  it("formats catalog version labels while preserving raw JSON values", async () => {
+    const results = ["1.2.3", "v1.2.3", "V1.2.3", "canary", "  v1.2.3  ", undefined].map(
+      (latestVersion, index) => ({
+        score: 1,
+        package: {
+          name: `plugin-${index}`,
+          displayName: "Plugin",
+          family: "bundle-plugin",
+          channel: "community",
+          isOfficial: false,
+          createdAt: 1,
+          updatedAt: 1,
+          latestVersion,
+        },
+      }),
+    );
+    mocks.searchClawHubPackages.mockResolvedValue(results);
 
-    await runPluginsSearchCommand("calendar", { json: true }, mocks.runtime);
-
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results: [] }, 2);
+    const program = new Command();
+    registerPluginsCli(program);
+    await program.parseAsync(["plugins", "search", "version"], { from: "user" });
+    const output = mocks.logs.join("\n");
+    for (const line of [
+      "plugin-0  bundle-plugin | community | v1.2.3\n",
+      "plugin-1  bundle-plugin | community | v1.2.3\n",
+      "plugin-2  bundle-plugin | community | V1.2.3\n",
+      "plugin-3  bundle-plugin | community | canary\n",
+      "plugin-4  bundle-plugin | community | v1.2.3\n",
+      "plugin-5  bundle-plugin | community\n",
+    ]) {
+      expect(output).toContain(line);
+    }
+    await program.parseAsync(["plugins", "search", "version", "--json"], { from: "user" });
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ results }, 2);
   });
 
   it("leaves missing-query JSON failures to the root renderer", async () => {

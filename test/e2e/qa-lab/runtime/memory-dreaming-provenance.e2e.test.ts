@@ -16,6 +16,7 @@ import {
 import type { OpenClawConfig } from "../../../../src/plugin-sdk/config-contracts.js";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "../../../../src/plugin-sdk/memory-core-host-status.js";
 import { readMemoryHostEventRecords } from "../../../../src/plugin-sdk/memory-host-events.js";
+import { withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const RESTRICTED_MARKER = "SESSION_MEMORY_RESTRICTED_MARKER";
@@ -45,16 +46,29 @@ afterEach(async () => {
   await Promise.all(cleanups);
 });
 
-async function waitFor<T>(label: string, read: () => Promise<T | undefined>): Promise<T> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const value = await read();
-    if (value !== undefined) {
-      return value;
+// Detached session-memory writes and remote cron state expose no completion
+// promise to this client. Observe their facts until Vitest cancels the test.
+async function waitFor<T>(
+  signal: AbortSignal,
+  label: string,
+  read: () => Promise<T | undefined>,
+): Promise<T> {
+  try {
+    for (;;) {
+      const value = await withinTest(Promise.resolve().then(read), signal);
+      if (value !== undefined) {
+        return value;
+      }
+      await sleep(100, undefined, { signal });
     }
-    await sleep(100);
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`timed out waiting for ${label}${gateway ? `\n${gateway.logs()}` : ""}`, {
+        cause: error,
+      });
+    }
+    throw error;
   }
-  throw new Error(`timed out waiting for ${label}${gateway ? `\n${gateway.logs()}` : ""}`);
 }
 
 async function sendAndWait(params: {
@@ -199,7 +213,7 @@ describe("memory provenance through a real Gateway", () => {
   test(
     "carries restricted session memory across enabling a memory provider",
     { timeout: 180_000 },
-    async () => {
+    async ({ signal }) => {
       mock = await startQaMockOpenAiServer();
       gatewayOwner = createQaGatewayChild();
       gateway = await gatewayOwner.start({
@@ -228,7 +242,7 @@ describe("memory provenance through a real Gateway", () => {
       await sendAndWait({ call: gateway.call.bind(gateway), sessionKey, message: "/reset" });
 
       const memoryDir = path.join(gateway.workspaceDir, "memory");
-      const capturedFile = await waitFor("session-memory capture", async () => {
+      const capturedFile = await waitFor(signal, "session-memory capture", async () => {
         const names = await fs.readdir(memoryDir).catch(() => []);
         for (const name of names) {
           if (!name.endsWith(".md")) {
@@ -294,7 +308,7 @@ describe("memory provenance through a real Gateway", () => {
         mode: "force",
       })) as { runId?: unknown };
       expect(typeof startedDreaming.runId).toBe("string");
-      const completedDreaming = await waitFor("completed dreaming cron", async () => {
+      const completedDreaming = await waitFor(signal, "completed dreaming cron", async () => {
         const history = (await gateway?.call("cron.runs", {
           id: dreamingJob.id,
           runId: startedDreaming.runId,
@@ -306,21 +320,25 @@ describe("memory provenance through a real Gateway", () => {
       });
       expect(completedDreaming).toMatchObject({ status: "ok" });
 
-      const narrativeRequest = await waitFor("tool-free dreaming provider request", async () => {
-        const response = await fetch(`${mock?.baseUrl}/debug/requests?after=${cursor}`);
-        if (!response.ok) {
-          throw new Error(`mock request log returned ${response.status}`);
-        }
-        const requests = (await response.json()) as Array<{
-          allInputText?: unknown;
-          body?: Record<string, unknown>;
-        }>;
-        return requests.find(
-          (request) =>
-            typeof request.allInputText === "string" &&
-            request.allInputText.includes(LEGACY_MARKER),
-        );
-      });
+      const narrativeRequest = await waitFor(
+        signal,
+        "tool-free dreaming provider request",
+        async () => {
+          const response = await fetch(`${mock?.baseUrl}/debug/requests?after=${cursor}`);
+          if (!response.ok) {
+            throw new Error(`mock request log returned ${response.status}`);
+          }
+          const requests = (await response.json()) as Array<{
+            allInputText?: unknown;
+            body?: Record<string, unknown>;
+          }>;
+          return requests.find(
+            (request) =>
+              typeof request.allInputText === "string" &&
+              request.allInputText.includes(LEGACY_MARKER),
+          );
+        },
+      );
 
       expect(narrativeRequest.allInputText).not.toContain(RESTRICTED_MARKER);
       expect(narrativeRequest.body?.tools ?? []).toEqual([]);
@@ -331,7 +349,7 @@ describe("memory provenance through a real Gateway", () => {
   test(
     "routes the explicit workspace owner into deep consolidation",
     { timeout: 180_000 },
-    async () => {
+    async ({ signal }) => {
       mock = await startQaMockOpenAiServer();
       gatewayOwner = createQaGatewayChild();
       gateway = await gatewayOwner.start({
@@ -367,7 +385,7 @@ describe("memory provenance through a real Gateway", () => {
           "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
       });
 
-      const recallEvent = await waitFor("explicit-owner recall tracking", async () => {
+      const recallEvent = await waitFor(signal, "explicit-owner recall tracking", async () => {
         const events = await readMemoryHostEventRecords({
           workspaceDir: activeGateway.workspaceDir,
           env: activeGateway.runtimeEnv,
@@ -389,7 +407,7 @@ describe("memory provenance through a real Gateway", () => {
       expect(typeof cursorResult.cursor).toBe("number");
       const cursor = cursorResult.cursor as number;
 
-      const dreamingJob = await waitFor("managed researcher dreaming cron", async () => {
+      const dreamingJob = await waitFor(signal, "managed researcher dreaming cron", async () => {
         const cron = (await activeGateway.call("cron.list", {
           includeDisabled: true,
         })) as {
@@ -404,6 +422,7 @@ describe("memory provenance through a real Gateway", () => {
       })) as { runId?: unknown };
       expect(typeof startedDreaming.runId).toBe("string");
       const completedDreaming = await waitFor(
+        signal,
         "completed explicit-owner dreaming cron",
         async () => {
           const history = (await activeGateway.call("cron.runs", {
@@ -417,6 +436,7 @@ describe("memory provenance through a real Gateway", () => {
       expect(completedDreaming).toMatchObject({ status: "ok" });
 
       const consolidationRequest = await waitFor(
+        signal,
         "explicit-owner consolidation provider request",
         async () => {
           const response = await fetch(`${mock?.baseUrl}/debug/requests?after=${cursor}`);

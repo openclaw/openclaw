@@ -1,34 +1,26 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   clearDeviceAuthToken,
   loadCurrentDeviceAuthToken,
   loadDeviceAuthToken,
+  peekStoredDeviceIdentityId,
   storeDeviceAuthToken,
 } from "./index.ts";
-import { rotateDeviceToken } from "./page-operations.ts";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
+import { createInitialDevicesState, rotateDeviceToken } from "./page-operations.ts";
 
 function createState(request: (method: string, params?: unknown) => Promise<unknown>) {
   return {
-    client: {
-      request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
-    },
-    connected: true,
+    ...createInitialDevicesState({
+      client: {
+        request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
+      },
+      connected: true,
+    }),
     requestGeneration: 1,
-    devicesLoading: false,
-    devicesQueuedRefresh: "none" as const,
-    devicesError: null as string | null,
-    devicesList: null,
   };
 }
 
@@ -137,6 +129,34 @@ describe("current browser device token", () => {
   });
 });
 
+describe("peekStoredDeviceIdentityId", () => {
+  it("reads the stored device id without minting or fingerprint-verifying an identity", () => {
+    // A hanging digest would stall any path that verifies the identity; the
+    // peek must answer synchronously without touching it (render-gate contract).
+    const { digestMock } = deferIdentityFingerprint();
+    storeIdentity();
+
+    expect(peekStoredDeviceIdentityId()).toBe("00");
+    expect(digestMock).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(1);
+  });
+
+  it.each([
+    { name: "no stored identity", raw: null },
+    { name: "malformed JSON", raw: "{not-json" },
+    { name: "unsupported version", raw: JSON.stringify({ version: 2, deviceId: "00" }) },
+    { name: "missing device id", raw: JSON.stringify({ version: 1 }) },
+  ])("returns null for $name without creating one", ({ raw }) => {
+    if (raw !== null) {
+      localStorage.setItem("openclaw-device-identity-v1", raw);
+    }
+    const before = localStorage.length;
+
+    expect(peekStoredDeviceIdentityId()).toBeNull();
+    expect(localStorage.length).toBe(before);
+  });
+});
+
 describe("device token request lifecycle", () => {
   // A retired epoch is a reconnect, not a reason to destroy the credential: the previous
   // token is already dead on the server, so the caller still needs this one to recover.
@@ -156,21 +176,8 @@ describe("device token request lifecycle", () => {
     expect(loadDeviceAuthToken(tokenParams)?.token).toBe("rotated-token");
   });
 
+  // Grant matching uses the same whitespace normalization as the device-auth store.
   it("reports a cross-device rotation the Gateway withheld the token for", async () => {
-    const state = createState(async () => ({
-      ...rotationResult,
-      tokenDelivery: "withheld-cross-device",
-    }));
-
-    expect(await rotateDeviceToken(state, tokenParams)).toEqual({
-      delivery: "withheld-cross-device",
-    });
-    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
-  });
-
-  // The Gateway echoes the raw request deviceId and its own stored role, so a grant that
-  // differs only by surrounding whitespace is still the one this page asked to rotate.
-  it("accepts a result whose grant differs from the request only by whitespace", async () => {
     const state = createState(async () => ({
       ...rotationResult,
       deviceId: " 00 ",
@@ -181,6 +188,7 @@ describe("device token request lifecycle", () => {
     expect(await rotateDeviceToken(state, tokenParams)).toEqual({
       delivery: "withheld-cross-device",
     });
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
 
   // Gateways released before tokenDelivery answer without it; a present token is then

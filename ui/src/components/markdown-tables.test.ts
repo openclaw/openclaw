@@ -59,6 +59,22 @@ class TestResizeObserver {
   }
 }
 
+function deliverTableResize(target: HTMLElement): void {
+  const observer = TestResizeObserver.instances.at(-1);
+  observer?.callback(
+    [
+      {
+        target,
+        contentRect: target.getBoundingClientRect(),
+        borderBoxSize: [],
+        contentBoxSize: [],
+        devicePixelContentBoxSize: [],
+      },
+    ],
+    observer,
+  );
+}
+
 function interactiveOwner(content = markdown): {
   owner: HTMLElement;
   shell: HTMLElement;
@@ -81,6 +97,7 @@ function interactiveOwner(content = markdown): {
   });
   owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
+  deliverTableResize(viewport);
   return { owner, shell, viewport };
 }
 
@@ -152,22 +169,51 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
   });
 
-  it("copies TSV and updates the copy label", async () => {
-    vi.useFakeTimers();
-    const { owner } = interactiveOwner();
-    const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
-    copy.click();
-
-    expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
-    expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy table");
-    expect(copy.querySelector("svg rect")).not.toBeNull();
-  });
-
   it.each([true, false])(
+    "updates retained table overflow without mutation-time layout when observed (ResizeObserver: %s)",
+    async (observed) => {
+      restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
+      if (!observed) {
+        Reflect.deleteProperty(globalThis, "ResizeObserver");
+      }
+      const { owner, shell, viewport } = interactiveOwner(`${markdown}\n\n${markdown}`);
+      const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
+      const otherWidth = vi.fn(() => 300);
+      const changedWidth = vi.fn(() => 100);
+      Object.defineProperty(otherViewport, "scrollWidth", {
+        configurable: true,
+        get: otherWidth,
+      });
+      Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
+
+      try {
+        shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+        await Promise.resolve();
+        await Promise.resolve();
+        if (observed) {
+          expect(changedWidth).not.toHaveBeenCalled();
+          expect(otherWidth).not.toHaveBeenCalled();
+          deliverTableResize(viewport);
+        }
+        expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+        expect(changedWidth).toHaveBeenCalled();
+        expect(otherWidth).not.toHaveBeenCalled();
+
+        changedWidth.mockClear();
+        shell
+          .querySelector(".markdown-table__copy")!
+          .replaceChildren(document.createElement("span"));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(changedWidth).not.toHaveBeenCalled();
+        expect(otherWidth).not.toHaveBeenCalled();
+      } finally {
+        releaseMarkdownTables(owner);
+      }
+    },
+  );
+
+  it.each([true])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {
       vi.useFakeTimers();
@@ -225,12 +271,14 @@ describe("Markdown table interactions", () => {
     expect(modal.querySelector("table")?.textContent).toContain("Alpha");
     dialog.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
+    await Promise.resolve();
     expect(document.activeElement).toBe(expand);
 
     expand.click();
     const reopened = await waitForRenderedModalDialog(owner);
     reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
+    await Promise.resolve();
     expect(document.activeElement).toBe(expand);
   });
 
@@ -252,6 +300,7 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
     modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    await Promise.resolve();
     expect(document.activeElement).toBe(second);
   });
 

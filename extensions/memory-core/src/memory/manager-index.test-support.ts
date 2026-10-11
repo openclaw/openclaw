@@ -1,25 +1,25 @@
-import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
@@ -57,11 +57,13 @@ type ProviderCall = {
 };
 
 type ProviderControls = {
+  beforeEmbedBatch: (() => Promise<void>) | null;
   beforeEmbedQuery: ((options?: EmbeddingProviderCallOptions) => Promise<void>) | null;
   embedQueryCalls: number;
   embeddedQueryTexts: string[];
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
+  embedBatchPermanentFailure: Error | null;
   embedBatchInputCalls: number;
   embeddedBatchInputs: EmbeddingInput[][];
   providerRuntimeBatchCalls: string[][];
@@ -91,6 +93,7 @@ type ProviderControls = {
 export type ManagerIndexFixture = {
   paths: {
     readonly root: string;
+    readonly stateDir: string;
     readonly workspace: string;
     readonly memory: string;
   };
@@ -98,14 +101,14 @@ export type ManagerIndexFixture = {
   createConfig: (params: ManagerIndexFixtureConfig) => ManagerConfig;
   requireManager: (result: ManagerResult, missingMessage?: string) => MemoryIndexManager;
   trackManager: (manager: MemoryIndexManager) => void;
-  resetManager: (manager: MemoryIndexManager) => void;
+  resetManager: (manager: MemoryIndexManager) => Promise<void>;
   getPersistentManager: (cfg: ManagerConfig) => Promise<MemoryIndexManager>;
   getFreshManager: (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
     inspectSources?: boolean,
   ) => Promise<MemoryIndexManager>;
-  getFtsSessionManager: (params: { stateDirName: string }) => Promise<MemoryIndexManager | null>;
+  getFtsSessionManager: () => Promise<MemoryIndexManager | null>;
   seedSessionTranscript: (params: {
     messages: Array<{
       content: string;
@@ -116,16 +119,16 @@ export type ManagerIndexFixture = {
     sessionId: string;
     sessionKey?: string;
   }) => Promise<void>;
-  setStateDir: (stateDir: string) => void;
-  restoreStateDir: () => void;
 };
 
 const providerState = vi.hoisted(() => ({
+  beforeEmbedBatch: null as ProviderControls["beforeEmbedBatch"],
   beforeEmbedQuery: null as ProviderControls["beforeEmbedQuery"],
   embedQueryCalls: 0,
   embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
+  embedBatchPermanentFailure: null as Error | null,
   embedBatchInputCalls: 0,
   embeddedBatchInputs: [] as EmbeddingInput[][],
   providerRuntimeBatchCalls: [] as string[][],
@@ -276,6 +279,7 @@ vi.mock("./embeddings.js", async (importOriginal) => {
             return embedText(text);
           },
           embedBatch: async (inputs: EmbeddingInput[]) => {
+            await providerState.beforeEmbedBatch?.();
             if (providerId === "gemini" || providerId === "fallback-provider") {
               const structuredInputs = inputs.filter(
                 (input): input is Exclude<EmbeddingInput, string> =>
@@ -300,6 +304,9 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   return embedText(input.text);
                 });
               }
+            }
+            if (providerState.embedBatchPermanentFailure !== null) {
+              throw providerState.embedBatchPermanentFailure;
             }
             const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
             providerState.embedBatchCalls += 1;
@@ -387,30 +394,12 @@ export function createManagerIndexFixture(deps: {
   let root = "";
   let workspace = "";
   let memory = "";
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  let state: OpenClawTestState;
+  let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
 
-  const setStateDir = (stateDir: string): void => {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-  };
-
-  const restoreStateDir = (): void => {
-    if (originalStateDir === undefined) {
-      Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-    } else {
-      Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStateDir);
-    }
-  };
-
-  const resetManager = (manager: MemoryIndexManager): void => {
-    const db = (
-      manager as unknown as {
-        db: {
-          exec: (sql: string) => void;
-          prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
-        };
-      }
-    ).db;
+  const resetManager = async (manager: MemoryIndexManager): Promise<void> => {
+    const db = memoryIndexFixtureWriter(manager);
     for (const table of [
       "memory_index_sources",
       "memory_index_chunks",
@@ -422,6 +411,12 @@ export function createManagerIndexFixture(deps: {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
         .get(table);
       if (existingTable?.name === table) {
+        if (table === "memory_index_chunks_vec") {
+          const loaded = await loadSqliteVecExtension({ db });
+          if (!loaded.ok) {
+            throw new Error(loaded.error);
+          }
+        }
         db.exec(`DELETE FROM ${table}`);
       }
     }
@@ -444,7 +439,7 @@ export function createManagerIndexFixture(deps: {
           },
           remote: params.batchEnabled ? { batch: { enabled: true } } : undefined,
           query: { minScore: params.minScore ?? 0 },
-          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          cache: params.cacheEnabled !== undefined ? { enabled: params.cacheEnabled } : undefined,
           extraPaths: params.extraPaths,
           multimodal: params.multimodal,
           sources: params.sources,
@@ -454,7 +449,7 @@ export function createManagerIndexFixture(deps: {
       },
       agents: {
         defaults: { workspace },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);
@@ -464,7 +459,7 @@ export function createManagerIndexFixture(deps: {
     missingMessage = "manager missing",
   ): MemoryIndexManager => {
     if (!result.manager) {
-      throw new Error(missingMessage);
+      throw new Error(result.error ?? missingMessage);
     }
     return result.manager as unknown as MemoryIndexManager;
   };
@@ -474,9 +469,15 @@ export function createManagerIndexFixture(deps: {
   };
 
   const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
-    resetManager(manager);
+    await resetManager(manager);
     return manager;
   };
 
@@ -486,7 +487,13 @@ export function createManagerIndexFixture(deps: {
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
     const manager = requireManager(
-      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose, inspectSources }),
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+        purpose,
+        inspectSources,
+      }),
     );
     trackManager(manager);
     return manager;
@@ -520,57 +527,64 @@ export function createManagerIndexFixture(deps: {
     }
   };
 
-  const getFtsSessionManager: ManagerIndexFixture["getFtsSessionManager"] = async (params) => {
+  const getFtsSessionManager: ManagerIndexFixture["getFtsSessionManager"] = async () => {
     providerState.forceNoProvider = true;
-    setStateDir(path.join(workspace, params.stateDirName));
     const cfg = createConfig({
       provider: "none",
       sources: ["memory", "sessions"],
       sessionMemory: true,
       minScore: 0,
     });
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
-    resetManager(manager);
+    await resetManager(manager);
     return manager.status().fts?.available ? manager : null;
   };
 
   beforeAll(async () => {
-    const rawRoot = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mem-fixtures-"),
-    );
-    root = await fs.realpath(rawRoot);
-    workspace = path.join(root, "workspace");
-    memory = path.join(workspace, "memory");
-  });
-
-  afterAll(async () => {
-    await Promise.all(Array.from(managers).map((manager) => manager.close()));
-    if (root) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    workerState = await createOpenClawTestState({
+      prefix: "openclaw-mem-worker-fixture-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    // A file-owned store keeps shared SQLite workers available across complete case cleanup.
+    await createPluginStateKeyedStoreForTests<boolean>("memory-core", {
+      namespace: "index-fixture-worker",
+      maxEntries: 1,
+      env: workerState.env,
+    }).register("ready", true);
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     await Promise.all(Array.from(managers).map((manager) => manager.close()));
     await deps.closeAllMemorySearchManagers();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await state.cleanup();
     resetMemoryCoreDreamingStateForTests();
     clearRegistry();
     managers.clear();
-    restoreStateDir();
+  });
+
+  afterAll(async () => {
+    await workerState?.cleanup();
   });
 
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
     providerState.beforeEmbedQuery = null;
+    providerState.beforeEmbedBatch = null;
     providerState.embedQueryCalls = 0;
     providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
     providerState.embeddedBatchTexts = [];
+    providerState.embedBatchPermanentFailure = null;
     providerState.embedBatchInputCalls = 0;
     providerState.embeddedBatchInputs = [];
     providerState.providerRuntimeBatchCalls = [];
@@ -590,9 +604,14 @@ export function createManagerIndexFixture(deps: {
     providerState.providerCalls = [];
     providerState.forceNoProvider = false;
 
-    rmSync(workspace, { recursive: true, force: true });
-    mkdirSync(memory, { recursive: true });
-    setStateDir(path.join(workspace, ".state-memory-index"));
+    state = await createOpenClawTestState({
+      prefix: "openclaw-mem-fixtures-",
+      layout: "state-only",
+    });
+    root = state.root;
+    workspace = state.workspaceDir;
+    memory = path.join(workspace, "memory");
+    await fs.mkdir(memory, { recursive: true });
     await configureMemoryCoreDreamingStateForTests();
     await fs.writeFile(
       path.join(memory, "2026-01-12.md"),
@@ -604,6 +623,9 @@ export function createManagerIndexFixture(deps: {
     paths: {
       get root() {
         return root;
+      },
+      get stateDir() {
+        return state.stateDir;
       },
       get workspace() {
         return workspace;
@@ -621,7 +643,53 @@ export function createManagerIndexFixture(deps: {
     getFreshManager,
     getFtsSessionManager,
     seedSessionTranscript,
-    setStateDir,
-    restoreStateDir,
+  };
+}
+
+/** Fixture writes use the native test owner; the manager retains only its reader. */
+export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseSync {
+  const databasePath = manager.status().dbPath;
+  if (!databasePath) {
+    throw new Error("Memory index fixture has no database path");
+  }
+  return openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db;
+}
+
+export function countMemoryIndexFtsMatches(databasePath: string, marker: string): number {
+  const observer = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return (
+      observer
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+        )
+        .get(`"${marker}"`) as { count: number }
+    ).count;
+  } finally {
+    observer.close();
+  }
+}
+
+export function readPublishedSessionIndex(
+  database: DatabaseSync,
+  sessionPath: string,
+  query: string,
+) {
+  return {
+    source: database
+      .prepare(
+        "SELECT path, hash, mtime, size FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
+      )
+      .get(sessionPath),
+    chunks: database
+      .prepare(
+        "SELECT id, hash, text, embedding, updated_at FROM memory_index_chunks WHERE path = ? AND source = 'sessions' ORDER BY id",
+      )
+      .all(sessionPath),
+    search: database
+      .prepare(
+        "SELECT text, id, path, model, start_line, end_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? AND path = ? ORDER BY id",
+      )
+      .all(query, sessionPath),
   };
 }

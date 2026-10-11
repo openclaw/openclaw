@@ -1,32 +1,19 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { createReplyTurnLedger } from "../../auto-reply/reply/dispatch-from-config.turn-ledger.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
-import type { DurableMessageBatchSendParams } from "../message/send.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
-import {
-  createCtx,
-  createDurableSendResult,
-  expectDispatched,
-} from "./run-channel-turn.delivery.test-helpers.js";
+import { createCtx, expectDispatched } from "./run-channel-turn.delivery.test-helpers.js";
 
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
-const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
-const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
-const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
-const createMessageSentEmitter = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/outbound/message-sent-hook.js").createMessageSentEmitter>(),
+const sendStructuredDurableMessageBatch = vi.hoisted(() =>
+  vi.fn<typeof import("../message/send.js").sendStructuredDurableMessageBatchCore>(),
 );
-
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  return {
-    ...actual,
-    dispatchInboundMessageWithRoutedChannelDispatcher: dispatchReplyWithRoutedChannelDispatcherCore,
-  };
-});
-
-vi.mock("../../infra/outbound/message-sent-hook.js", () => ({ createMessageSentEmitter }));
+const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
@@ -35,7 +22,11 @@ vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
 
 vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
-  return { ...actual, sendDurableMessageBatchCore: sendDurableMessageBatch };
+  return {
+    ...actual,
+    sendDurableMessageBatchCore: vi.fn(),
+    sendStructuredDurableMessageBatchCore: sendStructuredDurableMessageBatch,
+  };
 });
 
 vi.mock("../session.js", async (importOriginal) => {
@@ -52,15 +43,6 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
 }));
 
-vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/delivery-completion.js")>();
-  return {
-    ...actual,
-    settlePendingFinalDelivery: vi.fn(async (_completion: unknown, state: string) => ({ state })),
-  };
-});
-
 describe("group thread channel delivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -69,19 +51,12 @@ describe("group thread channel delivery", () => {
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
   });
 
-  it.each(["deferred direct", "durable"])(
-    "attributes group %s delivery to each participant",
-    async (lane) => {
-      const actualDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-        "../../auto-reply/dispatch.js",
-      );
-      const actualSent = await vi.importActual<
-        typeof import("../../infra/outbound/message-sent-hook.js")
-      >("../../infra/outbound/message-sent-hook.js");
-      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
-        actualDispatch.dispatchInboundMessageWithRoutedChannelDispatcher,
-      );
-      createMessageSentEmitter.mockImplementation(actualSent.createMessageSentEmitter);
+  it.each([
+    { lane: "deferred direct", prepared: false },
+    { lane: "durable", prepared: true },
+  ])(
+    "attributes group $lane delivery to each participant (prepared: $prepared)",
+    async ({ lane, prepared }) => {
       const runMessageSending = vi.fn(async () => undefined);
       const runMessageSent = vi.fn(async () => undefined);
       getGlobalHookRunner.mockReturnValue({
@@ -90,16 +65,24 @@ describe("group thread channel delivery", () => {
         runMessageSent,
       });
       const token = createExecutionIdentityAdmissionToken("run-alice");
-      const durableRequests: DurableMessageBatchSendParams[] = [];
-      const durableSend = async (request: DurableMessageBatchSendParams) => {
-        durableRequests.push(request);
-        return createDurableSendResult([`sent-${request.payloads[0]?.text}`]);
-      };
       if (lane === "durable") {
-        sendDurableMessageBatch
-          .mockImplementationOnce(durableSend)
-          .mockImplementationOnce(durableSend);
+        sendStructuredDurableMessageBatch.mockImplementation(async ({ plan, channel }) => {
+          const messageId = `sent-${plan[0]?.payload.text}`;
+          return {
+            status: "sent",
+            results: [{ channel, messageId }],
+            receipt: { platformMessageIds: [messageId], parts: [], sentAt: 1 },
+          };
+        });
       }
+      const deliver = async (payload: ReplyPayload) => ({
+        visibleReplySent: false,
+        finalization: Promise.resolve({
+          visibleReplySent: true,
+          content: payload.text,
+          messageIds: [`sent-${payload.text}`],
+        }),
+      });
       const result = await dispatchRoutedChannelTurn({
         cfg: {
           agents: { entries: { alice: {}, bob: {} } },
@@ -125,27 +108,34 @@ describe("group thread channel delivery", () => {
             `run-${ctx.AgentId}`,
             ctx.AgentId === "alice" ? token : undefined,
           );
+          const payload = { text: `${ctx.AgentId} answer` };
+          const queuedFinal = prepared
+            ? createReplyTurnLedger(dispatcher).sendPreparedQueued(
+                "final",
+                expectDefined(
+                  createStructuredOutboundPayloadPlan([payload])[0],
+                  "expected final plan",
+                ),
+              ).queued
+            : dispatcher.sendFinalReply(payload);
           return {
-            queuedFinal: dispatcher.sendFinalReply({ text: `${ctx.AgentId} answer` }),
+            queuedFinal,
             counts: dispatcher.getQueuedCounts(),
           };
         },
         delivery: {
           observeMessageSent: true,
           ...(lane === "durable" ? { durable: { to: "chat-1" } } : {}),
-          deliver: async (payload) => ({
-            visibleReplySent: false,
-            finalization: Promise.resolve({
-              visibleReplySent: true,
-              content: payload.text,
-              messageIds: [`sent-${payload.text}`],
-            }),
-          }),
+          deliver,
+          deliverPrepared: (plan) => deliver(plan.payload),
         },
       });
 
       expectDispatched(result);
       if (lane === "durable") {
+        const durableRequests = sendStructuredDurableMessageBatch.mock.calls.map(
+          ([request]) => request,
+        );
         expect(durableRequests).toHaveLength(2);
         for (const agentId of ["alice", "bob"]) {
           const request = durableRequests.find((entry) => entry.session?.agentId === agentId);

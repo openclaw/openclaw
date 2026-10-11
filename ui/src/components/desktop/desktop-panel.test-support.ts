@@ -1,9 +1,14 @@
+import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
-import "./desktop-panel.ts";
+import { DesktopPanelController } from "./desktop-panel-controller.ts";
+import { DesktopPanelContent } from "./desktop-panel-solid.tsx";
 
-type DesktopPanelElement = HTMLElementTagNameMap["openclaw-desktop-panel"];
+type DesktopPanelElement = DesktopPanelController;
+const mountedPanels = new WeakMap<DesktopPanelController, ReturnType<typeof mountSolid>>();
 
 export const desktopEnvironment = {
   id: "worker-desktop-1",
@@ -21,13 +26,26 @@ export const desktopEnvironment = {
 } as const;
 
 export function createPanel() {
-  return document.createElement("openclaw-desktop-panel");
+  const panel = new DesktopPanelController(document.createElement("div"));
+  updatePanel(panel, {
+    sessions: {
+      describe: (params, options) => {
+        const client = options?.client ?? panel.client;
+        if (!client) {
+          throw new Error("Desktop fixture has no Gateway client");
+        }
+        return client.request("sessions.describe", params);
+      },
+    },
+  });
+  return panel;
 }
 
 export function createConnectionHandle(overrides: Partial<DesktopConnectionHandle> = {}) {
   return {
     disconnect: vi.fn(),
     disableInput: vi.fn(),
+    setPresented: vi.fn(() => true),
     sendBackspace: vi.fn(),
     sendKeyboardEvent: vi.fn(),
     sendText: vi.fn(),
@@ -61,11 +79,35 @@ export function selectSizing(panel: DesktopPanelElement, mode: string): void {
   menu.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-export async function settleTasks(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    window.setTimeout(resolve, 0);
-  });
-  await Promise.resolve();
+export function updatePanel(
+  panel: DesktopPanelController,
+  changes: Partial<DesktopPanelController>,
+): void {
+  for (const key of Object.keys(changes) as (keyof DesktopPanelController)[]) {
+    const previous = panel[key];
+    if (Object.is(previous, changes[key])) {
+      continue;
+    }
+    Object.assign(panel, { [key]: changes[key] });
+    panel.inputsChanged(key, previous);
+  }
+}
+
+export function mountPanel(panel: DesktopPanelController): void {
+  document.body.append(panel.element);
+  mountedPanels.set(
+    panel,
+    mountSolid(() => createComponent(DesktopPanelContent, { controller: panel }), {
+      container: panel.element,
+    }),
+  );
+  flush();
+}
+
+export function unmountPanel(panel: DesktopPanelController): void {
+  mountedPanels.get(panel)?.unmount();
+  mountedPanels.delete(panel);
+  panel.element.remove();
 }
 
 export function createGatewayClient(request: unknown) {

@@ -1,20 +1,17 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigPatchAck } from "./config-gateway-operations.ts";
-import {
-  createConfigCapabilityHarness,
-  createConfigServerMock,
-  deferred,
-} from "./config-test-harness.ts";
+import { createConfigCapabilityHarness, createConfigServerMock } from "./config-test-harness.ts";
 
 it.each([false, true])(
   "runExternalMutation retires a held no-op read through refresh ownership (disconnect: %s)",
   async (disconnect) => {
     vi.useFakeTimers();
     const store = createConfigServerMock();
-    const started = deferred<void>();
-    const release = deferred<void>();
+    const started = deferred();
+    const release = deferred();
     let holdNextRead = false;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.patch") {
@@ -92,7 +89,10 @@ it("runExternalMutation preserves a retained form conflict after a hashless no-o
       method === "config.set" &&
       (params as { baseHash: string }).baseHash !== store.currentHash()
     ) {
-      throw new Error("config changed since last load; re-run config.get and retry");
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "config changed since last load; re-run config.get and retry",
+      });
     }
     return store.request(method, params);
   });
@@ -130,7 +130,7 @@ it("runExternalMutation preserves a retained form conflict after a hashless no-o
     expect(final).toMatchObject({ config: { count: 9 } });
     expect(store.submissions).toHaveLength(1);
   } finally {
-    runtimeConfig.resetDraft();
+    runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   }
 });
@@ -138,8 +138,8 @@ it("runExternalMutation preserves a retained form conflict after a hashless no-o
 it("runExternalMutation replays a disjoint form edit made during the no-op source read", async () => {
   vi.useFakeTimers();
   const store = createConfigServerMock();
-  const started = deferred<void>();
-  const release = deferred<void>();
+  const started = deferred();
+  const release = deferred();
   let holdRead = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.patch") {

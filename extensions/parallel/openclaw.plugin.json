@@ -27,6 +27,14 @@
   "contracts": {
     "webSearchProviders": ["parallel", "parallel-free"]
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

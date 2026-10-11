@@ -1,49 +1,22 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { readChatHistoryReplyMessageId } from "./server-methods/chat-history-reply-messages.js";
+import {
+  attachOpenClawTranscriptMeta,
+  readTranscriptMessageIdempotencyKey,
+} from "./session-transcript-entry-message.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 export type SessionMessageProjectionState = {
   assistantErrorPending: boolean;
   turnBoundaryPending: boolean;
 };
-
-/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
-export function attachOpenClawTranscriptMeta(
-  message: unknown,
-  meta: Record<string, unknown>,
-): unknown {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const existing =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: {
-      ...existing,
-      ...meta,
-    },
-  };
-}
-
-export function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefined {
   const openclaw = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
@@ -55,15 +28,18 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 export function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
+  toolResultMaxChars?: number;
   message: unknown;
   messageId?: string;
   messageSeq?: number;
   transcriptPosition?: TranscriptDisplayPosition;
   projectionState?: SessionMessageProjectionState;
   projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
+  resolveCronJobName?: (jobId: string) => string | undefined;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
 }): {
   payload?: Record<string, unknown>;
   projectionState: SessionMessageProjectionState;
@@ -81,7 +57,11 @@ export function projectSessionMessagePayload(params: {
   const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
+        subagentCoordination: params.subagentCoordination,
+        resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
+        toolResultMaxChars: params.toolResultMaxChars,
+        activity: false,
       })
     : undefined;
   if (
@@ -108,9 +88,18 @@ export function projectSessionMessagePayload(params: {
         ? projectChatDisplayMessagesWithState([rawMessage], {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
+            activity: false,
+            toolResultMaxChars: params.toolResultMaxChars,
+            subagentCoordination: params.subagentCoordination,
+            resolveCronJobName: params.resolveCronJobName,
           })
         : {
-            messages: [projectChatDisplayMessage(rawMessage)],
+            messages: [
+              projectChatDisplayMessage(rawMessage, {
+                subagentCoordination: params.subagentCoordination,
+                resolveCronJobName: params.resolveCronJobName,
+              }),
+            ],
             assistantErrorPending: false,
             turnBoundaryPending: false,
           };
@@ -122,89 +111,26 @@ export function projectSessionMessagePayload(params: {
   if (!message) {
     return { projectionState };
   }
+  if (readChatHistoryReplyMessageId(message)) {
+    // The page owner resolves quoted originals once, with visibility and payload bounds.
+    return { projectionState, requiresHistoryReset: true };
+  }
   const projectCurrentUserProfile =
     params.projectCurrentUserProfile ??
     createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const projectedMessage = projectCurrentUserProfile(message);
+  params.subagentCoordination?.assertCurrent?.();
   return {
     payload: {
       sessionKey: params.sessionKey,
       ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      message: projectCurrentUserProfile(message),
+      message: projectedMessage,
       ...(params.messageId ? { messageId: params.messageId } : {}),
       ...(params.messageSeq !== undefined ? { messageSeq: params.messageSeq } : {}),
       ...params.sessionSnapshot,
       ...(params.runId ? { runId: params.runId } : {}),
     },
     projectionState,
-  };
-}
-
-/** Project one stored transcript entry onto the client-visible chat history shape. */
-export function projectTranscriptEntryMessage(
-  entry: unknown,
-  seq: number,
-  transcriptPosition?: TranscriptDisplayPosition,
-): unknown {
-  if (!isVisibleTranscriptRecord(entry)) {
-    return null;
-  }
-  const record = entry;
-  if (record.message) {
-    const recordTimestampMs =
-      typeof record.timestamp === "string"
-        ? Date.parse(record.timestamp)
-        : typeof record.timestamp === "number"
-          ? record.timestamp
-          : Number.NaN;
-    const idempotencyKey = readTranscriptMessageIdempotencyKey(record.message);
-    return attachOpenClawTranscriptMeta(record.message, {
-      ...(typeof record.id === "string" ? { id: record.id } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
-      transcriptPosition,
-      seq,
-    });
-  }
-  const parsedTimestamp =
-    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
-  if (record.type === "custom_message") {
-    return attachOpenClawTranscriptMeta(
-      {
-        role: "custom",
-        customType: record.customType,
-        content: record.content,
-        display: record.display,
-        details: record.details,
-        timestamp: parsedTimestamp,
-      },
-      {
-        ...(typeof record.id === "string" ? { id: record.id } : {}),
-        recordTimestampMs: parsedTimestamp,
-        transcriptPosition,
-        seq,
-      },
-    );
-  }
-  if (record.type !== "compaction" && record.type !== "reset") {
-    return null;
-  }
-  const kind = record.type;
-  const compactionIdentity =
-    kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
-  return {
-    role: "system",
-    content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],
-    timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
-    __openclaw: {
-      kind,
-      id: typeof record.id === "string" ? record.id : undefined,
-      ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
-      ...(typeof compactionIdentity?.itemId === "string"
-        ? { itemId: compactionIdentity.itemId }
-        : {}),
-      transcriptPosition,
-      seq,
-    },
   };
 }

@@ -18,8 +18,9 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
@@ -57,13 +58,50 @@ async function invoke(
 const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
 
 describe("secret store mutation lifecycle", () => {
+  it("rejects a redaction sentinel without replacing the stored credential", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const name = "OPENCLAW_GATEWAY_TOKEN";
+      const value = "synthetic-gateway-token";
+      await writeSecretStoreEntry({
+        scope: { kind: "team" },
+        name,
+        value,
+        kind: "secret",
+        updatedBy: "test",
+      });
+      const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
+      const handlers = createSecretsHandlers({
+        reloadSecrets,
+        resolveSecrets,
+        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
+      });
+
+      expect(
+        await invoke(handlers, "secrets.store.set", {
+          name,
+          value: "__OPENCLAW_REDACTED__",
+          kind: "secret",
+        }),
+      ).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
+      ]);
+      expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
+        ok: true,
+        value,
+      });
+      expect(reloadSecrets).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["dispatch continuation", "mutation logging"] as const)(
     "does not delete when admitted authority closes during %s",
     async (closure) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const name = "SYNTHETIC_DELETE_KEY";
         const value = "test-secret-delete-must-survive";
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           scope: { kind: "team" },
           name,
           value,
@@ -104,7 +142,7 @@ describe("secret store mutation lifecycle", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-          expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
+          expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
             ok: true,
             value,
           });
@@ -114,7 +152,7 @@ describe("secret store mutation lifecycle", () => {
             true,
             { ok: true },
           ]);
-          expect(readSecretStoreValue({ scope: { kind: "team" }, name }).ok).toBe(false);
+          expect((await readSecretStoreValue({ scope: { kind: "team" }, name })).ok).toBe(false);
         } finally {
           releaseAgentRunDelegatedAuthority(authority);
           clearAgentRunContext("delete-run");
@@ -141,11 +179,12 @@ describe("secret store mutation lifecycle", () => {
           },
         },
       } as GatewayClient;
-      const manager = new QuestionManager();
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
       const reloadSecrets = async () => ({ warningCount: 0 });
       const storeWriteService = createSecretStoreWriteService({ reloadSecrets });
       const handlers = {
-        ...createQuestionHandlers(manager, storeWriteService),
+        ...createQuestionHandlers(manager, storeWriteService, scheduler),
         ...createSecretsHandlers({ reloadSecrets, resolveSecrets, storeWriteService }),
       };
       const methods: string[] = [];
@@ -183,7 +222,7 @@ describe("secret store mutation lifecycle", () => {
           name: "APPROVED_POLICY_KEY",
           allowedHosts: ["proposed.example.test"],
         });
-        expect(listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
           { name: "APPROVED_POLICY_KEY", allowedHosts: ["approved.example.test"] },
         ]);
         expect(result.details).toEqual({
@@ -288,7 +327,7 @@ describe("secret store mutation lifecycle", () => {
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
         expect(
-          readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
+          await readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
         ).toEqual({ ok: true, value: "enabled" });
         clearSecretsRuntimeSnapshot();
       });

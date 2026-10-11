@@ -34,6 +34,17 @@ If you need transcript storage details, see
 
 ---
 
+## Delivered command exchanges
+
+Slash commands and their delivered replies from the shared dispatcher are ordinary
+conversation messages, not runtime-only prompt context. Native command menus,
+button selections, and acknowledgements on Discord and Telegram, and Slack
+argument menus, are also retained after delivery.
+Login device codes, pairing codes, login URLs, and sensitive `/config set` or `/debug set` values
+(including nested object assignments) are redacted before appending the exchange.
+These rows remain available to later provider requests and chat history without rewriting earlier
+rows. `/btw` and `/side` remain ephemeral.
+
 ## Failed attempts and recovery
 
 Text-only assistant errors are buffered until the logical run settles. Recovery
@@ -54,6 +65,20 @@ not end-user-authored content. OpenClaw keeps a separate transcript-facing
 prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
+
+For a runtime-only turn with no user text, the embedded runner marks its synthetic
+continuation as hidden internal-system input. It remains in model history so cold
+replay preserves the original request prefix, but it is not human-authored text or
+visible chat history. The next real user input persists normally even if prompt
+submission fails before the runtime-only turn starts. Existing stored markers are
+not rewritten.
+
+Compaction and saved CLI session notes exclude the reserved
+`openclaw.runtime-context` custom message type, including older entries without
+carrier metadata and entries that opt out of provider replay. Provider carrier
+metadata controls replay authority; it does not make private context eligible
+for summaries or saved notes. Existing transcripts receive this filtering when
+read, without rewriting stored history.
 
 For legacy sessions that already persisted runtime wrappers, Gateway history
 surfaces apply a display projection before returning messages to WebChat,
@@ -78,7 +103,16 @@ embedded runner does not repair or reopen file-backed runtime transcripts.
 ## Global rule: image sanitization
 
 Image payloads are always sanitized to prevent provider-side rejection due to
-size limits (downscale/recompress oversized base64 images). This also helps
+size limits (downscale/recompress oversized base64 images). When an image backend
+is available, replay also checks that each retained image can be decoded. A
+corrupt image becomes an `omitted image payload` note; valid images, surrounding
+text, and tool errors remain intact. A successful reply does not repair the
+original stored image bytes, so failed checks are never remembered and a corrupt
+image stays omitted on every replay. Successful outcomes (verified as-is, or the
+downscaled replacement) are cached in process by content digest and limits,
+bounded to 16 MiB, so later turns reuse them instead of decoding the same bytes
+again.
+This also helps
 control image-driven token pressure for vision-capable models: lower max
 dimensions reduce token usage, higher dimensions preserve detail.
 
@@ -118,11 +152,20 @@ Implementation:
 
 ## Global rule: tool result pairing
 
+The live runner rewrites a provider ID that repeats an earlier call, keeping IDs
+unique across responses within an embedded run attempt, including after compaction.
+Persisted older transcripts still use occurrence-based pairing.
+
 Tool results are paired to tool-call occurrences within each assistant turn before
 provider-specific call IDs are rewritten. Provider-generated IDs may repeat on later
 turns, so a result adjacent to a repeated call stays with that occurrence. A displaced
 result is moved only when exactly one unresolved occurrence can own it; ambiguous
 extras are dropped and missing occurrences receive synthetic error results.
+
+Synthetic missing results tell the model that the outcome is unknown: retry only
+read-only or idempotent operations, and verify current state before repeating an
+operation that may have had side effects. Responses-family transports retain
+their `aborted` placeholder. Neither placeholder proves that the tool did not run.
 
 Implementation: `sanitizeToolUseResultPairing` in
 `src/agents/session-transcript-repair.ts`
@@ -159,7 +202,7 @@ Implementation: `normalizeAssistantReplayContent` in
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send`
-(including agent-to-agent reply/announce steps), OpenClaw persists the
+(including a delayed reply delivered to the requester), OpenClaw persists the
 created user turn with `message.provenance.kind = "inter_session"`.
 
 OpenClaw also prepends a same-turn `[Inter-session message] ... isUser=false`
@@ -186,6 +229,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- Node turns canonicalize fresh reasoning signatures before returning the
+  completed assistant message, so live continuation and transcript storage use
+  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
+  and previously approved history remain unchanged.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
@@ -224,12 +271,15 @@ inter-session user turns that only have provenance metadata.
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
-  Carriers contain only the delimited context body; the shared instruction lives
-  once in the stable system prompt. Carriers remain user-role context and
-  are excluded from chat history and compaction summarization. Other Claude
-  models and Anthropic-compatible models keep transient carriers, avoiding
-  repeated cache-read charges and context use for old carriers when nothing
-  binds the prefix.
+  Agent core marks carriers with typed runtime-context metadata on a user-role
+  compatibility message. Provider adapters project the message at the strongest
+  authority their protocol supports; Anthropic-family and external plugin adapters
+  retain the labeled user representation, while OpenAI-compatible adapters use
+  system or developer authority.
+  Carriers are excluded from chat history and compaction summarization. Other
+  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  repeated cache-read charges and context use for old carriers when nothing binds
+  the prefix.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps

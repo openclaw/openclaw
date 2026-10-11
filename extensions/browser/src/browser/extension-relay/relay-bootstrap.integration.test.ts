@@ -168,9 +168,11 @@ it.each(["owned", "borrowed"] as const)(
       },
       ownership === "owned"
         ? async () => {
-            await startBrowserControlServiceFromConfig();
+            const state = await startBrowserControlServiceFromConfig();
+            const relay = state?.extensionRelays?.get("chrome");
             const stopped = createDeferred<void>();
             return {
+              port: relay?.ownership === "owned" ? relay.port : null,
               stop: () => {
                 void stopBrowserControlService().then(stopped.resolve, stopped.reject);
               },

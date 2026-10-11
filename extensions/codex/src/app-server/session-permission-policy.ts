@@ -2,23 +2,20 @@ import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
-  CodexAppServerApprovalsReviewer,
   CodexAppServerManagedApprovalPolicy,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexPluginConfig,
   OpenClawExecMode,
 } from "./config-contracts.js";
 import { selectGuardianSandbox } from "./config-exec-policy.js";
 import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  parseAllowedApprovalsReviewersFromCodexRequirements,
-  parseAllowedSandboxModesFromCodexRequirements,
+  parseCodexRequirementsPolicy,
   selectGuardianApprovalPolicy,
   selectGuardianApprovalsReviewer,
   selectUserApprovalsReviewer,
 } from "./config-requirements.js";
 import { resolveCodexAppServerNetworkProxy } from "./config-security.js";
+import type { CodexApprovalsReviewer, CodexSandboxMode } from "./protocol.js";
 
 type SessionPermissionMode = NonNullable<EmbeddedRunAttemptParamsV2["permissionMode"]>;
 
@@ -37,52 +34,38 @@ export const CODEX_SESSION_PERMISSION_EXEC_MODES = {
 
 type CodexSessionPermissionTuple = {
   approvalPolicy: CodexAppServerManagedApprovalPolicy;
-  approvalsReviewer: CodexAppServerApprovalsReviewer;
-  sandbox: CodexAppServerSandboxMode;
+  approvalsReviewer: CodexApprovalsReviewer;
+  sandbox: CodexSandboxMode;
 };
+
+const SESSION_SANDBOX_MODES = {
+  "read-only": "read-only",
+  guarded: "workspace-write",
+  workspace: "workspace-write",
+  full: "danger-full-access",
+} satisfies Record<SessionPermissionMode, CodexSandboxMode>;
 
 function tupleForMode(
   mode: SessionPermissionMode,
   canUseAutoReview: boolean,
 ): CodexSessionPermissionTuple {
-  switch (mode) {
-    case "read-only":
-      return { sandbox: "read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
-    case "guarded":
-      return {
-        sandbox: "workspace-write",
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-      };
-    case "workspace":
-      return {
-        sandbox: "workspace-write",
-        approvalPolicy: "on-request",
-        approvalsReviewer: canUseAutoReview ? "auto_review" : "user",
-      };
-    case "full":
-      return {
-        sandbox: "danger-full-access",
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-      };
-  }
-  return mode satisfies never;
+  return {
+    sandbox: SESSION_SANDBOX_MODES[mode],
+    approvalPolicy: mode === "full" ? "never" : "on-request",
+    approvalsReviewer: mode === "workspace" && canUseAutoReview ? "auto_review" : "user",
+  };
 }
 
 function requirementsAllowTuple(
   tuple: CodexSessionPermissionTuple,
-  allowed: {
-    sandboxes: Set<CodexAppServerSandboxMode> | undefined;
-    approvalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined;
-    reviewers: Set<CodexAppServerApprovalsReviewer> | undefined;
-  },
+  allowed: ReturnType<typeof parseCodexRequirementsPolicy>,
 ): boolean {
   return (
-    (allowed.sandboxes === undefined || allowed.sandboxes.has(tuple.sandbox)) &&
-    (allowed.approvalPolicies === undefined ||
-      allowed.approvalPolicies.has(tuple.approvalPolicy)) &&
-    (allowed.reviewers === undefined || allowed.reviewers.has(tuple.approvalsReviewer))
+    (allowed.allowedSandboxModes === undefined || allowed.allowedSandboxModes.has(tuple.sandbox)) &&
+    (allowed.allowedApprovalPolicies === undefined ||
+      allowed.allowedApprovalPolicies.has(tuple.approvalPolicy)) &&
+    (allowed.allowedApprovalsReviewers === undefined ||
+      allowed.allowedApprovalsReviewers.has(tuple.approvalsReviewer))
   );
 }
 
@@ -119,20 +102,16 @@ function clampSessionPermissionTuple(params: {
   if (!params.requirementsToml) {
     return params.requested;
   }
-  const allowed = {
-    sandboxes: parseAllowedSandboxModesFromCodexRequirements(
-      params.requirementsToml,
-      params.hostName ?? readHostName(),
-    ),
-    approvalPolicies: parseAllowedApprovalPoliciesFromCodexRequirements(params.requirementsToml),
-    reviewers: parseAllowedApprovalsReviewersFromCodexRequirements(params.requirementsToml),
-  };
+  const allowed = parseCodexRequirementsPolicy(
+    params.requirementsToml,
+    params.hostName ?? readHostName(),
+  );
   if (requirementsAllowTuple(params.requested, allowed)) {
     return params.requested;
   }
   if (
     params.requested.approvalPolicy === "untrusted" &&
-    allowed.approvalPolicies?.has("untrusted") === false
+    allowed.allowedApprovalPolicies?.has("untrusted") === false
   ) {
     throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");
   }
@@ -145,12 +124,12 @@ function clampSessionPermissionTuple(params: {
     "read-only": 0,
     "workspace-write": 1,
     "danger-full-access": 2,
-  } satisfies Record<CodexAppServerSandboxMode, number>;
+  } satisfies Record<CodexSandboxMode, number>;
   const allowedSandboxes = new Set(
     (["read-only", "workspace-write", "danger-full-access"] as const).filter(
       (sandbox) =>
         sandboxAuthority[sandbox] <= sandboxAuthority[params.requested.sandbox] &&
-        (allowed.sandboxes === undefined || allowed.sandboxes.has(sandbox)),
+        (allowed.allowedSandboxModes === undefined || allowed.allowedSandboxModes.has(sandbox)),
     ),
   );
   if (allowedSandboxes.size === 0) {
@@ -164,12 +143,12 @@ function clampSessionPermissionTuple(params: {
       params.requested.approvalPolicy === "untrusted"
         ? "untrusted"
         : selectGuardianApprovalPolicy(
-            allowed.approvalPolicies,
+            allowed.allowedApprovalPolicies,
             userReviewRequired ? "ask" : "auto",
           ),
     approvalsReviewer: userReviewRequired
-      ? selectUserApprovalsReviewer(allowed.reviewers)
-      : selectGuardianApprovalsReviewer(allowed.reviewers, "auto"),
+      ? selectUserApprovalsReviewer(allowed.allowedApprovalsReviewers)
+      : selectGuardianApprovalsReviewer(allowed.allowedApprovalsReviewers, "auto"),
   };
 }
 

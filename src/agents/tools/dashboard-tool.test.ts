@@ -31,6 +31,12 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
     params: Record<string, unknown>,
   ): Promise<T> => {
     calls.push([method, params]);
+    if (method === "sessions.describe") {
+      return { session: null } as T;
+    }
+    if (method === "sessions.patch") {
+      return { key: params.key, entry: { boardPresentation: params.boardPresentation } } as T;
+    }
     return boardSnapshot as T;
   };
   return {
@@ -52,6 +58,14 @@ function createGatewayAffinityHarness(revision: number) {
       requests.push(req);
       respond(true, { ...snapshot, revision });
     },
+    "sessions.describe": ({ req, respond }) => {
+      requests.push(req);
+      respond(true, { session: { boardPresentation: "expanded" } });
+    },
+    "sessions.patch": ({ req, params, respond }) => {
+      requests.push(req);
+      respond(true, { key: params.key, entry: { boardPresentation: params.boardPresentation } });
+    },
   };
   const methodRegistry = createGatewayMethodRegistry(
     createGatewayMethodDescriptorsFromHandlers({
@@ -72,17 +86,13 @@ function createGatewayAffinityHarness(revision: number) {
 }
 
 describe("dashboard tool", () => {
-  it("declares every action, no client capability guard, sizing, and the dashboard threshold", () => {
+  it("declares dashboard actions without overriding widget placement", () => {
     const tool = createDashboardTool();
     const directoryDescription = tool.description.slice(0, 177);
     expect(tool.requiredClientCaps).toBeUndefined();
     expect(tool.description).toContain("stable names");
     expect(tool.description).toContain("sm=3x3");
-    expect(directoryDescription).toMatch(
-      /(?:single|one[- ]off|ad hoc).{0,40}visualizations?.{0,40}inline/i,
-    );
-    expect(directoryDescription).toContain("explicit dashboard request");
-    expect(directoryDescription).toContain("multiple non-code visualizations");
+    expect(directoryDescription).not.toMatch(/keep .*inline/i);
     expect(directoryDescription).toMatch(/widget_put.*plugin.*only/i);
     expect(tool.description).not.toMatch(/show_widget|widget_code|\bpin\b/);
     expect(tool.parameters).toMatchObject({
@@ -101,6 +111,7 @@ describe("dashboard tool", () => {
             "widget_remove",
             "focus_tab",
             "set_presentation",
+            "set_default_presentation",
           ],
         },
       },
@@ -122,24 +133,18 @@ describe("dashboard tool", () => {
       Value.Check(tool.parameters, { action: "tab_update", tabId: "main", chatDock: "left" }),
     ).toBe(false);
     expect(Value.Check(tool.parameters, { action: "set_presentation", dock: "left" })).toBe(false);
-  });
-
-  it("reads a compact text plus JSON snapshot", async () => {
-    const harness = recorder();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: harness.callGateway,
-    });
-    const result = await tool.execute("read", { action: "read" });
-    expect(harness.calls).toEqual([["board.get", { sessionKey: "agent:main:main" }]]);
-    expect(result.details).toEqual({
-      ...snapshot,
-      tabs: [{ tabId: "main", title: "Main", position: 0 }],
-    });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining('"revision":3'),
-    });
+    expect(
+      Value.Check(tool.parameters, {
+        action: "set_default_presentation",
+        presentation: "expanded",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "set_default_presentation",
+        presentation: "fullscreen",
+      }),
+    ).toBe(false);
   });
 
   it("dispatches through the admitted Gateway and fences replacement or retirement", async () => {
@@ -166,10 +171,25 @@ describe("dashboard tool", () => {
               action: "focus_tab",
               tabId: "main",
             });
-            expect(read.details).toMatchObject({ revision: 11 });
+            expect(read.details).toMatchObject({ revision: 11, defaultPresentation: "expanded" });
             expect(command.details).toEqual({ ok: true, delivered: 1 });
+            const saved = await tool.execute("save", {
+              action: "set_default_presentation",
+              presentation: "expanded",
+            });
+            expect(saved.details).toEqual({
+              ok: true,
+              sessionKey: "agent:main:main",
+              defaultPresentation: "expanded",
+            });
 
             current = replacement.context;
+            await expect(
+              tool.execute("late-save", {
+                action: "set_default_presentation",
+                presentation: "split",
+              }),
+            ).rejects.toThrow(/dashboard|Gateway|gateway|unavailable/u);
             await expect(tool.execute("late-read", { action: "read" })).rejects.toThrow(
               /dashboard|Gateway|gateway|unavailable/u,
             );
@@ -187,6 +207,18 @@ describe("dashboard tool", () => {
         id: expect.stringMatching(/^plugin-subagent-/u),
         method: "board.get",
         params: expect.objectContaining({ sessionKey: "agent:main:main" }),
+      }),
+      expect.objectContaining({
+        method: "sessions.describe",
+        params: expect.objectContaining({ key: "agent:main:main" }),
+      }),
+      expect.objectContaining({
+        method: "sessions.patch",
+        params: {
+          key: "agent:main:main",
+          boardFace: "dashboard",
+          boardPresentation: "expanded",
+        },
       }),
     ]);
     expect(replacement.requests).toEqual([]);
@@ -268,9 +300,11 @@ describe("dashboard tool", () => {
     const tool = createDashboardTool({
       agentSessionKey: "agent:main:main",
       emitCommand: harness.emitCommand,
+      callGateway: harness.callGateway,
     });
     await expect(tool.execute("command", args)).rejects.toThrow(message);
     expect(harness.commands).toEqual([]);
+    expect(harness.calls).toEqual([]);
   });
 
   it.each([
@@ -341,7 +375,6 @@ describe("dashboard tool", () => {
   });
 
   it.each([
-    ["focus_tab", { tabId: "notes" }, { kind: "focus_tab", tabId: "notes" }],
     ["set_presentation", { presentation: "split" }, { kind: "set_chat_dock", dock: "right" }],
     ["set_presentation", { presentation: "expanded" }, { kind: "set_chat_dock", dock: "hidden" }],
   ])("emits board.command for %s", async (action, args, command) => {
@@ -357,10 +390,7 @@ describe("dashboard tool", () => {
     expect(result.details).toEqual({ ok: true, delivered: 2 });
   });
 
-  it.each([
-    ["focus_tab", { tabId: "notes" }],
-    ["set_presentation", { presentation: "expanded" }],
-  ])("reports %s as unavailable when no Control UI is connected", async (action, args) => {
+  it("reports commands as unavailable when no Control UI is connected", async () => {
     const broadcastToConnIds = vi.fn();
     const context = {
       broadcastToConnIds,
@@ -370,7 +400,7 @@ describe("dashboard tool", () => {
       { context, isWebchatConnect: () => false },
       async () => {
         const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
-        const result = await tool.execute("command", { action, ...args });
+        const result = await tool.execute("command", { action: "focus_tab", tabId: "notes" });
         expect(result.details).toEqual({
           status: "unavailable",
           code: "UNAVAILABLE",

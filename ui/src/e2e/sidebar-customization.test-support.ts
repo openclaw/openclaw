@@ -76,6 +76,38 @@ export async function openSidebarCustomizationPage(
   const page = await context.newPage();
   await installMockGateway(page);
   await page.goto(`${suite.server.baseUrl}chat`);
-  await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
+  await page.locator("openclaw-app-sidebar").waitFor();
+  const pages = await openSidebarPages(page);
+  for (const label of ["Agents", "Dashboards", "Systems"]) {
+    await pages
+      .locator(".sidebar-pages__entry")
+      .filter({ has: page.getByRole("link", { name: label, exact: true }) })
+      .getByRole("button", { name: "Pin", exact: true })
+      .click();
+  }
+  await page
+    .locator("openclaw-app-sidebar")
+    .getByRole("button", { name: "Sessions", exact: true })
+    .click();
   return { context, page };
+}
+
+export async function openSidebarPages(page: Page): Promise<Locator> {
+  const sidebar = page.locator("openclaw-app-sidebar:visible");
+  const pages = sidebar.locator(".sidebar-pages");
+  if (!(await pages.isVisible())) {
+    await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+  }
+  await pages.waitFor();
+  return pages;
+}
+
+export async function openSidebarPinMenu(page: Page, entry = "route:dashboards"): Promise<Locator> {
+  const row = page
+    .locator("openclaw-app-sidebar:visible")
+    .locator(`[data-sidebar-entry="${entry}"]`);
+  await row.locator("a, button").first().click({ button: "right" });
+  const menu = page.locator("wa-dropdown.sidebar-rail-pin-menu");
+  await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
+  return menu;
 }

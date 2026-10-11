@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
@@ -7,8 +7,10 @@ import {
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEDUPE_MAX } from "../server-constants.js";
+import { projectSessionFastModeEntryResult } from "../session-fast-mode-presentation.js";
 import type { GatewayInflightResult } from "./inflight.js";
-import type { GatewayRequestContext, GatewayRequestHandler } from "./types.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestContext, GatewayRequestHandler, RespondFn } from "./types.js";
 
 type SessionCreateAuthorization = { role: string | null; scopes: readonly string[] };
 type SessionCreateEntry = {
@@ -27,16 +29,24 @@ const sessionCreatesByContext = new WeakMap<
 
 export function idempotentSessionCreate(handler: GatewayRequestHandler): GatewayRequestHandler {
   return async (request) => {
+    const respond: RespondFn = (...args) => {
+      if (args[0] && args.length > 1) {
+        args[1] = projectSessionFastModeEntryResult(args[1], request.client);
+      }
+      request.respond(...args);
+    };
     const idempotencyKey = request.params.idempotencyKey;
     if (typeof idempotencyKey !== "string" || !idempotencyKey) {
-      await handler(request);
+      await handler(
+        bindGatewayRequestHandlerMutationAuthority(request, { ...request, respond }, undefined),
+      );
       return;
     }
     const principal =
       request.client?.authenticatedUserProfile?.profileId ?? request.client?.authenticatedUserId;
     const deviceId = request.client?.connect.device?.id?.trim();
     if (!principal && !deviceId) {
-      request.respond(
+      respond(
         false,
         undefined,
         errorShape(
@@ -67,9 +77,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       }
     }
     let entries = entriesByOwner.get(owner);
-    const requestIdentity = createHash("sha256")
-      .update(stableStringify(request.params))
-      .digest("hex");
+    const requestIdentity = sha256Hex(stableStringify(request.params));
     const authorization: SessionCreateAuthorization = {
       role: request.client?.connect.role ?? null,
       scopes: request.client?.connect.scopes?.toSorted() ?? [],
@@ -77,7 +85,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     const existing = entries?.get(idempotencyKey);
     if (existing) {
       if (existing.requestIdentity !== requestIdentity) {
-        request.respond(
+        respond(
           false,
           undefined,
           errorShape(
@@ -88,7 +96,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
         return;
       }
       if (existing.authorization.role !== authorization.role) {
-        request.respond(
+        respond(
           false,
           undefined,
           errorShape(ErrorCodes.FORBIDDEN, "session creation authorization changed; start again"),
@@ -99,7 +107,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
         (scope) => !authorization.scopes.includes(scope),
       );
       if (missingScope) {
-        request.respond(
+        respond(
           false,
           undefined,
           missingScopeErrorShape({
@@ -111,7 +119,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       }
       const result =
         existing.state.kind === "completed" ? existing.state.result : await existing.state.work;
-      request.respond(result.ok, result.payload, result.error, {
+      respond(result.ok, result.payload, result.error, {
         ...result.meta,
         cached: true,
       });
@@ -119,7 +127,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     }
     // Reserve a full owner's capacity for other principals while bounding process-wide state.
     if ((entries?.size ?? 0) >= DEDUPE_MAX || retainedEntryCount >= DEDUPE_MAX * 2) {
-      request.respond(
+      respond(
         false,
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, "session creation capacity is full; retry later"),
@@ -140,12 +148,18 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     const work = Promise.resolve().then(async (): Promise<GatewayInflightResult> => {
       try {
         let result: GatewayInflightResult | undefined;
-        await handler({
-          ...request,
-          respond: (ok, payload, error, meta) => {
-            result = { ok, payload, error, meta };
-          },
-        });
+        await handler(
+          bindGatewayRequestHandlerMutationAuthority(
+            request,
+            {
+              ...request,
+              respond: (ok, payload, error, meta) => {
+                result = { ok, payload, error, meta };
+              },
+            },
+            undefined,
+          ),
+        );
         result ??= {
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, "session creation was interrupted"),
@@ -170,6 +184,6 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     };
     entries.set(idempotencyKey, entry);
     const result = await work;
-    request.respond(result.ok, result.payload, result.error, result.meta);
+    respond(result.ok, result.payload, result.error, result.meta);
   };
 }

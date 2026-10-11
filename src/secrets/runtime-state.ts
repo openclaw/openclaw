@@ -1,6 +1,10 @@
-/** Holds active secrets runtime snapshots, refresh context, and cleanup hooks. */
+/** Holds active secrets runtime snapshots and their refresh lifecycle. */
 import { isDeepStrictEqual } from "node:util";
-import { AuthProfileMigrationRequiredError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
+import {
+  AuthProfileMigrationRequiredError,
+  clearAuthProfileMigrationDiagnostics,
+} from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreProfileSetMutationToken,
@@ -34,7 +38,7 @@ import {
   type RuntimeConfigSnapshotRefreshHandler,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
+import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
@@ -70,7 +74,7 @@ type LocatedSecretRef = {
   ref: SecretRef;
 };
 
-type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
+type SecretDefaults = Parameters<typeof parseSecretRef>[1];
 
 function listLocatedSecretRefs(
   value: unknown,
@@ -78,7 +82,7 @@ function listLocatedSecretRefs(
   path: Array<string | number> = [],
   refs: LocatedSecretRef[] = [],
 ): LocatedSecretRef[] {
-  const ref = coerceSecretRef(value, defaults);
+  const ref = parseSecretRef(value, defaults);
   if (ref) {
     refs.push({ path, ref });
     return refs;
@@ -112,18 +116,12 @@ export function collectSecretStoreRefKeysInSnapshot(
 
 /** Whether two configs resolve the same SecretRefs through the same provider contracts. */
 export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  return isDeepStrictEqual(
-    {
-      refs: listLocatedSecretRefs(left, left.secrets?.defaults),
-      defaults: left.secrets?.defaults,
-      providers: left.secrets?.providers,
-    },
-    {
-      refs: listLocatedSecretRefs(right, right.secrets?.defaults),
-      defaults: right.secrets?.defaults,
-      providers: right.secrets?.providers,
-    },
-  );
+  const contract = (config: OpenClawConfig) => ({
+    refs: listLocatedSecretRefs(config, config.secrets?.defaults),
+    defaults: config.secrets?.defaults,
+    providers: config.secrets?.providers,
+  });
+  return isDeepStrictEqual(contract(left), contract(right));
 }
 
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
@@ -137,35 +135,21 @@ export type SecretsRuntimeRefreshContext = {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
+type ProviderAuthRuntimeSnapshotActivation = (params: {
+  snapshot: PreparedSecretsRuntimeSnapshot;
+  expectedRevision: number;
+  activateSnapshotIfCurrent: () => boolean;
+}) => Promise<boolean>;
+
+let providerAuthActivation: ProviderAuthRuntimeSnapshotActivation | null = null;
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 let activeSnapshotRevision = 0;
 let activeSnapshotLineageStartRevision = 0;
 // Capture auth truth at candidate publication; descendant credential refreshes keep this base so
 // rollback can distinguish pre-activation auth writes from candidate-owned resolved values.
 let activeSnapshotLineageAuthStores: PreparedSecretsRuntimeSnapshot["authStores"] = [];
-let activeSnapshotLineageAuthMutations: Record<
-  string,
-  {
-    store: {
-      baseline: StoreMutationLineage;
-      candidate: StoreMutationLineage;
-    };
-    state: {
-      token: RuntimeAuthProfileStoreMutationToken;
-      includeMain: boolean;
-      databaseOwner: RuntimeAuthProfileStoreMutationOwner;
-    };
-    profiles: Record<
-      string,
-      {
-        baseline: ProfileOwnerMutationLineage;
-        candidate: ProfileOwnerMutationLineage;
-      }
-    >;
-  }
-> = {};
+let activeSnapshotLineageAuthMutations: ReturnType<typeof captureAuthStoreMutationLineage> = {};
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
-const clearHooks = new Set<() => void>();
 const preparedSnapshotRefreshContext = new WeakMap<
   PreparedSecretsRuntimeSnapshot,
   SecretsRuntimeRefreshContext
@@ -189,7 +173,7 @@ type StoreMutationLineage = {
 function cloneSecretsRuntimeRefreshContext(
   context: SecretsRuntimeRefreshContext,
 ): SecretsRuntimeRefreshContext {
-  const cloned: SecretsRuntimeRefreshContext = {
+  return {
     env: { ...context.env },
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
     includeConfigRefs: context.includeConfigRefs ?? true,
@@ -198,62 +182,23 @@ function cloneSecretsRuntimeRefreshContext(
     ...(context.manifestRegistry
       ? { manifestRegistry: structuredClone(context.manifestRegistry) }
       : {}),
+    ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
   };
-  if (context.loadAuthStore) {
-    cloned.loadAuthStore = context.loadAuthStore;
-  }
-  return cloned;
 }
 
-function cloneDegradedSecretOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
-  const cloned: DegradedSecretOwner = {
-    ownerKind: owner.ownerKind,
-    ownerId: owner.ownerId,
-    state: owner.state,
-    paths: [...owner.paths],
-    refKeys: [...owner.refKeys],
-    reason: owner.reason,
-  };
-  if (owner.degradationState) {
-    cloned.degradationState = owner.degradationState;
-  }
-  if (owner.providerFailures) {
-    cloned.providerFailures = owner.providerFailures.map((failure) => ({ ...failure }));
-  }
-  if (owner.refFailureReason) {
-    cloned.refFailureReason = owner.refFailureReason;
-  }
-  return cloned;
-}
-
-function cloneSecretOwnerRefState(owner: SecretOwnerRefState): SecretOwnerRefState {
-  const cloned: SecretOwnerRefState = {
-    ownerKind: owner.ownerKind,
-    ownerId: owner.ownerId,
-    refKeys: [...owner.refKeys],
-  };
-  if (owner.contractDigest) {
-    cloned.contractDigest = owner.contractDigest;
-  }
-  if (owner.resolvedValues) {
-    cloned.resolvedValues = owner.resolvedValues.map((entry) => ({
-      refKey: entry.refKey,
-      value: structuredClone(entry.value),
-    }));
-  }
-  return cloned;
-}
-
-function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
+function cloneSnapshot(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+  authStores: PreparedSecretsRuntimeSnapshot["authStores"],
+): PreparedSecretsRuntimeSnapshot {
   return {
     sourceConfig: cloneConfigWithResolutionFacts(snapshot.sourceConfig),
     config: cloneConfigWithResolutionFacts(snapshot.config),
-    authStores: structuredClone(snapshot.authStores),
+    authStores,
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     authStoreSnapshotsRevision: snapshot.authStoreSnapshotsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    degradedOwners: (snapshot.degradedOwners ?? []).map(cloneDegradedSecretOwner),
-    secretOwners: (snapshot.secretOwners ?? []).map(cloneSecretOwnerRefState),
+    degradedOwners: structuredClone(snapshot.degradedOwners ?? []),
+    secretOwners: structuredClone(snapshot.secretOwners ?? []),
     webTools: structuredClone(snapshot.webTools),
   };
 }
@@ -338,13 +283,7 @@ function captureProfileOwnerMutationLineage(
   return {
     owner,
     databaseOwner,
-    token:
-      owner === "external"
-        ? { revision: 0, known: true }
-        : getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, profileId, {
-            includeMain: owner === "absent" || owner === "inherited",
-            owner: databaseOwner,
-          }),
+    token: readProfileOwnerMutationToken(agentDir, profileId, { owner, databaseOwner }),
   };
 }
 
@@ -391,13 +330,17 @@ function readSharedProfileSetMutationToken(
     : { revision: 0, known: false };
 }
 
+function unionKeys(...values: Array<Record<string, unknown> | undefined>): Set<string> {
+  return new Set(values.flatMap((value) => Object.keys(value ?? {})));
+}
+
 function captureAuthStoreMutationLineage(
   baselineAuthStores: PreparedSecretsRuntimeSnapshot["authStores"],
   candidateAuthStores: PreparedSecretsRuntimeSnapshot["authStores"],
-): typeof activeSnapshotLineageAuthMutations {
+) {
   const baseline = Object.fromEntries(baselineAuthStores.map((entry) => [entry.agentDir, entry]));
   const candidate = Object.fromEntries(candidateAuthStores.map((entry) => [entry.agentDir, entry]));
-  const agentDirs = new Set([...Object.keys(baseline), ...Object.keys(candidate)]);
+  const agentDirs = unionKeys(baseline, candidate);
   return Object.fromEntries(
     [...agentDirs].map((agentDir) => {
       const baselineStore = baseline[agentDir]?.store;
@@ -405,10 +348,7 @@ function captureAuthStoreMutationLineage(
       const baselineOwner = snapshotMutationOwner(baseline[agentDir] ?? candidate[agentDir]!);
       const candidateOwner = snapshotMutationOwner(candidate[agentDir] ?? baseline[agentDir]!);
       const effectiveStore = candidateStore ?? baselineStore;
-      const profileIds = new Set([
-        ...Object.keys(baselineStore?.profiles ?? {}),
-        ...Object.keys(candidateStore?.profiles ?? {}),
-      ]);
+      const profileIds = unionKeys(baselineStore?.profiles, candidateStore?.profiles);
       return [
         agentDir,
         {
@@ -425,26 +365,29 @@ function captureAuthStoreMutationLineage(
             includeMain: effectiveStore?.runtimeInheritsMainState === true,
           },
           profiles: Object.fromEntries(
-            [...profileIds].map((profileId) => [
-              profileId,
-              {
-                baseline: captureProfileOwnerMutationLineage(
-                  agentDir,
-                  baselineStore,
+            [...profileIds].map(
+              (profileId) =>
+                [
                   profileId,
-                  baselineOwner,
-                ),
-                candidate: captureProfileOwnerMutationLineage(
-                  agentDir,
-                  candidateStore,
-                  profileId,
-                  candidateOwner,
-                ),
-              },
-            ]),
+                  {
+                    baseline: captureProfileOwnerMutationLineage(
+                      agentDir,
+                      baselineStore,
+                      profileId,
+                      baselineOwner,
+                    ),
+                    candidate: captureProfileOwnerMutationLineage(
+                      agentDir,
+                      candidateStore,
+                      profileId,
+                      candidateOwner,
+                    ),
+                  },
+                ] as const,
+            ),
           ),
         },
-      ];
+      ] as const;
     }),
   );
 }
@@ -460,11 +403,7 @@ function mergeRollbackValue(previous: unknown, candidate: unknown, current: unkn
     return structuredClone(previous);
   }
   const merged: Record<string, unknown> = {};
-  const keys = new Set([
-    ...Object.keys(previous),
-    ...Object.keys(candidate),
-    ...Object.keys(current),
-  ]);
+  const keys = unionKeys(previous, candidate, current);
   for (const key of keys) {
     const value = mergeRollbackValue(previous[key], candidate[key], current[key]);
     if (value !== undefined) {
@@ -507,9 +446,9 @@ function preserveResolvedSecretRefValues(
   sourceConfig: OpenClawConfig,
   currentSourceConfig: OpenClawConfig,
 ): unknown {
-  const sourceRef = coerceSecretRef(source, sourceConfig.secrets?.defaults);
+  const sourceRef = parseSecretRef(source, sourceConfig.secrets?.defaults);
   if (sourceRef) {
-    const currentRef = coerceSecretRef(currentSource, currentSourceConfig.secrets?.defaults);
+    const currentRef = parseSecretRef(currentSource, currentSourceConfig.secrets?.defaults);
     return currentRef &&
       isDeepStrictEqual(sourceRef, currentRef) &&
       hasSameSecretProviderDefinition(sourceRef, [sourceConfig, currentSourceConfig])
@@ -550,13 +489,12 @@ function preserveResolvedSecretRefValues(
 function preserveResolvedAuthStoreSecretValues(
   previous: Record<string, AuthProfileStore>,
   candidate: Record<string, AuthProfileStore>,
-  restored: Record<string, AuthProfileStore>,
+  next: Record<string, AuthProfileStore>,
   current: Record<string, AuthProfileStore>,
   previousConfig: OpenClawConfig,
   candidateConfig: OpenClawConfig,
   currentConfig: OpenClawConfig,
 ): Record<string, AuthProfileStore> {
-  const next = structuredClone(restored);
   for (const [agentDir, store] of Object.entries(next)) {
     const previousStore = previous[agentDir];
     const candidateStore = candidate[agentDir];
@@ -568,37 +506,28 @@ function preserveResolvedAuthStoreSecretValues(
       const previousCredential = previousStore.profiles[profileId];
       const candidateCredential = candidateStore.profiles[profileId];
       const currentCredential = currentStore.profiles[profileId];
+      const ref = credentialSecretRef(credential);
+      if (
+        !ref ||
+        previousCredential?.type !== credential.type ||
+        candidateCredential?.type !== credential.type ||
+        currentCredential?.type !== credential.type ||
+        !isDeepStrictEqual(ref, credentialSecretRef(previousCredential)) ||
+        !isDeepStrictEqual(ref, credentialSecretRef(candidateCredential)) ||
+        !isDeepStrictEqual(ref, credentialSecretRef(currentCredential)) ||
+        !hasSameSecretProviderDefinition(ref, [previousConfig, candidateConfig, currentConfig])
+      ) {
+        continue;
+      }
       if (
         credential.type === "api_key" &&
-        previousCredential?.type === "api_key" &&
-        candidateCredential?.type === "api_key" &&
-        currentCredential?.type === "api_key" &&
-        isSecretRef(credential.keyRef) &&
-        isDeepStrictEqual(credential.keyRef, previousCredential.keyRef) &&
-        isDeepStrictEqual(credential.keyRef, candidateCredential.keyRef) &&
-        isDeepStrictEqual(credential.keyRef, currentCredential.keyRef) &&
-        hasSameSecretProviderDefinition(credential.keyRef, [
-          previousConfig,
-          candidateConfig,
-          currentConfig,
-        ]) &&
+        currentCredential.type === "api_key" &&
         currentCredential.key !== undefined
       ) {
         store.profiles[profileId] = { ...credential, key: currentCredential.key };
       } else if (
         credential.type === "token" &&
-        previousCredential?.type === "token" &&
-        candidateCredential?.type === "token" &&
-        currentCredential?.type === "token" &&
-        isSecretRef(credential.tokenRef) &&
-        isDeepStrictEqual(credential.tokenRef, previousCredential.tokenRef) &&
-        isDeepStrictEqual(credential.tokenRef, candidateCredential.tokenRef) &&
-        isDeepStrictEqual(credential.tokenRef, currentCredential.tokenRef) &&
-        hasSameSecretProviderDefinition(credential.tokenRef, [
-          previousConfig,
-          candidateConfig,
-          currentConfig,
-        ]) &&
+        currentCredential.type === "token" &&
         currentCredential.token !== undefined
       ) {
         store.profiles[profileId] = { ...credential, token: currentCredential.token };
@@ -655,7 +584,7 @@ function compareMutationTokens(
 function readProfileOwnerMutationToken(
   agentDir: string,
   profileId: string,
-  lineage: ProfileOwnerMutationLineage,
+  lineage: Pick<ProfileOwnerMutationLineage, "owner" | "databaseOwner">,
 ): RuntimeAuthProfileStoreMutationToken {
   return lineage.owner === "external"
     ? { revision: 0, known: true }
@@ -670,7 +599,6 @@ function getProfileMutationDecision(params: {
   profileId: string;
   mutationLineage: typeof activeSnapshotLineageAuthMutations;
 }): {
-  baselineOwner: ProfileOwner;
   candidateOwner: ProfileOwner;
   candidateStatus: "mutated" | "unchanged" | "unknown";
   ownerChanged: boolean;
@@ -679,7 +607,6 @@ function getProfileMutationDecision(params: {
   const captured = params.mutationLineage[params.agentDir]?.profiles[params.profileId];
   if (!captured) {
     return {
-      baselineOwner: "absent",
       candidateOwner: "absent",
       candidateStatus: "mutated",
       ownerChanged: false,
@@ -691,7 +618,6 @@ function getProfileMutationDecision(params: {
     !isDeepStrictEqual(captured.baseline.databaseOwner, captured.candidate.databaseOwner);
   const relevant = ownerChanged ? captured.baseline : captured.candidate;
   return {
-    baselineOwner: captured.baseline.owner,
     candidateOwner: captured.candidate.owner,
     candidateStatus: compareMutationTokens(
       captured.candidate.token,
@@ -709,17 +635,12 @@ function mergeRollbackAuthStoreCredentials(
   baseline: Record<string, AuthProfileStore>,
   candidate: Record<string, AuthProfileStore>,
   current: Record<string, AuthProfileStore>,
-  restored: Record<string, AuthProfileStore>,
+  next: Record<string, AuthProfileStore>,
   configs: [OpenClawConfig, OpenClawConfig, OpenClawConfig],
   mutationLineage: typeof activeSnapshotLineageAuthMutations,
   snapshotOwners: Record<string, RuntimeAuthProfileStoreMutationOwner>,
 ): Record<string, AuthProfileStore> {
-  const next = structuredClone(restored);
-  const agentDirs = new Set([
-    ...Object.keys(baseline),
-    ...Object.keys(candidate),
-    ...Object.keys(current),
-  ]);
+  const agentDirs = unionKeys(baseline, candidate, current);
   for (const agentDir of agentDirs) {
     let invalidateStore = false;
     const baselineStore = baseline[agentDir];
@@ -776,6 +697,10 @@ function mergeRollbackAuthStoreCredentials(
         !profileOwnerMutated
       ) {
         next[agentDir] = structuredClone(baselineStore);
+        copyCanonicalAuthProfileCredentialObservations(
+          baselineStore.profiles,
+          next[agentDir]!.profiles,
+        );
       } else {
         delete next[agentDir];
       }
@@ -784,11 +709,11 @@ function mergeRollbackAuthStoreCredentials(
     const store = next[agentDir] ?? structuredClone(baselineStore ?? currentStore);
     const profiles: AuthProfileStore["profiles"] = {};
     const selectedSources = new Map<string, AuthProfileStore>();
-    const profileIds = new Set([
-      ...Object.keys(baselineStore?.profiles ?? {}),
-      ...Object.keys(candidateStore?.profiles ?? {}),
-      ...Object.keys(currentStore.profiles),
-    ]);
+    const profileIds = unionKeys(
+      baselineStore?.profiles,
+      candidateStore?.profiles,
+      currentStore.profiles,
+    );
     for (const profileId of profileIds) {
       const baselineCredential = baselineStore?.profiles[profileId];
       const candidateCredential = candidateStore?.profiles[profileId];
@@ -801,10 +726,8 @@ function mergeRollbackAuthStoreCredentials(
       const profileMutationStatus = profileMutationDecision.status;
       const profileMutated = profileMutationStatus === "mutated";
       const currentOwner = profileOwner(currentStore, profileId);
-      let credential: AuthProfileCredential | undefined;
       let selectedSource: AuthProfileStore | undefined;
       if (currentOwner !== profileMutationDecision.candidateOwner) {
-        credential = currentCredential;
         selectedSource = currentStore;
       } else if (profileMutationDecision.ownerChanged) {
         if (
@@ -813,29 +736,18 @@ function mergeRollbackAuthStoreCredentials(
         ) {
           invalidateStore = true;
         } else {
-          credential = baselineCredential;
           selectedSource = baselineStore;
         }
       } else if (profileMutationStatus === "unknown") {
         if (isDeepStrictEqual(baselineCredential, candidateCredential)) {
-          credential = currentCredential;
           selectedSource = currentStore;
         } else {
           invalidateStore = true;
         }
+      } else if (!profileMutated && isDeepStrictEqual(currentCredential, candidateCredential)) {
+        selectedSource = baselineStore;
       } else {
-        if (isDeepStrictEqual(currentCredential, candidateCredential)) {
-          if (profileMutated) {
-            credential = currentCredential;
-            selectedSource = currentStore;
-          } else {
-            credential = baselineCredential;
-            selectedSource = baselineStore;
-          }
-        } else {
-          credential = currentCredential;
-          selectedSource = currentStore;
-        }
+        selectedSource = currentStore;
       }
       const baselineRef = credentialSecretRef(baselineCredential);
       const candidateRef = credentialSecretRef(candidateCredential);
@@ -850,7 +762,6 @@ function mergeRollbackAuthStoreCredentials(
       ) {
         // Candidate activation owns the ref transition. Descendant resolution may refresh the
         // literal, but without a persisted write rollback still restores the previous owner/ref.
-        credential = baselineCredential;
         selectedSource = baselineStore;
       }
       if (
@@ -866,35 +777,34 @@ function mergeRollbackAuthStoreCredentials(
           profileMutationStatus !== "unchanged"
         ) {
           invalidateStore = true;
-          credential = undefined;
           selectedSource = undefined;
         } else {
-          credential = baselineCredential;
           selectedSource = baselineStore;
         }
       }
-      const selectedRef = credentialSecretRef(credential);
+      const selectedRef = credentialSecretRef(selectedSource?.profiles[profileId]);
       if (
         selectedSource === currentStore &&
         selectedRef &&
         !hasSameSecretProviderDefinition(selectedRef, [configs[0], configs[1]])
       ) {
         invalidateStore = true;
-        credential = undefined;
         selectedSource = undefined;
       }
+      const credential = selectedSource?.profiles[profileId];
       if (credential && selectedSource) {
-        profiles[profileId] = structuredClone(credential);
+        const clonedCredential = structuredClone(credential);
+        copyCanonicalAuthProfileCredentialObservations(
+          { [profileId]: credential },
+          { [profileId]: clonedCredential },
+        );
+        profiles[profileId] = clonedCredential;
         selectedSources.set(profileId, selectedSource);
       }
     }
-    if (invalidateStore) {
-      // Exact persisted ownership was evicted. Remove the runtime store so the
-      // next auth load reads durable truth instead of publishing a partial clone.
-      delete next[agentDir];
-      continue;
-    }
-    if (!baselineStore && Object.keys(profiles).length === 0) {
+    if (invalidateStore || (!baselineStore && Object.keys(profiles).length === 0)) {
+      // Do not publish a partial clone after ownership eviction, or retain a
+      // candidate-only empty store. The next auth load reads durable truth.
       delete next[agentDir];
       continue;
     }
@@ -940,7 +850,7 @@ export function graftActiveSecretsRuntimeAuthState(snapshot: PreparedSecretsRunt
   snapshot.authStores = getLiveSecretsRuntimeAuthStores();
   snapshot.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
-  setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, activeRefreshContext);
+  preparedSnapshotRefreshContext.set(snapshot, activeRefreshContext);
 }
 
 /**
@@ -950,13 +860,6 @@ export function getActiveSecretsRuntimeEnvState(): NodeJS.ProcessEnv {
   return {
     ...(activeRefreshContext?.env ?? process.env),
   } as NodeJS.ProcessEnv;
-}
-
-/**
- * Registers cleanup hooks that run whenever the active secrets runtime snapshot is cleared.
- */
-export function registerSecretsRuntimeStateClearHook(clearHook: () => void): void {
-  clearHooks.add(clearHook);
 }
 
 /**
@@ -975,7 +878,14 @@ export function activateSecretsRuntimeSnapshotState(params: {
       "Cannot activate stale secrets runtime snapshot: auth credentials changed during preparation.",
     );
   }
-  const next = cloneSnapshot(params.snapshot);
+  const authStores = structuredClone(params.snapshot.authStores);
+  for (const [index, entry] of authStores.entries()) {
+    copyCanonicalAuthProfileCredentialObservations(
+      params.snapshot.authStores[index]!.store.profiles,
+      entry.store.profiles,
+    );
+  }
+  const next = cloneSnapshot(params.snapshot, authStores);
   if (params.mergeLiveAuthBookkeeping !== false) {
     next.authStores = mergeLiveAuthStoreBookkeeping(
       next.authStores,
@@ -1011,7 +921,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
     : activationAuthMutations;
   activeRefreshContext = nextRefreshContext;
   if (nextRefreshContext) {
-    preparedSnapshotRefreshContext.set(next, cloneSecretsRuntimeRefreshContext(nextRefreshContext));
+    preparedSnapshotRefreshContext.set(next, nextRefreshContext);
   }
   setActiveRuntimeWebToolsMetadata(next.webTools);
   setActiveDegradedSecretOwners(next.degradedOwners ?? []);
@@ -1041,15 +951,15 @@ export function activateSecretsRuntimeSnapshotStateIfCurrent(
   return true;
 }
 
-/** Restores an owned predecessor while retaining changes after candidate preparation. */
-export function restoreSecretsRuntimeSnapshotStateIfCurrent(
+/** Computes the owned predecessor while retaining changes after candidate preparation. */
+export function prepareSecretsRuntimeSnapshotRestoreState(
   params: Parameters<typeof activateSecretsRuntimeSnapshotState>[0] & {
     expectedRevision: number;
     ownedSnapshot: PreparedSecretsRuntimeSnapshot;
   },
-): boolean {
+) {
   if (!activeSnapshot || activeSnapshotLineageStartRevision !== params.expectedRevision) {
-    return false;
+    return null;
   }
   const currentEntries = listOwnedRuntimeAuthProfileStoreSnapshots();
   // A later owner is outside this activation's rollback authority, even when its bytes match.
@@ -1061,17 +971,15 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
     );
   });
   const independentKeys = new Set(independentEntries.map((entry) => entry.agentDir));
-  const rollbackEntries = (entries: OwnedRuntimeAuthProfileStoreSnapshotEntry[]) =>
-    entries.filter((entry) => !independentKeys.has(entry.agentDir));
-  const baselineAuthStores = Object.fromEntries(
-    rollbackEntries(activeSnapshotLineageAuthStores).map((entry) => [entry.agentDir, entry.store]),
-  );
-  const candidateAuthStores = Object.fromEntries(
-    rollbackEntries(params.ownedSnapshot.authStores).map((entry) => [entry.agentDir, entry.store]),
-  );
-  const currentAuthStores = Object.fromEntries(
-    rollbackEntries(currentEntries).map((entry) => [entry.agentDir, entry.store]),
-  );
+  const rollbackStores = (entries: OwnedRuntimeAuthProfileStoreSnapshotEntry[]) =>
+    Object.fromEntries(
+      entries
+        .filter((entry) => !independentKeys.has(entry.agentDir))
+        .map((entry) => [entry.agentDir, entry.store]),
+    );
+  const baselineAuthStores = rollbackStores(activeSnapshotLineageAuthStores);
+  const candidateAuthStores = rollbackStores(params.ownedSnapshot.authStores);
+  const currentAuthStores = rollbackStores(currentEntries);
   const restoredEntries = new Map(
     [...currentEntries, ...params.ownedSnapshot.authStores, ...activeSnapshotLineageAuthStores].map(
       (entry) => [entry.agentDir, entry],
@@ -1114,7 +1022,7 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
     restoredSourceConfig,
     activeSnapshot.sourceConfig,
   ) as OpenClawConfig;
-  return activateSecretsRuntimeSnapshotStateIfCurrent({
+  return {
     ...params,
     snapshot: {
       ...params.snapshot,
@@ -1136,7 +1044,7 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
     mergeLiveAuthBookkeeping: false,
     preserveActivationLineage: false,
     expectedRevision: activeSnapshotRevision,
-  });
+  };
 }
 
 /**
@@ -1146,15 +1054,11 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
   if (!activeSnapshot) {
     return null;
   }
-  const snapshot = cloneSnapshot(activeSnapshot);
-  snapshot.authStores = listOwnedRuntimeAuthProfileStoreSnapshots();
+  const snapshot = cloneSnapshot(activeSnapshot, listOwnedRuntimeAuthProfileStoreSnapshots());
   snapshot.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   if (activeRefreshContext) {
-    preparedSnapshotRefreshContext.set(
-      snapshot,
-      cloneSecretsRuntimeRefreshContext(activeRefreshContext),
-    );
+    preparedSnapshotRefreshContext.set(snapshot, activeRefreshContext);
   }
   return snapshot;
 }
@@ -1258,7 +1162,7 @@ export function getActiveSecretsRuntimeConfigSnapshot():
 /**
  * Returns current auth stores, preferring live auth-store snapshots over activation-time clones.
  */
-export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapshot["authStores"] {
+function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapshot["authStores"] {
   if (!activeSnapshot) {
     return [];
   }
@@ -1266,6 +1170,39 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
   return listOwnedRuntimeAuthProfileStoreSnapshots().filter((entry) =>
     activeKeys.has(entry.databasePath),
   );
+}
+
+export function registerProviderAuthRuntimeSnapshotActivationOwner(owner: {
+  runExclusive: (operation: () => Promise<boolean>) => Promise<boolean>;
+  isCurrent: (snapshot: PreparedSecretsRuntimeSnapshot, expectedRevision: number) => boolean;
+  assertValid: (snapshot: PreparedSecretsRuntimeSnapshot) => void;
+  publish: (snapshot: PreparedSecretsRuntimeSnapshot) => Promise<void>;
+  onError: (error: unknown, snapshot: PreparedSecretsRuntimeSnapshot) => never;
+}): void {
+  providerAuthActivation = async (params) =>
+    await owner.runExclusive(async () => {
+      if (!owner.isCurrent(params.snapshot, params.expectedRevision)) {
+        return false;
+      }
+      try {
+        owner.assertValid(params.snapshot);
+        if (!params.activateSnapshotIfCurrent()) {
+          return false;
+        }
+        await owner.publish(params.snapshot);
+        return true;
+      } catch (error) {
+        return owner.onError(error, params.snapshot);
+      }
+    });
+}
+
+export async function activateProviderAuthRuntimeSnapshot(
+  params: Parameters<ProviderAuthRuntimeSnapshotActivation>[0],
+): Promise<boolean> {
+  return providerAuthActivation
+    ? await providerAuthActivation(params)
+    : params.activateSnapshotIfCurrent();
 }
 
 /**
@@ -1284,8 +1221,7 @@ export function clearSecretsRuntimeSnapshotState(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
-  for (const clearHook of clearHooks) {
-    clearHook();
-  }
+  clearAuthProfileMigrationDiagnostics();
+  providerAuthActivation = null;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

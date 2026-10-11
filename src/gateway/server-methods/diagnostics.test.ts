@@ -14,7 +14,6 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
-import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
 import {
   enqueueCommandInLane,
@@ -185,6 +184,7 @@ describe("diagnostics gateway methods", () => {
       const payload = await requestLaneDiagnostics();
       expect(payload.ts).toBeGreaterThan(0);
       expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual([
+        CommandLane.ActiveMemory,
         CommandLane.Background,
         CommandLane.Cron,
         CommandLane.CronNested,
@@ -193,6 +193,7 @@ describe("diagnostics gateway methods", () => {
         CommandLane.Nested,
         CommandLane.Subagent,
         CommandLane.SystemAgent,
+        CommandLane.SystemAgentInference,
       ]);
       expect(payload.lanes).toContainEqual(
         expect.objectContaining({
@@ -229,25 +230,45 @@ describe("diagnostics gateway methods", () => {
     }
   });
 
-  it("reports background owners once in the aggregate without duplicating dynamic lanes", async () => {
+  it("reports subagent totals with per-session capacity without exposing parent identities", async () => {
     const before = await requestLaneDiagnostics();
-    const owner = createBackgroundWorkOwner({ owner: "core:diagnostics-test", maxConcurrent: 1 });
+    const originalConcurrency = getCommandLaneSnapshot(CommandLane.Subagent).maxConcurrent;
+    const parentA = "subagent:agent:main:private-parent-a";
+    const parents = [parentA, "subagent:agent:main:private-parent-b"];
     const gate = createDeferred();
-    const active = owner.enqueue(async () => await gate.promise);
-    const queued = owner.enqueue(async () => undefined);
+    setCommandLaneConcurrency(CommandLane.Subagent, 3);
+    const runs = parents.flatMap((lane) =>
+      Array.from({ length: 2 }, () => enqueueCommandInLane(lane, async () => await gate.promise)),
+    );
     try {
-      const payload = await requestLaneDiagnostics();
-      expect(payload.lanes.find((snapshot) => snapshot.lane === "background")).toMatchObject({
-        activeCount: 1,
+      let payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
+        activeCount: 4,
+        queuedCount: 0,
+        maxConcurrent: 3,
+        concurrencyScope: "session",
+        saturatedLaneCount: 0,
+        blockedBy: null,
+      });
+      runs.push(
+        enqueueCommandInLane(parentA, async () => await gate.promise),
+        enqueueCommandInLane(parentA, async () => await gate.promise),
+      );
+      payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
+        activeCount: 5,
         queuedCount: 1,
         maxConcurrent: 3,
+        concurrencyScope: "session",
+        saturatedLaneCount: 1,
         blockedBy: "lane",
       });
-      expect(payload.lanes.some((snapshot) => snapshot.lane === owner.lane)).toBe(false);
       expect(payload.dynamic).toEqual(before.dynamic);
+      expect(JSON.stringify(payload)).not.toContain("private-parent");
     } finally {
       gate.resolve();
-      await Promise.all([active, queued]);
+      await Promise.all(runs);
+      setCommandLaneConcurrency(CommandLane.Subagent, originalConcurrency);
     }
   });
 

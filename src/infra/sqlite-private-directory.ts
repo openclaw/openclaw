@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveRequiredOsHomeDir } from "./home-dir.js";
+import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { createPrivateWindowsDirectory } from "./windows-private-directory.js";
 
@@ -17,13 +18,15 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
   createPrivateWindowsDirectory(directoryPath);
 }
 
-export function resolvePrivateSqliteSnapshotStagingRoot(): string {
-  const appData = process.platform === "win32" ? process.env.LOCALAPPDATA?.trim() : undefined;
+export function resolvePrivateSqliteSnapshotStagingRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const appData = process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined;
   const defaultRoot = process.platform === "win32" ? "AppData/Local" : ".cache";
   const platformRoot = process.platform === "darwin" ? "Library/Caches" : defaultRoot;
   const cacheRoot =
-    [process.env.XDG_CACHE_HOME?.trim(), appData].find((root) => root && path.isAbsolute(root)) ??
-    path.join(resolveRequiredOsHomeDir(), platformRoot);
+    [env.XDG_CACHE_HOME?.trim(), appData].find((root) => root && path.isAbsolute(root)) ??
+    path.join(resolveRequiredOsHomeDir(env), platformRoot);
   return resolvePreferredOpenClawTmpDir({
     preferredDir: path.join(cacheRoot, "openclaw"),
     tmpdir: () => cacheRoot,
@@ -44,7 +47,11 @@ export async function createPrivateSqliteTempDirectory(
 
 export function createPrivateSqliteTempDirectorySync(rootPath: string, prefix: string): string {
   if (process.platform !== "win32") {
-    return fsSync.mkdtempSync(path.join(rootPath, prefix));
+    try {
+      return fsSync.mkdtempSync(path.join(rootPath, prefix));
+    } catch (error) {
+      throw markPrivateDirectoryCreationRefused(error);
+    }
   }
   const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
   createPrivateWindowsDirectory(directoryPath);

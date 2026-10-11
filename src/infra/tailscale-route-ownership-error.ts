@@ -1,3 +1,4 @@
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -22,12 +23,12 @@ export class TailscaleRouteOwnershipConflictError extends Error {
     const [mount, handler] =
       Object.entries(readRecord(readRecord(server)?.Handlers) ?? {})[0] ?? [];
     const route = host
-      ? `https://${host}${mount ?? ""} -> ${normalizeOptionalString(readRecord(handler)?.Proxy) ?? "non-proxy handler"}`
+      ? `https://${host}${mount ?? ""} -> ${redactSensitiveUrlLikeString(normalizeOptionalString(readRecord(handler)?.Proxy) ?? "non-proxy handler")}`
       : `HTTPS port ${port}`;
     super(
       `Tailscale HTTPS port ${port} is already owned by a route whose ownership OpenClaw cannot prove; it was not modified. ` +
         (session
-          ? `Foreground session ${session} (${route.slice(0, 512)}). Inspect \`tailscale serve status --json\` and stop the confirmed owning process, then restart the Gateway. Tailscale status does not report the claimant PID; \`serve off\` does not release foreground claims. `
+          ? `Foreground session ${session} (${route.slice(0, 512)}). Inspect \`tailscale serve status --json\` and stop the confirmed owning process, then restart the Gateway. Tailscale status does not report the claimant PID; \`serve off\` does not release foreground claims. Run \`ps -axo pid,args | grep '[t]ailscale serve'\`, then \`sudo kill -TERM <pid>\` for the confirmed claimant. `
           : "Inspect `tailscale serve status`. If the route belongs to the current Tailscale hostname and is stale from an older OpenClaw release, remove its background root handler with " +
             `\`tailscale serve --yes --https=${port} --set-path=/ off\`, then restart the Gateway. ` +
             "Otherwise disable managed Tailscale ingress or reconfigure the route before restarting."),

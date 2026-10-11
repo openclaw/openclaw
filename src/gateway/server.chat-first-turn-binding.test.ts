@@ -6,6 +6,8 @@ import {
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { activeExecRequestOwners } from "../infra/exec-request-context.js";
+import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import * as subscriptions from "./server-runtime-subscriptions.js";
@@ -35,6 +37,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
   const providerClosed = createDeferred();
   const firstDelta = createDeferred();
   const terminal = createDeferred();
+  const persistedPartial = createDeferred();
   const requestBodies: string[] = [];
   // Call-through observation exposes the real Gateway-owned buffer and registration.
   const observeSubscriptions = vi.spyOn(subscriptions, "startGatewayEventSubscriptions");
@@ -52,7 +55,10 @@ it("binds a first native chat.send before streaming and persists its stopped par
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   let original: ChatAbortControllerEntry | undefined;
   const lifecycle: Array<{ phase?: unknown; sessionId?: unknown; aborted?: unknown }> = [];
+  const heartbeatsEnabled = areHeartbeatsEnabled();
   try {
+    // A zero interval still permits event-driven wakes to consume the scripted response.
+    setHeartbeatsEnabled(false);
     await new Promise<void>((resolve, reject) => {
       providerServer.once("error", reject);
       providerServer.listen(0, "127.0.0.1", resolve);
@@ -99,6 +105,8 @@ it("binds a first native chat.send before streaming and persists its stopped par
         const payload = event.payload as
           | {
               runId?: string;
+              sessionKey?: string;
+              message?: { role?: string };
               state?: string;
               stream?: string;
               sessionId?: string;
@@ -107,6 +115,13 @@ it("binds a first native chat.send before streaming and persists its stopped par
           | undefined;
         if (payload?.runId !== runId) {
           return;
+        }
+        if (
+          event.event === "session.message" &&
+          payload.sessionKey === sessionKey &&
+          payload.message?.role === "assistant"
+        ) {
+          persistedPartial.resolve();
         }
         if (event.event === "chat" && payload.state === "delta") {
           firstDelta.resolve();
@@ -143,6 +158,18 @@ it("binds a first native chat.send before streaming and persists its stopped par
     }
     expect(committed.entry.sessionId).not.toBe(runId);
     expect.soft(original.sessionId).toBe(committed.entry.sessionId);
+    const requestOwners = activeExecRequestOwners(
+      { runId, sessionKey, sessionId: committed.entry.sessionId, agentId: "main" },
+      () => true,
+    );
+    expect(requestOwners).toHaveLength(1);
+    expect(original.ownerConnId).toEqual(expect.any(String));
+    expect(requestOwners[0]?.identity).toMatchObject({
+      runId,
+      sessionId: committed.entry.sessionId,
+      ownerConnId: original.ownerConnId,
+    });
+    expect(activeExecRequestOwners({ runId, sessionId: runId }, () => true)).toEqual([]);
     response.writeHead(200, { "content-type": "text/event-stream" });
     for (const event of [
       {
@@ -172,11 +199,49 @@ it("binds a first native chat.send before streaming and persists its stopped par
     expect(lifecycle).toContainEqual(
       expect.objectContaining({ phase: "start", sessionId: committed.entry.sessionId }),
     );
+    const history = await gateway.client.request<{
+      sessionId: string;
+      sessionInfo: { activeLeafEntryId: string | null };
+    }>("chat.history", { sessionKey });
+    expect(history).toMatchObject({
+      sessionId: committed.entry.sessionId,
+      sessionInfo: { activeLeafEntryId: expect.any(String) },
+    });
+    const transcriptScope = {
+      sessionKey,
+      sessionId: committed.entry.sessionId,
+      agentId: "main",
+    };
+    const beforeRejectedStops = await loadTranscriptEvents(transcriptScope);
+    for (const guard of [
+      {
+        idempotencyKey: "stop-stale-first-native-leaf",
+        expectedLeafEntryId: "stale-first-native-leaf",
+        sessionId: history.sessionId,
+      },
+      {
+        idempotencyKey: "stop-copied-first-native-leaf",
+        expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
+        sessionId: "previous-first-native-session",
+      },
+    ]) {
+      await expect(
+        gateway.client.request("chat.send", { sessionKey, message: "/stop", ...guard }),
+      ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
+      expect(original.controller.signal.aborted).toBe(false);
+      expect(runtime.chatAbortControllers.get(runId)).toBe(original);
+      expect(runtime.chatRunState.resolveBuffer(runId).text).toBe(partial);
+      expect(response.destroyed).toBe(false);
+      expect(requestBodies).toHaveLength(1);
+      expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
+    }
     const stop = await gateway.client
       .request("chat.send", {
         sessionKey,
         message: "/stop",
         idempotencyKey: "stop-first-native-turn",
+        expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
+        sessionId: history.sessionId,
       })
       .then(
         (result) => ({ result }),
@@ -184,6 +249,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
       );
     expect.soft(stop).toMatchObject({ result: { ok: true, aborted: true, runIds: [runId] } });
     expect(original.controller.signal.aborted).toBe(true);
+    expect(requestOwners[0]?.signal.aborted).toBe(true);
     await terminal.promise;
     await providerClosed.promise;
     await vi.waitFor(() => expect(runtime.chatAbortControllers.has(runId)).toBe(false));
@@ -194,20 +260,19 @@ it("binds a first native chat.send before streaming and persists its stopped par
         status: "killed",
         abortedLastRun: true,
       });
-    expect(lifecycle).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        status: "cancelled",
-        aborted: true,
-        stopReason: "stop",
-        sessionId: committed.entry.sessionId,
-      }),
+    await vi.waitFor(() =>
+      expect(lifecycle).toContainEqual(
+        expect.objectContaining({
+          phase: "end",
+          status: "cancelled",
+          aborted: true,
+          stopReason: "stop",
+          sessionId: committed.entry.sessionId,
+        }),
+      ),
     );
-    const events = await loadTranscriptEvents({
-      sessionKey,
-      sessionId: committed.entry.sessionId,
-      agentId: "main",
-    });
+    await persistedPartial.promise;
+    const events = await loadTranscriptEvents(transcriptScope);
     expect(events).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
@@ -230,7 +295,11 @@ it("binds a first native chat.send before streaming and persists its stopped par
       }
     } finally {
       observeSubscriptions.mockRestore();
-      await state.cleanup();
+      try {
+        await state.cleanup();
+      } finally {
+        setHeartbeatsEnabled(heartbeatsEnabled);
+      }
     }
   }
 });

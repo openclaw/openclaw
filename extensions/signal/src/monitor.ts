@@ -1,24 +1,20 @@
-// Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type {
-  OpenClawConfig,
-  SignalReactionNotificationMode,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   canonicalizeBase64,
   detectMime,
   estimateBase64DecodedBytes,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
   resolveChunkMode,
@@ -39,7 +35,6 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
@@ -53,14 +48,8 @@ import {
   type SignalDaemonHandle,
   waitForSignalDaemonReady,
 } from "./daemon.js";
-import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
-import type {
-  SignalAttachment,
-  SignalNativeReplyContext,
-  SignalReactionMessage,
-  SignalReactionTarget,
-} from "./monitor/event-handler.types.js";
+import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
@@ -119,86 +108,6 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
   };
 }
 
-function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
-  const targets: SignalReactionTarget[] = [];
-  const uuid = reaction.targetAuthorUuid?.trim();
-  if (uuid) {
-    targets.push({ kind: "uuid", id: uuid, display: `uuid:${uuid}` });
-  }
-  const author = reaction.targetAuthor?.trim();
-  if (author) {
-    const normalized = normalizeE164(author);
-    targets.push({ kind: "phone", id: normalized, display: normalized });
-  }
-  return targets;
-}
-
-function isSignalReactionMessage(
-  reaction: SignalReactionMessage | null | undefined,
-): reaction is SignalReactionMessage {
-  if (!reaction) {
-    return false;
-  }
-  const emoji = reaction.emoji?.trim();
-  const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(
-    normalizeOptionalString(reaction.targetAuthor) ||
-    normalizeOptionalString(reaction.targetAuthorUuid),
-  );
-  return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
-}
-
-function shouldEmitSignalReactionNotification(params: {
-  mode?: SignalReactionNotificationMode;
-  account?: string | null;
-  accountUuid?: string | null;
-  targets?: SignalReactionTarget[];
-  sender?: ReturnType<typeof resolveSignalSender> | null;
-  allowlist?: string[];
-}) {
-  const { mode, account, accountUuid, targets, sender, allowlist } = params;
-  const effectiveMode = mode ?? "own";
-  if (effectiveMode === "off") {
-    return false;
-  }
-  if (effectiveMode === "own") {
-    const accountId = normalizeOptionalString(account);
-    const normalizedAccountUuid = normalizeOptionalString(accountUuid);
-    if ((!accountId && !normalizedAccountUuid) || !targets || targets.length === 0) {
-      return false;
-    }
-    const normalizedAccount = accountId ? normalizeE164(accountId) : undefined;
-    return targets.some((target) => {
-      if (target.kind === "uuid") {
-        // UUID-only reaction payloads omit the phone identity carried by account.
-        return [accountId, normalizedAccountUuid].some(
-          (candidate) => candidate === target.id || candidate === `uuid:${target.id}`,
-        );
-      }
-      return Boolean(normalizedAccount) && normalizedAccount === target.id;
-    });
-  }
-  if (effectiveMode === "allowlist") {
-    if (!sender || !allowlist || allowlist.length === 0) {
-      return false;
-    }
-    return isSignalSenderAllowed(sender, allowlist);
-  }
-  return true;
-}
-
-function buildSignalReactionSystemEventText(params: {
-  emojiLabel: string;
-  actorLabel: string;
-  messageId: string;
-  targetLabel?: string;
-  groupLabel?: string;
-}) {
-  const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
-  const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
-  return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
-}
-
 const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
 const SIGNAL_BASE64_OVERHEAD_NUMERATOR = 4;
 const SIGNAL_BASE64_OVERHEAD_DENOMINATOR = 3;
@@ -213,15 +122,11 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
   return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
 }
 
-async function fetchAttachment(params: {
-  baseUrl: string;
-  account?: string;
-  transportKind?: SignalTransportKind;
-  attachment: SignalAttachment;
-  sender?: string;
-  groupId?: string;
-  maxBytes: number;
-}): Promise<{ path: string; contentType?: string } | null> {
+async function fetchAttachment(
+  params: Parameters<SignalEventHandlerDeps["fetchAttachment"]>[0] & {
+    transportKind?: SignalTransportKind;
+  },
+) {
   const { attachment } = params;
   if (!attachment?.id) {
     return null;
@@ -277,21 +182,11 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-export async function deliverReplies(params: {
-  cfg: OpenClawConfig;
-  replies: ReplyPayload[];
-  target: string;
-  baseUrl: string;
-  account?: string;
-  accountUuid?: string;
-  accountId?: string;
-  runtime: RuntimeEnv;
-  maxBytes: number;
-  textLimit: number;
-  chunkMode: "length" | "newline";
-  replyContext?: SignalNativeReplyContext;
-  chatType?: "direct" | "group";
-}) {
+export async function deliverReplies(
+  params: Parameters<SignalEventHandlerDeps["deliverReplies"]>[0] & {
+    chunkMode: "length" | "newline";
+  },
+) {
   const {
     replies,
     target,
@@ -352,10 +247,7 @@ export async function deliverReplies(params: {
       });
       // Failed blocks must leave the shared first-reply slot available to the final reply.
       replyPlan.markSent();
-      const messageId =
-        typeof result?.messageId === "string" && result.messageId.trim()
-          ? result.messageId.trim()
-          : null;
+      const messageId = result.messageId.trim();
       if (messageId) {
         deliveryResults.push({
           channel: "signal",
@@ -396,11 +288,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     cfg,
     accountId: opts.accountId,
   });
-  const historyLimit = Math.max(
-    0,
-    accountInfo.config.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    accountInfo.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
@@ -436,6 +325,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const transportKind = accountInfo.transport.kind;
   const managedTransport =
     accountInfo.transport.kind === "managed-native" ? accountInfo.transport : undefined;
+  const socketPath = managedTransport?.socketPath;
+  if (
+    socketPath &&
+    (opts.baseUrl !== undefined || opts.httpHost !== undefined || opts.httpPort !== undefined)
+  ) {
+    throw new Error("Signal socket transport cannot be combined with HTTP endpoint overrides");
+  }
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
@@ -471,6 +367,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await assertSignalDaemonEndpointAvailable({
         httpHost,
         httpPort,
+        ...(socketPath ? { socketPath } : {}),
         abortSignal: endpointProbeSignal,
       });
     } catch (error) {
@@ -501,6 +398,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       httpHost,
       httpPort,
+      ...(socketPath ? { socketPath } : {}),
       receiveMode: opts.receiveMode ?? managedTransport?.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? managedTransport?.ignoreStories,
@@ -519,8 +417,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         baseUrl,
         abortSignal: daemonLifecycle.abortSignal,
         startupDeadlineMs: startupDeadline,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
         runtime,
         waitForTransportReadyFn,
       });
@@ -577,10 +473,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       readReceiptsViaDaemon,
       fetchAttachment: (params) => fetchAttachment({ ...params, transportKind }),
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
-      resolveSignalReactionTargets,
-      isSignalReactionMessage,
-      shouldEmitSignalReactionNotification,
-      buildSignalReactionSystemEventText,
     });
 
     ingressMonitor = await startSignalIngressMonitor({

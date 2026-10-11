@@ -3,14 +3,14 @@ import http from "node:http";
 import net from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
   stopBrowserControlService,
 } from "../../control-service.js";
-import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
+import { getGatewayExtensionRelayModule } from "../extension-relay.runtime.js";
 import type { RelayOwnerClient } from "./owner-client.js";
 import { RELAY_OWNER_LIMIT } from "./owner-protocol.js";
 import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
@@ -48,6 +48,7 @@ it.each(["peer-close", "preparation-failure", "superseded"] as const)(
         }
         return attach;
       });
+      const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
       const server = http.createServer();
       server.on("upgrade", (req, socket, head) => {
         void handleGatewayExtensionUpgrade(req, socket, head);

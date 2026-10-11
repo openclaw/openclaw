@@ -27,6 +27,25 @@ afterEach(() => {
 });
 
 describe("unconfigured agent database diagnostics", () => {
+  it("does not warn for a configured agentDir database registered outside the default tree", () => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("doctor-configured-agentdir-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentDir = path.join(stateDir, ".openclaw", "agents", "worker", "agent");
+    openOpenClawAgentDatabase({
+      agentId: "worker",
+      env,
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(
+      collectRetainedUnconfiguredAgentDatabaseWarnings({
+        cfg: { agents: { ownership: "explicit", entries: { worker: { agentDir } } } },
+        env,
+      }),
+    ).toEqual([]);
+  });
+
   it("reports a custom registered database that is no longer configured", () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-unconfigured-agent-database-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };

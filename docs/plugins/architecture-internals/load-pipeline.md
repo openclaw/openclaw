@@ -32,12 +32,20 @@ linking the plugin's asynchronous module graph. This lets CommonJS bundles
 `require()` the same SDK entry during concurrent channel startup without seeing
 an unfinished ESM module. Unused SDK entries remain unloaded.
 
+Bundled channel entries and channel metadata modules use the shared cached module
+loader. It prepares SDK aliases before evaluation and owns native-to-source
+fallback; channel adapters do not retry a failed evaluation through another loader.
+
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
 - its resolved entry escapes the plugin root
 - its path (or its root directory) is world-writable
 - for non-bundled plugins, path ownership does not match the current uid (or root)
+
+On Windows, plugin roots can sit beneath directory junctions, including Node
+version-manager prefixes. Root aliases are resolved and verified by directory
+identity before entries are opened; files must still stay inside that root.
 
 World-writable bundled directories get an in-place `chmod` repair attempt
 first (npm/global installs can ship package dirs at `0777`) before the gate
@@ -138,6 +146,17 @@ hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
 
+An explicit install or refresh clears mutable discovery caches for the command,
+so its next metadata phase observes the updated inventory. Immutable runtime
+generations keep their captured metadata. Each process normally owns one Gateway.
+Overlapping independent Gateways in one process are best effort rather than
+coordinated owners of the same inventory.
+
+Native SDK alias resolution retains each importing file's canonical path, root
+membership, and alias targets in that same generation. Alias registration or
+replacement clears those results, as does metadata invalidation; repeated
+imports do not repeat filesystem canonicalization or containment checks.
+
 The same cache generation prepares installed-index scope lookups, compiled model
 matching patterns, parsed install-record projections, and manifest fingerprints
 once per immutable index. Mutable management indexes remain uncached. Lookup
@@ -165,6 +184,16 @@ A completed registry is cached under both its original request and its resolved
 manifest selection. Reusing those prepared manifests does not repeat plugin
 registration. Both keys share the existing bounded cache and are removed when
 the registry retires or the load cache is cleared.
+Validation, full registration, and CLI metadata loads have separate cache entries;
+validating a module cannot satisfy a later request for its registrations.
+
+Outbound channel bootstrap remembers successful and unavailable senders within
+the selected plugin cache and metadata scope. Inventory replacement or metadata
+invalidation permits a fresh attempt; repeated deliveries within the same scope
+reuse the outcome without retrying failed registration. A request-scoped channel
+owner still takes precedence over process-root bootstrap outcomes.
+Payload preparation carries the selected sender's directive policy on its handler,
+so one batch resolves its plugin once before parsing and applying channel transforms.
 
 Provider lookup uses an explicit caller workspace first, then the workspace
 recorded by its metadata snapshot, including an explicitly shared-root scope.
@@ -219,12 +248,30 @@ cache releases failed loads, but Node retains failed native ESM evaluations for
 the process lifetime; restarting an account cannot repair that module graph.
 A successful import is shared across consumers.
 
+Document and web-content extraction select callbacks from the current metadata
+scope on each request. A shared config object does not make two inventories
+interchangeable; the plugin cache still reuses their module exports. Public
+artifact adapters carry an explicit environment through both provider selection
+and module loading, including the selected profile's bundled-discovery policy.
+When selection supplies a manifest owner, artifacts resolve from that owner's
+root and entry, preserving source overlays and retained module instances.
+
+Bundled provider policy lookups retain their resolved surface, including absence,
+in the metadata cache. Repeated model-reference canonicalization reuses that
+surface without resolving artifact candidates again. The memo follows the
+selected registry's publication version and bundled-directory selection, with
+separate weakly held entries for each registry. Completed private registries
+become cacheable when their loader publishes its identity; registration and
+incomplete registries remain uncached. A new generation or explicit metadata
+invalidation resolves the surface again, and managed surfaces
+retain their instance's admission checks.
+
 The CLI invocation owns one operation cache across config reads, output metadata,
 command ownership, nested registration, and actions. Standalone registration uses
 its caller's active generation. Config validation covers every
 workspace; execution uses the original selected workspace snapshot, or shared
-roots when no workspace owner is proven. Exact config/source identities and
-revision checks fence retained registrars. Preparation closes before Commander
+roots when no workspace owner is proven. Prepared registrars keep their captured
+metadata if configuration changes during the operation. Preparation closes before Commander
 actions, while its cache scope lasts through action completion for late imports.
 Changed package files require a new operation; changing activation inputs does
 not retire compatible package facts. SDK alias maps are prepared on first alias

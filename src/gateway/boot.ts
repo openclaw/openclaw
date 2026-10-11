@@ -3,11 +3,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   escapeInternalRuntimeContextDelimiters,
+  type RuntimeContextFragment,
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -21,7 +20,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { clearBootEchoContextForSession, setBootEchoContextForSession } from "./boot-echo-guard.js";
@@ -43,36 +41,35 @@ type BootRunResult =
   | { status: "failed"; reason: string };
 
 function buildBootPrompt(content: string) {
-  // Wrap BOOT.md content in internal-runtime-context delimiters so any
-  // verbatim model echo (final reply or message-tool send) is removed by
-  // the existing `stripInternalRuntimeContext` pathway. Mirrors the
-  // runtime-context-prompt pattern from `e918e5f75c fix: hide runtime
-  // context from submitted prompts`. The notice tells the model the
-  // wrapped content is internal and should not be repeated to users.
-  // Fixes #53732.
   const safeContent = escapeInternalRuntimeContextDelimiters(content);
-  return [
-    "You are running a boot check. Follow BOOT.md instructions exactly.",
-    "",
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-    "",
-    "BOOT.md:",
-    safeContent,
-    INTERNAL_RUNTIME_CONTEXT_END,
-    "",
-    "If BOOT.md asks you to send a message, use the message tool (action=send with channel + target).",
-    "Use the `target` field (not `to`) for message tool destinations.",
-    `After sending with the message tool, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
-    `If nothing needs attention, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
-  ].join("\n");
+  const runtimeContextFragments: RuntimeContextFragment[] = [
+    {
+      kind: "runtime-instruction",
+      text: "You are running a boot check. Follow BOOT.md instructions exactly.",
+    },
+    { kind: "runtime-instruction", text: `BOOT.md:\n${safeContent}` },
+    {
+      kind: "runtime-instruction",
+      text: [
+        "If BOOT.md asks you to send a message, use the message tool (action=send with channel + target).",
+        "Use the `target` field (not `to`) for message tool destinations.",
+        `After sending with the message tool, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
+        `If nothing needs attention, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
+      ].join("\n"),
+    },
+  ];
+  return {
+    message: "Run the workspace boot check now.",
+    runtimeContextFragments,
+    echoContext: runtimeContextFragments.map((fragment) => fragment.text).join("\n\n"),
+  };
 }
 
 const MAX_BOOT_FILE_BYTES = 16 * 1024 * 1024;
 
 async function loadBootFile(
   workspaceDir: string,
-): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
+): Promise<{ content: string; status: "ok" } | { status: "missing" | "empty" }> {
   const bootPath = path.join(workspaceDir, BOOT_FILENAME);
 
   // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
@@ -93,12 +90,8 @@ async function loadBootFile(
     }
     throw err;
   }
-  const content = buffer.toString("utf-8");
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return { status: "empty" };
-  }
-  return { status: "ok", content: trimmed };
+  const content = buffer.toString("utf-8").trim();
+  return content ? { status: "ok", content } : { status: "empty" };
 }
 
 export async function runBootOnce(params: {
@@ -121,14 +114,14 @@ export async function runBootOnce(params: {
     return { status: "failed", reason: message };
   }
 
-  if (result.status === "missing" || result.status === "empty") {
+  if (result.status !== "ok") {
     return { status: "skipped", reason: result.status };
   }
 
   const mainSessionKey = params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
-  const message = buildBootPrompt(result.content ?? "");
+  const bootPrompt = buildBootPrompt(result.content);
   const sessionId = generateBootSessionId();
   const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
   // A run-owned key avoids rebinding a retained boot session, which would reject
@@ -139,11 +132,12 @@ export async function runBootOnce(params: {
   let agentFailure: string | undefined;
   let cleanupFailure: string | undefined;
   // Message tools use this exact run key to suppress unwrapped BOOT.md echoes.
-  setBootEchoContextForSession(sessionKey, message);
+  setBootEchoContextForSession(sessionKey, bootPrompt.echoContext);
   try {
     await agentCommandFromSystem(
       {
-        message,
+        message: bootPrompt.message,
+        runtimeContextFragments: bootPrompt.runtimeContextFragments,
         sessionKey,
         sessionId,
         deliver: false,

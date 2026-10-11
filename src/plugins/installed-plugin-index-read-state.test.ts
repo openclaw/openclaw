@@ -5,24 +5,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
-import {
-  refreshPersistedInstalledPluginIndex,
-  refreshPersistedInstalledPluginIndexWithLeaseSync,
-} from "./installed-plugin-index-store-write.js";
+import { refreshPersistedInstalledPluginIndexWithLeaseSync } from "./installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store.js";
+import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -60,8 +60,12 @@ describe("installed plugin index read state", () => {
     const stateDir = makeTempDir();
     const error = Object.assign(new Error("plugin index read denied"), { code: "EACCES" });
     const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
-    for (const read of [readPersistedInstalledPluginIndexSync, readPersistedInstalledPluginIndex]) {
-      readSpy.mockImplementationOnce(() => {
+    const asyncReadSpy = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+    for (const { read, fail } of [
+      { read: readPersistedInstalledPluginIndexSync, fail: readSpy },
+      { read: readPersistedInstalledPluginIndex, fail: asyncReadSpy },
+    ]) {
+      fail.mockImplementationOnce(() => {
         throw error;
       });
       await expect
@@ -71,6 +75,7 @@ describe("installed plugin index read state", () => {
         )
         .rejects.toBe(error);
     }
+    asyncReadSpy.mockRestore();
     readSpy.mockRestore();
   });
 
@@ -102,14 +107,9 @@ describe("installed plugin index read state", () => {
     },
   );
 
-  it.each([
-    { reason: "manual", leased: false },
-    { reason: "manual", leased: true },
-    { reason: "policy-changed", leased: false },
-    { reason: "policy-changed", leased: true },
-  ] as const)(
-    "stops $reason refresh before mutation after one failed read (leased=$leased)",
-    async ({ reason, leased }) => {
+  it.each(["manual", "policy-changed"] as const)(
+    "stops %s refresh before mutation after one failed read",
+    async (reason) => {
       const stateDir = makeTempDir();
       const installRecords = {
         authoritative: { source: "npm", spec: "authoritative@1.0.0" },
@@ -145,17 +145,15 @@ describe("installed plugin index read state", () => {
         env: { OPENCLAW_VERSION: "2026.4.25", VITEST: "true" },
         ...(reason === "policy-changed" ? { installRecords } : {}),
       };
-      const refresh = async () =>
-        leased
-          ? refreshPersistedInstalledPluginIndexWithLeaseSync({ ...params, lease })
-          : refreshPersistedInstalledPluginIndex(params);
+      // Worker refreshes and install transactions share this persistence kernel.
+      const refresh = () => refreshPersistedInstalledPluginIndexWithLeaseSync({ ...params, lease });
       await expect.soft(Promise.resolve().then(refresh)).rejects.toBe(error);
       expect.soft(lease.assertOwnedInTransaction).not.toHaveBeenCalled();
       expect
         .soft(readPersistedIndexRow(filePath))
         .toEqual({ value_json: valueJson, updated_at_ms: 123 });
       readSpy.mockRestore();
-      await refresh();
+      refresh();
       expect((await readPersistedInstalledPluginIndex({ stateDir }))?.installRecords).toEqual(
         installRecords,
       );

@@ -70,37 +70,6 @@ afterEach(async () => {
 });
 
 describe("commanded existing document navigation", () => {
-  it.each(["all", "selected"] as const)(
-    "does not admit an old %s navigation through a replacement native attachment",
-    async (mode) => {
-      const h = await setup(mode);
-      const access = createDeferred<void>();
-      releases.push(() => access.resolve());
-      const get = h.tabsGet.getMockImplementation()!;
-      let held = false;
-      h.tabsGet.mockImplementationOnce(async (id) => {
-        const tab = await get(id);
-        held = true;
-        await access.promise;
-        return tab;
-      });
-      h.native(async () => {
-        h.commitBlank();
-        return blankResult;
-      });
-      const navigating = h.navigate();
-      await vi.waitFor(() => expect(held).toBe(true));
-      expect(await h.request({ type: "detach", tabId: 7 })).toMatchObject({ type: "result" });
-      expect(await h.request({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-      access.resolve();
-      expect.soft(await navigating).toMatchObject({ type: "error" });
-      expect.soft(h.debuggerSendCommand).not.toHaveBeenCalled();
-      expect(h.tabsRemove).not.toHaveBeenCalled();
-      expect(h.tabsUpdate).not.toHaveBeenCalled();
-      expect(await h.navigate()).toMatchObject({ type: "result", result: blankResult });
-    },
-  );
-
   it("preserves the native blank/reset/trace/return order in selected mode", async () => {
     const h = await setup();
     h.native(async () => {
@@ -161,16 +130,6 @@ describe("commanded existing document navigation", () => {
     expect(h.tabsRemove).not.toHaveBeenCalled();
     expect(h.tabsUpdate).not.toHaveBeenCalled();
   });
-  it("honors an explicit close of the controlled blank in selected mode", async () => {
-    const h = await setup();
-    h.native(async () => {
-      h.commitBlank();
-      return blankResult;
-    });
-    expect(await h.navigate()).toMatchObject({ type: "result" });
-    expect(await h.request({ type: "closeTab", tabId: 7 })).toMatchObject({ type: "result" });
-    expect(h.tabsRemove).toHaveBeenCalledExactlyOnceWith(7);
-  });
 
   it.each([
     { pendingUrl: "https://example.com/next", response: "result" },
@@ -191,6 +150,10 @@ describe("commanded existing document navigation", () => {
       });
       expect(await h.navigate()).toMatchObject({ type: response });
       expect(h.tabsRemove).not.toHaveBeenCalled();
+      if (response === "result") {
+        expect(await h.request({ type: "closeTab", tabId: 7 })).toMatchObject({ type: "result" });
+        expect(h.tabsRemove).toHaveBeenCalledExactlyOnceWith(7);
+      }
     },
   );
 
@@ -257,27 +220,6 @@ describe("commanded existing document navigation", () => {
     });
     expect(h.tabsRemove).not.toHaveBeenCalled();
     expect(h.tabsUpdate).not.toHaveBeenCalled();
-  });
-  it("does not restore selected navigation provenance after worker restart", async () => {
-    const h = await setup();
-    h.native(async () => {
-      h.commitBlank();
-      return blankResult;
-    });
-    expect(await h.navigate()).toMatchObject({ type: "result" });
-    const initialTabs = await h.tabsQuery();
-    const storedConfig = { ...h.storageValues };
-    const sessionConfig = { ...h.sessionStorageValues };
-    await cleanupBackgroundHarnesses();
-    vi.resetModules();
-    const restarted = await loadBackground({ initialTabs, storedConfig, sessionConfig });
-    const socket = restarted.relaySockets[0];
-    assert(socket);
-    await restarted.authenticate(socket);
-    expect(await sendRuntimeMessage(restarted, { type: "getTabAccess", tabId: 7 })).toMatchObject({
-      accessible: false,
-    });
-    expect(restarted.tabsRemove).not.toHaveBeenCalled();
   });
   it("discards a stale selected discovery snapshot of the source before consuming blank provenance", async () => {
     const h = await setup();

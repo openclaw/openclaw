@@ -1,39 +1,36 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { getReadPathVariants, resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+import { describe, expect, it } from "vitest";
+import { normalizeFileReferencePrefix } from "../../sandbox-paths.js";
+import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
 
 describe("resolveToCwd", () => {
   const cwd = path.resolve("workspace");
 
-  it("resolves ordinary relative paths against cwd", () => {
-    expect(resolveToCwd("notes/today.md", cwd)).toBe(path.resolve(cwd, "notes/today.md"));
+  it.each([
+    ["@notes.md", "notes.md"],
+    ["@@notes.md", "@notes.md"],
+    ["@@@notes.md", "@@notes.md"],
+    ["./@notes.md", "@notes.md"],
+  ])("consumes one reference prefix across resolver handoffs: %s", (input, filename) => {
+    const normalized = normalizeFileReferencePrefix(input);
+    expect(resolveToCwd(normalized, cwd)).toBe(path.resolve(cwd, filename));
+    expect(resolveToCwd(normalizeFileReferencePrefix(normalized), cwd)).toBe(
+      path.resolve(cwd, filename),
+    );
   });
 
-  it("keeps Unicode spaces in the destination path", () => {
-    const nnbsp = "Screenshot 9.30\u202FAM.png";
-    const ascii = "Screenshot 9.30 AM.png";
-    expect(resolveToCwd(nnbsp, cwd)).toBe(path.resolve(cwd, nnbsp));
-    expect(resolveToCwd(nnbsp, cwd)).not.toBe(path.resolve(cwd, ascii));
-  });
-
-  it("resolves valid file URLs to their filesystem path", () => {
+  it("preserves home and file URL references without decoding escaped mentions", () => {
     const target = path.resolve(cwd, "notes.txt");
-    expect(resolveToCwd(pathToFileURL(target).href, cwd)).toBe(target);
-  });
-
-  it("keeps lexical backend paths independent of local literal @ names", async () => {
-    const tempCwd = tempDirs.make("openclaw-at-path-");
-    await fs.writeFile(path.join(tempCwd, "@literal.txt"), "literal", "utf8");
-
-    expect(resolveLocalPathToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "@literal.txt"));
-    expect(resolveLocalPathToCwd("@missing.txt", tempCwd)).toBe(path.join(tempCwd, "missing.txt"));
-    expect(resolveToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "literal.txt"));
+    const url = pathToFileURL(target).href;
+    expect(resolveToCwd(normalizeFileReferencePrefix(`@${url}`), cwd)).toBe(target);
+    expect(resolveToCwd(normalizeFileReferencePrefix(`@@${url}`), cwd)).toBe(
+      path.resolve(cwd, `@${url}`),
+    );
+    expect(resolveToCwd(normalizeFileReferencePrefix("@~/notes.txt"), cwd)).toBe(
+      resolveToCwd("~/notes.txt", cwd),
+    );
   });
 
   it("keeps malformed file URLs on the ordinary relative-path path", () => {

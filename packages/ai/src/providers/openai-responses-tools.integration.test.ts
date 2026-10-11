@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-client.js";
 import {
@@ -33,15 +33,35 @@ function completedResponseEvents() {
 
 it.each(
   (["provider", "transport"] as const).flatMap((entrypoint) =>
-    [true, false, undefined].map((strict) => ({ entrypoint, strict })),
+    [
+      { native: false, supportsStrictMode: true, strict: false },
+      { native: false, supportsStrictMode: false, strict: undefined },
+      { native: false, supportsStrictMode: undefined, strict: undefined },
+      { native: true, supportsStrictMode: undefined, strict: true },
+    ].map(({ native, supportsStrictMode, strict }) => ({
+      entrypoint,
+      native,
+      supportsStrictMode,
+      strict,
+    })),
   ),
-)("serializes $entrypoint Responses tools with strict=$strict", async ({ entrypoint, strict }) => {
+)("serializes $entrypoint Responses tools with strict=$strict", async (scenario) => {
+  const { entrypoint, native, supportsStrictMode, strict } = scenario;
   const server = await createResponsesLoopbackServer(completedResponseEvents);
-  configureAiTransportHost({ resolveOpenAIStrictToolSetting: () => strict });
+  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
+  configureAiTransportHost({
+    resolveProviderRequestCapabilities: () => ({
+      ...capabilities,
+      endpointClass: native ? "openai-public" : "custom",
+    }),
+    resolveOpenAIStrictToolSetting: (_model, options) =>
+      native ? true : options?.supportsStrictMode ? false : undefined,
+  });
+  const model = { ...responsesLoopbackModel, compat: { supportsStrictMode } };
   const parameters = Object.freeze({
     type: "object",
-    properties: Object.freeze({}),
-    required: Object.freeze([]),
+    properties: Object.freeze({ prompt: { type: "string" }, note: { type: "string" } }),
+    required: Object.freeze(native ? ["prompt", "note"] : ["prompt"]),
     additionalProperties: false,
   });
   let descriptionReads = 0;
@@ -85,26 +105,64 @@ it.each(
   try {
     const runtime = createLlmRuntime();
     registerBuiltInApiProviders(runtime.registry);
-    const stream =
-      entrypoint === "provider"
-        ? runtime.stream(responsesLoopbackModel, context, options)
-        : await createOpenAIResponsesTransportStreamFn()(responsesLoopbackModel, context, options);
-    for await (const event of stream) {
-      if (event.type === "start" || event.type === "done" || event.type === "error") {
-        lifecycle.push(event.type);
+    for (let request = 0; request < 2; request++) {
+      const stream =
+        entrypoint === "provider"
+          ? runtime.stream(model, context, options)
+          : await createOpenAIResponsesTransportStreamFn()(model, context, options);
+      for await (const event of stream) {
+        if (event.type === "start" || event.type === "done" || event.type === "error") {
+          lifecycle.push(event.type);
+        }
       }
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "done" })]);
+      expect(result.usage).toMatchObject({ input: 5, output: 3, totalTokens: 8 });
     }
-    const result = await stream.result();
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "done" })]);
-    expect(result.usage).toMatchObject({ input: 5, output: 3, totalTokens: 8 });
-    expect(lifecycle).toEqual(["payload", "response", "start", "done"]);
-    expect(server.requests).toHaveLength(1);
-    expect(server.requests[0]?.tools).toEqual(expectedTools);
-    expect(server.rawRequests[0]).toContain(`"tools":${JSON.stringify(expectedTools)}`);
-    expect(descriptionReads).toBe(1);
+    expect(lifecycle).toEqual(
+      Array.from({ length: 2 }, () => ["payload", "response", "start", "done"]).flat(),
+    );
+    expect(server.requests).toHaveLength(2);
+    for (let request = 0; request < 2; request++) {
+      expect(server.requests[request]?.tools).toEqual(expectedTools);
+      expect(server.rawRequests[request]).toContain(`"tools":${JSON.stringify(expectedTools)}`);
+    }
+    expect(descriptionReads).toBe(2);
     expect(tools.map((tool) => tool.name)).toEqual(["zeta", "alpha"]);
     expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
+  } finally {
+    configureAiTransportHost({});
+    await server.close();
+  }
+});
+
+it("sends strict=false when a Responses tool pattern uses a regex lookaround", async () => {
+  const server = await createResponsesLoopbackServer(completedResponseEvents);
+  configureAiTransportHost({ resolveOpenAIStrictToolSetting: () => true });
+  const parameters = {
+    type: "object",
+    properties: {
+      filename: { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" },
+      folder: { type: "string" },
+      content: { type: "string" },
+    },
+    required: ["folder", "filename", "content"],
+    additionalProperties: false,
+  };
+  const context: Context = {
+    messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    tools: [{ name: "create_file", description: "Create", parameters }],
+  };
+  try {
+    const stream = await createOpenAIResponsesTransportStreamFn()(responsesLoopbackModel, context, {
+      apiKey: "synthetic-key",
+      cacheRetention: "none",
+    });
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(server.requests[0]?.tools).toEqual([
+      { type: "function", name: "create_file", description: "Create", parameters, strict: false },
+    ]);
   } finally {
     configureAiTransportHost({});
     await server.close();

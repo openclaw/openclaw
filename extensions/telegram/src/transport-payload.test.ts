@@ -2,41 +2,21 @@ import { buffer } from "node:stream/consumers";
 import { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { telegramPlugin } from "./channel.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
 import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
-
-const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
-
-vi.mock("./rich-blocks.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
-  return {
-    ...actual,
-    markdownToTelegramRichBlocks: (
-      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
-    ) => {
-      richMarkdownProjection.count += 1;
-      return actual.markdownToTelegramRichBlocks(...args);
-    },
-  };
-});
 
 type CapturedRequest = {
   body: Buffer;
@@ -70,24 +50,6 @@ function directMessagesMessage(overrides: Record<string, unknown> = {}): Record<
     text: "button",
     ...overrides,
   };
-}
-
-function installTelegramStateRuntimeForTest(): void {
-  setTelegramRuntime({
-    state: {
-      openKeyedStore: ((options) =>
-        createPluginStateKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-    },
-    channel: {},
-  } as TelegramRuntime);
 }
 
 function parseJsonBody(request: CapturedRequest): Record<string, unknown> {
@@ -164,10 +126,9 @@ describe("Telegram topic transport payloads", () => {
 
   beforeEach(() => {
     requests.length = 0;
-    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
-    installTelegramStateRuntimeForTest();
+    setTelegramPluginStateRuntimeForTests();
   });
 
   afterEach(() => {
@@ -242,7 +203,7 @@ describe("Telegram topic transport payloads", () => {
     if (!target?.to) {
       throw new Error("expected persisted direct-topic delivery target");
     }
-    installTelegramStateRuntimeForTest();
+    setTelegramPluginStateRuntimeForTests();
     await sendMessageTelegram(target.to, "roundtrip", {
       cfg,
       token: TOKEN,
@@ -273,7 +234,6 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
-    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {
@@ -380,6 +340,46 @@ describe("Telegram topic transport payloads", () => {
     expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
       business_connection_id: "business-media-1",
       direct_messages_topic_id: DIRECT_TOPIC_ID,
+      text: "Replacement",
+    });
+  });
+
+  it("clears media callback buttons when deleting before a text replacement fails", async () => {
+    const callbackMessage = directMessagesMessage({
+      text: undefined,
+      caption: "Choose an action",
+    }) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+    const editMessage = vi
+      .spyOn(bot.api, "editMessageText")
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: there is no text in the message to edit"),
+      );
+    const deleteMessage = vi
+      .spyOn(bot.api, "deleteMessage")
+      .mockRejectedValueOnce(new Error("400: Bad Request: message can't be deleted"));
+
+    try {
+      await actions.editCallbackMessageWithButtons("Replacement", []);
+    } finally {
+      editMessage.mockRestore();
+      deleteMessage.mockRestore();
+    }
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "editMessageReplyMarkup",
+      "sendMessage",
+    ]);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual({
+      chat_id: DIRECT_CHAT_ID,
+      message_id: 41,
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
       text: "Replacement",
     });
   });

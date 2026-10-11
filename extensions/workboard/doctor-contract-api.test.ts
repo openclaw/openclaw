@@ -1,467 +1,73 @@
-// Workboard tests cover doctor contract api plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { createPluginStateKeyedStoreForTests as createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import {
+  createPluginStateKeyedStoreForTests as createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import type { PersistedWorkboardCard } from "./src/persistence-types.js";
-import { createWorkboardSqliteStores } from "./src/sqlite-store.js";
-import { WorkboardStore } from "./src/store.js";
-import { sqliteTestAuxStores } from "./src/test/sqlite-store.js";
 
-function createDoctorContext(
-  env: NodeJS.ProcessEnv,
-  supportsCount = true,
-): PluginDoctorStateMigrationContext {
-  return {
+let stateDir: string;
+let env: NodeJS.ProcessEnv;
+const migration = expectDefined(stateMigrations[0], "Workboard retirement detector");
+
+beforeAll(() => {
+  // openclaw-temp-dir: allow closes the database owner before removing the suite fixture.
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-retired-"));
+  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+});
+
+afterAll(() => {
+  resetPluginStateStoreForTests();
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+function input(supportsCount: boolean) {
+  const context: PluginDoctorStateMigrationContext = {
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      const store = createPluginStateKeyedStore<T>("workboard", {
-        ...options,
-        env: options.env ?? env,
-      });
+      const store = createPluginStateKeyedStore<T>("workboard", options);
       return { ...store, count: supportsCount ? store.count : undefined };
     },
   };
+  return { config: {}, env, stateDir, oauthDir: path.join(stateDir, "oauth"), context };
 }
 
-describe("workboard doctor contract", () => {
-  it.each([true, false])("migrates .28 data with count support %s", async (supportsCount) => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    try {
-      const cardStore = createPluginStateKeyedStore<PersistedWorkboardCard>("workboard", {
-        namespace: "workboard.cards",
-        maxEntries: 2000,
-        env,
-      });
-      const boardStore = createPluginStateKeyedStore("workboard", {
-        namespace: "workboard.boards",
-        maxEntries: 200,
-        env,
-      });
-      const notifyStore = createPluginStateKeyedStore("workboard", {
-        namespace: "workboard.notify",
-        maxEntries: 2000,
-        env,
-      });
-      const attachmentStore = createPluginStateKeyedStore("workboard", {
-        namespace: "workboard.attachments",
-        maxEntries: 42_000,
-        env,
-      });
-      await boardStore.register("planning", {
-        version: 1,
-        board: { id: "planning", name: "Planning", createdAt: 1, updatedAt: 2 },
-      });
-      await cardStore.register("card-1", {
-        version: 1,
-        card: {
-          id: "card-1",
-          title: "Migrate me",
-          status: "todo",
-          priority: "normal",
-          labels: ["sqlite"],
-          position: 1000,
-          createdAt: 1,
-          updatedAt: 2,
-          metadata: {
-            automation: { boardId: "planning" },
-            attachments: [
-              {
-                id: "attachment-1",
-                cardId: "card-1",
-                createdAt: 2,
-                fileName: "proof.txt",
-                byteSize: 2,
-              },
-            ],
-          },
-        },
-      });
-      await notifyStore.register("sub-1", {
-        version: 1,
-        subscription: { id: "sub-1", boardId: "planning", createdAt: 1, updatedAt: 2 },
-      });
-      await attachmentStore.register("attachment-1", {
-        version: 1,
-        attachment: {
-          id: "attachment-1",
-          cardId: "card-1",
-          createdAt: 2,
-          fileName: "proof.txt",
-          byteSize: 2,
-        },
-        contentBase64: Buffer.from("ok").toString("base64"),
-      });
-
-      const migration = expectDefined(stateMigrations[0], "workboard state migration");
-      await expect(
-        migration.detectLegacyState({
-          config: {},
-          env,
-          stateDir,
-          oauthDir: path.join(stateDir, "oauth"),
-          context: createDoctorContext(env, supportsCount),
-        }),
-      ).resolves.toMatchObject({
-        preview: [expect.stringContaining("4 legacy .28 plugin-state KV entries")],
-      });
-
-      const result = await migration.migrateLegacyState({
-        config: {},
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env, supportsCount),
-      });
-
-      expect(result).toMatchObject({
-        changes: [expect.stringContaining("Migrated 4 Workboard .28 plugin-state KV entries")],
-        warnings: [],
-      });
-      expect(await cardStore.entries()).toEqual([]);
-      expect(await boardStore.entries()).toEqual([]);
-      expect(await notifyStore.entries()).toEqual([]);
-      expect(await attachmentStore.entries()).toEqual([]);
-
-      const sqlite = createWorkboardSqliteStores({ env });
-      const store = new WorkboardStore(sqlite.cards, {
-        boards: sqlite.boards,
-        subscriptions: sqlite.subscriptions,
-        attachments: sqlite.attachments,
-      });
-      expect(await store.get("card-1")).toMatchObject({
-        title: "Migrate me",
-        metadata: {
-          automation: { boardId: "planning" },
-          attachments: [expect.objectContaining({ id: "attachment-1" })],
-        },
-      });
-      expect(await store.getAttachment("attachment-1")).toMatchObject({
-        contentBase64: Buffer.from("ok").toString("base64"),
-      });
-      expect(await store.listBoards()).toMatchObject({
-        boards: [
-          expect.objectContaining({ id: "default" }),
-          expect.objectContaining({ id: "planning" }),
-        ],
-      });
-      expect(await store.listNotificationSubscriptions({ boardId: "planning" })).toMatchObject({
-        subscriptions: [expect.objectContaining({ id: "sub-1" })],
-      });
-      sqlite.close();
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
+describe.each([true, false])("Workboard retirement with count support %s", (supportsCount) => {
+  it("leaves installations without legacy rows alone", async () => {
+    await expect(migration.detectLegacyState(input(supportsCount))).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(input(supportsCount))).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   });
 
-  it("resumes attachment migration when the owning card was already copied", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  it.each([
+    ["workboard.cards", 2000],
+    ["workboard.boards", 200],
+    ["workboard.notify", 2000],
+    ["workboard.attachments", 42_000],
+  ])("preserves %s rows and names the recovery release", async (namespace, maxEntries) => {
+    const store = createPluginStateKeyedStore<unknown>("workboard", { namespace, maxEntries, env });
+    await store.register("retained", { version: 1, retained: namespace });
+    const before = await store.entries();
     try {
-      const attachmentStore = createPluginStateKeyedStore("workboard", {
-        namespace: "workboard.attachments",
-        maxEntries: 42_000,
-        env,
+      await expect(migration.detectLegacyState(input(supportsCount))).resolves.toEqual({
+        preview: [expect.stringContaining("2026.9.7 and run openclaw doctor --fix")],
       });
-      await attachmentStore.register("attachment-1", {
-        version: 1,
-        attachment: {
-          id: "attachment-1",
-          cardId: "card-1",
-          createdAt: 2,
-          fileName: "proof.txt",
-          byteSize: 2,
-        },
-        contentBase64: Buffer.from("ok").toString("base64"),
+      const result = await migration.migrateLegacyState(input(supportsCount));
+      expect(result).toEqual({
+        changes: [],
+        warnings: [expect.stringContaining("2026.9.7 and run openclaw doctor --fix")],
       });
-
-      const sqlite = createWorkboardSqliteStores({ env });
-      await sqlite.cards.register("card-1", {
-        version: 1,
-        card: {
-          id: "card-1",
-          title: "Already copied",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1000,
-          createdAt: 1,
-          updatedAt: 2,
-          metadata: {
-            attachments: [
-              {
-                id: "attachment-1",
-                cardId: "card-1",
-                createdAt: 2,
-                fileName: "proof.txt",
-                byteSize: 2,
-              },
-            ],
-          },
-        },
-      });
-      sqlite.close();
-
-      const result = await expectDefined(
-        stateMigrations[0],
-        "workboard state migration",
-      ).migrateLegacyState({
-        config: {},
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
-      });
-
-      expect(result).toMatchObject({
-        changes: [expect.stringContaining("Migrated 1 Workboard .28 plugin-state KV entry")],
-        warnings: [],
-      });
-      expect(await attachmentStore.entries()).toEqual([]);
-
-      const reopenedStores = createWorkboardSqliteStores({ env });
-      expect(await reopenedStores.attachments.lookup("attachment-1")).toMatchObject({
-        contentBase64: Buffer.from("ok").toString("base64"),
-      });
-      reopenedStores.close();
+      expect(await store.entries()).toEqual(before);
     } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips malformed legacy attachments without aborting valid attachment migration", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    try {
-      const attachmentStore = createPluginStateKeyedStore<unknown>("workboard", {
-        namespace: "workboard.attachments",
-        maxEntries: 42_000,
-        env,
-      });
-      await attachmentStore.register("broken", { version: 1 });
-      await attachmentStore.register("attachment-1", {
-        version: 1,
-        attachment: {
-          id: "attachment-1",
-          cardId: "card-1",
-          createdAt: 2,
-          fileName: "proof.txt",
-          byteSize: 2,
-        },
-        contentBase64: Buffer.from("ok").toString("base64"),
-      });
-
-      const sqlite = createWorkboardSqliteStores({ env });
-      await sqlite.cards.register("card-1", {
-        version: 1,
-        card: {
-          id: "card-1",
-          title: "Already copied",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1000,
-          createdAt: 1,
-          updatedAt: 2,
-          metadata: {
-            attachments: [
-              {
-                id: "attachment-1",
-                cardId: "card-1",
-                createdAt: 2,
-                fileName: "proof.txt",
-                byteSize: 2,
-              },
-            ],
-          },
-        },
-      });
-      sqlite.close();
-
-      const result = await expectDefined(
-        stateMigrations[0],
-        "workboard state migration",
-      ).migrateLegacyState({
-        config: {},
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
-      });
-
-      expect(result.changes).toEqual([
-        expect.stringContaining("Migrated 1 Workboard .28 plugin-state KV entry"),
-      ]);
-      expect(result.warnings).toEqual([
-        expect.stringContaining("Skipped malformed legacy Workboard attachment entry broken"),
-      ]);
-      expect((await attachmentStore.entries()).map((entry) => entry.key)).toEqual(["broken"]);
-
-      const reopenedStores = createWorkboardSqliteStores({ env });
-      expect(await reopenedStores.attachments.lookup("attachment-1")).toMatchObject({
-        contentBase64: Buffer.from("ok").toString("base64"),
-      });
-      reopenedStores.close();
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps orphan legacy attachments when migrated card metadata does not reference them", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    try {
-      const cardStore = createPluginStateKeyedStore<PersistedWorkboardCard>("workboard", {
-        namespace: "workboard.cards",
-        maxEntries: 2000,
-        env,
-      });
-      const attachmentStore = createPluginStateKeyedStore("workboard", {
-        namespace: "workboard.attachments",
-        maxEntries: 42_000,
-        env,
-      });
-      await cardStore.register("card-1", {
-        version: 1,
-        card: {
-          id: "card-1",
-          title: "Migrated card",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1000,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      });
-      await attachmentStore.register("attachment-1", {
-        version: 1,
-        attachment: {
-          id: "attachment-1",
-          cardId: "card-1",
-          createdAt: 2,
-          fileName: "orphan.txt",
-          byteSize: 2,
-        },
-        contentBase64: Buffer.from("ok").toString("base64"),
-      });
-
-      const result = await expectDefined(
-        stateMigrations[0],
-        "workboard state migration",
-      ).migrateLegacyState({
-        config: {},
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
-      });
-
-      expect(result.changes).toEqual([
-        expect.stringContaining("Migrated 1 Workboard .28 plugin-state KV entry"),
-      ]);
-      expect(result.warnings).toEqual([
-        expect.stringContaining("does not reference the attachment"),
-      ]);
-      expect(await cardStore.entries()).toEqual([]);
-      expect(await attachmentStore.entries()).toHaveLength(1);
-
-      const reopenedStores = createWorkboardSqliteStores({ env });
-      expect(await reopenedStores.attachments.lookup("attachment-1")).toBeUndefined();
-      reopenedStores.close();
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps current sqlite rows when legacy kv ids conflict", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    try {
-      const cardStore = createPluginStateKeyedStore<PersistedWorkboardCard>("workboard", {
-        namespace: "workboard.cards",
-        maxEntries: 2000,
-        env,
-      });
-      const attachmentStore = createPluginStateKeyedStore("workboard", {
-        namespace: "workboard.attachments",
-        maxEntries: 42_000,
-        env,
-      });
-      await cardStore.register("card-1", {
-        version: 1,
-        card: {
-          id: "card-1",
-          title: "Legacy card",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1000,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      });
-      await attachmentStore.register("attachment-1", {
-        version: 1,
-        attachment: {
-          id: "attachment-1",
-          cardId: "card-1",
-          createdAt: 1,
-          fileName: "old.txt",
-          byteSize: 2,
-        },
-        contentBase64: Buffer.from("no").toString("base64"),
-      });
-
-      const sqlite = createWorkboardSqliteStores({ env });
-      await sqlite.cards.register("card-1", {
-        version: 1,
-        card: {
-          id: "card-1",
-          title: "Current card",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1000,
-          createdAt: 2,
-          updatedAt: 2,
-        },
-      });
-      sqlite.close();
-
-      const result = await expectDefined(
-        stateMigrations[0],
-        "workboard state migration",
-      ).migrateLegacyState({
-        config: {},
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
-      });
-
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([
-        expect.stringContaining("SQLite target already exists"),
-        expect.stringContaining("owning card was not migrated"),
-      ]);
-      expect(await cardStore.entries()).toHaveLength(1);
-      expect(await attachmentStore.entries()).toHaveLength(1);
-
-      const reopenedStores = createWorkboardSqliteStores({ env });
-      const store = new WorkboardStore(reopenedStores.cards, sqliteTestAuxStores(reopenedStores));
-      expect(await store.get("card-1")).toMatchObject({ title: "Current card" });
-      expect(await reopenedStores.attachments.lookup("attachment-1")).toBeUndefined();
-      reopenedStores.close();
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
+      await store.delete("retained");
     }
   });
 });

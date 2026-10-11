@@ -1,22 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
+import { settleRoster } from "./roster.test-support.ts";
 
 function expectEmptyLead(row: Element | null) {
   const lead = row?.querySelector(".sidebar-session-indicator");
   expect(lead).not.toBeNull();
   expect(lead?.childElementCount).toBe(0);
 }
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
 
 describe("AppSidebar session indicators", () => {
   it("removes a session stripe when a changed event clears its color", async () => {
@@ -46,21 +41,25 @@ describe("AppSidebar session indicators", () => {
     expect(row()?.style.getPropertyValue("--session-color")).toBe("");
   });
 
-  it("renders named glyphs as strokes and keeps emoji as text", async () => {
+  it("renders named glyphs and SVG artwork while keeping emoji as text", async () => {
     const glyphKey = "agent:main:glyph";
     const emojiKey = "agent:main:emoji";
-    const sessions = createSessionsHarness("main", [glyphKey, emojiKey]);
+    const svgKey = "agent:main:svg";
+    const svgIcon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>')}`;
+    const sessions = createSessionsHarness("main", [glyphKey, emojiKey, svgKey]);
     const result = sessions.sessions.state.result;
     if (!result) {
       throw new Error("expected session list");
     }
     const glyph = result.sessions.find((row) => row.key === glyphKey);
     const emoji = result.sessions.find((row) => row.key === emojiKey);
-    if (!glyph || !emoji) {
+    const svg = result.sessions.find((row) => row.key === svgKey);
+    if (!glyph || !emoji || !svg) {
       throw new Error("expected icon sessions");
     }
     glyph.icon = "braces";
     emoji.icon = "🦞";
+    svg.icon = svgIcon;
 
     const { sidebar } = await mountSidebar(
       createGatewayHarness({} as GatewayBrowserClient).gateway,
@@ -68,11 +67,24 @@ describe("AppSidebar session indicators", () => {
     );
     const glyphRow = sidebar.querySelector(`[data-session-key="${glyphKey}"]`);
     const emojiRow = sidebar.querySelector(`[data-session-key="${emojiKey}"]`);
+    const svgRow = () => sidebar.querySelector(`[data-session-key="${svgKey}"]`);
 
     expect(glyphRow?.querySelector(".session-glyph__icon svg")).not.toBeNull();
     expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
     expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
+    expect(svgRow()?.querySelector(".session-glyph__icon img")?.getAttribute("src")).toBe(svgIcon);
+    expect(svgRow()?.querySelector(".session-glyph__icon svg")).toBeNull();
+    expect(svgRow()?.querySelector(".session-glyph__emoji")).toBeNull();
+
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: svgKey,
+        icon: null,
+      }).result,
+    });
+    await sidebar.updateComplete;
+    expect(svgRow()?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
   it("prioritizes session icons, then channel avatars, then owner chips", async () => {
@@ -134,7 +146,9 @@ describe("AppSidebar session indicators", () => {
     expect(avatar?.querySelector(".channel-avatar")?.getAttribute("src")).toBe(
       "blob:channel-avatar",
     );
-    expect(avatar?.querySelector(".session-owner-chip")).toBeNull();
+    expect(
+      avatar?.querySelector<HTMLElement>("openclaw-channel-avatar > span")?.style.display,
+    ).toBe("none");
 
     const owner = sidebar.querySelector(`[data-session-key="${ownerKey}"]`);
     expect(owner?.querySelector("openclaw-channel-avatar")).toBeNull();
@@ -205,8 +219,12 @@ describe("AppSidebar session indicators", () => {
 
     // A restored/replaced backing image arrives as a new route revision; the
     // mounted row must fetch the new URL instead of reusing the sticky 404.
-    row.channelAvatarUrl = restoredUrl;
-    sidebar.requestUpdate();
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: avatarKey,
+        channelAvatarUrl: restoredUrl,
+      }).result,
+    });
     await sidebar.updateComplete;
 
     await waitForFast(() => {
@@ -222,8 +240,10 @@ describe("AppSidebar session indicators", () => {
     );
     // Once the avatar renders, the chip fallback yields to the real image.
     expect(
-      sidebar.querySelector(`[data-session-key="${avatarKey}"] .session-owner-chip`),
-    ).toBeNull();
+      sidebar.querySelector<HTMLElement>(
+        `[data-session-key="${avatarKey}"] openclaw-channel-avatar > span`,
+      )?.style.display,
+    ).toBe("none");
   });
 
   it("keeps the owner chip when avatar auth is not ready", async () => {
@@ -264,7 +284,7 @@ describe("AppSidebar session indicators", () => {
   });
 
   it.each(["running", "queued"] as const)(
-    "rings Home for %s activity while keeping its draft and outbox badges trailing",
+    "presents main-session %s activity once in the agent header with draft and outbox badges",
     async (status) => {
       const mainKey = "agent:main:main";
       const workingKey = "agent:main:working";
@@ -283,28 +303,34 @@ describe("AppSidebar session indicators", () => {
       const { sidebar } = await mountSidebar(
         createGatewayHarness({} as GatewayBrowserClient).gateway,
         sessions.sessions,
+        "panel",
+        { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
       );
       sidebar.activeRouteId = "chat";
       sidebar.sessionKey = workingKey;
-      sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
-      sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
-      sidebar.requestUpdate();
-      await sidebar.updateComplete;
+      sidebar.storedOutboxes = {
+        total: 2,
+        attentionCountForSession: (sessionKey) => (sessionKey === mainKey ? 2 : 0),
+        hasSessionDraft: (sessionKey) => sessionKey === mainKey,
+      };
+      sidebar.connected = true;
+      sidebar.sidebarAgentsMode = "roster";
+      await settleRoster(sidebar);
 
-      const home = sidebar.querySelector(".nav-item--home");
+      const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
       const homeRing = home?.querySelector(".session-glyph--running .session-glyph__ring");
-      expect(home?.querySelector(".session-glyph__content .nav-item__icon")).not.toBeNull();
+      expect(home?.querySelector(".sidebar-agent-roster__avatar")).not.toBeNull();
       expect(homeRing).not.toBeNull();
-      expect(home?.querySelector(".nav-item__state .session-run-spinner")).toBeNull();
-      expect(home?.querySelector(".session-unread-dot")).toBeNull();
+      expect(home?.querySelectorAll(".session-run-spinner")).toHaveLength(0);
+      expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
       const activityLabel = status === "queued" ? "Queued" : "Active run";
       expect(homeRing?.getAttribute("aria-label")).toBe(activityLabel);
       expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(status === "queued");
-      expect(home?.getAttribute("aria-label")).toBe(`Home · ${activityLabel} · Unread`);
       expect(
-        home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
-      ).toContain("2");
-      expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+        home?.querySelectorAll(`.session-glyph__ring[aria-label="${activityLabel}"]`),
+      ).toHaveLength(1);
+      expect(home?.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
+      expect(home?.querySelector(".session-row-badge--draft")).not.toBeNull();
     },
   );
 
@@ -428,6 +454,12 @@ describe("AppSidebar session indicators", () => {
       ],
     });
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
     sessions.publishList({
       result: {
@@ -564,6 +596,7 @@ describe("AppSidebar session indicators", () => {
     const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
       } as ApplicationGatewaySnapshot["hello"],
     });
@@ -573,39 +606,21 @@ describe("AppSidebar session indicators", () => {
     await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        expect.objectContaining({
-          sessionKeys: expect.arrayContaining([keys.openPullRequest, keys.mergedPullRequest]),
-        }),
+        { sessionKeys: [] },
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       );
     });
-    gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-      sessions: Object.fromEntries(
-        [keys.openPullRequest, keys.mergedPullRequest].map((key) => [
-          key,
-          {
-            pullRequests: [
-              {
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                branch: "feature/test",
-                title: "Test",
-                url: "https://example.test/pr/1",
-                state: key.endsWith("open-pr") ? "open" : "merged",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        ]),
-      ),
+    sessions.sessions.setPullRequestSummary(keys.openPullRequest, { numbers: [1], state: "open" });
+    sessions.sessions.setPullRequestSummary(keys.mergedPullRequest, {
+      numbers: [1],
+      state: "merged",
     });
 
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-pull-request-state="open"]')).not.toBeNull();
       expect(sidebar.querySelector('[data-pull-request-state="merged"]')).not.toBeNull();
     });
-    // Opening chat hydrates its detailed summary from the same pushed snapshot.
+    // Opening chat hydrates its detailed summary from the same last-known snapshot.
     // It must not add a second PR icon beside the sidebar's existing indicator.
     sessions.sessions.setPullRequestSummary(keys.openPullRequest, { numbers: [1], state: "open" });
     await sidebar.updateComplete;

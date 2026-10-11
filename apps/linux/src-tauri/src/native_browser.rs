@@ -1,4 +1,4 @@
-use crate::native_browser_platform as platform;
+use crate::native_browser_platform::{self as platform, Navigation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -95,54 +95,47 @@ struct Presentation {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 enum Request {
-    #[serde(rename_all = "camelCase")]
     Open {
         tab_id: String,
         url: String,
         session_key: String,
     },
-    #[serde(rename_all = "camelCase")]
     Navigate {
         tab_id: String,
         url: String,
     },
-    #[serde(rename_all = "camelCase")]
     Back {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Forward {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Reload {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Stop {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Close {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Snapshot {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Inspect {
         tab_id: String,
         x: f64,
         y: f64,
     },
-    #[serde(rename_all = "camelCase")]
     Download {
         tab_id: String,
     },
-    #[serde(rename_all = "camelCase")]
     Present {
         scope: String,
         tab_id: Option<String>,
@@ -180,6 +173,13 @@ impl BrowserHost {
             .ok_or_else(|| "This browser tab has closed.".into())
     }
 
+    fn current_tab(&mut self, label: &str, clock: &AtomicU64, event: u64) -> Option<&mut Tab> {
+        if clock.load(Ordering::SeqCst) != event {
+            return None;
+        }
+        self.tabs.iter_mut().find(|tab| tab.label == label)
+    }
+
     fn view(&self, app: &AppHandle, id: &str) -> Result<Webview, String> {
         app.get_webview(&self.tab(id)?.label)
             .ok_or_else(|| "This browser tab is unavailable.".into())
@@ -189,16 +189,13 @@ impl BrowserHost {
         if url == "about:blank" {
             return None;
         }
-        self.tabs
+        let mut tabs = self
+            .tabs
             .iter()
-            .find(|tab| !tab.failed && tab.session_key == session && tab.url == url)
-            .or_else(|| {
-                self.tabs.iter().find(|tab| {
-                    !tab.failed
-                        && tab.session_key == session
-                        && tab.initial_alias.as_deref() == Some(url)
-                })
-            })
+            .filter(|tab| !tab.failed && tab.session_key == session);
+        tabs.clone()
+            .find(|tab| tab.url == url)
+            .or_else(|| tabs.find(|tab| tab.initial_alias.as_deref() == Some(url)))
     }
 
     fn publish(&mut self, app: &AppHandle) {
@@ -206,7 +203,11 @@ impl BrowserHost {
         let state = json!({ "revision": self.revision, "tabs": self.tabs });
         if let (Some(view), Some(script)) = (
             app.get_webview("main"),
-            crate::native_browser_bridge::publication_script(app, &state.to_string()),
+            crate::native_browser_bridge::publication_script(
+                app,
+                &state.to_string(),
+                crate::native_browser_bridge::Publication::Browser,
+            ),
         ) {
             let _ = view.eval(script);
         }
@@ -242,16 +243,12 @@ impl BrowserHost {
                     LogicalSize::new(rect.width, rect.height),
                 )
                 .await?;
-                if app.get_webview("main").is_some_and(|dashboard| {
-                    crate::native_browser_bridge::dashboard_is_current(app, &dashboard)
-                }) {
-                    view.show().map_err(|error| error.to_string())?;
-                } else {
-                    view.hide().map_err(|error| error.to_string())?;
-                }
-            } else {
-                view.hide().map_err(|error| error.to_string())?;
             }
+            let visible = rect.is_some()
+                && app.get_webview("main").is_some_and(|dashboard| {
+                    crate::native_browser_bridge::dashboard_is_current(app, &dashboard)
+                });
+            if visible { view.show() } else { view.hide() }.map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -296,6 +293,15 @@ impl NativeBrowserState {
         generation: Option<u64>,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
         Box::pin(async move {
+            let current = || {
+                if generation.is_some_and(|generation| {
+                    !crate::native_browser_bridge::request_is_current(app, generation)
+                }) {
+                    Err("The native browser document changed.".to_string())
+                } else {
+                    Ok(())
+                }
+            };
             identifier(&id)?;
             if !session_key.is_empty() {
                 identifier(&session_key)?;
@@ -310,11 +316,7 @@ impl NativeBrowserState {
                 .get_webview("main")
                 .ok_or_else(|| "The dashboard is unavailable.".to_string())?;
             platform::prepare_surface(&dashboard).await?;
-            if generation.is_some_and(|generation| {
-                !crate::native_browser_bridge::request_is_current(app, generation)
-            }) {
-                return Err("The native browser document changed.".into());
-            }
+            current()?;
             // WebView labels are generated by the host, never controlled by page input.
             // These views match no IPC capability and receive no dashboard auth scripts.
             let label = format!("inline-browser-{}", uuid::Uuid::new_v4());
@@ -355,10 +357,7 @@ impl NativeBrowserState {
                 let url = url.to_string();
                 tauri::async_runtime::spawn(async move {
                     let mut host = owner.inner.lock().await;
-                    if clock.load(Ordering::SeqCst) != event {
-                        return;
-                    }
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
+                    if let Some(tab) = host.current_tab(&label, &clock, event) {
                         if tab.initial_finished && tab.url != url {
                             tab.initial_alias = None;
                         }
@@ -385,10 +384,7 @@ impl NativeBrowserState {
                 let event = clock.fetch_add(1, Ordering::SeqCst) + 1;
                 tauri::async_runtime::spawn(async move {
                     let mut host = owner.inner.lock().await;
-                    if clock.load(Ordering::SeqCst) != event {
-                        return;
-                    }
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == view.label()) {
+                    if let Some(tab) = host.current_tab(view.label(), &clock, event) {
                         // An engine can finish its initial empty document after
                         // the requested page has already begun navigating.
                         if url == "about:blank" && tab.url != "about:blank" {
@@ -420,11 +416,7 @@ impl NativeBrowserState {
                 .first()
                 .and_then(|tab| app.get_webview(&tab.label));
             let builder = platform::configure_browser(builder, sibling.as_ref()).await?;
-            if generation.is_some_and(|generation| {
-                !crate::native_browser_bridge::request_is_current(app, generation)
-            }) {
-                return Err("The native browser document changed.".into());
-            }
+            current()?;
             let view = window
                 .add_child(
                     builder,
@@ -432,11 +424,9 @@ impl NativeBrowserState {
                     LogicalSize::new(1.0, 1.0),
                 )
                 .map_err(|error| format!("Could not open the browser tab: {error}"))?;
-            if generation.is_some_and(|generation| {
-                !crate::native_browser_bridge::request_is_current(app, generation)
-            }) {
+            if let Err(error) = current() {
                 let _ = view.close();
-                return Err("The native browser document changed.".into());
+                return Err(error);
             }
             if let Err(error) = view.hide() {
                 let _ = view.close();
@@ -462,69 +452,55 @@ impl NativeBrowserState {
                 opener_tab_id,
                 label,
             });
-            let observer_owner = self.clone();
-            let observer_app = app.clone();
-            let observer_label = view.label().to_string();
-            let refresh_clock = Arc::new(AtomicU64::new(0));
-            if let Err(error) = platform::observe_navigation(&view, move || {
-                let owner = observer_owner.clone();
-                let app = observer_app.clone();
-                let label = observer_label.clone();
-                let clock = refresh_clock.clone();
-                let event = clock.fetch_add(1, Ordering::SeqCst) + 1;
-                tauri::async_runtime::spawn(async move {
-                    owner.refresh(&app, &label, clock, event).await;
-                });
-            })
-            .await
-            {
-                host.tabs.retain(|tab| tab.id != id);
-                let _ = platform::release(&view).await;
-                let _ = view.close();
-                return Err(error);
-            }
-            let failure_owner = self.clone();
-            let failure_app = app.clone();
-            let failure_label = view.label().to_string();
-            if let Err(error) = platform::observe_navigation_failure(&view, move || {
-                let event = navigation_epoch.load(Ordering::SeqCst);
-                failed_epoch.store(event, Ordering::SeqCst);
-                let clock = navigation_epoch.clone();
-                let owner = failure_owner.clone();
-                let app = failure_app.clone();
-                let label = failure_label.clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut host = owner.inner.lock().await;
-                    if clock.load(Ordering::SeqCst) != event {
+            let prepared = async {
+                let observer_owner = self.clone();
+                let observer_app = app.clone();
+                let observer_label = view.label().to_string();
+                let refresh_clock = Arc::new(AtomicU64::new(0));
+                platform::observe_navigation(&view, move || {
+                    let owner = observer_owner.clone();
+                    let app = observer_app.clone();
+                    let label = observer_label.clone();
+                    let clock = refresh_clock.clone();
+                    let event = clock.fetch_add(1, Ordering::SeqCst) + 1;
+                    tauri::async_runtime::spawn(async move {
+                        owner.refresh(&app, &label, clock, event).await;
+                    });
+                })
+                .await?;
+                let failure_owner = self.clone();
+                let failure_app = app.clone();
+                let failure_label = view.label().to_string();
+                platform::observe_navigation_events(&view, move |navigation| {
+                    if navigation != platform::NavigationEvent::Failed {
                         return;
                     }
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
-                        tab.navigation_failed();
-                        host.publish(&app);
-                    }
-                });
-            })
-            .await
-            {
+                    let event = navigation_epoch.load(Ordering::SeqCst);
+                    failed_epoch.store(event, Ordering::SeqCst);
+                    let clock = navigation_epoch.clone();
+                    let owner = failure_owner.clone();
+                    let app = failure_app.clone();
+                    let label = failure_label.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut host = owner.inner.lock().await;
+                        if let Some(tab) = host.current_tab(&label, &clock, event) {
+                            tab.navigation_failed();
+                            host.publish(&app);
+                        }
+                    });
+                })
+                .await?;
+                current()?;
+                bootstrap.store(false, Ordering::SeqCst);
+                view.navigate(url)
+                    .map_err(|error| format!("Could not load the browser page: {error}"))
+            }
+            .await;
+            if let Err(error) = prepared {
                 host.tabs.retain(|tab| tab.id != id);
                 let _ = platform::release(&view).await;
                 let _ = view.close();
                 return Err(error);
-            }
-            if generation.is_some_and(|generation| {
-                !crate::native_browser_bridge::request_is_current(app, generation)
-            }) {
-                host.tabs.retain(|tab| tab.id != id);
-                let _ = platform::release(&view).await;
-                let _ = view.close();
-                return Err("The native browser document changed.".into());
-            }
-            bootstrap.store(false, Ordering::SeqCst);
-            if let Err(error) = view.navigate(url) {
-                host.tabs.retain(|tab| tab.id != id);
-                let _ = platform::release(&view).await;
-                let _ = view.close();
-                return Err(format!("Could not load the browser page: {error}"));
             }
             host.publish(app);
             Ok(id)
@@ -542,10 +518,7 @@ impl NativeBrowserState {
             return;
         }
         let mut host = self.inner.lock().await;
-        if clock.load(Ordering::SeqCst) != event {
-            return;
-        }
-        if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
+        if let Some(tab) = host.current_tab(label, &clock, event) {
             if browser_url(&url).is_ok() {
                 if tab.initial_finished && tab.url != url.as_str() {
                     tab.initial_alias = None;
@@ -668,32 +641,30 @@ impl NativeBrowserState {
                     tab.initial_alias = None;
                 }
             }
-            Request::Back { tab_id } => platform::go_back(&host.view(app, &tab_id)?).await?,
-            Request::Forward { tab_id } => platform::go_forward(&host.view(app, &tab_id)?).await?,
+            Request::Back { tab_id } => {
+                platform::navigate(&host.view(app, &tab_id)?, Navigation::Back).await?
+            }
+            Request::Forward { tab_id } => {
+                platform::navigate(&host.view(app, &tab_id)?, Navigation::Forward).await?
+            }
             Request::Reload { tab_id } => host
                 .view(app, &tab_id)?
                 .reload()
                 .map_err(|error| error.to_string())?,
             Request::Stop { tab_id } => {
-                platform::stop(&host.view(app, &tab_id)?).await?;
+                platform::navigate(&host.view(app, &tab_id)?, Navigation::Stop).await?;
                 if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                     tab.loading = false;
                     tab.initial_alias = None;
                 }
                 host.publish(app);
             }
-            operation @ (Request::Snapshot { .. }
-            | Request::Download { .. }
-            | Request::Inspect { .. }) => {
+            ref operation @ (Request::Snapshot { ref tab_id }
+            | Request::Download { ref tab_id }
+            | Request::Inspect { ref tab_id, .. }) => {
                 // Native dialogs and image capture may outlive a tab. Do not block
                 // close/switch while awaiting them, and discard results from a closed view.
-                let tab_id = match &operation {
-                    Request::Snapshot { tab_id }
-                    | Request::Download { tab_id }
-                    | Request::Inspect { tab_id, .. } => tab_id.clone(),
-                    _ => unreachable!(),
-                };
-                let view = host.view(app, &tab_id)?;
+                let view = host.view(app, tab_id)?;
                 let downloading = matches!(operation, Request::Download { .. });
                 if downloading && !host.downloads.insert(view.label().to_string()) {
                     return Err("This browser tab already has a download in progress.".into());
@@ -703,9 +674,9 @@ impl NativeBrowserState {
                     Request::Snapshot { .. } => platform::snapshot(&view).await,
                     Request::Download { .. } => platform::download(&view, generation).await,
                     Request::Inspect { x, y, .. }
-                        if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 =>
+                        if x.is_finite() && y.is_finite() && *x >= 0.0 && *y >= 0.0 =>
                     {
-                        platform::inspect(&view, x, y).await
+                        platform::inspect(&view, *x, *y).await
                     }
                     _ => Err("Invalid browser inspection coordinates.".into()),
                 };
@@ -713,7 +684,7 @@ impl NativeBrowserState {
                 if downloading {
                     host.downloads.remove(view.label());
                 }
-                if host.tab(&tab_id)?.label != view.label() {
+                if host.tab(tab_id)?.label != view.label() {
                     return Err("This browser tab has changed.".into());
                 }
                 return result;

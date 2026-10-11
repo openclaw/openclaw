@@ -52,11 +52,19 @@ openclaw-chat-clawhub-card {
 
 .chat-clawhub-card__name {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
 
+.chat-clawhub-card__name .plugin-card-author {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: normal;
+}
+
 .chat-clawhub-card .card-sub {
+  margin-top: 2px;
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;

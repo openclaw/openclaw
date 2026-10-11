@@ -17,7 +17,7 @@ describe("tool meta formatting", () => {
       expect(formatToolAggregate("fs", [`${home}/a.txt`])).toContain("~/a.txt");
       expect(formatToolAggregate("fs", [`${home}/a.txt:12`])).toContain("~/a.txt:12");
       expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain("cd ~/dir && ls");
-      expect(formatToolAggregate("fs", [""])).toBe("🧩 Fs");
+      expect(formatToolAggregate("fs", [""])).toBe("Fs");
     });
   });
 
@@ -29,7 +29,7 @@ describe("tool meta formatting", () => {
         "note",
         "a→b",
       ]);
-      expect(out).toMatch(/^🧩 Fs/);
+      expect(out).toMatch(/^Fs/);
       expect(out).toContain("~/dir/{a.txt, b.txt}");
       expect(out).toContain("note");
       expect(out).toContain("a→b");
@@ -43,9 +43,30 @@ describe("tool meta formatting", () => {
     });
   });
 
+  it("preserves path spelling and group order after raw metadata", () => {
+    withHome(() => {
+      expect(
+        formatToolAggregate("fs", [
+          "/z/a",
+          "/2/a",
+          "/z/b",
+          "relative/file",
+          "/a→b",
+          "/1/a",
+          "/root",
+          "/leaf",
+          "/double//file",
+          "/trailing/",
+        ]),
+      ).toBe(
+        "Fs: relative/file; /a→b; /z/{a, b}; /2/a; /1/a; /{root, leaf}; /double//file; /trailing/",
+      );
+    });
+  });
+
   it("uses a longer inline code delimiter when meta contains backticks", () => {
     const out = formatToolAggregate("fs", ["name `with` ticks"], { markdown: true });
-    expect(out).toBe("🧩 Fs: ``name `with` ticks``");
+    expect(out).toBe("Fs: ``name `with` ticks``");
   });
 
   it("keeps exec flags outside markdown and moves them to the front", () => {
@@ -53,7 +74,7 @@ describe("tool meta formatting", () => {
       const out = formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], {
         markdown: true,
       });
-      expect(out).toBe("🛠️ elevated · `cd ~/dir && gemini 2>&1`");
+      expect(out).toBe("elevated · `cd ~/dir && gemini 2>&1`");
     });
   });
 });

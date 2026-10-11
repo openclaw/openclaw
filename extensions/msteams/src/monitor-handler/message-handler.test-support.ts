@@ -1,4 +1,3 @@
-// Msteams plugin module implements message handler support behavior.
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
@@ -7,24 +6,31 @@ import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 export const channelConversationId = "19:general@thread.tacv2";
 
 type MessageHandlerDepsOptions = {
+  accountId?: string;
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
-  resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
+  resolveAgentRoute?: (params: {
+    accountId?: string | null;
+    peer: { kind: string; id: string };
+  }) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
   shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
   shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  resolveStorePath?: () => string | undefined;
   getTeamDetails?: ReturnType<typeof vi.fn>;
+  runPrepared?: NonNullable<Parameters<typeof installMSTeamsTestRuntime>[0]>["runPrepared"];
 };
 
 export function createMessageHandlerDeps(
   cfg: OpenClawConfig,
   options: MessageHandlerDepsOptions = {},
 ) {
+  const accountId = options.accountId ?? "default";
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
   const readAllowFromStore = options.readAllowFromStore ?? vi.fn(async () => []);
   const upsertPairingRequest = options.upsertPairingRequest ?? vi.fn(async () => null);
@@ -35,7 +41,7 @@ export function createMessageHandlerDeps(
     vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
       sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
       agentId: "main",
-      accountId: "default",
+      accountId,
       mainSessionKey: "agent:main:main",
       lastRoutePolicy: "session" as const,
       matchedBy: "default" as const,
@@ -56,7 +62,8 @@ export function createMessageHandlerDeps(
     createInboundDebouncer: options.createInboundDebouncer,
     resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: () => "/tmp/test-store",
+    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
+    runPrepared: options.runPrepared,
   });
 
   const conversationStore = {
@@ -70,6 +77,7 @@ export function createMessageHandlerDeps(
   const deps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+    accountId,
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {

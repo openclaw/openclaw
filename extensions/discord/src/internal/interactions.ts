@@ -1,31 +1,20 @@
-// Discord plugin module implements interactions behavior.
 import {
   ComponentType,
   InteractionResponseType,
   InteractionType,
+  Routes,
+  type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteraction,
   type APIApplicationCommandInteractionDataOption,
   type APIChannel,
   type APIInteraction,
   type APIInteractionDataResolvedChannel,
-  type APIMessage,
   type APIMessageComponentInteraction,
   type APIModalSubmitInteraction,
   type APIUser,
 } from "discord-api-types/v10";
-import {
-  createInteractionCallback,
-  createWebhookMessage,
-  deleteWebhookMessage,
-  editWebhookMessage,
-  getWebhookMessage,
-} from "./api.interactions.js";
 import { OptionsHandler } from "./interaction-options.js";
-import {
-  InteractionResponseController,
-  needsComponentsV2Query,
-  type InteractionResponseState,
-} from "./interaction-response.js";
+import { needsComponentsV2Query, type InteractionResponseState } from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
@@ -40,23 +29,12 @@ import {
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
-  componentHandler: {
-    waitForMessageComponent(
-      message: Message,
-      timeoutMs: number,
-    ): Promise<
-      | { success: true; customId: string; message: Message; values?: string[] }
-      | { success: false; message: Message; reason: "timed out" }
-    >;
-  };
   fetchChannel(id: string): Promise<DiscordChannel>;
 };
 
 type Modal = {
   serialize: () => unknown;
 };
-
-type ComponentData = Record<string, unknown>;
 
 export type RawInteraction = APIInteraction & {
   token: string;
@@ -79,22 +57,6 @@ export type RawInteraction = APIInteraction & {
   message?: unknown;
 };
 
-type CommandRawInteraction = APIApplicationCommandInteraction & RawInteraction;
-type MessageComponentRawInteraction = APIMessageComponentInteraction & RawInteraction;
-type ModalSubmitRawInteraction = APIModalSubmitInteraction & RawInteraction;
-
-function toCommandRawInteraction(rawData: RawInteraction): CommandRawInteraction {
-  return rawData as CommandRawInteraction;
-}
-
-function toMessageComponentRawInteraction(rawData: RawInteraction): MessageComponentRawInteraction {
-  return rawData as MessageComponentRawInteraction;
-}
-
-function toModalSubmitRawInteraction(rawData: RawInteraction): ModalSubmitRawInteraction {
-  return rawData as ModalSubmitRawInteraction;
-}
-
 function readInteractionUser(rawData: RawInteraction, client: InteractionClient): User | null {
   const directUser = "user" in rawData ? rawData.user : undefined;
   if (directUser && typeof directUser === "object" && "id" in directUser) {
@@ -102,7 +64,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   }
   const memberUser = rawData.member?.user;
   if (memberUser && typeof memberUser === "object" && typeof memberUser.id === "string") {
-    const user = { ...memberUser } as APIUser;
+    const user = { ...memberUser };
     if (typeof user.username !== "string") {
       user.username = "";
     }
@@ -119,7 +81,7 @@ class BaseInteraction {
   readonly guild: Guild | null;
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
-  private readonly response = new InteractionResponseController();
+  responseState: InteractionResponseState = "unacknowledged";
   private pendingResponse: Promise<void> = Promise.resolve();
   private sentFollowUp = false;
 
@@ -139,22 +101,10 @@ class BaseInteraction {
   }
 
   get acknowledged(): boolean {
-    return this.response.acknowledged;
+    return this.responseState !== "unacknowledged";
   }
 
-  get responseState(): InteractionResponseState {
-    return this.response.state;
-  }
-
-  set responseState(nextState: InteractionResponseState) {
-    this.response.state = nextState;
-  }
-
-  /**
-   * True once a follow-up message has been delivered. Follow-ups are visible to
-   * the user but never advance `responseState`, so this is the only record that
-   * the interaction has already produced output.
-   */
+  // Follow-ups produce visible output without advancing responseState.
   get hasSentFollowUp(): boolean {
     return this.sentFollowUp;
   }
@@ -170,16 +120,18 @@ class BaseInteraction {
   }
 
   private async performCallback(type: InteractionResponseType, data?: unknown) {
-    if (this.response.acknowledged) {
+    if (this.responseState !== "unacknowledged") {
       throw new Error("Discord interaction has already been acknowledged.");
     }
-    const result = await createInteractionCallback(
-      this.client.rest,
-      this.id,
-      this.token,
-      data === undefined ? { type } : { type, data },
-    );
-    this.response.recordCallback(type);
+    const result = await this.client.rest.post(Routes.interactionCallback(this.id, this.token), {
+      body: data === undefined ? { type } : { type, data },
+    });
+    this.responseState =
+      type === InteractionResponseType.DeferredChannelMessageWithSource
+        ? "deferred"
+        : type === InteractionResponseType.DeferredMessageUpdate
+          ? "deferred-update"
+          : "replied";
     return result;
   }
 
@@ -189,11 +141,10 @@ class BaseInteraction {
 
   async reply(payload: MessagePayload): Promise<unknown> {
     return await this.enqueueResponse(async () => {
-      const action = this.response.nextReplyAction();
-      if (action === "edit") {
+      if (this.responseState === "deferred" || this.responseState === "deferred-update") {
         return await this.performReplyEdit(payload);
       }
-      if (action === "follow-up") {
+      if (this.responseState !== "unacknowledged") {
         return await this.performFollowUp(payload);
       }
       return await this.performCallback(
@@ -218,17 +169,8 @@ class BaseInteraction {
     return await this.enqueueResponse(() => this.performReplyEdit(payload));
   }
 
-  /**
-   * Edits the deferred placeholder only if this interaction is still an
-   * unanswered spinner when the queue reaches this operation.
-   *
-   * Both conditions are re-read inside the queue. A follow-up that was still in
-   * flight when the caller decided to report will have settled — and recorded
-   * itself in `sentFollowUp` — by the time this runs, so the decision cannot be
-   * made against state that is about to change.
-   *
-   * Resolves true when the edit was sent.
-   */
+  // Recheck inside the queue: an in-flight follow-up may answer the spinner
+  // before this edit runs.
   async editDeferredPlaceholderIfUnanswered(payload: MessagePayload): Promise<boolean> {
     return await this.enqueueResponse(async () => {
       if (this.responseState !== "deferred" || this.sentFollowUp) {
@@ -243,52 +185,26 @@ class BaseInteraction {
     const body = serializePayload(payload);
     const query = needsComponentsV2Query(body) ? { with_components: true } : undefined;
     const result = query
-      ? await editWebhookMessage(
-          this.client.rest,
-          this.client.options.clientId,
-          this.token,
-          "@original",
-          { body },
-          query,
-        )
-      : await editWebhookMessage(
-          this.client.rest,
-          this.client.options.clientId,
-          this.token,
-          "@original",
-          { body },
-        );
-    this.response.recordReplyEdit();
+      ? await this.client.rest.patch(this.originalReplyRoute, { body }, query)
+      : await this.client.rest.patch(this.originalReplyRoute, { body });
+    this.responseState = "replied";
     return result;
   }
 
   async deleteReply(): Promise<unknown> {
     return await this.enqueueResponse(async () => {
-      const result = await deleteWebhookMessage(
-        this.client.rest,
-        this.client.options.clientId,
-        this.token,
-        "@original",
-      );
-      this.response.recordReplyDelete();
+      const result = await this.client.rest.delete(this.originalReplyRoute);
+      this.responseState = "replied";
       return result;
     });
   }
 
   async fetchReply(): Promise<unknown> {
-    return await this.enqueueResponse(() =>
-      getWebhookMessage(this.client.rest, this.client.options.clientId, this.token, "@original"),
-    );
+    return await this.enqueueResponse(() => this.client.rest.get(this.originalReplyRoute));
   }
 
-  async replyAndWaitForComponent(payload: MessagePayload, timeoutMs = 300_000) {
-    const result = await this.reply(payload);
-    const rawMessage = isRawMessage(result) ? result : await this.fetchReply();
-    if (!isRawMessage(rawMessage)) {
-      throw new Error("Discord interaction reply did not return a message");
-    }
-    const message = new Message(this.client, rawMessage as APIMessage);
-    return await this.client.componentHandler.waitForMessageComponent(message, timeoutMs);
+  private get originalReplyRoute(): string {
+    return Routes.webhookMessage(this.client.options.clientId, this.token, "@original");
   }
 
   async followUp(payload: MessagePayload): Promise<unknown> {
@@ -297,10 +213,8 @@ class BaseInteraction {
 
   private async performFollowUp(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
-    const result = await createWebhookMessage(
-      this.client.rest,
-      this.client.options.clientId,
-      this.token,
+    const result = await this.client.rest.post(
+      Routes.webhook(this.client.options.clientId, this.token),
       { body },
       needsComponentsV2Query(body) ? { with_components: true } : undefined,
     );
@@ -313,7 +227,8 @@ export class CommandInteraction extends BaseInteraction {
   readonly options: OptionsHandler;
   constructor(
     client: InteractionClient,
-    rawData: APIApplicationCommandInteraction & RawInteraction,
+    rawData: (APIApplicationCommandInteraction | APIApplicationCommandAutocompleteInteraction) &
+      RawInteraction,
   ) {
     super(client, rawData);
     this.options = new OptionsHandler(
@@ -360,10 +275,10 @@ export class BaseComponentInteraction extends BaseInteraction {
 
 export class ButtonInteraction extends BaseComponentInteraction {}
 export class StringSelectMenuInteraction extends BaseComponentInteraction {}
-export class UserSelectMenuInteraction extends BaseComponentInteraction {}
-export class RoleSelectMenuInteraction extends BaseComponentInteraction {}
-export class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
-export class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
+class UserSelectMenuInteraction extends BaseComponentInteraction {}
+class RoleSelectMenuInteraction extends BaseComponentInteraction {}
+class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
+class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
 
 export class ModalInteraction extends BaseInteraction {
   readonly fields: ModalFields;
@@ -380,51 +295,30 @@ export class ModalInteraction extends BaseInteraction {
   }
 }
 
+const componentInteractions = new Map<number, typeof BaseComponentInteraction>([
+  [ComponentType.Button, ButtonInteraction],
+  [ComponentType.StringSelect, StringSelectMenuInteraction],
+  [ComponentType.UserSelect, UserSelectMenuInteraction],
+  [ComponentType.RoleSelect, RoleSelectMenuInteraction],
+  [ComponentType.MentionableSelect, MentionableSelectMenuInteraction],
+  [ComponentType.ChannelSelect, ChannelSelectMenuInteraction],
+]);
+
 export function createInteraction(client: InteractionClient, rawData: RawInteraction) {
   assertDiscordInteractionPayload(rawData);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
-    return new AutocompleteInteraction(client, toCommandRawInteraction(rawData));
+    return new AutocompleteInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.ApplicationCommand) {
-    return new CommandInteraction(client, toCommandRawInteraction(rawData));
+    return new CommandInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.ModalSubmit) {
-    return new ModalInteraction(client, toModalSubmitRawInteraction(rawData));
+    return new ModalInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const componentRawData = toMessageComponentRawInteraction(rawData);
-    switch (rawData.data?.component_type) {
-      case ComponentType.Button:
-        return new ButtonInteraction(client, componentRawData);
-      case ComponentType.StringSelect:
-        return new StringSelectMenuInteraction(client, componentRawData);
-      case ComponentType.UserSelect:
-        return new UserSelectMenuInteraction(client, componentRawData);
-      case ComponentType.RoleSelect:
-        return new RoleSelectMenuInteraction(client, componentRawData);
-      case ComponentType.MentionableSelect:
-        return new MentionableSelectMenuInteraction(client, componentRawData);
-      case ComponentType.ChannelSelect:
-        return new ChannelSelectMenuInteraction(client, componentRawData);
-      default:
-        return new BaseComponentInteraction(client, componentRawData);
-    }
+    const Component =
+      componentInteractions.get(rawData.data?.component_type) ?? BaseComponentInteraction;
+    return new Component(client, rawData);
   }
   return new BaseInteraction(client, rawData);
-}
-
-export function parseComponentInteractionData(
-  component: { customIdParser: (id: string) => { data: ComponentData } },
-  customId: string,
-): ComponentData {
-  return component.customIdParser(customId).data;
-}
-
-function isRawMessage(value: unknown): value is { id: string; channel_id: string } {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { id?: unknown }).id === "string" &&
-    typeof (value as { channel_id?: unknown }).channel_id === "string"
-  );
 }

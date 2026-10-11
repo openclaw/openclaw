@@ -10,10 +10,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { createSecretFileAtomic, tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { extractErrorCode } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
@@ -154,9 +155,7 @@ export async function ensureExtensionRelayToken(
         lastError = err;
       }
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, RELAY_SECRET_REREAD_DELAY_MS);
-    });
+    await sleepWithAbort(RELAY_SECRET_REREAD_DELAY_MS);
   }
   throw new Error("extension relay secret exists but is unreadable/malformed", {
     cause: lastError,

@@ -62,6 +62,16 @@ vi.mock("./resolve.js", () => ({
 
 const cfg = {} as CoreConfig;
 
+function sendTestMedia(overrides: Partial<Parameters<typeof sendClickClackMedia>[0]> = {}) {
+  return sendClickClackMedia({
+    cfg,
+    to: "channel:general",
+    text: "Artifact proof",
+    mediaUrl: "/workspace/viewer-proof.ts",
+    ...overrides,
+  });
+}
+
 describe("sendClickClackText routing", () => {
   beforeEach(() => {
     createChannelMessage.mockClear();
@@ -94,17 +104,6 @@ describe("sendClickClackText routing", () => {
     expect(createThreadReply).not.toHaveBeenCalled();
   });
 
-  it("posts a plain channel message when there is no reply context", async () => {
-    await sendClickClackText({ cfg, to: "channel:general", text: "hi" });
-
-    expect(createChannelMessage).toHaveBeenCalledWith(
-      "general",
-      "hi",
-      expect.objectContaining({ quotedMessageId: undefined }),
-    );
-    expect(createThreadReply).not.toHaveBeenCalled();
-  });
-
   it("uses the inbound correlation id for outbound ClickClack HTTP calls", async () => {
     await sendClickClackText({
       cfg,
@@ -113,11 +112,13 @@ describe("sendClickClackText routing", () => {
       correlationId: "fakeco.case_1",
     });
 
-    expect(createClientOptions).toHaveBeenCalledWith({
-      baseUrl: "http://127.0.0.1:8484",
-      token: "test-token-placeholder",
-      correlationId: "fakeco.case_1",
-    });
+    expect(createClientOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://127.0.0.1:8484",
+        token: "test-token-placeholder",
+        correlationId: "fakeco.case_1",
+      }),
+    );
   });
 
   it("sanitizes replies inside a genuine thread", async () => {
@@ -130,13 +131,6 @@ describe("sendClickClackText routing", () => {
     });
 
     expect(createThreadReply).toHaveBeenCalledWith("msg_thread_root", "Done.", expect.anything());
-    expect(createChannelMessage).not.toHaveBeenCalled();
-  });
-
-  it("threads when the target itself names a thread", async () => {
-    await sendClickClackText({ cfg, to: "thread:msg_root", text: "hi" });
-
-    expect(createThreadReply).toHaveBeenCalledWith("msg_root", "hi", expect.anything());
     expect(createChannelMessage).not.toHaveBeenCalled();
   });
 
@@ -242,11 +236,7 @@ describe("sendClickClackMedia", () => {
     });
     const mediaReadFile = vi.fn();
 
-    const messageId = await sendClickClackMedia({
-      cfg,
-      to: "channel:general",
-      text: "Artifact proof",
-      mediaUrl: "/workspace/viewer-proof.ts",
+    const messageId = await sendTestMedia({
       mediaLocalRoots: ["/workspace"],
       mediaReadFile,
     });
@@ -385,33 +375,10 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
   });
 
-  it("rejects oversized media before creating an upload or message", async () => {
-    loadOutboundMediaFromUrl.mockRejectedValueOnce(new Error("media exceeds 67108864 bytes"));
-
-    await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Too large",
-        mediaUrl: "/workspace/oversized.bin",
-      }),
-    ).rejects.toThrow("media exceeds 67108864 bytes");
-
-    expect(createUpload).not.toHaveBeenCalled();
-    expect(createChannelMessage).not.toHaveBeenCalled();
-  });
-
   it("retries attachment association with the same upload and message", async () => {
     attachUpload.mockRejectedValueOnce(new Error("attachment response lost"));
 
-    await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Artifact proof",
-        mediaUrl: "/workspace/viewer-proof.ts",
-      }),
-    ).resolves.toBe("msg_out");
+    await expect(sendTestMedia()).resolves.toBe("msg_out");
 
     expect(createUpload).toHaveBeenCalledTimes(1);
     expect(createChannelMessage).toHaveBeenCalledTimes(1);
@@ -424,14 +391,7 @@ describe("sendClickClackMedia", () => {
     attachUpload.mockRejectedValueOnce(new Error("attachment response lost"));
     message.mockResolvedValueOnce({ id: "msg_out", attachments: [{ id: "upl_1" }] });
 
-    await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Artifact proof",
-        mediaUrl: "/workspace/viewer-proof.ts",
-      }),
-    ).resolves.toBe("msg_out");
+    await expect(sendTestMedia()).resolves.toBe("msg_out");
 
     expect(createUpload).toHaveBeenCalledTimes(1);
     expect(createChannelMessage).toHaveBeenCalledTimes(1);
@@ -441,11 +401,7 @@ describe("sendClickClackMedia", () => {
 
   it("reuses durable upload and message nonces across queue retries", async () => {
     await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Artifact proof",
-        mediaUrl: "/workspace/viewer-proof.ts",
+      sendTestMedia({
         deliveryQueueId: "queue-1",
         deliveryPartIndex: 0,
       }),
@@ -475,11 +431,7 @@ describe("sendClickClackMedia", () => {
     });
 
     await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Artifact proof",
-        mediaUrl: "/workspace/viewer-proof.ts",
+      sendTestMedia({
         deliveryQueueId: "queue-1",
         deliveryPartIndex: 0,
       }),
@@ -490,7 +442,7 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_existing");
   });
 
-  it("marks dispatch once before upload-first durable delivery", async () => {
+  it("marks dispatch once after upload and before visible message creation", async () => {
     const order: string[] = [];
     const onPlatformSendDispatch = vi.fn(async () => {
       order.push("dispatch");
@@ -504,27 +456,19 @@ describe("sendClickClackMedia", () => {
       return { id: "msg_out" };
     });
 
-    await sendClickClackMedia({
-      cfg,
-      to: "channel:general",
-      text: "Artifact proof",
-      mediaUrl: "/workspace/viewer-proof.ts",
+    await sendTestMedia({
       deliveryQueueId: "queue-1",
       deliveryPartIndex: 0,
       onPlatformSendDispatch,
     });
 
-    expect(order).toEqual(["dispatch", "upload", "message"]);
+    expect(order).toEqual(["upload", "dispatch", "message"]);
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
   });
 
   it("rejects a durable send without a stable part index before reading media", async () => {
     await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Artifact proof",
-        mediaUrl: "/workspace/viewer-proof.ts",
+      sendTestMedia({
         deliveryQueueId: "queue-1",
       }),
     ).rejects.toThrow("requires a stable delivery part index");
@@ -536,14 +480,7 @@ describe("sendClickClackMedia", () => {
   it("still rejects when attachment association and its bounded retry both fail", async () => {
     attachUpload.mockRejectedValue(new Error("attachment rejected"));
 
-    await expect(
-      sendClickClackMedia({
-        cfg,
-        to: "channel:general",
-        text: "Artifact proof",
-        mediaUrl: "/workspace/viewer-proof.ts",
-      }),
-    ).rejects.toThrow("attachment rejected");
+    await expect(sendTestMedia()).rejects.toThrow("attachment rejected");
 
     expect(createUpload).toHaveBeenCalledTimes(1);
     expect(createChannelMessage).toHaveBeenCalledTimes(1);

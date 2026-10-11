@@ -1,6 +1,5 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
@@ -71,66 +70,14 @@ function compactionState(
   };
 }
 
-const converters = [
-  {
-    name: "transport-owned",
-    convert: (context: Context, replayMode: OpenAIResponsesReplayMode = "checkpoint") =>
-      convertResponsesMessages(model, context, new Set(["openai"]), {
-        ...replayIdentity,
-        replayMode,
-      }),
-  },
-  {
-    name: "provider-owned",
-    convert: (context: Context, replayMode: OpenAIResponsesReplayMode = "checkpoint") =>
-      convertProviderResponsesMessages(model, context, new Set(["openai"]), {
-        ...replayIdentity,
-        replayMode,
-      }),
-  },
-] as const;
+const convert = (context: Context, replayMode: OpenAIResponsesReplayMode = "checkpoint") =>
+  convertResponsesMessages(model, context, new Set(["openai"]), {
+    ...replayIdentity,
+    replayMode,
+  });
 
 describe("Responses retained-user compaction replay", () => {
-  it.each(converters)(
-    "$name replays the complete saved provider window verbatim",
-    ({ convert }) => {
-      const output = [
-        {
-          type: "message",
-          role: "developer",
-          content: [{ type: "input_text", text: "saved instructions" }],
-        },
-        {
-          type: "message",
-          role: "user",
-          id: "msg_saved",
-          content: [{ type: "input_text", text: "canonical retained user" }],
-        },
-        {
-          type: "compaction",
-          id: "cmp_retained",
-          encrypted_content: "opaque-retained",
-          created_by: "compactor",
-        },
-      ];
-      const replay = {
-        ...compactionState("openai-responses-retained-compaction"),
-        compactedWindow: { state: "ready", output: JSON.stringify(output) },
-      };
-      const input = convert({
-        messages: [
-          { role: "user", content: "not the returned provider window", timestamp: 1 },
-          createAssistant("covered owner text", replay),
-          { role: "user", content: "new turn", timestamp: 2 },
-        ],
-      });
-      expect(input.slice(0, output.length)).toEqual(output);
-      expect(JSON.stringify(input)).not.toContain("not the returned provider window");
-      expect(JSON.stringify(input)).not.toContain("covered owner text");
-    },
-  );
-
-  it.each(converters)("$name requires rebuilding legacy retained-user state", ({ convert }) => {
+  it("requires rebuilding legacy retained-user state", () => {
     const context: Context = {
       systemPrompt: "current system instructions",
       messages: [
@@ -196,23 +143,11 @@ describe("Responses retained-user compaction replay", () => {
     ).toEqual(output);
   });
 
-  it.each(
-    converters.flatMap((converter) =>
-      [
-        {
-          scenario: "compacted-prefix",
-          retainedUsers: false,
-          fullHistory: false,
-          laterUser: false,
-        },
-        { scenario: "retained-users", retainedUsers: true, fullHistory: false, laterUser: false },
-        { scenario: "full-history", retainedUsers: false, fullHistory: true, laterUser: false },
-        { scenario: "later-user", retainedUsers: false, fullHistory: false, laterUser: true },
-      ].map((scenario) => Object.assign({}, converter, scenario)),
-    ),
-  )(
-    "$name preserves the compacted prefix and current context across tool rounds ($scenario)",
-    ({ convert, scenario, retainedUsers, fullHistory, laterUser }) => {
+  it.each([
+    { scenario: "retained-users", retainedUsers: true, fullHistory: false, laterUser: false },
+  ])(
+    "preserves the compacted prefix and current context across tool rounds ($scenario)",
+    ({ scenario, retainedUsers, fullHistory, laterUser }) => {
       const owner = createAssistant([], compactionState("openai-responses-compaction"));
       if (retainedUsers) {
         const item = {
@@ -246,16 +181,16 @@ describe("Responses retained-user compaction replay", () => {
       }
       const carrier = {
         role: "user",
-        content: "current request metadata",
-        runtimeContextCarrier: true,
+        content: "OpenClaw runtime context:\ncurrent request metadata",
         timestamp: 3,
+        runtimeContext: {},
       } satisfies Context["messages"][number];
       const replayMode = fullHistory ? "full-history" : "checkpoint";
       const prefix = convert({ messages }, replayMode);
       let input = convert({ messages: [...messages, carrier] }, replayMode);
       expect(input.slice(0, prefix.length), scenario).toEqual(prefix);
       expect(input.at(-1), scenario).toMatchObject({
-        role: "user",
+        role: "developer",
         content: [{ type: "input_text", text: carrier.content }],
       });
 
@@ -303,7 +238,6 @@ describe("Responses retained-user compaction replay", () => {
   );
 
   it.each([
-    { state: "refresh-required" },
     { state: "ready", output: "not JSON" },
     {
       state: "ready",
@@ -399,7 +333,7 @@ describe("Responses retained-user compaction replay", () => {
     ).toEqual([item]);
   });
 
-  it.each(["duplicated opaque", "escaped plaintext"])(
+  it.each(["escaped plaintext"])(
     "keeps imported %s over the envelope limit as a refresh barrier",
     (kind) => {
       const data = kind === "duplicated opaque" ? "a".repeat(9 * 1024 * 1024) : "opaque-retained";

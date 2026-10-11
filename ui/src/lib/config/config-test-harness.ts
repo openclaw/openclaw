@@ -1,4 +1,5 @@
 import { afterEach, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -8,16 +9,6 @@ export const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
 function configGatewayHello(): GatewayHelloOk {
   return gatewayHelloForMethods(["config.schema", "config.set", "config.apply", "config.patch"]);
-}
-
-export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 export function createGatewayHarness(client: GatewayBrowserClient) {

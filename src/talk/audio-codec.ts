@@ -1,4 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core"; /**
+import { expectDefined } from "@openclaw/normalization-core";
+/**
  * PCM resampling and G.711 mu-law conversion helpers for Talk audio bridges.
  *
  * Telephony providers generally expect 8 kHz mu-law frames, while local audio
@@ -116,20 +117,23 @@ function buildResampleKernel(
   return { coefficients, inputStep, phaseCount };
 }
 
-// Samples through a precomputed windowed-sinc kernel for common rate ratios.
-function sampleBandlimitedWithCoefficients(
+// Common rate ratios reuse a phase table; unusual ratios calculate the same window on demand.
+function sampleBandlimited(
   input: Int16Array,
-  center: number,
-  phase: ResamplePhase,
+  srcPos: number,
+  cutoffCyclesPerSample: number,
+  phase?: ResamplePhase,
 ): number {
-  const { coefficients } = phase;
+  const center = phase ? srcPos : Math.floor(srcPos);
   let weighted = 0;
   // Interior samples use the whole phase; retain the tap order so PCM rounding stays exact.
   if (
+    phase &&
     center >= RESAMPLE_HALF_TAPS &&
     center + RESAMPLE_HALF_TAPS < input.length &&
     phase.weightSum !== 0
   ) {
+    const { coefficients } = phase;
     for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
       weighted += (input[center + tap] ?? 0) * (coefficients[tap + RESAMPLE_HALF_TAPS] ?? 0);
     }
@@ -142,44 +146,19 @@ function sampleBandlimitedWithCoefficients(
     if (sampleIndex < 0 || sampleIndex >= input.length) {
       continue;
     }
-    const coeff = coefficients[tap + RESAMPLE_HALF_TAPS] ?? 0;
+    const tapIndex = tap + RESAMPLE_HALF_TAPS;
+    const coeff = phase
+      ? (phase.coefficients[tapIndex] ?? 0)
+      : 2 *
+        cutoffCyclesPerSample *
+        sinc(2 * cutoffCyclesPerSample * (sampleIndex - srcPos)) *
+        (RESAMPLE_WINDOW[tapIndex] ?? 0);
     weighted += (input[sampleIndex] ?? 0) * coeff;
     weightSum += coeff;
   }
 
   if (weightSum === 0) {
-    const nearest = Math.max(0, Math.min(input.length - 1, center));
-    return input[nearest] ?? 0;
-  }
-
-  return weighted / weightSum;
-}
-
-// Direct windowed-sinc sampler used when precomputing phase tables is too large.
-function sampleBandlimited(
-  input: Int16Array,
-  srcPos: number,
-  cutoffCyclesPerSample: number,
-): number {
-  const center = Math.floor(srcPos);
-  let weighted = 0;
-  let weightSum = 0;
-
-  for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
-    const sampleIndex = center + tap;
-    if (sampleIndex < 0 || sampleIndex >= input.length) {
-      continue;
-    }
-
-    const distance = sampleIndex - srcPos;
-    const lowPass = 2 * cutoffCyclesPerSample * sinc(2 * cutoffCyclesPerSample * distance);
-    const coeff = lowPass * (RESAMPLE_WINDOW[tap + RESAMPLE_HALF_TAPS] ?? 0);
-    weighted += (input[sampleIndex] ?? 0) * coeff;
-    weightSum += coeff;
-  }
-
-  if (weightSum === 0) {
-    const nearest = Math.max(0, Math.min(input.length - 1, Math.round(srcPos)));
+    const nearest = Math.max(0, Math.min(input.length - 1, phase ? center : Math.round(srcPos)));
     return input[nearest] ?? 0;
   }
 
@@ -208,22 +187,19 @@ function sampleResampledPcm(
 ): number {
   const sourcePosition = (outputIndex * plan.inputSampleRate) / plan.outputSampleRate;
   return Math.round(
-    plan.kernel
-      ? sampleBandlimitedWithCoefficients(
-          input,
-          Math.floor(sourcePosition) - inputStartSample,
-          expectDefined(
+    sampleBandlimited(
+      input,
+      (plan.kernel ? Math.floor(sourcePosition) : outputIndex * plan.ratio) - inputStartSample,
+      plan.cutoffCyclesPerSample,
+      plan.kernel
+        ? expectDefined(
             plan.kernel.coefficients[
               (outputIndex * plan.kernel.inputStep) % plan.kernel.phaseCount
             ],
             "coefficients entry at (output index * kernel input step) % kernel phase count",
-          ) ?? plan.kernel.coefficients[0],
-        )
-      : sampleBandlimited(
-          input,
-          outputIndex * plan.ratio - inputStartSample,
-          plan.cutoffCyclesPerSample,
-        ),
+          )
+        : undefined,
+    ),
   );
 }
 

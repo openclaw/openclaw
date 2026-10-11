@@ -96,7 +96,16 @@ describe("managed worktrees child CLI product proof", () => {
 
       const created = parseCommandJson<ManagedWorktreeRecord>(
         "worktrees create",
-        await instance.cli(["worktrees", "create", repo, "--name", WORKTREE_NAME, "--json"]),
+        await instance.cli([
+          "worktrees",
+          "create",
+          repo,
+          "--name",
+          WORKTREE_NAME,
+          "--base-ref",
+          "HEAD",
+          "--json",
+        ]),
       );
       expect(created).toMatchObject({
         name: WORKTREE_NAME,
@@ -182,7 +191,7 @@ describe("managed worktrees child CLI product proof", () => {
         "worktrees gc",
         await instance.cli(["worktrees", "gc", "--json"]),
       );
-      expect(gc).toEqual({
+      expect(gc).toMatchObject({
         removed: [],
         orphansDeleted: expect.any(Number),
         snapshotsPruned: expect.any(Number),

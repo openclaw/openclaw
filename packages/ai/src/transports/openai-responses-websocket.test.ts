@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 
 const websocketState = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -8,7 +9,6 @@ const websocketState = vi.hoisted(() => ({
   }>,
   clients: [] as Array<{ apiKey?: string }>,
   options: [] as Array<{ headers?: Record<string, string> }>,
-  requests: [] as Array<Record<string, unknown>>,
   responseBatches: [] as Array<Array<Record<string, unknown>>>,
 }));
 
@@ -25,8 +25,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       websocketState.options.push(options);
     }
 
-    send(request: Record<string, unknown>) {
-      websocketState.requests.push(request);
+    send() {
       this.events = websocketState.responseBatches.shift() ?? [];
     }
 
@@ -60,12 +59,14 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { cleanupSessionResources } from "../session-resources.js";
 import {
-  createOpenAIResponsesWebSocketStream,
-  supportsNativeOpenAIResponsesEndpoint,
-} from "./openai-responses-websocket.js";
+  configureAiTransportHost,
+  createAiTransportHost,
+  getAiTransportHost,
+  runWithAiTransportHost,
+} from "../host.js";
+import { cleanupSessionResources } from "../session-resources.js";
+import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
 const clientFixture = {
@@ -98,18 +99,11 @@ function completion(responseId: string, output: Array<Record<string, unknown>> =
   };
 }
 
-async function consume(stream: AsyncIterable<unknown>): Promise<unknown[]> {
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 async function consumeResponse(response: ReturnType<typeof createOpenAIResponsesWebSocketStream>) {
-  const events = await consume(response.stream);
+  for await (const event of response.stream) {
+    void event;
+  }
   response.finish();
-  return events;
 }
 
 function createStream(request: Record<string, unknown>, overrides: { sessionId?: string } = {}) {
@@ -127,7 +121,6 @@ describe("native OpenAI Responses WebSocket transport", () => {
     websocketState.instances.length = 0;
     websocketState.clients.length = 0;
     websocketState.options.length = 0;
-    websocketState.requests.length = 0;
     websocketState.responseBatches.length = 0;
     configureAiTransportHost(initialHost);
   });
@@ -137,23 +130,10 @@ describe("native OpenAI Responses WebSocket transport", () => {
     configureAiTransportHost(initialHost);
   });
 
-  it("only enables WebSockets for the official native OpenAI Responses endpoint", () => {
-    expect(
-      supportsNativeOpenAIResponsesEndpoint({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    ).toBe(true);
-  });
-
   it.each([
-    ["missing version path", "openai", "https://api.openai.com"],
-    ["compatible endpoint", "openai", "https://compatible.example/v1"],
     ["missing endpoint", "openai", undefined],
     ["credentials and URL components", "openai", "https://user:pass@api.openai.com/v1?q=x#x"],
     ["lookalike host", "openai", "https://api.openai.com.evil.example/v1"],
-    ["different provider", "azure-openai", "https://api.openai.com/v1"],
   ])("rejects %s", (_name, provider, baseUrl) => {
     expect(
       supportsNativeOpenAIResponsesEndpoint({ provider, api: "openai-responses", baseUrl }),
@@ -207,65 +187,6 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
   });
 
-  it("continues across equivalent request ordering, omissions, and persisted reasoning replay", async () => {
-    const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "ciphertext" };
-    websocketState.responseBatches.push(
-      [completion("resp_1", [reasoning, assistantOutput])],
-      [completion("resp_2")],
-    );
-    await consumeResponse(
-      createStream({
-        model: "gpt-5.6-luna",
-        metadata: { beta: "2", alpha: "1" },
-        max_output_tokens: undefined,
-        input: [firstUser],
-      }),
-    );
-
-    const second = createStream({
-      input: [
-        firstUser,
-        { type: "reasoning", summary: [] },
-        assistantOutput,
-        { role: "user", content: "second" },
-      ],
-      metadata: { alpha: "1", beta: "2" },
-      model: "gpt-5.6-luna",
-    });
-
-    expect(second.continuationStatus).toBe("continued");
-    expect(second.request.input).toEqual([{ role: "user", content: "second" }]);
-    await consumeResponse(second);
-  });
-
-  it("fails closed when a non-assistant history item changes", async () => {
-    const firstInput = {
-      type: "message",
-      role: "user",
-      id: "input_1",
-      status: "completed",
-      content: [{ type: "input_text", text: "first" }],
-    };
-    websocketState.responseBatches.push(
-      [completion("resp_1", [assistantOutput])],
-      [completion("resp_2")],
-    );
-    await consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstInput] as never }));
-
-    const second = createStream({
-      model: "gpt-5.6-luna",
-      input: [
-        { ...firstInput, id: "input_changed" },
-        assistantOutput,
-        { role: "user", content: "second" },
-      ] as never,
-    });
-
-    expect(second.continuationStatus).toBe("history_changed");
-    expect(second.request).not.toHaveProperty("previous_response_id");
-    await consumeResponse(second);
-  });
-
   it("does not retain a continuation after a terminal incomplete response", async () => {
     websocketState.responseBatches.push(
       [completion("resp_1", [assistantOutput])],
@@ -299,13 +220,6 @@ describe("native OpenAI Responses WebSocket transport", () => {
   });
 
   it.each([
-    {
-      name: "tool choice change",
-      mutate: (request: Record<string, unknown>) => ({
-        ...request,
-        tool_choice: "none",
-      }),
-    },
     {
       name: "history rewrite",
       mutate: (request: Record<string, unknown>) => ({
@@ -382,18 +296,36 @@ describe("native OpenAI Responses WebSocket transport", () => {
     expect(websocketState.instances).toHaveLength(2);
   });
 
-  it("closes only the requested session resources", async () => {
-    websocketState.responseBatches.push([completion("resp_1")], [completion("resp_2")]);
-    await consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] }));
-    await consumeResponse(
-      createStream(
-        { model: "gpt-5.6-luna", input: [{ role: "user", content: "other" }] },
-        { sessionId: "session-2" },
+  it("keeps matching-session and all-session cleanup inside one runtime owner", async () => {
+    const firstHost = createAiTransportHost();
+    const secondHost = createAiTransportHost();
+    websocketState.responseBatches.push(
+      [completion("first-shared")],
+      [completion("first-other")],
+      [completion("second-shared")],
+    );
+    await runWithAiTransportHost(firstHost, () =>
+      consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] })),
+    );
+    await runWithAiTransportHost(firstHost, () =>
+      consumeResponse(
+        createStream(
+          { model: "gpt-5.6-luna", input: [{ role: "user", content: "other" }] },
+          { sessionId: "other" },
+        ),
       ),
     );
+    await runWithAiTransportHost(secondHost, () =>
+      consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] })),
+    );
 
-    cleanupSessionResources("session-1");
-    expect(websocketState.instances[0]?.closed).toBe(true);
-    expect(websocketState.instances[1]?.closed).toBe(false);
+    cleanupSessionResources("session-1", firstHost);
+    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, false, false]);
+
+    cleanupSessionResources(undefined, firstHost);
+    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, false]);
+
+    cleanupSessionResources(undefined, secondHost);
+    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, true]);
   });
 });

@@ -1,30 +1,15 @@
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
-// OpenClaw rescue policy gates remote writes by owner, DM, sandbox, and YOLO posture.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals.js";
 
 /**
- * Policy checks for remote OpenClaw rescue commands.
- *
  * Rescue intentionally opens only for owner-controlled, non-sandboxed YOLO host
  * posture because remote commands can write local state.
  */
 type SystemAgentRescueDecision =
-  | {
-      allowed: true;
-      enabled: true;
-      ownerDmOnly: boolean;
-      pendingTtlMinutes: number;
-      yolo: true;
-      sandboxActive: false;
-    }
+  | { allowed: true }
   | {
       allowed: false;
-      enabled: boolean;
-      ownerDmOnly: boolean;
-      pendingTtlMinutes: number;
-      yolo: boolean;
-      sandboxActive: boolean;
       reason: "disabled" | "sandbox-active" | "not-owner" | "not-direct-message";
       message: string;
     };
@@ -36,69 +21,34 @@ type SystemAgentRescuePolicyInput = {
   isDirectMessage: boolean;
 };
 
-function resolveScopedExecConfig(cfg: OpenClawConfig, agentId?: string) {
-  return agentId ? resolveAgentEntry(cfg, agentId)?.tools?.exec : undefined;
-}
-
-function resolveScopedSandboxMode(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): "off" | "non-main" | "all" {
-  return (
-    (agentId ? resolveAgentEntry(cfg, agentId)?.sandbox?.mode : undefined) ??
-    cfg.agents?.defaults?.sandbox?.mode ??
-    "off"
-  );
-}
-
-function isYoloHostPosture(cfg: OpenClawConfig, agentId?: string): boolean {
-  const scopedExec = resolveScopedExecConfig(cfg, agentId);
-  const globalExec = cfg.tools?.exec;
-  const inherited = resolveExecModePolicy({
-    mode: globalExec?.mode,
-    security: globalExec?.security ?? "full",
-    ask: globalExec?.ask ?? "off",
-  });
-  return (
-    resolveExecModePolicy({
-      mode: scopedExec?.mode,
-      security: scopedExec?.security ?? inherited.security,
-      ask: scopedExec?.ask ?? inherited.ask,
-    }).mode === "full"
-  );
-}
-
-/** Decide whether a message-channel rescue command is allowed for this sender/context. */
 export function resolveSystemAgentRescuePolicy(
   input: SystemAgentRescuePolicyInput,
 ): SystemAgentRescueDecision {
-  const ownerDmOnly = true;
-  const pendingTtlMinutes = 15;
-  const sandboxActive = resolveScopedSandboxMode(input.cfg, input.agentId) !== "off";
-  const yolo = !sandboxActive && isYoloHostPosture(input.cfg, input.agentId);
-  const enabled = yolo;
-
-  if (sandboxActive) {
+  const agent = input.agentId ? resolveAgentEntry(input.cfg, input.agentId) : undefined;
+  const sandboxMode = agent?.sandbox?.mode ?? input.cfg.agents?.defaults?.sandbox?.mode ?? "off";
+  if (sandboxMode !== "off") {
     return {
       allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
       reason: "sandbox-active",
       message:
         "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
     };
   }
-  if (!enabled) {
+  const globalExec = input.cfg.tools?.exec;
+  const inherited = resolveExecModePolicy({
+    mode: globalExec?.mode,
+    security: globalExec?.security ?? "full",
+    ask: globalExec?.ask ?? "off",
+  });
+  const scopedExec = agent?.tools?.exec;
+  const effective = resolveExecModePolicy({
+    mode: scopedExec?.mode,
+    security: scopedExec?.security ?? inherited.security,
+    ask: scopedExec?.ask ?? inherited.ask,
+  });
+  if (effective.mode !== "full") {
     return {
       allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
       reason: "disabled",
       message: "OpenClaw rescue requires YOLO host posture with sandboxing off.",
     };
@@ -106,33 +56,16 @@ export function resolveSystemAgentRescuePolicy(
   if (!input.senderIsOwner) {
     return {
       allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
       reason: "not-owner",
       message: "OpenClaw rescue only accepts commands from an OpenClaw owner.",
     };
   }
-  if (ownerDmOnly && !input.isDirectMessage) {
+  if (!input.isDirectMessage) {
     return {
       allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
       reason: "not-direct-message",
       message: "OpenClaw rescue is restricted to owner DMs by default.",
     };
   }
-  return {
-    allowed: true,
-    enabled: true,
-    ownerDmOnly,
-    pendingTtlMinutes,
-    yolo: true,
-    sandboxActive: false,
-  };
+  return { allowed: true };
 }

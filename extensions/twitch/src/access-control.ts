@@ -1,30 +1,12 @@
-// Twitch plugin module implements access control behavior.
 import {
-  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type IngressReasonCode,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
-
-type TwitchAccessControlResult =
-  | {
-      allowed: false;
-      reason?: string;
-      matchKey?: string;
-      matchSource?: string;
-    }
-  | {
-      allowed: true;
-      channelIngress: Awaited<
-        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
-      >;
-      reason?: string;
-      matchKey?: string;
-      matchSource?: string;
-    };
 
 type TwitchPolicyKind = "open" | "allowFrom" | "role";
 
@@ -52,70 +34,56 @@ export async function checkTwitchAccessControl(params: {
   accountId: string;
   botUsername: string;
   contextBinding?: ChannelIngressContextBinding;
-}): Promise<TwitchAccessControlResult> {
+}) {
   const { message, account, botUsername } = params;
   const policyKind = resolveTwitchPolicyKind(account);
-  const resolved = await createChannelIngressResolver({
-    channelId: "twitch",
-    accountId: params.accountId,
-    identity: policyKind === "role" ? twitchRoleIdentity : twitchUserIdentity,
-  }).message({
-    subject: twitchSubject(message),
-    conversation: {
-      kind: "group",
-      id: message.channel,
-    },
-    contextBinding: params.contextBinding,
-    event: { mayPair: false },
-    mentionFacts: {
-      canDetectMention: true,
-      wasMentioned: mentionsBot(message.message, botUsername),
-    },
-    dmPolicy: "open",
-    groupPolicy: policyKind === "open" ? "open" : "allowlist",
-    policy: {
-      activation: {
-        requireMention: account.requireMention ?? true,
-        allowTextCommands: false,
-        order: "before-sender",
+  const resolved = await getTwitchRuntime()
+    .channel.inbound.ingress.createResolver({
+      channelId: "twitch",
+      accountId: params.accountId,
+      identity: policyKind === "role" ? twitchRoleIdentity : twitchUserIdentity,
+    })
+    .message({
+      subject: twitchSubject(message),
+      conversation: {
+        kind: "group",
+        id: message.channel,
       },
-    },
-    // Canonical wildcard input keeps admission and participant evidence aligned.
-    groupAllowFrom:
-      policyKind === "allowFrom"
-        ? account.allowFrom
-        : policyKind === "role"
-          ? account.allowedRoles?.map((role) => (role === "all" ? "*" : role))
-          : undefined,
-  });
+      contextBinding: params.contextBinding,
+      event: { mayPair: false },
+      mentionFacts: {
+        canDetectMention: true,
+        wasMentioned: mentionsBot(message.message, botUsername),
+      },
+      dmPolicy: "open",
+      groupPolicy: policyKind === "open" ? "open" : "allowlist",
+      policy: {
+        activation: {
+          requireMention: account.requireMention ?? true,
+          allowTextCommands: false,
+          order: "before-sender",
+        },
+      },
+      // Canonical wildcard input keeps admission and participant evidence aligned.
+      groupAllowFrom:
+        policyKind === "allowFrom"
+          ? account.allowFrom
+          : policyKind === "role"
+            ? account.allowedRoles?.map((role) => (role === "all" ? "*" : role))
+            : undefined,
+    });
   const decision = resolved.ingress;
 
   if (decision.decisiveGateId === "activation" && decision.admission !== "dispatch") {
     return {
-      allowed: false,
+      allowed: false as const,
       reason: "message does not mention the bot (requireMention is enabled)",
     };
   }
 
   if (decision.admission === "dispatch") {
-    if (policyKind === "allowFrom") {
-      return {
-        allowed: true,
-        channelIngress: resolved,
-        matchKey: params.message.userId,
-        matchSource: "allowlist",
-      };
-    }
-    if (policyKind === "role") {
-      return {
-        allowed: true,
-        channelIngress: resolved,
-        matchKey: params.account.allowedRoles?.join(","),
-        matchSource: "role",
-      };
-    }
     return {
-      allowed: true,
+      allowed: true as const,
       channelIngress: resolved,
     };
   }
@@ -123,25 +91,25 @@ export async function checkTwitchAccessControl(params: {
   if (policyKind === "allowFrom") {
     if (!params.message.userId) {
       return {
-        allowed: false,
+        allowed: false as const,
         reason: "sender user ID not available for allowlist check",
       };
     }
     return {
-      allowed: false,
+      allowed: false as const,
       reason: "sender is not in allowFrom allowlist",
     };
   }
 
   if (policyKind === "role") {
     return {
-      allowed: false,
+      allowed: false as const,
       reason: `sender does not have any of the required roles: ${params.account.allowedRoles?.join(", ") ?? ""}`,
     };
   }
 
   return {
-    allowed: false,
+    allowed: false as const,
     reason: reasonForTwitchIngressDecision(decision),
   };
 }

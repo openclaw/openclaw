@@ -1,0 +1,67 @@
+import type { CodexAppServerClient } from "./client.js";
+import { listAllCodexAppServerModels } from "./models.js";
+import type { CodexServiceTier } from "./protocol.js";
+import {
+  CodexAppServerScopedRequestRejectedError,
+  requestCodexAppServerClientJson,
+} from "./request.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
+
+/** Validate an explicit Ultrafast selection against this turn's native model and client. */
+export async function resolveCodexUltrafastServiceTier(params: {
+  enabled: boolean;
+  serviceTier?: CodexServiceTier | null;
+  model?: string;
+  modelProvider?: string;
+  client: CodexAppServerClient;
+  timeoutMs: number;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+  config?: Parameters<typeof requestCodexAppServerClientJson>[0]["config"];
+}): Promise<CodexServiceTier | null | undefined> {
+  if (
+    !params.enabled ||
+    (params.modelProvider !== "openai" &&
+      params.modelProvider !== CODEX_RESPONSES_OAUTH_PROVIDER) ||
+    !params.model
+  ) {
+    return params.serviceTier;
+  }
+  params.signal.throwIfAborted();
+  params.assertCurrent();
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while request timers (also monotonic) are in flight.
+  const deadline = performance.now() + params.timeoutMs;
+  try {
+    const catalog = await listAllCodexAppServerModels({
+      includeHidden: true,
+      request: (request) => {
+        const timeoutMs = deadline - performance.now();
+        if (timeoutMs <= 0) {
+          throw new Error("Codex Ultrafast catalog deadline exceeded");
+        }
+        return requestCodexAppServerClientJson({
+          ...request,
+          client: params.client,
+          signal: params.signal,
+          assertCurrent: params.assertCurrent,
+          timeoutMs,
+          config: params.config,
+        });
+      },
+    });
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    // Match the request's model slug, not a catalog alias for another native model.
+    const model = catalog.models.find((entry) => entry.model === params.model);
+    return model?.serviceTiers?.includes("ultrafast") ? "ultrafast" : params.serviceTier;
+  } catch (error) {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    if (error instanceof CodexAppServerScopedRequestRejectedError) {
+      throw error;
+    }
+    // An unavailable or malformed optional catalog must not erase the baseline tier.
+    return params.serviceTier;
+  }
+}

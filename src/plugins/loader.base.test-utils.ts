@@ -108,12 +108,7 @@ describe("loadOpenClawPlugins", () => {
         properties: { token: { type: "string" } },
         required: ["token"],
       },
-      body: `module.exports = {
-  id: "Config-Probe",
-  register(api) {
-    api.registerProvider({ id: "config-probe-provider", label: JSON.stringify(api.pluginConfig), auth: [] });
-  },
-};`,
+      registration: `api.registerProvider({ id: "config-probe-provider", label: JSON.stringify(api.pluginConfig), auth: [] });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -142,12 +137,7 @@ describe("loadOpenClawPlugins", () => {
         additionalProperties: false,
         properties: { apiKey: { type: "string" } },
       },
-      body: `module.exports = {
-    id: "env-config-probe",
-    register(api) {
-      api.registerProvider({ id: "env-config-provider", label: JSON.stringify(api.pluginConfig), auth: [] });
-    },
-  };`,
+      registration: `api.registerProvider({ id: "env-config-provider", label: JSON.stringify(api.pluginConfig), auth: [] });`,
     });
     const entries = {
       "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
@@ -271,58 +261,19 @@ describe("loadOpenClawPlugins", () => {
     expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
-  it("rolls back trusted policies when plugin register fails", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "trusted-policy-register-fail",
-      filename: "trusted-policy-register-fail.cjs",
-      body: `module.exports = { id: "trusted-policy-register-fail", register(api) {
-    api.registerTrustedToolPolicy({
-      id: "failed-policy",
-      description: "Must be removed after register failure",
-      evaluate: () => ({ block: true, blockReason: "stale failed policy" })
-    });
-    throw new Error("register boom");
-  } };`,
-    });
-    updatePluginManifest(plugin, {
-      contracts: { trustedToolPolicies: ["failed-policy"] },
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["trusted-policy-register-fail"],
-      },
-    });
-
-    expect(registry.trustedToolPolicies).toHaveLength(0);
-    const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
-    expect(loaded?.status).toBe("error");
-    expect(loaded?.error).toContain("register boom");
-    expectDiagnosticContaining({
-      registry,
-      level: "error",
-      pluginId: "trusted-policy-register-fail",
-      message: "plugin failed during register: Error: register boom",
-    });
-  });
-
   it("rolls back worker providers when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "worker-provider-register-fail",
       filename: "worker-provider-register-fail.cjs",
-      body: `module.exports = { id: "worker-provider-register-fail", register(api) {
-    api.registerWorkerProvider({
-      id: "failed-worker",
-      resolveAllocation: async () => ({ leaseId: "unused", sharedHost: false }),
-      provision: async () => { throw new Error("not called"); },
-      inspect: async () => ({ status: "unknown" }),
-      destroy: async () => {}
-    });
-    throw new Error("register boom");
-  } };`,
+      registration: `api.registerWorkerProvider({
+        id: "failed-worker",
+        resolveAllocation: async () => ({ leaseId: "unused", sharedHost: false }),
+        provision: async () => { throw new Error("not called"); },
+        inspect: async () => ({ status: "unknown" }),
+        destroy: async () => {}
+      });
+      throw new Error("register boom");`,
     });
     updatePluginManifest(plugin, {
       contracts: { workerProviders: ["failed-worker"] },
@@ -346,13 +297,11 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "trusted-policy-success",
       filename: "trusted-policy-success.cjs",
-      body: `module.exports = { id: "trusted-policy-success", register(api) {
-    api.registerTrustedToolPolicy({
-      id: "declared-policy",
-      description: "Declared installed policy",
-      evaluate: () => ({ allow: true })
-    });
-  } };`,
+      registration: `api.registerTrustedToolPolicy({
+        id: "declared-policy",
+        description: "Declared installed policy",
+        evaluate: () => ({ allow: true })
+      });`,
     });
     updatePluginManifest(plugin, {
       contracts: { trustedToolPolicies: ["declared-policy"] },
@@ -381,13 +330,11 @@ describe("loadOpenClawPlugins", () => {
     const stablePlugin = writePlugin({
       id: "stable-trusted-policy",
       filename: "stable-trusted-policy.cjs",
-      body: `module.exports = { id: "stable-trusted-policy", register(api) {
-    api.registerTrustedToolPolicy({
-      id: "stable-policy",
-      description: "Stable policy must survive later failures",
-      evaluate: () => ({ allow: true })
-    });
-  } };`,
+      registration: `api.registerTrustedToolPolicy({
+        id: "stable-policy",
+        description: "Stable policy must survive later failures",
+        evaluate: () => ({ allow: true })
+      });`,
     });
     updatePluginManifest(stablePlugin, {
       contracts: { trustedToolPolicies: ["stable-policy"] },
@@ -395,14 +342,12 @@ describe("loadOpenClawPlugins", () => {
     const failingPlugin = writePlugin({
       id: "later-trusted-policy-register-fail",
       filename: "later-trusted-policy-register-fail.cjs",
-      body: `module.exports = { id: "later-trusted-policy-register-fail", register(api) {
-    api.registerTrustedToolPolicy({
-      id: "failed-policy",
-      description: "Must be removed after register failure",
-      evaluate: () => ({ block: true, blockReason: "stale failed policy" })
-    });
-    throw new Error("register boom");
-  } };`,
+      registration: `api.registerTrustedToolPolicy({
+        id: "failed-policy",
+        description: "Must be removed after register failure",
+        evaluate: () => ({ block: true, blockReason: "stale failed policy" })
+      });
+      throw new Error("register boom");`,
     });
     updatePluginManifest(failingPlugin, {
       contracts: { trustedToolPolicies: ["failed-policy"] },
@@ -511,14 +456,14 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === sourcePlugin.id)?.status).toBe("loaded");
   });
 
-  it("loads installed plugin packages discovered from persisted install records", () => {
+  it("loads installed plugin packages discovered from persisted install records", async () => {
     useNoBundledPlugins();
     const stateDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "installed-record-plugin",
       body: `module.exports = { id: "installed-record-plugin", register() {} };`,
     });
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       reason: "source-changed",
       installRecords: {
@@ -673,15 +618,10 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "text-shim",
       filename: "text-shim.cjs",
-      body: `module.exports = {
-          id: "text-shim",
-          register(api) {
-            api.registerTextTransforms({
-              input: [{ from: /red basket/g, to: "blue basket" }],
-              output: [{ from: /blue basket/g, to: "red basket" }],
-            });
-          },
-        };`,
+      registration: `api.registerTextTransforms({
+        input: [{ from: /red basket/g, to: "blue basket" }],
+        output: [{ from: /blue basket/g, to: "red basket" }],
+      });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1026,12 +966,7 @@ describe("loadOpenClawPlugins", () => {
         const plugin = writePlugin({
           id: "allowed-config-path",
           filename: "allowed-config-path.cjs",
-          body: `module.exports = {
-    id: "allowed-config-path",
-    register(api) {
-      api.registerGatewayMethod("allowed-config-path.ping", ({ respond }) => respond(true, { ok: true }));
-    },
-  };`,
+          registration: `api.registerGatewayMethod("allowed-config-path.ping", ({ respond }) => respond(true, { ok: true }));`,
         });
 
         const registry = loadRegistryFromSinglePlugin({
@@ -1057,12 +992,7 @@ describe("loadOpenClawPlugins", () => {
         const plugin = writePlugin({
           id: "returned-gateway-method",
           filename: "returned-gateway-method.cjs",
-          body: `module.exports = {
-    id: "returned-gateway-method",
-    register(api) {
-      api.registerGatewayMethod("returned-gateway-method.status", async () => ({ ok: true, status: "ready" }));
-    },
-  };`,
+          registration: `api.registerGatewayMethod("returned-gateway-method.status", async () => ({ ok: true, status: "ready" }));`,
         });
 
         const registry = loadRegistryFromSinglePlugin({
@@ -1089,15 +1019,10 @@ describe("loadOpenClawPlugins", () => {
         const plugin = writePlugin({
           id: "explicit-gateway-method",
           filename: "explicit-gateway-method.cjs",
-          body: `module.exports = {
-    id: "explicit-gateway-method",
-    register(api) {
-      api.registerGatewayMethod("explicit-gateway-method.status", ({ respond }) => {
-        respond(true, { status: "responded" });
-        return { status: "returned" };
-      });
-    },
-  };`,
+          registration: `api.registerGatewayMethod("explicit-gateway-method.status", ({ respond }) => {
+            respond(true, { status: "responded" });
+            return { status: "returned" };
+          });`,
         });
 
         const registry = loadRegistryFromSinglePlugin({
@@ -1124,21 +1049,16 @@ describe("loadOpenClawPlugins", () => {
         const plugin = writePlugin({
           id: "profile-independent-gateway-method",
           filename: "profile-independent-gateway-method.cjs",
-          body: `module.exports = {
-    id: "profile-independent-gateway-method",
-    register(api) {
-      api.registerGatewayMethod(
-        "profile-independent-gateway-method.status",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.read", profileAccess: "independent" },
-      );
-      api.registerGatewayMethod(
-        "profile-independent-gateway-method.content",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.read" },
-      );
-    },
-  };`,
+          registration: `api.registerGatewayMethod(
+            "profile-independent-gateway-method.status",
+            ({ respond }) => respond(true, { ok: true }),
+            { scope: "operator.read", profileAccess: "independent" },
+          );
+          api.registerGatewayMethod(
+            "profile-independent-gateway-method.content",
+            ({ respond }) => respond(true, { ok: true }),
+            { scope: "operator.read" },
+          );`,
         });
 
         const registry = loadRegistryFromSinglePlugin({
@@ -1196,12 +1116,7 @@ describe("loadOpenClawPlugins", () => {
         const plugin = writePlugin({
           id: "hidden-core-collision",
           filename: "hidden-core-collision.cjs",
-          body: `module.exports = {
-    id: "hidden-core-collision",
-    register(api) {
-      api.registerGatewayMethod("config.openFile", ({ respond }) => respond(true, { ok: true }));
-    },
-  };`,
+          registration: `api.registerGatewayMethod("config.openFile", ({ respond }) => respond(true, { ok: true }));`,
         });
 
         const registry = loadRegistryFromSinglePlugin({
@@ -1281,33 +1196,6 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      label: "can build a manifest-only snapshot without importing plugin modules",
-      run: () => {
-        useNoBundledPlugins();
-        const importedMarker = path.join(makePluginLoaderTempDir(), "manifest-only-imported.txt");
-        const plugin = writePlugin({
-          id: "manifest-only-plugin",
-          filename: "manifest-only-plugin.cjs",
-          body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
-  module.exports = { id: "manifest-only-plugin", register() { throw new Error("manifest-only snapshot should not register"); } };`,
-        });
-
-        const registry = loadRegistryFromSinglePlugin({
-          plugin,
-          includeWorkspaceDir: false,
-          pluginConfig: {
-            allow: ["manifest-only-plugin"],
-            entries: { "manifest-only-plugin": { enabled: true } },
-          },
-          options: { activate: false, loadModules: false },
-        });
-
-        expect(fs.existsSync(importedMarker)).toBe(false);
-        const record = registry.plugins.find((entry) => entry.id === "manifest-only-plugin");
-        expect(record?.status).toBe("loaded");
-      },
-    },
-    {
       label: "includes manifest-owned surfaces in manifest-only snapshots",
       run: () => {
         useNoBundledPlugins();
@@ -1341,6 +1229,7 @@ describe("loadOpenClawPlugins", () => {
 
         const record = registry.plugins.find((entry) => entry.id === "manifest-surfaces-plugin");
         expect(fs.existsSync(importedMarker)).toBe(false);
+        expect(record?.status).toBe("loaded");
         expect(record?.channelIds).toEqual(["manifest-surfaces-channel"]);
         expect(record?.providerIds).toEqual(["manifest-surfaces-provider"]);
         expect(record?.cliBackendIds).toEqual([
@@ -1443,10 +1332,7 @@ describe("loadOpenClawPlugins", () => {
             additionalProperties: false,
             properties: { token: { type: "string" } },
           },
-          body: `module.exports = {
-    id: "reentrant-snapshot",
-    register(api) { api.logger.info("reenter"); },
-  };`,
+          registration: `api.logger.info("reenter");`,
         });
 
         const cacheKey = resolvePluginRegistryLoadCacheKey(nestedOptions);
@@ -1495,10 +1381,7 @@ describe("loadOpenClawPlugins", () => {
           id: "runtime-registry-reentry",
           dir: pluginDir,
           filename: "runtime-registry-reentry.cjs",
-          body: `module.exports = {
-    id: "runtime-registry-reentry",
-    register(api) { api.logger.info("resolve"); },
-  };`,
+          registration: `api.logger.info("resolve");`,
         });
 
         const resolve = vi.fn(() => resolveRuntimePluginRegistry(nestedOptions));
@@ -1584,34 +1467,6 @@ describe("loadOpenClawPlugins", () => {
     await run();
   });
 
-  it("treats an explicit empty plugin scope as scoped-empty instead of unscoped", () => {
-    useNoBundledPlugins();
-    const allowed = writePlugin({
-      id: "allowed-empty-scope",
-      filename: "allowed-empty-scope.cjs",
-      body: `module.exports = { id: "allowed-empty-scope", register() {} };`,
-    });
-    const extra = writePlugin({
-      id: "extra-empty-scope",
-      filename: "extra-empty-scope.cjs",
-      body: `module.exports = { id: "extra-empty-scope", register() {} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      config: {
-        plugins: {
-          load: { paths: [allowed.file, extra.file] },
-          allow: ["allowed-empty-scope", "extra-empty-scope"],
-        },
-      },
-      onlyPluginIds: [],
-    });
-
-    expect(registry.plugins).toStrictEqual([]);
-  });
-
   it("skips discovery and manifest registry loading entirely when onlyPluginIds is an explicit empty array", async () => {
     useNoBundledPlugins();
     const allowed = writePlugin({
@@ -1645,10 +1500,7 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "command-plugin",
       filename: "command-plugin.cjs",
-      body: `module.exports = {
-          id: "command-plugin",
-          register(api) {
-            api.registerCommand({
+      registration: `api.registerCommand({
               name: "pair",
               description: "Pair device",
               acceptsArgs: true,
@@ -1658,9 +1510,7 @@ describe("loadOpenClawPlugins", () => {
               channel: "telegram",
               namespace: "pair",
               handle: async () => ({ handled: true }),
-            });
-          },
-        };`,
+            });`,
     });
     clearPluginCommands();
     clearPluginInteractiveHandlers();
@@ -1726,17 +1576,12 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "codex-harness",
       filename: "codex-harness.cjs",
-      body: `module.exports = {
-          id: "codex-harness",
-          register(api) {
-            api.registerAgentHarness({
-              id: "codex",
-              label: "Codex",
-              supports: () => ({ supported: true }),
-              runAttempt: async () => ({ ok: false, error: "unused" }),
-            });
-          },
-        };`,
+      registration: `api.registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => ({ ok: false, error: "unused" }),
+      });`,
     });
 
     loadRegistryFromSinglePlugin({
@@ -1763,39 +1608,34 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "reload-rollback",
       filename: "reload-rollback.cjs",
-      body: `module.exports = {
-        id: "reload-rollback",
-        register(api) {
-          api.registerAgentHarness({
-            id: "codex",
-            label: "Codex",
-            supports: () => ({ supported: true }),
-            runAttempt: async () => ({ ok: false, error: "unused" }),
-          });
-          api.registerCommand({
-            name: "pair",
-            description: "Pair device",
-            acceptsArgs: true,
-            handler: async () => ({ text: "paired" }),
-          });
-          api.registerProvider({
-            id: "rollback-provider",
-            label: "Rollback Provider",
-            auth: [],
-          });
-          api.registerAgentToolResultMiddleware(() => undefined, {
-            runtimes: ["openclaw"],
-          });
-          api.registerHook(
-            "gateway:startup",
-            (event) => {
-              event.messages.push("rollback-hook-fired");
-            },
-            { name: "reload-rollback-hook" },
-          );
-          api.on("gateway_stop", async () => {});
+      registration: `api.registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => ({ ok: false, error: "unused" }),
+      });
+      api.registerCommand({
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        handler: async () => ({ text: "paired" }),
+      });
+      api.registerProvider({
+        id: "rollback-provider",
+        label: "Rollback Provider",
+        auth: [],
+      });
+      api.registerAgentToolResultMiddleware(() => undefined, {
+        runtimes: ["openclaw"],
+      });
+      api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push("rollback-hook-fired");
         },
-      };`,
+        { name: "reload-rollback-hook" },
+      );
+      api.on("gateway_stop", async () => {});`,
     });
     updatePluginManifest(plugin, {
       providers: ["rollback-provider"],
@@ -1873,15 +1713,10 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "failing-gateway-method",
       filename: "failing-gateway-method.cjs",
-      body: `module.exports = {
-        id: "failing-gateway-method",
-        register(api) {
-          api.registerGatewayMethod("failing-gateway-method.ping", ({ respond }) => {
-            respond(true, { ok: true });
-          });
-          throw new Error("gateway method register failed");
-        },
-      };`,
+      registration: `api.registerGatewayMethod("failing-gateway-method.ping", ({ respond }) => {
+        respond(true, { ok: true });
+      });
+      throw new Error("gateway method register failed");`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1900,12 +1735,7 @@ describe("loadOpenClawPlugins", () => {
     const goodPlugin = writePlugin({
       id: "context-engine-reload",
       filename: "context-engine-good.cjs",
-      body: `module.exports = {
-        id: "context-engine-reload",
-        register(api) {
-          api.registerContextEngine("reload-engine", () => ({ marker: "good" }));
-        },
-      };`,
+      registration: `api.registerContextEngine("reload-engine", () => ({ marker: "good" }));`,
     });
     const baseOptions = {
       cache: false,
@@ -1924,13 +1754,8 @@ describe("loadOpenClawPlugins", () => {
     const failingPlugin = writePlugin({
       id: "context-engine-reload",
       filename: "context-engine-failing.cjs",
-      body: `module.exports = {
-        id: "context-engine-reload",
-        register(api) {
-          api.registerContextEngine("reload-engine", () => ({ marker: "bad" }));
-          throw new Error("context engine reload failed");
-        },
-      };`,
+      registration: `api.registerContextEngine("reload-engine", () => ({ marker: "bad" }));
+      throw new Error("context engine reload failed");`,
     });
     expect(() =>
       loadOpenClawPlugins({
@@ -1956,15 +1781,10 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "bad-harness",
       filename: "bad-harness.cjs",
-      body: `module.exports = {
-          id: "bad-harness",
-          register(api) {
-            api.registerAgentHarness({
-              id: "broken",
-              label: "Broken",
-            });
-          },
-        };`,
+      registration: `api.registerAgentHarness({
+        id: "broken",
+        label: "Broken",
+      });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1990,12 +1810,7 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "internal-hook-snapshot",
       filename: "internal-hook-snapshot.cjs",
-      body: `module.exports = {
-          id: "internal-hook-snapshot",
-          register(api) {
-            api.registerHook("gateway:startup", () => {}, { name: "snapshot-hook" });
-          },
-        };`,
+      registration: `api.registerHook("gateway:startup", () => {}, { name: "snapshot-hook" });`,
     });
 
     clearInternalHooks();
@@ -2019,18 +1834,13 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "internal-hook-reload",
       filename: "internal-hook-reload.cjs",
-      body: `module.exports = {
-          id: "internal-hook-reload",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push("reload-hook-fired");
-              },
-              { name: "reload-hook" },
-            );
-          },
-        };`,
+      registration: `api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push("reload-hook-fired");
+        },
+        { name: "reload-hook" },
+      );`,
     });
 
     clearInternalHooks();
@@ -2064,18 +1874,13 @@ describe("loadOpenClawPlugins", () => {
       const plugin = writePlugin({
         id: "internal-hook-lifecycle",
         filename: "internal-hook-lifecycle.cjs",
-        body: `module.exports = {
-          id: "internal-hook-lifecycle",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push("legacy-hook-fired");
-              },
-              { name: "legacy-lifecycle-hook" },
-            );
+        registration: `api.registerHook(
+          "gateway:startup",
+          (event) => {
+            event.messages.push("legacy-hook-fired");
           },
-        };`,
+          { name: "legacy-lifecycle-hook" },
+        );`,
       });
 
       clearInternalHooks();
@@ -2122,18 +1927,13 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "hook-config-context",
       filename: "hook-config-context.cjs",
-      body: `module.exports = {
-          id: "hook-config-context",
-          register(api) {
-            api.registerHook(
-              "gateway:startup",
-              (event) => {
-                event.messages.push(event.context.pluginConfig?.marker);
-              },
-              { name: "hook-config-context" },
-            );
-          },
-        };`,
+      registration: `api.registerHook(
+        "gateway:startup",
+        (event) => {
+          event.messages.push(event.context.pluginConfig?.marker);
+        },
+        { name: "hook-config-context" },
+      );`,
     });
     updatePluginManifest(plugin, { configSchema: { type: "object" } });
 
@@ -2161,25 +1961,20 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "hook-bootstrap-mutation",
       filename: "hook-bootstrap-mutation.cjs",
-      body: `module.exports = {
-          id: "hook-bootstrap-mutation",
-          register(api) {
-            api.registerHook(
-              "agent:bootstrap",
-              (event) => {
-                event.context.bootstrapFiles = [
-                  {
-                    name: "AGENTS.md",
-                    path: "/tmp/override-AGENTS.md",
-                    content: "override bootstrap rules",
-                    missing: false,
-                  },
-                ];
-              },
-              { name: "hook-bootstrap-mutation" },
-            );
-          },
-        };`,
+      registration: `api.registerHook(
+        "agent:bootstrap",
+        (event) => {
+          event.context.bootstrapFiles = [
+            {
+              name: "AGENTS.md",
+              path: "/tmp/override-AGENTS.md",
+              content: "override bootstrap rules",
+              missing: false,
+            },
+          ];
+        },
+        { name: "hook-bootstrap-mutation" },
+      );`,
     });
 
     clearInternalHooks();

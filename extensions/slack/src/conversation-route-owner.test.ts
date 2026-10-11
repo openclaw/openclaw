@@ -1,15 +1,22 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
+import { slackConversationRouteOwners } from "./conversation-route-owner.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const { resolveConversationRouteOwner: inspectSlackConversationRouteOwner } =
+  slackConversationRouteOwners;
 
 describe("inspectSlackConversationRouteOwner", () => {
   let releaseInstallation: (() => void) | undefined;
 
   beforeEach(() => {
+    for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"]) {
+      vi.stubEnv(key, undefined);
+    }
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     releaseInstallation = registerSlackInstallationState("default", "workspace").release;
   });
@@ -17,6 +24,7 @@ describe("inspectSlackConversationRouteOwner", () => {
   afterEach(() => {
     releaseInstallation?.();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    vi.unstubAllEnvs();
   });
 
   it("checks the thread before its parent without touching liveness", () => {
@@ -43,7 +51,7 @@ describe("inspectSlackConversationRouteOwner", () => {
 
     expect(
       inspectSlackConversationRouteOwner({
-        cfg: {},
+        cfg: { channels: { slack: { accounts: { default: {} } } } },
         accountId: "default",
         conversation: { kind: "channel", peerId: "channel-1", threadId: "thread-1" },
       }),
@@ -54,6 +62,7 @@ describe("inspectSlackConversationRouteOwner", () => {
       conversationId: "thread-1",
       parentConversationId: "channel-1",
     });
+    expect(resolveByConversation).toHaveBeenCalledTimes(1);
     expect(touch).not.toHaveBeenCalled();
   });
 
@@ -64,7 +73,7 @@ describe("inspectSlackConversationRouteOwner", () => {
 
     expect(
       inspectSlackConversationRouteOwner({
-        cfg: {},
+        cfg: { channels: { slack: { accounts: { default: {} } } } },
         accountId: "default",
         conversation: { kind: "channel", peerId: "C456" },
       }),
@@ -72,7 +81,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     installation.update("workspace");
     expect(
       inspectSlackConversationRouteOwner({
-        cfg: {},
+        cfg: { channels: { slack: { accounts: { default: {} } } } },
         accountId: "default",
         conversation: { kind: "channel", peerId: "team:T123:channel:C456" },
       }),
@@ -94,7 +103,7 @@ describe("inspectSlackConversationRouteOwner", () => {
       }),
     });
     const input = {
-      cfg: {},
+      cfg: { channels: { slack: { accounts: { default: {} } } } },
       accountId: "default",
       conversation: { kind: "channel" as const, peerId: "C456" },
     };
@@ -106,5 +115,71 @@ describe("inspectSlackConversationRouteOwner", () => {
     releaseInstallation?.();
     releaseInstallation = undefined;
     expect(inspectSlackConversationRouteOwner(input)).toEqual({ kind: "unavailable" });
+  });
+  const inactiveAccounts: Array<{
+    name: string;
+    accountId: string;
+    slack: NonNullable<OpenClawConfig["channels"]>["slack"];
+  }> = [
+    {
+      name: "removed account",
+      accountId: "retired",
+      slack: { accounts: { default: {} } },
+    },
+    {
+      name: "removed default account",
+      accountId: "default",
+      slack: { accounts: {} },
+    },
+    {
+      name: "disabled account",
+      accountId: "default",
+      slack: { accounts: { default: { enabled: false } } },
+    },
+    {
+      name: "disabled channel",
+      accountId: "default",
+      slack: { enabled: false, accounts: { default: { enabled: true } } },
+    },
+  ];
+  it.each(inactiveAccounts)(
+    "rejects a $name without requiring installation identity",
+    ({ accountId, slack }) => {
+      releaseInstallation?.();
+      releaseInstallation = undefined;
+
+      expect(
+        inspectSlackConversationRouteOwner({
+          cfg: { channels: { slack } },
+          accountId,
+          conversation: { kind: "channel", peerId: "C456" },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("preserves a configured default while its token and installation are unavailable", () => {
+    vi.stubEnv("OPENCLAW_TEST_MISSING_SLACK_BOT_TOKEN", undefined);
+    releaseInstallation?.();
+    releaseInstallation = undefined;
+    expect(
+      inspectSlackConversationRouteOwner({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_MISSING_SLACK_BOT_TOKEN",
+              },
+              appToken: "synthetic-app-token",
+              accounts: { secondary: {} },
+            },
+          },
+        },
+        accountId: "default",
+        conversation: { kind: "channel", peerId: "C456" },
+      }),
+    ).toEqual({ kind: "unavailable" });
   });
 });

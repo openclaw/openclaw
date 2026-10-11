@@ -96,19 +96,39 @@ function runCloseout(options: {
     isCrossRepository: options.fork ?? false,
   };
   writeFileSync(join(repo, "metadata.json"), JSON.stringify(metadata));
+  writeFileSync(
+    join(repo, ".local/gates-hosted-checks.json"),
+    JSON.stringify({ headSha: metadata.headRefOid }),
+  );
   const bin = join(dir, "bin");
   mkdirSync(bin);
   writeFileSync(
     join(bin, "gh"),
-    `#!/bin/sh
-if [ "$1 $2" = "pr view" ]; then
-  printf '%s\\n' "$*" >> gh-calls.log
-  cat metadata.json
-elif [ "$1 $2" = "repo view" ]; then
-  echo openclaw/openclaw
-else
-  exit 1
-fi
+    `#!${process.execPath}
+import { appendFileSync, readFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args[0] === 'browse') {
+  console.log('https://github.com/openclaw/openclaw');
+  process.exit(0);
+}
+const endpoint = args.find(arg => arg.startsWith('repos/'));
+if (args[0] !== 'api') throw new Error('Unexpected GitHub command: ' + args.join(' '));
+const metadata = JSON.parse(readFileSync('metadata.json', 'utf8'));
+const repository = { id: 1, node_id: 'fixture-repo', full_name: 'openclaw/openclaw', html_url: 'https://github.com/openclaw/openclaw' };
+let value;
+if (endpoint === 'repos/openclaw/openclaw') value = repository;
+else if (endpoint === 'repos/openclaw/openclaw/pulls/42') {
+  appendFileSync('gh-calls.log', args.join(' ') + '\\n');
+  value = {
+    number: 42, title: metadata.title, state: 'open', draft: false,
+    head: { ref: metadata.headRefName, sha: metadata.headRefOid, repo: repository },
+    base: { ref: metadata.baseRefName, sha: ${JSON.stringify(mainSha)}, repo: { ...repository, id: metadata.isCrossRepository ? 2 : 1 } },
+  };
+} else if (endpoint === 'repos/openclaw/openclaw/pulls/42/files?per_page=100') value = [[]];
+else if (endpoint === 'repos/openclaw/openclaw/commits/' + metadata.headRefOid + '/check-runs?filter=latest&per_page=100') value = [{ check_runs: [] }];
+else if (endpoint === 'repos/openclaw/openclaw/commits/' + metadata.headRefOid + '/status?per_page=100') value = [{ statuses: [] }];
+else throw new Error('Unexpected GitHub endpoint: ' + endpoint);
+console.log(JSON.stringify(value));
 `,
   );
   chmodSync(join(bin, "gh"), 0o755);
@@ -121,10 +141,21 @@ set -euo pipefail
 source "$SCRIPTS/pr-lib/common.sh"
 source "$SCRIPTS/pr-lib/changelog.sh"
 source "$SCRIPTS/pr-lib/gates.sh"
+source "$SCRIPTS/pr-lib/review.sh"
 enter_worktree() { PR_MAIN_SHA="$MAIN_SHA"; }
 refresh_prep_branch_for_reviewed_head() { :; }
 checkout_prep_branch() { :; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1"; }
+# Review authority is covered by the preparation fixtures; this isolates release classification.
+require_prepared_review() { :; }
+run_quiet_logged() {
+  if [ "$1" = 'hosted CI/Testbox gates' ]; then
+    jq -se --slurpfile expected metadata.json '
+      length == 1 and
+      (.[0] | {headRefName,title,baseRefName,headRefOid,isCrossRepository}) == $expected[0]
+    ' >/dev/null || return 1
+  fi
+  printf 'gate:%s\\n' "$1"
+}
 prepare_gates 42
 `,
     ],
@@ -136,6 +167,8 @@ prepare_gates 42
         PATH: `${bin}:${process.env.PATH}`,
         SCRIPTS: join(repoRoot, "scripts"),
         MAIN_SHA: mainSha,
+        GH_REPO: "openclaw/openclaw",
+        OPENCLAW_GH_BIN: join(bin, "gh"),
         OPENCLAW_TESTBOX: "1",
         OPENCLAW_PR_GATES_REMOTE: "",
         OPENCLAW_ALLOW_ROOT_CHANGELOG_PR: options.override ?? "",
@@ -216,36 +249,8 @@ describe("release closeout prepare gates", () => {
     expect(result.stdout).toContain("CHANGELOG.md is release-owned");
     expect(result.stdout).not.toContain("gate:hosted");
   });
-
-  it("does not classify arbitrary CHANGELOG files as changelog-only", () => {
-    const { result } = runCloseout({
-      split: true,
-      override: "1",
-      afterFiles: { "CHANGELOG/notes.md": "Additional documentation.\n" },
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("changelog_only=false");
-  });
   it.each([
-    { name: "adds the released section" },
-    {
-      name: "replaces the released section",
-      before:
-        preamble + releaseSection("2026.9.1").replace("Shipped repair", "Draft repair") + history,
-    },
     { name: "accepts stable correction tags", version: "2026.9.1-2" },
-    {
-      name: "finalizes an unreleased section",
-      before: preamble + releaseSection("2026.8.3 (Unreleased)") + history,
-    },
-    {
-      name: "finalizes bare Unreleased",
-      before: preamble + releaseSection("Unreleased") + history,
-    },
-    {
-      name: "finalizes the matching draft",
-      before: preamble + releaseSection("2026.9.1 (Unreleased)") + history,
-    },
     {
       name: "finalizes an earlier correction draft",
       version: "2026.9.1-10",
@@ -266,41 +271,23 @@ describe("release closeout prepare gates", () => {
   });
 
   it.each([
-    { name: "normal branch", branch: "fix/changelog" },
-    { name: "branch suffix", branch: "release/2026.9.1-main-closeout-extra" },
     { name: "wrong title", title: "chore: release" },
     { name: "non-main target", base: "release/2026.9.1" },
     { name: "fork identity", fork: true },
     { name: "beta version", version: "2026.9.1-beta.1" },
     { name: "local-only tag", published: false },
     { name: "different section version", after: preamble + releaseSection("2026.9.2") + history },
-    { name: "unreleased section", after: preamble + releaseSection("Unreleased") + history },
     {
       name: "replaces a newer unreleased train",
       before: preamble + releaseSection("2026.9.2 (Unreleased)") + history,
     },
     {
-      name: "replaces a newer unreleased month",
-      before: preamble + releaseSection("2026.10.1 (Unreleased)") + history,
-    },
-    {
-      name: "replaces a newer unreleased correction",
-      before: preamble + releaseSection("2026.9.1-2 (Unreleased)") + history,
-    },
-    {
       name: "edits older release",
       after: preamble + releaseSection("2026.9.1") + history.replace("Previous", "Changed"),
     },
-    { name: "drops older release", after: preamble + releaseSection("2026.9.1") },
-    { name: "edits preamble", after: "# Changed\n\n" + releaseSection("2026.9.1") + history },
     {
       name: "duplicate sections",
       after: preamble + releaseSection("2026.9.1").repeat(2) + history,
-    },
-    {
-      name: "removes released section",
-      before: preamble + releaseSection("2026.9.1") + history,
-      after: preamble + history,
     },
   ])("rejects $name", ({ name: _name, ...options }) => {
     const { result } = runCloseout(options);

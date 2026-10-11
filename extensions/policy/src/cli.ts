@@ -1,4 +1,3 @@
-// Policy plugin module implements cli behavior.
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
@@ -12,11 +11,13 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { POLICY_CHECK_IDS } from "./doctor/check-ids.js";
+import { evaluatePolicy, toAttestedFinding } from "./doctor/evaluation.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
-import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
   buildPolicyConformanceReport,
   type PolicyConformanceReport,
@@ -41,16 +42,7 @@ interface PolicyCompareOptions {
   readonly json?: boolean;
 }
 
-type PolicyCheckReport = {
-  readonly ok: boolean;
-  readonly attestation?: ReturnType<typeof createPolicyAttestation>;
-  readonly evidence: unknown;
-  readonly checksRun: number;
-  readonly checksSkipped: number;
-  readonly findings: readonly Record<string, unknown>[];
-  readonly expectedAttestationHash?: string;
-  readonly exitCode: 0 | 1;
-};
+type PolicyCheckReport = Awaited<ReturnType<typeof buildPolicyCheckReport>>;
 
 export function registerPolicyCli(program: Command): void {
   const policy = program.command("policy").description("Verify workspace policy conformance");
@@ -63,7 +55,18 @@ export function registerPolicyCli(program: Command): void {
     .option("--agent <id>", "Agent id for relative policy workspace paths")
     .option("--json", "Emit JSON output")
     .action(async (options: PolicyCompareOptions) => {
-      process.exitCode = await policyCompareCommand(options);
+      process.exitCode = await runPolicyCommand(async () => {
+        if (options.baseline === undefined || options.baseline.trim() === "") {
+          throw new Error("Missing required --baseline value.");
+        }
+        const policyPath = await policyCompareCandidatePath(options);
+        const report = await buildPolicyConformanceReport({
+          baselinePath: options.baseline,
+          policyPath,
+        });
+        writePolicyConformanceReport(report, options);
+        return report.ok ? 0 : 1;
+      });
     });
 
   policy
@@ -73,7 +76,11 @@ export function registerPolicyCli(program: Command): void {
     .option("--json", "Emit JSON output")
     .option("--severity-min <severity>", "Minimum severity: info, warning, or error")
     .action(async (options: PolicyCheckOptions) => {
-      process.exitCode = await policyCheckCommand(options);
+      process.exitCode = await runPolicyCommand(async () => {
+        const report = await buildPolicyCheckReport(options, "policy check");
+        writePolicyCheckReport(report, options);
+        return report.exitCode;
+      });
     });
 
   policy
@@ -85,51 +92,24 @@ export function registerPolicyCli(program: Command): void {
     .option("--interval-ms <ms>", "Polling interval in milliseconds")
     .option("--once", "Run one watch evaluation and exit")
     .action(async (options: PolicyWatchOptions) => {
-      process.exitCode = await policyWatchCommand(options);
+      process.exitCode = await runPolicyCommand(async () => {
+        const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
+        let previousKey: string | undefined;
+        for (;;) {
+          const report = await buildPolicyCheckReport(options, "policy watch");
+          const status = policyWatchStatus(report);
+          const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
+          if (previousKey === undefined || previousKey !== key || options.once === true) {
+            writePolicyWatchReport(report, status, options);
+            previousKey = key;
+          }
+          if (options.once === true) {
+            return status === "stale" ? 1 : report.exitCode;
+          }
+          await sleep(intervalMs);
+        }
+      });
     });
-}
-
-async function policyCompareCommand(options: PolicyCompareOptions): Promise<number> {
-  return runPolicyCommand(async () => {
-    if (options.baseline === undefined || options.baseline.trim() === "") {
-      throw new Error("Missing required --baseline value.");
-    }
-    const policyPath = await policyCompareCandidatePath(options);
-    const report = await buildPolicyConformanceReport({
-      baselinePath: options.baseline,
-      policyPath,
-    });
-    writePolicyConformanceReport(report, options);
-    return report.ok ? 0 : 1;
-  });
-}
-
-async function policyCheckCommand(options: PolicyCheckOptions): Promise<number> {
-  return runPolicyCommand(async () => {
-    const report = await buildPolicyCheckReport(options, "policy check");
-    writePolicyCheckReport(report, options);
-    return report.exitCode;
-  });
-}
-
-async function policyWatchCommand(options: PolicyWatchOptions): Promise<number> {
-  return runPolicyCommand(async () => {
-    const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
-    let previousKey: string | undefined;
-    for (;;) {
-      const report = await buildPolicyCheckReport(options, "policy watch");
-      const status = policyWatchStatus(report);
-      const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
-      if (previousKey === undefined || previousKey !== key || options.once === true) {
-        writePolicyWatchReport(report, status, options);
-        previousKey = key;
-      }
-      if (options.once === true) {
-        return status === "stale" ? 1 : report.exitCode;
-      }
-      await sleep(intervalMs);
-    }
-  });
 }
 
 async function runPolicyCommand(run: () => Promise<number>): Promise<number> {
@@ -144,7 +124,7 @@ async function runPolicyCommand(run: () => Promise<number>): Promise<number> {
 async function buildPolicyCheckReport(
   options: PolicyCheckOptions,
   ownerSurface: "policy check" | "policy watch",
-): Promise<PolicyCheckReport> {
+) {
   const severityMin =
     options.severityMin === undefined ? "info" : parseHealthFindingSeverity(options.severityMin);
   if (severityMin === null) {
@@ -171,7 +151,7 @@ async function buildPolicyCheckReport(
       exitCode: visibleFindings.length === 0 ? 0 : 1,
     };
   }
-  const cfg = snapshot.valid ? policyCommandConfig(snapshot.config) : {};
+  const cfg = policyCommandConfig(snapshot.config);
   const cwd = resolveAgentWorkspaceDir(
     cfg,
     resolvePolicyCommandAgentId(cfg, options.agent, ownerSurface),
@@ -199,7 +179,7 @@ async function buildPolicyCheckReport(
   );
   const jsonFindings = findings.map(toJsonFinding);
   const attestedFindings = evaluation.attestedFindings.map(toAttestedJsonFinding);
-  const ok = exitCodeFromFindings(evaluation.findings, severityMin) === 0;
+  const exitCode = exitCodeFromFindings(evaluation.findings, severityMin);
   const attestation = createPolicyAttestation({
     ok: evaluation.attestedFindings.length === 0,
     checkedAt: new Date().toISOString(),
@@ -209,14 +189,14 @@ async function buildPolicyCheckReport(
     findings: attestedFindings,
   });
   return {
-    ok,
+    ok: exitCode === 0,
     attestation,
     evidence: evaluation.evidence,
     checksRun: POLICY_CHECK_IDS.length,
     checksSkipped: 0,
     findings: jsonFindings,
     expectedAttestationHash: evaluation.expectedAttestationHash,
-    exitCode: exitCodeFromFindings(evaluation.findings, severityMin),
+    exitCode,
   };
 }
 
@@ -313,12 +293,11 @@ function writePolicyCheckReport(report: PolicyCheckReport, options: PolicyCheckO
   } else {
     process.stdout.write(`policy check: ${report.findings.length} finding(s)\n`);
     for (const finding of report.findings) {
-      const where = typeof finding.path === "string" ? ` ${finding.path}` : "";
-      const line = typeof finding.line === "number" ? `:${finding.line}` : "";
-      const severity = typeof finding.severity === "string" ? finding.severity : "unknown";
-      const checkId = typeof finding.checkId === "string" ? finding.checkId : "unknown";
-      const message = typeof finding.message === "string" ? finding.message : "";
-      process.stdout.write(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
+      const where = finding.path !== undefined ? ` ${finding.path}` : "";
+      const line = finding.line !== undefined ? `:${finding.line}` : "";
+      process.stdout.write(
+        `  [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}\n`,
+      );
     }
   }
 }
@@ -410,32 +389,22 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   if (!Number.isSafeInteger(raw) || raw < 250) {
     throw new Error("--interval-ms must be an integer >= 250.");
   }
-  return raw;
+  return Math.min(raw, MAX_TIMER_TIMEOUT_MS);
 }
 
-function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {
-  return {
-    checkId: finding.checkId,
-    severity: finding.severity,
-    message: finding.message,
-    ...(finding.source !== undefined ? { source: finding.source } : {}),
-    ...(finding.path !== undefined ? { path: finding.path } : {}),
-    ...(finding.line !== undefined ? { line: finding.line } : {}),
-    ...(finding.ocPath !== undefined ? { ocPath: finding.ocPath } : {}),
-    ...(finding.target !== undefined ? { target: finding.target } : {}),
-    ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
-    ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
-  };
+function toAttestedJsonFinding(finding: HealthFinding) {
+  const { column: _column, ...json } = toAttestedFinding(finding);
+  return json;
 }
 
-function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
+function toJsonFinding(finding: HealthFinding) {
   return {
     ...toAttestedJsonFinding(finding),
     ...policyFindingMetadata(finding),
   };
 }
 
-function policyFindingMetadata(finding: HealthFinding): Record<string, unknown> {
+function policyFindingMetadata(finding: HealthFinding) {
   const metadata = POLICY_FIX_METADATA_BY_CHECK_ID.get(
     finding.checkId as (typeof POLICY_CHECK_IDS)[number],
   );

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
 import "../../../styles.css";
+import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/split-view.css";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
@@ -36,6 +37,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const reason = "Branch switch is unavailable while the agent is working.";
         const { container, props } = mountChatPaneHeader(containers, {
           branchSwitchDisabledReason: busy ? reason : null,
+          onClosePane: state === "idle" ? vi.fn() : undefined,
           branches: [
             { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
             { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
@@ -52,7 +54,10 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             container,
           );
         }
-        container.style.cssText = "position: fixed; top: 80px; left: 500px; width: 650px";
+        container.style.cssText =
+          state === "idle"
+            ? "position: fixed; top: 80px; left: 80px; width: 1000px"
+            : "position: fixed; top: 80px; left: 500px; width: 650px";
         const trigger = container.querySelector<HTMLButtonElement>(
           editor ? ".sidebar-file-view__action" : ".chat-pane__branches-trigger",
         )!;
@@ -88,6 +93,28 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           expect(editor ? onOpenEditor : props.onBranchSelect).toHaveBeenCalledWith(
             editor ? "vscode" : "other",
           );
+        }
+
+        if (state === "idle") {
+          const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+          const close = container.querySelector<HTMLButtonElement>(".chat-pane__close-pane")!;
+          for (const width of [320, 693]) {
+            container.style.width = `${width}px`;
+            expect(trigger.checkVisibility()).toBe(true);
+            const bounds = header.getBoundingClientRect();
+            const branchBounds = trigger.getBoundingClientRect();
+            const closeBounds = close.getBoundingClientRect();
+            expect(branchBounds.left).toBeGreaterThanOrEqual(bounds.left);
+            expect(branchBounds.right).toBeLessThanOrEqual(closeBounds.left);
+            expect(closeBounds.right).toBeLessThanOrEqual(bounds.right);
+            expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+            vi.mocked(props.onBranchSelect).mockClear();
+            await page.elementLocator(trigger).click();
+            await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
+            expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
+          }
+          await page.elementLocator(close).click();
+          expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
         }
       },
     );

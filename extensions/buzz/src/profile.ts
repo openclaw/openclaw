@@ -1,4 +1,9 @@
 import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
@@ -6,20 +11,8 @@ const AGENT_PROFILE_KIND = 10_100;
 const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
 const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
 
-type BuzzProfileSyncResult = { status: "unchanged" } | { status: "published"; eventId: string };
-
 function parseProfileContent(event: Event | undefined): Record<string, unknown> {
-  if (!event) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(event.content);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? { ...parsed }
-      : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(event ? safeParseJson<unknown>(event.content) : undefined);
 }
 
 function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {
@@ -39,42 +32,6 @@ function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | unde
   }
   const authTags = event?.tags.filter((tag) => tag[0] === "auth") ?? [];
   return authTags.length === 1 && JSON.stringify(authTags[0]) === JSON.stringify(authTag);
-}
-
-function readNonEmptyString(content: Record<string, unknown>, key: string): string | undefined {
-  const value = content[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-async function queryCurrentProfiles(params: {
-  relay: Relay;
-  publicKey: string;
-  onTimeout?: (error: Error) => void;
-  signal?: AbortSignal;
-}): Promise<Map<number, Event>> {
-  params.signal?.throwIfAborted();
-  const latestByKind = new Map<number, Event>();
-  return await queryBuzzRelaySnapshot({
-    relay: params.relay,
-    filters: [
-      { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
-      { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
-    ],
-    signal: params.signal,
-    timeoutMessage: "Timed out loading current Buzz profile",
-    abortMessage: "Buzz profile query aborted",
-    failureMessage: "Buzz profile query failed",
-    closeReason: "profile query complete",
-    closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
-    onEvent: (event) => {
-      const current = latestByKind.get(event.kind);
-      if (!current || compareEvents(event, current) < 0) {
-        latestByKind.set(event.kind, event);
-      }
-    },
-    result: () => latestByKind,
-    onTimeout: params.onTimeout,
-  });
 }
 
 function buildProfileEvent(params: {
@@ -104,14 +61,33 @@ export async function syncBuzzProfile(params: {
   authTag?: string[];
   onFatalError?: (error: Error) => void;
   signal?: AbortSignal;
-}): Promise<BuzzProfileSyncResult> {
+}): Promise<string | undefined> {
   const displayName = params.displayName.trim();
   if (!displayName) {
-    return { status: "unchanged" };
+    return undefined;
   }
 
-  const currentProfiles = await queryCurrentProfiles({
-    ...params,
+  params.signal?.throwIfAborted();
+  const currentProfiles = new Map<number, Event>();
+  await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [
+      { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+      { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+    ],
+    signal: params.signal,
+    timeoutMessage: "Timed out loading current Buzz profile",
+    abortMessage: "Buzz profile query aborted",
+    failureMessage: "Buzz profile query failed",
+    closeReason: "profile query complete",
+    closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
+    onEvent: (event) => {
+      const current = currentProfiles.get(event.kind);
+      if (!current || compareEvents(event, current) < 0) {
+        currentProfiles.set(event.kind, event);
+      }
+    },
+    result: () => currentProfiles,
     onTimeout: params.onFatalError,
   });
   params.signal?.throwIfAborted();
@@ -120,9 +96,9 @@ export async function syncBuzzProfile(params: {
   const metadataContent = parseProfileContent(currentMetadata);
   const agentContent = parseProfileContent(currentAgentProfile);
   const resolvedDisplayName =
-    readNonEmptyString(metadataContent, "display_name") ??
-    readNonEmptyString(agentContent, "display_name") ??
-    readNonEmptyString(agentContent, "name") ??
+    normalizeOptionalString(metadataContent.display_name) ??
+    normalizeOptionalString(agentContent.display_name) ??
+    normalizeOptionalString(agentContent.name) ??
     displayName;
   const events: Event[] = [];
 
@@ -143,11 +119,11 @@ export async function syncBuzzProfile(params: {
   }
 
   let agentProfileChanged = false;
-  if (!readNonEmptyString(agentContent, "name")) {
+  if (!normalizeOptionalString(agentContent.name)) {
     agentContent.name = resolvedDisplayName;
     agentProfileChanged = true;
   }
-  if (!readNonEmptyString(agentContent, "display_name")) {
+  if (!normalizeOptionalString(agentContent.display_name)) {
     agentContent.display_name = resolvedDisplayName;
     agentProfileChanged = true;
   }
@@ -174,7 +150,7 @@ export async function syncBuzzProfile(params: {
 
   const lastEvent = events.at(-1);
   if (!lastEvent) {
-    return { status: "unchanged" };
+    return undefined;
   }
   for (const event of events) {
     // A previous publish acknowledgement can arrive after this account stopped.
@@ -182,5 +158,5 @@ export async function syncBuzzProfile(params: {
     await params.relay.publish(event);
   }
   params.signal?.throwIfAborted();
-  return { status: "published", eventId: lastEvent.id };
+  return lastEvent.id;
 }

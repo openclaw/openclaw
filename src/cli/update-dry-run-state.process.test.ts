@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -47,13 +46,17 @@ async function sha256File(filePath: string): Promise<string> {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
+function runUpdateProcess(
+  root: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+  preload?: string,
+) {
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
   const entryPath = path.resolve("openclaw.mjs");
-  return spawnSync(process.execPath, [entryPath, ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
+  return runCliProcessChild({
+    nodeArgs: [...(preload ? ["--import", preload] : []), entryPath, ...args],
     env: {
       ...process.env,
       HOME: root,
@@ -62,6 +65,7 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
       HTTP_PROXY: undefined,
       HTTPS_PROXY: undefined,
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       NODE_ENV: undefined,
       NODE_OPTIONS: undefined,
       NO_COLOR: "1",
@@ -82,16 +86,15 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
       ...env,
     },
     maxBuffer: 4 * 1024 * 1024,
-    timeout: 60_000,
+    timeoutMs: 60_000,
   });
 }
 
 async function expectUnrecordedPreview(root: string, before: string[]): Promise<void> {
   expect(await snapshotTree(root)).toEqual(before);
 
-  const status = runUpdateProcess(root, ["update", "status", "--json"]);
-  expect(status.error).toBeUndefined();
-  expect(status.status, status.stderr).toBe(0);
+  const status = await runUpdateProcess(root, ["update", "status", "--timeout", "1", "--json"]);
+  expect(status.code, status.stderr).toBe(0);
   const report = JSON.parse(status.stdout);
   expect(report.activeRun).toBeUndefined();
   expect(report.lastRun).toBeUndefined();
@@ -138,15 +141,14 @@ process.stdin.resume();
     const { runId } = JSON.parse(admitted.stdout) as { runId: string };
     expect(getUpdateRun(runId, { env })).toMatchObject({ status: "running", finishedAtMs: null });
 
-    const cleanup = runUpdateProcess(root, ["update", "cleanup", "--yes", "--json"]);
+    const cleanup = await runUpdateProcess(root, ["update", "cleanup", "--yes", "--json"]);
 
-    expect(cleanup.error).toBeUndefined();
     expect(JSON.parse(cleanup.stdout)).toMatchObject({
       status: "complete",
       artifacts: [],
       totals: { removedFiles: 0 },
     });
-    expect(cleanup.status, cleanup.stderr).toBe(0);
+    expect(cleanup.code, cleanup.stderr).toBe(0);
     expect(getUpdateRun(runId, { env })).toMatchObject({ status: "running", finishedAtMs: null });
   });
 
@@ -158,6 +160,16 @@ process.stdin.resume();
       const runs = path.join(root, "state", "session-sqlite-migration-runs");
       const cache = path.join(root, "cache");
       const temporary = path.join(root, "tmp");
+      const logs = tempDirs.make("openclaw-cleanup-logs-");
+      const loggingPreload = path.join(logs, "logging.mjs");
+      // Diagnostics normally live outside the config/state/cache/scratch snapshot.
+      await fs.writeFile(
+        loggingPreload,
+        `if (!process.versions.bun) await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});
+const { setLoggerOverride } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/logging/logger.ts")).href)});
+setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
+`,
+      );
       await fs.mkdir(path.dirname(config), { recursive: true });
       await fs.mkdir(runs, { recursive: true });
       await fs.mkdir(cache);
@@ -165,13 +177,13 @@ process.stdin.resume();
       await fs.writeFile(config, "{ invalid-config");
       await fs.writeFile(path.join(runs, "unknown.json"), "{ invalid-manifest");
       const before = await snapshotTree(root);
-      const result = runUpdateProcess(
+      const result = await runUpdateProcess(
         root,
         dryRun ? ["update", "--json", "--dry-run", "cleanup"] : ["update", "cleanup", "--json"],
         { XDG_CACHE_HOME: cache, TMPDIR: temporary },
+        loggingPreload,
       );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(dryRun ? 0 : 1);
+      expect(result.code, result.stderr).toBe(dryRun ? 0 : 1);
       expect(JSON.parse(result.stdout)).toMatchObject({ status: dryRun ? "preview" : "refused" });
       expect(await snapshotTree(root)).toEqual(before);
     },
@@ -186,10 +198,16 @@ process.stdin.resume();
     const configBefore = await fs.readFile(configPath);
     const treeBefore = await snapshotTree(root);
 
-    const result = runUpdateProcess(root, ["update", "--dry-run", "--no-restart", "--json"]);
+    const result = await runUpdateProcess(root, [
+      "update",
+      "--dry-run",
+      "--no-restart",
+      "--timeout",
+      "1",
+      "--json",
+    ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.code, result.stderr).toBe(0);
     const preview = JSON.parse(result.stdout);
     expect(preview).toMatchObject({
       runId: expect.any(String),
@@ -221,10 +239,16 @@ process.stdin.resume();
     };
     const treeBefore = await snapshotTree(root);
 
-    const result = runUpdateProcess(root, ["--update", "--dry-run", "--no-restart", "--json"]);
+    const result = await runUpdateProcess(root, [
+      "--update",
+      "--dry-run",
+      "--no-restart",
+      "--timeout",
+      "1",
+      "--json",
+    ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.code, result.stderr).toBe(0);
     const preview = JSON.parse(result.stdout);
     expect(preview).toMatchObject({ runId: expect.any(String), dryRun: true });
     expect(await fs.readFile(configPath)).toEqual(configBefore);
@@ -259,7 +283,7 @@ process.stdin.resume();
       );
       const before = await snapshotTree(root);
 
-      const result = runUpdateProcess(root, [
+      const result = await runUpdateProcess(root, [
         "update",
         "migration-plan",
         "--snapshot-home",
@@ -271,8 +295,7 @@ process.stdin.resume();
         "--json",
       ]);
 
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(1);
       const plan = JSON.parse(result.stdout) as {
         mutationAllowed: boolean;
         outcome: string;
@@ -302,15 +325,19 @@ process.stdin.resume();
           stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
         },
       });
-      for (const [id, sourcePath] of [
-        ["tui-last-session", tuiPath],
-        ["exec-approvals", execPath],
-      ]) {
+      const stateDatabase = {
+        kind: "sqlite",
+        path: path.join(stateDir, "state", "openclaw.sqlite"),
+      } as const;
+      for (const [id, source] of [
+        ["tui-last-session", [{ kind: "path", path: tuiPath }]],
+        ["exec-approvals", [{ kind: "path", path: execPath }, stateDatabase]],
+      ] as const) {
         expect(plan.steps.find((step) => step.id === id)).toMatchObject({
           outcome: unknownPlugin ? "deferred" : "planned",
           requiredness: "required",
-          source: [{ kind: "path", path: sourcePath }],
-          target: [{ kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") }],
+          source,
+          target: [stateDatabase],
           ...(unknownPlugin ? { refusal: { code: "blocked-by-prior-refusal" } } : {}),
         });
       }
@@ -368,17 +395,15 @@ process.stdin.resume();
         { OPENCLAW_STATE_DIR: snapshotState },
       );
 
-    const valid = runPlan(stateDir);
-    expect(valid.error).toBeUndefined();
-    expect(valid.status, valid.stderr).toBe(1);
+    const valid = await runPlan(stateDir);
+    expect(valid.code, valid.stderr).toBe(1);
     expect(JSON.parse(valid.stdout)).toMatchObject({
       outcome: "refused",
       snapshot: { stateDir },
     });
 
-    const blank = runPlan(" \t ");
-    expect(blank.error).toBeUndefined();
-    expect(blank.status).toBe(1);
+    const blank = await runPlan(" \t ");
+    expect(blank.code).toBe(1);
     expect(blank.stderr).toContain("--snapshot-state must not be blank");
     expect(await snapshotTree(root)).toEqual(before);
   });
@@ -407,9 +432,8 @@ process.stdin.resume();
 
     await fs.writeFile(configPath, `${JSON.stringify({ session: { store: externalStore } })}\n`);
     const externalBefore = await snapshotTree(root);
-    const external = runPlan();
-    expect(external.error).toBeUndefined();
-    expect(external.status, external.stderr).toBe(1);
+    const external = await runPlan();
+    expect(external.code, external.stderr).toBe(1);
     const externalPlan = JSON.parse(external.stdout) as LegacyStateMigrationPlan;
     expect(externalPlan).toMatchObject({
       outcome: "refused",
@@ -440,9 +464,8 @@ process.stdin.resume();
     await fs.writeFile(copiedStore, "{}\n");
     await fs.writeFile(configPath, `${JSON.stringify({ session: { store: copiedStore } })}\n`);
     const copiedBefore = await snapshotTree(root);
-    const copied = runPlan();
-    expect(copied.error).toBeUndefined();
-    expect(copied.status, copied.stderr).toBe(1);
+    const copied = await runPlan();
+    expect(copied.code, copied.stderr).toBe(1);
     const copiedPlan = JSON.parse(copied.stdout) as LegacyStateMigrationPlan;
     expect(copiedPlan).toMatchObject({
       refusal: { code: "candidate-artifact-digest-required" },
@@ -463,7 +486,7 @@ process.stdin.resume();
     await fs.writeFile(configPath, "{}\n");
     const before = await snapshotTree(root);
 
-    const result = runUpdateProcess(root, [
+    const result = await runUpdateProcess(root, [
       "update",
       "migration-plan",
       "--snapshot-home",
@@ -477,8 +500,8 @@ process.stdin.resume();
       "--json",
     ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status).not.toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('does not recognize option "--config-digest"');
     expect(await snapshotTree(root)).toEqual(before);
   });
@@ -493,7 +516,7 @@ process.stdin.resume();
     await fs.writeFile(stateDir, "not a state directory\n");
     const before = await snapshotTree(root);
 
-    const result = runUpdateProcess(root, [
+    const result = await runUpdateProcess(root, [
       "update",
       "migration-plan",
       "--snapshot-home",
@@ -505,8 +528,7 @@ process.stdin.resume();
       "--json",
     ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
+    expect(result.code).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       mutationAllowed: false,
       outcome: "refused",
@@ -542,7 +564,7 @@ process.stdin.resume();
       );
       const before = await snapshotTree(root);
 
-      const result = runUpdateProcess(root, [
+      const result = await runUpdateProcess(root, [
         "update",
         ...(command === "repair" ? ["repair"] : []),
         "--timeout",
@@ -551,15 +573,8 @@ process.stdin.resume();
         "--json",
       ]);
 
-      expect(
-        result.error,
-        formatCliProcessFailure({
-          reason: `rejected ${command} arguments`,
-          stdout: result.stdout ?? "",
-          stderr: result.stderr ?? "",
-        }),
-      ).toBeUndefined();
-      expect(result.status).not.toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.code).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(
         /--timeout must be a positive integer/iu,
       );
@@ -582,15 +597,12 @@ process.stdin.resume();
     );
     const before = await snapshotTree(root);
 
-    const result = runUpdateProcess(root, ["update", "--no-restart", "--json"], {
+    const result = await runUpdateProcess(root, ["update", "--no-restart", "--json"], {
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
     });
 
-    expect(
-      result.error,
-      formatCliProcessFailure({ reason: "managed update handoff refusal", ...result }),
-    ).toBeUndefined();
-    expect(result.status).not.toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.code).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/Managed update handoff root mismatch/iu);
     expect(await snapshotTree(root)).toEqual(before);
   });
@@ -617,7 +629,7 @@ process.stdin.resume();
       const before = await snapshotTree(root);
       const beforeDatabaseHash = await sha256File(databasePath);
 
-      const refused = runUpdateProcess(
+      const refused = await runUpdateProcess(
         root,
         command === "cleanup"
           ? ["update", "cleanup", "--yes", "--json"]
@@ -630,8 +642,8 @@ process.stdin.resume();
             ],
       );
 
-      expect(refused.error).toBeUndefined();
-      expect(refused.status).not.toBe(0);
+      expect(refused.signal).toBeNull();
+      expect(refused.code).not.toBe(0);
       expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/gateway-supervisor/u);
       expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
       expect(await snapshotTree(root)).toEqual(before);
@@ -640,70 +652,131 @@ process.stdin.resume();
   );
 });
 
-it("exits the node worker after a stop frame while the supervisor keeps stdin open", async () => {
-  const root = tempDirs.make("openclaw-worker-exit-");
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(root, "openclaw.json");
-  await fs.writeFile(configPath, JSON.stringify({ nodeHost: { skills: { enabled: false } } }));
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: root,
-    USERPROFILE: root,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  delete env.VITEST;
-  delete env.VITEST_POOL_ID;
-  delete env.VITEST_WORKER_ID;
-  const result = await runCliProcessChild({
-    nodeArgs: [path.resolve("openclaw.mjs"), "node", "worker"],
-    env,
-    interact: async (child) => {
-      let stdout = "";
-      let stderr = "";
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-      await new Promise<void>((resolve, reject) => {
-        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-          reject(new Error(`worker exited before ready: ${code ?? signal}`));
-        };
-        const onData = (chunk: string) => {
-          stdout += chunk;
-          if (stdout.includes('"type":"ready"')) {
-            child.stdout.off("data", onData);
-            child.off("exit", onExit);
-            resolve();
-          }
-        };
-        child.stdout.on("data", onData);
-        child.once("exit", onExit);
-      });
-      child.stdin.write('{"type":"stop"}\n');
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(
-            new Error(
-              formatCliProcessFailure({
-                reason: "worker stayed alive after stop while stdin remained open",
-                stdout,
-                stderr,
-              }),
-            ),
-          );
-        }, 2_500);
-        timer.unref();
-        void once(child, "exit").then(() => {
-          clearTimeout(timer);
-          resolve();
+it.each([
+  { entry: "cli", signal: false, plugin: false },
+  { entry: "dedicated", signal: false, plugin: true },
+  { entry: "dedicated", signal: true, plugin: true },
+])(
+  "exits the $entry node worker with held-open stdin (signal=$signal, plugin=$plugin)",
+  async (scenario) => {
+    const root = tempDirs.make("openclaw-worker-exit-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const marker = path.join(root, "plugin-child-closed");
+    const pluginDir = path.join(root, "worker-plugin");
+    if (scenario.plugin) {
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "worker-exit-fixture",
+          configSchema: { type: "object", properties: {} },
+        }),
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "index.cjs"),
+        [
+          'const { spawn } = require("node:child_process");',
+          'const { once } = require("node:events");',
+          'const { writeFileSync } = require("node:fs");',
+          'module.exports = { id: "worker-exit-fixture", register(api) {',
+          '  const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "pipe", "pipe"] });',
+          '  const closed = once(child, "close");',
+          "  api.lifecycle.onDispose(async () => {",
+          "    child.stdin.end();",
+          "    await closed;",
+          "    writeFileSync(" + JSON.stringify(marker) + ', "closed");',
+          "  });",
+          "} };",
+        ].join("\n"),
+      );
+    }
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        nodeHost: { skills: { enabled: false } },
+        ...(scenario.plugin
+          ? {
+              plugins: {
+                allow: ["worker-exit-fixture"],
+                load: { paths: [path.join(pluginDir, "index.cjs")] },
+                slots: { memory: "none" },
+              },
+            }
+          : {}),
+      }),
+    );
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const result = await runCliProcessChild({
+      nodeArgs: [
+        path.resolve(scenario.entry === "cli" ? "openclaw.mjs" : "dist/mac-node-worker.js"),
+        "node",
+        "worker",
+      ],
+      env,
+      interact: async (child) => {
+        let stdout = "";
+        let stderr = "";
+        child.stderr.on("data", (chunk: string) => {
+          stderr += chunk;
         });
-      });
-    },
-  });
+        await new Promise<void>((resolve, reject) => {
+          const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+            reject(new Error(`worker exited before ready: ${code ?? signal}`));
+          };
+          const onData = (chunk: string) => {
+            stdout += chunk;
+            if (stdout.includes('"type":"ready"')) {
+              child.stdout.off("data", onData);
+              child.off("exit", onExit);
+              resolve();
+            }
+          };
+          child.stdout.on("data", onData);
+          child.once("exit", onExit);
+        });
+        if (scenario.signal) {
+          child.kill("SIGTERM");
+        } else {
+          child.stdin.write('{"type":"stop"}\n');
+        }
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            reject(
+              new Error(
+                formatCliProcessFailure({
+                  reason: "worker stayed alive after stop while stdin remained open",
+                  stdout,
+                  stderr,
+                }),
+              ),
+            );
+          }, 2_500);
+          timer.unref();
+          void once(child, "exit").then(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      },
+    });
 
-  expect(result.code).toBe(0);
-  expect(result.signal).toBeNull();
-});
+    expect(result.code).toBe(scenario.signal ? 143 : 0);
+    expect(result.signal).toBeNull();
+    if (scenario.plugin) {
+      expect(await fs.readFile(marker, "utf8")).toBe("closed");
+    }
+  },
+);

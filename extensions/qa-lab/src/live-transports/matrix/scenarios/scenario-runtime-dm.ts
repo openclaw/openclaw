@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime dm behavior.
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
@@ -6,6 +5,7 @@ import {
 import {
   assertThreadReplyArtifact,
   buildMatrixReplyDetails,
+  resolveMatrixQaActorSyncParams,
   runConfigurableTopLevelScenario,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
@@ -14,15 +14,10 @@ import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 export async function runDmThreadReplyOverrideScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_DRIVER_DM_ROOM_KEY);
   const result = await runConfigurableTopLevelScenario({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
+    ...resolveMatrixQaActorSyncParams(context, "driver"),
     replyPredicate: (event, params) =>
       event.relatesTo?.relType === "m.thread" && event.relatesTo?.eventId === params.driverEventId,
     roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: context.timeoutMs,
     tokenPrefix: "MATRIX_QA_DM_THREAD",

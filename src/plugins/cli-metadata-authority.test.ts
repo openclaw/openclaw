@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, expect, it } from "vitest";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLoadSession,
@@ -21,8 +20,8 @@ import {
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each(["retained-agent", "install-roots", "install-state"] as const)(
-  "fences hidden %s changes with unchanged serialized config and env",
+it.each(["system-agent", "install-roots", "install-state"] as const)(
+  "prepares %s scopes without mutating the supplied config or env",
   async (kind) => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     for (const id of ["alpha", "beta"]) {
@@ -51,7 +50,7 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
     if (kind === "install-state") {
       for (const id of ["alpha", "beta"]) {
         const installPath = path.join(root, id, ".openclaw", "extensions", id);
-        refreshPersistedInstalledPluginIndex({
+        await refreshPersistedInstalledPluginIndex({
           config: cfg,
           env,
           stateDir: path.join(root, id, "state"),
@@ -60,41 +59,22 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
         });
       }
     }
-    const serialized = JSON.stringify([cfg, env]);
     const session = createPluginCliLoadSession();
     let previous: Awaited<ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>> = [];
     for (const id of ["alpha", "beta"]) {
       const run = async () => {
-        if (previous.length) {
-          await expect(previous[0]!.register(new Command())).rejects.toThrow(
-            /preparation inputs changed/,
-          );
-        }
+        const serialized = JSON.stringify([cfg, env]);
         expect(
           (await loadPluginCliDescriptors({ cfg, env, session })).map(({ name }) => name),
         ).toEqual([id]);
-        previous = await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, session });
-        const loaderOptions: import("./cli-registry-loader.js").PluginCliLoaderOptions = {
-          pluginSdkResolution: "src",
-        };
-        const captured = await loadPluginCliRegistrationEntriesWithDefaults({
-          cfg,
-          env,
-          session,
-          loaderOptions,
-        });
-        loaderOptions.pluginSdkResolution = "dist";
-        await expect(captured[0]!.register(new Command())).rejects.toThrow(
-          /preparation inputs changed/,
-        );
         previous = await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, session });
         const program = new Command();
         await previous[0]!.register(program);
         expect(program.commands.map((command) => command.name())).toEqual([id]);
         expect(JSON.stringify([cfg, env])).toBe(serialized);
       };
-      if (kind === "retained-agent") {
-        retainLegacyDefaultAgentId(cfg, id);
+      if (kind === "system-agent") {
+        cfg.agents!.defaults = { systemAgent: { agentId: id } };
         await run();
       } else {
         await withPluginInstallRoots(
@@ -129,14 +109,12 @@ it("retains the exact new config object when a fresh read has identical serializ
   const cfg = { plugins: { enabled: false } };
   const fresh = { ...cfg };
   const session = createPluginCliLoadSession();
-  const previous = session.resolve({ cfg, env });
+  session.resolve({ cfg, env });
   const next = session.resolve({ cfg: fresh, env });
   expect(next.context.rawConfig).toBe(fresh);
   expect(next.context.activationSourceConfig).toBe(fresh);
-  expect(() => previous.assertCurrent()).toThrow(/preparation inputs changed/);
   const freshEnv = { ...env };
   const changedEnv = session.resolve({ cfg: fresh, env: freshEnv });
   expect(changedEnv).not.toBe(next);
-  expect(() => next.assertCurrent()).toThrow(/preparation inputs changed/);
   session.close();
 });

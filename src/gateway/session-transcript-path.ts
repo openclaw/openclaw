@@ -5,6 +5,10 @@ import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 const transcriptUpdatePaths = new WeakMap<InternalSessionTranscriptUpdate, string | undefined>();
+const transcriptUpdateStorePaths = new WeakMap<
+  InternalSessionTranscriptUpdate,
+  string | undefined
+>();
 
 /** Resolve a transcript file path into a stable comparison key. */
 export function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
@@ -18,12 +22,16 @@ export function resolveTranscriptPathForComparison(value: string | undefined): s
 /** Share path resolution across a normalized event's synchronous listener fan-out. */
 export function resolveTranscriptUpdatePathForComparison(
   update: InternalSessionTranscriptUpdate,
+  source: "sessionFile" | "storePath" = "sessionFile",
 ): string | undefined {
-  if (transcriptUpdatePaths.has(update)) {
-    return transcriptUpdatePaths.get(update);
+  const paths = source === "storePath" ? transcriptUpdateStorePaths : transcriptUpdatePaths;
+  if (paths.has(update)) {
+    return paths.get(update);
   }
-  const resolved = resolveTranscriptPathForComparison(update.sessionFile);
+  const resolved = resolveTranscriptPathForComparison(
+    source === "storePath" ? update.target?.storePath : update.sessionFile,
+  );
   // The emitter creates a fresh event per update; later updates retry missing paths.
-  transcriptUpdatePaths.set(update, resolved);
+  paths.set(update, resolved);
   return resolved;
 }

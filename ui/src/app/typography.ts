@@ -1,4 +1,5 @@
-import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts";
+import { isBuiltinThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -42,7 +43,7 @@ export const TYPEFACES = Object.fromEntries(
   { label: string; stack: string; asset: `fonts/${TypefaceId}.css` | undefined }
 >;
 
-export const THEME_TYPEFACES = {
+const THEME_TYPEFACES = {
   claw: { ui: "instrument-sans", chat: "instrument-sans" },
   knot: { ui: "geist", chat: "geist" },
   dash: { ui: "dm-sans", chat: "fraunces" },
@@ -68,23 +69,28 @@ export function resolveTypefaces(
   ui?: TypefaceId,
   chat?: TypefaceId,
 ): TypefacePair {
-  const defaults = THEME_TYPEFACES[theme];
+  const defaults = THEME_TYPEFACES[isBuiltinThemeId(theme) ? theme : "custom"];
   return { ui: ui ?? defaults.ui, chat: chat ?? defaults.chat };
 }
 
 // Load faces only when selected or previewed; retain them so switching slots
 // or reopening specimens never replaces an already loaded stylesheet.
-function loadTypefaceStylesheet(face: TypefaceId): void {
+export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | undefined {
   const id = `openclaw-typeface-${face}`;
   const asset = TYPEFACES[face].asset;
-  if (!asset || document.getElementById(id)) {
-    return;
+  if (!asset) {
+    return undefined;
+  }
+  const existing = document.getElementById(id);
+  if (existing instanceof HTMLLinkElement) {
+    return existing;
   }
   const link = document.createElement("link");
   link.id = id;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
   document.head.append(link);
+  return link;
 }
 
 export function syncTypefaceStylesheets(faces: TypefacePair): void {

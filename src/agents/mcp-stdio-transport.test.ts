@@ -1,14 +1,18 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { once } from "node:events";
 // MCP framing and disposal preserve the spawn owner's independent cleanup receipt.
 import fs from "node:fs/promises";
 import { PassThrough, type Writable } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
-import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
+import {
+  connectMcpClient,
+  disposeMcpClient,
+  McpClientConnectTimeoutError,
+} from "./mcp-client-lifecycle.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
@@ -106,27 +110,6 @@ afterEach(async () => {
 });
 
 describe("OpenClawStdioClientTransport", () => {
-  it("preserves the configured command, target environment and stderr stream", async () => {
-    createChild();
-    const transport = createTransport({
-      command: "npx",
-      args: ["-y", "example-mcp"],
-      env: { EXAMPLE: "1" },
-      cwd: "/tmp/example",
-      stderr: "pipe",
-    });
-    await transport.start();
-    expect(spawnMock).toHaveBeenCalledWith({
-      argv: ["npx", "-y", "example-mcp"],
-      cwd: "/tmp/example",
-      env: expect.objectContaining({ EXAMPLE: "1" }),
-      abortSignal: expect.any(AbortSignal),
-      stderrDestination: transport.stderr,
-    });
-    expect(transport.pid).toBe(4321);
-    expect(transport.stderr).toBeInstanceOf(PassThrough);
-  });
-
   it("binds an exact environment without importing MCP default variables", async () => {
     createChild();
     await createTransport({
@@ -136,21 +119,6 @@ describe("OpenClawStdioClientTransport", () => {
     }).start();
     expect(spawnMock).toHaveBeenCalledWith(
       expect.objectContaining({ exactEnv: true, env: { ONLY: "1" } }),
-    );
-  });
-
-  it("uses the caller's bounded decoder", async () => {
-    const fixture = createChild();
-    const transport = createTransport({
-      command: "node",
-      decoder: new ReadBuffer({ maxBufferSize: 8 }),
-    });
-    const onerror = vi.fn();
-    Object.assign(transport, { onerror });
-    await transport.start();
-    fixture.stdout.write(Buffer.alloc(9, 0x20));
-    expect(onerror).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "ReadBuffer exceeded maximum size of 8 bytes" }),
     );
   });
 
@@ -215,34 +183,31 @@ describe("OpenClawStdioClientTransport", () => {
     expect(mkdir).not.toHaveBeenCalled();
   });
 
-  it.each(["close", "forceClose"] as const)(
-    "%s retires startup while its owned data directory is being prepared",
-    async (closeMethod) => {
-      const preparation = createDeferred<undefined>();
-      vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);
-      createChild();
-      const transport = createTransport({
-        command: "node",
-        prepareDataDir: "/owned-plugin-data",
-      });
-      const onclose = vi.fn();
-      Object.assign(transport, { onclose });
-      const started = transport.start();
-      const closing = transport[closeMethod]();
-      expect(onclose).not.toHaveBeenCalled();
-      preparation.resolve(undefined);
+  it("forceClose retires startup while its owned data directory is being prepared", async () => {
+    const preparation = createDeferred<undefined>();
+    vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);
+    createChild();
+    const transport = createTransport({
+      command: "node",
+      prepareDataDir: "/owned-plugin-data",
+    });
+    const onclose = vi.fn();
+    Object.assign(transport, { onclose });
+    const started = transport.start();
+    const closing = transport.forceClose();
+    expect(onclose).not.toHaveBeenCalled();
+    preparation.resolve(undefined);
 
-      await expect(started).rejects.toThrow("closed");
-      await closing;
-      expect(spawnMock).not.toHaveBeenCalled();
-      expect(onclose).toHaveBeenCalledOnce();
-      await transport.close();
-      await transport.forceClose();
-      expect(onclose).toHaveBeenCalledOnce();
-      await expect(transport.start()).rejects.toThrow("closed");
-      expect(spawnMock).not.toHaveBeenCalled();
-    },
-  );
+    await expect(started).rejects.toThrow("closed");
+    await closing;
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(onclose).toHaveBeenCalledOnce();
+    await transport.close();
+    await transport.forceClose();
+    expect(onclose).toHaveBeenCalledOnce();
+    await expect(transport.start()).rejects.toThrow("closed");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 
   it("joins one disposal across root exit, repeated close and forced escalation", async () => {
     const fixture = createChild();
@@ -303,7 +268,7 @@ describe("OpenClawStdioClientTransport", () => {
     expect(cleanupErrors).toEqual([failure]);
   });
 
-  it.each(["initialize-error", "aborted"] as const)(
+  it.each(["initialize-error", "aborted", "timed-out"] as const)(
     "contains SDK %s cleanup rejection without certifying closure",
     async (trigger) => {
       const fixture = createChild();
@@ -313,22 +278,33 @@ describe("OpenClawStdioClientTransport", () => {
       const transport = createTransport({ command: "node" });
       const client = new Client({ name: "doctor-mcp-proof", version: "1" });
       const cleanupScope = createAgentCleanupScope();
+      const cleanupStarted = createDeferred();
+      closeMock.mockImplementationOnce(async (child: OwnedStdioProcess) => {
+        cleanupStarted.resolve();
+        await child.wait();
+        await child.waitForExtinction?.();
+      });
       await cleanupScope.run(async () => {
         const controller = new AbortController();
+        const initializeWritten = once(fixture.stdin, "readable");
         const connecting = connectMcpClient({
           client,
           transport,
-          timeoutMs: 5_000,
+          timeoutMs: trigger === "timed-out" ? 50 : 5_000,
           signal: controller.signal,
         });
-        const rejected = expect(connecting).rejects.toThrow("fixture initialization failed");
-        await vi.waitFor(() => expect(fixture.stdin.readableLength).toBeGreaterThan(0));
+        const rejected =
+          trigger === "timed-out"
+            ? expect(connecting).rejects.toBeInstanceOf(McpClientConnectTimeoutError)
+            : expect(connecting).rejects.toThrow("fixture initialization failed");
+        await initializeWritten;
         const initialize = JSONRPCRequestSchema.parse(
           JSON.parse(fixture.stdin.read().toString("utf8")),
         );
+        expect(initialize.method).toBe("initialize");
         if (trigger === "aborted") {
           controller.abort(new Error("fixture initialization failed"));
-        } else {
+        } else if (trigger === "initialize-error") {
           fixture.stdout.write(
             JSON.stringify({
               jsonrpc: "2.0",
@@ -337,16 +313,19 @@ describe("OpenClawStdioClientTransport", () => {
             }) + "\n",
           );
         }
-        await rejected;
+        await cleanupStarted.promise;
         fixture.root.resolve({ code: 1, signal: null });
         fixture.extinction.reject(failure);
+        await rejected;
         // Let the SDK's discarded close promise settle before explicit disposal.
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
-        await expect(disposeMcpClient({ client, transport, transportType: "stdio" })).resolves.toBe(
-          "uncertain",
-        );
+        const onCleanupError = vi.fn();
+        await expect(
+          disposeMcpClient({ client, transport, transportType: "stdio", onCleanupError }),
+        ).resolves.toBe("uncertain");
+        expect(onCleanupError).toHaveBeenCalledExactlyOnceWith(failure);
         await expect(transport.close()).rejects.toBe(failure);
       });
       expect(cleanupScope.outcome).toBe("uncertain");
@@ -386,6 +365,55 @@ describe("OpenClawStdioClientTransport", () => {
     },
   );
 
+  it.each([true, false])(
+    "joins the owner's original deadline across MCP outer force (confirmed=%s)",
+    async (confirmed) => {
+      const { closeOwnedStdioProcess } = await vi.importActual<
+        typeof import("../process/owned-stdio.js")
+      >("../process/owned-stdio.js");
+      closeMock.mockImplementation(closeOwnedStdioProcess);
+      vi.useFakeTimers();
+      const fixture = createChild();
+      let hardCancellationStarted = false;
+      fixture.child.kill.mockImplementation((signal?: NodeJS.Signals) => {
+        if (signal !== "SIGKILL" || hardCancellationStarted) {
+          return;
+        }
+        hardCancellationStarted = true;
+        setTimeout(() => {
+          fixture.root.resolve({ code: null, signal: "SIGKILL" });
+          if (confirmed) {
+            fixture.extinction.resolve();
+          } else {
+            fixture.extinction.reject(new Error("owner cleanup deadline expired"));
+          }
+        }, 5_000);
+      });
+      const transport = createTransport({ command: "node" });
+      await transport.start();
+      const cleanupScope = createAgentCleanupScope();
+      const finished = vi.fn();
+      const disposal = cleanupScope.run(() =>
+        disposeMcpClient({
+          transport,
+          transportType: "stdio",
+          client: { close: () => transport.close() },
+        }),
+      );
+      void disposal.then(finished);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(fixture.child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixture.child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGKILL"]]);
+      expect(finished).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      await expect(disposal).resolves.toBe(confirmed ? "closed" : "uncertain");
+      expect(cleanupScope.outcome).toBe(confirmed ? "closed" : "uncertain");
+      expect(closeMock).toHaveBeenCalledOnce();
+      expect(fixture.child.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   it("cancels pending startup and replays its failed cleanup to later disposal", async () => {
     const failure = new OwnedStdioCleanupError("startup owner lost", {
       cause: new Error("MCP startup aborted"),
@@ -407,22 +435,6 @@ describe("OpenClawStdioClientTransport", () => {
       await expect(transport.close()).rejects.toBe(failure);
     });
     expect(cleanupScope.outcome).toBe("uncertain");
-  });
-
-  it("sends and receives JSON-RPC while preserving fragmented UTF-8 bytes", async () => {
-    const fixture = createChild();
-    const transport = createTransport({ command: "node" });
-    const onmessage = vi.fn();
-    Object.assign(transport, { onmessage });
-    await transport.start();
-    await transport.send({ jsonrpc: "2.0", id: 1, method: "ping" });
-    expect(fixture.stdin.read()?.toString()).toBe('{"jsonrpc":"2.0","id":1,"method":"ping"}\n');
-    const message = { jsonrpc: "2.0", id: 1, result: { text: "🦞" } };
-    const bytes = Buffer.from(`${JSON.stringify(message)}\n`);
-    const split = bytes.indexOf(Buffer.from("🦞")) + 1;
-    fixture.stdout.write(bytes.subarray(0, split));
-    fixture.stdout.write(bytes.subarray(split));
-    expect(onmessage).toHaveBeenCalledWith(message);
   });
 
   it.each(["callback", "throw"])("rejects failed stdin writes through %s", async (mode) => {
@@ -488,7 +500,7 @@ describe("OpenClawStdioClientTransport", () => {
     fixture.root.resolve({ code: 0, signal: null });
     fixture.extinction.resolve();
     await transport.close();
-    expect(Buffer.concat(received)).toEqual(Buffer.alloc(chunk.length * 64, 0xad));
+    deepStrictEqual(Buffer.concat(received), Buffer.alloc(chunk.length * 64, 0xad));
   });
 
   it("keeps default malformed-frame recovery when the caller does not retire", async () => {

@@ -22,7 +22,11 @@ vi.mock("../infra/diagnostic-events.js", async (importOriginal) => ({
   waitForDiagnosticEventsDrained,
 }));
 
-import { startOneShotDiagnosticsExporters } from "./one-shot-diagnostics.js";
+import { startOneShotDiagnosticsExporters as startWithoutHost } from "./one-shot-diagnostics.js";
+import { createOneShotDiagnosticsTestHost } from "./one-shot-diagnostics.test-support.js";
+
+let host: ReturnType<typeof createOneShotDiagnosticsTestHost>;
+const startOneShotDiagnosticsExporters: typeof startWithoutHost = (params) => host.start(params);
 
 const otelEnabledConfig = {
   diagnostics: { otel: { enabled: true, endpoint: "http://127.0.0.1:4318" } },
@@ -33,6 +37,7 @@ function mockRegistryWithServices(serviceIds: string[]) {
     services: serviceIds.map((id) => ({
       pluginId: id,
       pluginName: id,
+      id: id.trim(),
       service: { id },
       source: "test",
       origin: "bundled",
@@ -49,7 +54,13 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
   const { startPluginServices: startRealServices } =
     await vi.importActual<typeof import("./services.js")>("./services.js");
   const registry = createEmptyPluginRegistry();
-  registry.services.push({ pluginId: "diagnostics-otel", service, source: "test", origin });
+  registry.services.push({
+    pluginId: "diagnostics-otel",
+    id: service.id.trim(),
+    service,
+    source: "test",
+    origin,
+  });
   acquirePluginRegistryForInspection.mockResolvedValue({
     registry,
     release: vi.fn(async () => {}),
@@ -65,18 +76,38 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
 }
 
 beforeEach(() => {
+  host = createOneShotDiagnosticsTestHost();
   vi.clearAllMocks();
   waitForDiagnosticEventsDrained.mockResolvedValue(undefined);
 });
 
 describe("startOneShotDiagnosticsExporters", () => {
+  it("requires an existing host for enabled export before loading plugins", async () => {
+    await expect(startWithoutHost({ config: otelEnabledConfig })).rejects.toThrow(
+      "One-shot diagnostics requires a bound SDK host scheduler",
+    );
+    expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
+  });
+
+  it("retires the exporter service without stopping its host's sibling work", async () => {
+    const peer = vi.fn();
+    host.scheduler.schedule({ id: "peer", delayMs: 1, run: peer });
+    await mockRealExporter({ id: "diagnostics-otel", start() {}, stop() {} }, "workspace");
+    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
+    expect(handle).not.toBeNull();
+    await handle?.stop();
+    expect(host.scheduler.signal.aborted).toBe(false);
+    await host.clock.advanceBy(1);
+    expect(peer).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["no diagnostics config", {}],
     ["no otel config", { diagnostics: {} }],
     ["diagnostics disabled", { diagnostics: { enabled: false, otel: { enabled: true } } }],
     ["otel disabled", { diagnostics: { otel: { enabled: false } } }],
   ])("skips plugin loading when otel export is not configured (%s)", async (_label, config) => {
-    const handle = await startOneShotDiagnosticsExporters({ config: config as OpenClawConfig });
+    const handle = await startWithoutHost({ config: config as OpenClawConfig });
 
     expect(handle).toBeNull();
     expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();

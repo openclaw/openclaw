@@ -1,14 +1,16 @@
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../api.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordNativeCommand } from "./native-command.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -74,7 +76,13 @@ describe("Discord native verbose menu", () => {
         userId: mode === "unauthorized" ? "987654321098765432" : "123456789012345678",
         channelId: "234567890123456789",
       });
-      const dispatch = vi.spyOn(nativeCommandRuntime, "dispatchChannelInboundTurn");
+      const dispatch = vi.spyOn(channelInbound, "dispatchChannelInboundTurn");
+      const record = vi
+        .spyOn(transcriptRuntime, "recordDeliveredCommandExchange")
+        .mockResolvedValue({
+          ok: false,
+          reason: "recording disabled in adapter test",
+        });
       const command = createDiscordNativeCommand({
         command: { name: "verbose", description: "Verbose mode", acceptsArgs: true },
         cfg,
@@ -101,6 +109,18 @@ describe("Discord native verbose menu", () => {
       );
       const payload = interaction.followUp.mock.calls[0]?.[0];
       expect(Boolean(payload?.components?.length)).toBe(mode === "ready");
+      expect(record).toHaveBeenCalledTimes(mode === "ready" ? 1 : 0);
+      if (mode === "ready") {
+        expect(record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            commandText: "/verbose",
+            replyId: "argument-menu",
+            replyText: expect.stringContaining("Choose on, off, or full for /verbose."),
+          }),
+        );
+      }
     },
   );
 });
+
+installDiscordIngressTestRuntime();

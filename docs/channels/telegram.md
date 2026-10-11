@@ -31,7 +31,7 @@ Telegram is production-ready for bot DMs and groups via grammY. Long polling is 
 - [Telegram media and attachments](/channels/telegram/media) — photo albums, voice and video notes, locations, venues, and stickers.
 - [Telegram events and operations](/channels/telegram/events) — reaction notifications, config writes, and error reply policy.
 - [Telegram transports](/channels/telegram/transports) — long polling and webhook mode compared.
-- [Telegram Dashboard Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/dashboard`.
+- [Telegram Control UI Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/controlui`.
 - [Telegram troubleshooting](/channels/telegram/troubleshooting) — silent groups, missing commands, rejected tokens, and unstable polling.
 
 ## Where each section moved
@@ -40,7 +40,7 @@ Every section heading from the previous single-page version keeps its anchor her
 
 - <a id="quick-setup" />[Quick setup](/channels/telegram/setup#quick-setup)
 - <a id="telegram-side-settings" />[Telegram side settings](/channels/telegram/setup#telegram-side-settings)
-- <a id="dashboard-mini-app" />[Dashboard Mini App](/channels/telegram/mini-app#dashboard-mini-app)
+- <a id="dashboard-mini-app" />[Control UI Mini App](/channels/telegram/mini-app#dashboard-mini-app)
 - <a id="access-control-and-activation" />[Access control and activation](/channels/telegram/access-control#access-control-and-activation)
 - <a id="group-bot-identity" />[Group bot identity](/channels/telegram/access-control#group-bot-identity)
 - <a id="finding-your-telegram-user-id" />[Finding your Telegram user ID](/channels/telegram/access-control#finding-your-telegram-user-id)
@@ -105,7 +105,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
-- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`
+- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookCertPath`, `legacyWebhook` (optional explicit forwarding endpoint; omitted or `false` uses only the Gateway port)
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker|createForumTopic|editForumTopic`
 - reactions: `reactionNotifications`, `reactionLevel`
 - errors: `errorPolicy`, `silentErrorReplies`
@@ -116,6 +116,26 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 <Note>
 Multi-account precedence: with two or more account IDs configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Omitted account `dmPolicy`, `groupPolicy`, `allowFrom`, and `groupAllowFrom` inherit the channel root, not `accounts.default.*`. Explicit account policies win; if neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 </Note>
+
+## Multi-agent account ownership
+
+Each Telegram account needs a resolvable agent owner. To bind the default account
+to `main`, add this entry to the top-level `bindings` array:
+
+```json5 validate=false
+{ agentId: "main", match: { channel: "telegram", accountId: "default" } }
+```
+
+Use the configured agent and account IDs for your Gateway. A missing owner leaves
+that account blocked with the exact binding remediation in channel status;
+other accounts keep running. Add the binding and restart the Gateway.
+
+When upgrading a legacy `agents.list` config, Doctor preserves the previous
+implicit account owner in a binding before saving explicit ownership. Doctor
+requires the original roster and never promotes a narrower conversation route
+to account-wide ownership. Missing historical ownership requires an operator
+choice; Doctor reports the exact binding to add without changing existing routes.
+See [migration repairs](/gateway/doctor/config-migrations#channel-ownership-during-an-update).
 
 ## Related
 

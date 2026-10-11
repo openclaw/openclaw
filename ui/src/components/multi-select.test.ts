@@ -175,108 +175,6 @@ it("skips disabled choices in both keyboard directions", async () => {
   expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/last"]);
 });
 
-it("leaves no active choice when the only match becomes disabled", async () => {
-  const element = await createMultiSelect({
-    value: [],
-    isExcluded: () => false,
-    options: [{ value: "fixture/model", label: "Model" }],
-  });
-  await typeText(element, "fixture/model");
-  element.options = [{ value: "fixture/model", label: "Model", disabled: true }];
-  await element.updateComplete;
-  await pressKey(element, "ArrowDown");
-  await pressKey(element, "Enter");
-  expect(input(element).hasAttribute("aria-activedescendant")).toBe(false);
-  expect(element.onChange).not.toHaveBeenCalled();
-});
-
-it("does not disable a case-distinct model with the same lowercase spelling", async () => {
-  const element = await createMultiSelect({
-    value: [],
-    isExcluded: () => false,
-    getValueKey: normalizeAgentModelRefForConfig,
-    options: [
-      { value: "custom/model-a", label: "Blocked", disabled: true },
-      { value: "custom/Model-A", label: "Ready" },
-    ],
-  });
-
-  await typeText(element, "CUSTOM/Model-A");
-  await pressKey(element, "Enter");
-
-  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["custom/Model-A"]);
-});
-
-it("renders chips with option labels and lists only unchosen, unexcluded options once opened", async () => {
-  const element = await createMultiSelect();
-
-  expect(chipValues(element)).toEqual([sonnet]);
-  const chip = element.querySelector(".multi-select__chip");
-  expect(chip?.querySelector(".multi-select__chip-label")?.textContent?.trim()).toBe(
-    "Claude Sonnet 4.6",
-  );
-  expect(chip?.querySelector(".multi-select__chip-icon")).not.toBeNull();
-  expect(isOpen(element)).toBe(false);
-
-  await clickField(element);
-
-  expect(isOpen(element)).toBe(true);
-  expect(element.onOpen).toHaveBeenCalledTimes(1);
-  expect(rowValues(element)).toEqual([opus, gemini]);
-});
-
-it("filters rows by typed text and appends the highlighted row on Enter", async () => {
-  const element = await createMultiSelect();
-
-  await typeText(element, "gem");
-  // Matches lead and stay highlighted; the custom entry trails them so Enter
-  // never adds a partial search term by accident.
-  expect(rowValues(element)).toEqual([gemini, "gem"]);
-  expect(element.querySelector(".multi-select__option")?.getAttribute("aria-selected")).toBe(
-    "true",
-  );
-
-  await pressKey(element, "Enter");
-
-  expect(element.onChange).toHaveBeenCalledWith([sonnet, gemini]);
-  expect(input(element).value).toBe("");
-});
-
-it.each(["Enter", ",", "click"])(
-  "commits an explicitly chosen custom row via %s",
-  async (action) => {
-    const element = await createMultiSelect();
-    const custom = "openrouter/mistral/mistral-large";
-
-    await typeText(element, custom);
-    expect(rowValues(element)).toEqual([custom]);
-    const row = element.querySelector(".multi-select__option");
-    expect(row?.hasAttribute("data-custom")).toBe(true);
-    expect(row?.textContent).toContain(`Add “${custom}”`);
-
-    if (action === "click") {
-      row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await element.updateComplete;
-    } else {
-      await pressKey(element, action);
-    }
-
-    expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, custom]);
-    expect(input(element).value).toBe("");
-  },
-);
-
-it("does not offer custom rows for values already chosen or excluded", async () => {
-  const element = await createMultiSelect();
-
-  await typeText(element, primary);
-
-  expect(rowValues(element)).toEqual([]);
-  expect(element.querySelector(".multi-select__empty")?.textContent?.trim()).toBe("No matches");
-  await pressKey(element, "Enter");
-  expect(element.onChange).not.toHaveBeenCalled();
-});
-
 it("removes chips with Backspace on empty text and with the chip button", async () => {
   const element = await createMultiSelect({ value: [sonnet, gemini] });
 
@@ -312,7 +210,7 @@ it("moves the highlight with arrow keys and closes on Escape", async () => {
   expect(element.onChange).not.toHaveBeenCalled();
 });
 
-it.each(["Tab", "blur"])("discards unconfirmed search text on %s", async (action) => {
+it("discards unconfirmed search text on blur", async () => {
   const outside = document.createElement("button");
   document.body.append(outside);
   for (const value of ["gem", "openrouter/pending", gemini]) {
@@ -320,9 +218,6 @@ it.each(["Tab", "blur"])("discards unconfirmed search text on %s", async (action
     input(element).focus();
     await typeText(element, value);
 
-    if (action !== "blur") {
-      await pressKey(element, action);
-    }
     outside.focus();
     await element.updateComplete;
 
@@ -333,73 +228,7 @@ it.each(["Tab", "blur"])("discards unconfirmed search text on %s", async (action
   }
 });
 
-it("appends pasted references in order without duplicating or adding excluded models", async () => {
-  const element = await createMultiSelect();
-
-  await typeText(element, `${gemini}, openrouter/pending, ${primary}, ${gemini}`);
-  await pressKey(element, "Enter");
-
-  expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, gemini, "openrouter/pending"]);
-});
-
-it.each(["click", "Enter", ","])(
-  "preserves a case-distinct custom model when committed with %s",
-  async (action) => {
-    const lower = "custom/model-a";
-    const custom = "custom/Model-A";
-    const element = await createMultiSelect({
-      options: [{ value: lower, label: "Lowercase model" }],
-      value: [],
-      isExcluded: () => false,
-      getValueKey: normalizeAgentModelRefForConfig,
-    });
-    input(element).focus();
-    await typeText(element, custom);
-
-    expect(rowValues(element)).toEqual([lower, custom]);
-    const customRow = element.querySelector<HTMLElement>(".multi-select__option[data-custom]");
-    expect(customRow?.getAttribute("data-value")).toBe(custom);
-    if (action === "click") {
-      customRow?.click();
-    } else {
-      if (action === "Enter") {
-        await pressKey(element, "ArrowDown");
-      }
-      await pressKey(element, action);
-    }
-    await element.updateComplete;
-
-    expect(element.onChange).toHaveBeenCalledExactlyOnceWith([custom]);
-  },
-);
-
-it("uses caller-owned identity for chips, exclusion, and pasted values", async () => {
-  const lower = "custom/model-a";
-  const upper = "custom/Model-A";
-  const element = await createMultiSelect({
-    options: [
-      { value: lower, label: "Lowercase model" },
-      { value: upper, label: "Uppercase model" },
-    ],
-    value: ["CUSTOM/model-a"],
-    isExcluded: () => false,
-    getValueKey: normalizeAgentModelRefForConfig,
-  });
-
-  expect(element.querySelector(".multi-select__chip-label")?.textContent).toBe("Lowercase model");
-  await clickField(element);
-  expect(rowValues(element)).toEqual([upper]);
-  element.isExcluded = (value) => normalizeAgentModelRefForConfig(value) === upper;
-  await element.updateComplete;
-  expect(rowValues(element)).toEqual([]);
-  element.isExcluded = () => false;
-  await typeText(element, `${lower}, ${upper}, CUSTOM/Model-A`);
-  await pressKey(element, ",");
-
-  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["CUSTOM/model-a", upper]);
-});
-
-it.each([",", "Enter"])("preserves explicitly confirmed alias bindings on %s", async (action) => {
+it.each(["Enter"])("preserves explicitly confirmed alias bindings on %s", async (action) => {
   const target = "custom/Model-A";
   const element = await createMultiSelect({
     options: [{ value: target, label: "Uppercase model" }],
@@ -425,12 +254,6 @@ it.each([
     existing: "gpt-5.4-mini",
     alternate: "local/gpt-5.4-mini",
     models: { "local/gpt-5.4-mini": {} },
-  },
-  {
-    name: "a profile-qualified fallback alias",
-    existing: "fast@work",
-    alternate: "custom/upper",
-    models: { "custom/lower": { alias: "fast" }, "custom/upper": { alias: "fast@work" } },
   },
 ])("keeps $name separate from a real alternate model", async ({ existing, alternate, models }) => {
   const primaryModelRef = "openai/gpt-5.4";

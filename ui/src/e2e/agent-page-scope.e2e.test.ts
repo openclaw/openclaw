@@ -10,7 +10,9 @@ import {
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
@@ -95,7 +97,28 @@ suite.define(() => {
                 { id: "charlie", name: "Needle Charlie" },
               ],
             },
-            "cron.list": { jobs: [{ id: "bravo", name: "Needle Bravo" }] },
+            "cron.list": cronListResponseFixture({
+              jobs: [
+                {
+                  id: "bravo",
+                  name: "Needle Bravo",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "main",
+                  wakeMode: "next-heartbeat",
+                  payload: { kind: "systemEvent", text: "Prepare the sample report." },
+                  state: {},
+                },
+              ],
+              snapshotRevision: "palette-group-order",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            }),
             "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
             "sessions.usage": emptyUsage,
           },
@@ -157,7 +180,7 @@ suite.define(() => {
           await result.waitFor();
           await screenshot(page, "07-palette-reviewer-result.png");
           await result.click();
-          const selectedAgent = page.locator("openclaw-agents-page openclaw-agent-select");
+          const selectedAgent = page.locator(".settings-sidebar openclaw-agent-select");
           await selectedAgent.waitFor();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
           await expect
@@ -369,8 +392,8 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-        // The card sits at the top of the sidebar: the menu drops below it so the
-        // agent you clicked (and its checkmark row) stays visible.
+        // The compact avatar stays visible above its menu. Viewport padding may
+        // shift the menu's left edge inside the rail without detaching it.
         await expect
           .poll(async () => {
             const [card, menu] = await Promise.all([
@@ -380,9 +403,13 @@ suite.define(() => {
             if (!card || !menu) {
               return null;
             }
-            return { belowCard: menu.y >= card.y + card.height, leftAligned: menu.x <= card.x + 4 };
+            return {
+              belowCard: menu.y >= card.y + card.height,
+              anchoredToCard: menu.x <= card.x + card.width && menu.x + menu.width >= card.x,
+              inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
+            };
           })
-          .toEqual({ belowCard: true, leftAligned: true });
+          .toEqual({ belowCard: true, anchoredToCard: true, inViewport: true });
         await agentMenu.locator('wa-dropdown-item[value="agent:writer"]').click();
         await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
         await expect
@@ -391,7 +418,7 @@ suite.define(() => {
           )
           .toBe("Writer");
 
-        await sidebar.getByRole("link", { name: "Home" }).click();
+        await openHomeFullPage(page, "writer");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar

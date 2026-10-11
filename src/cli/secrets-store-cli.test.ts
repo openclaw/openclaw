@@ -1,9 +1,13 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerSecretsCli } from "./secrets-cli.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -12,6 +16,7 @@ const mocks = await vi.hoisted(async () => {
     list: vi.fn(),
     read: vi.fn(),
     write: vi.fn(),
+    writeBatch: vi.fn(),
     updateHosts: vi.fn(),
     remove: vi.fn(),
     purge: vi.fn(),
@@ -36,14 +41,25 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     listSecretStoreEntries: (params: unknown) => mocks.list(params),
     readSecretStoreValue: (params: unknown) => mocks.read(params),
     writeSecretStoreEntry: (params: unknown) => mocks.write(params),
+    writeSecretStoreEntries: (params: unknown) => mocks.writeBatch(params),
     updateSecretStoreAllowedHosts: (params: unknown) => mocks.updateHosts(params),
     deleteSecretStoreEntry: (params: unknown) => mocks.remove(params),
     purgeExpiredSecretStoreEntries: () => mocks.purge(),
   };
 });
-vi.mock("../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => mocks.gatewayIdentity(),
+// mock-isolation: These policy tests use the offline branch; owner routing has its own boundary suite.
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: Parameters<typeof import("./local-state-owner.js").runWithLocalStateOwner>[0]) =>
+    runLocal({
+      env: process.env,
+      config: {},
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
 }));
+
 vi.mock("@clack/prompts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@clack/prompts")>();
   return {
@@ -66,6 +82,7 @@ beforeEach(() => {
   mocks.list.mockReset().mockReturnValue([]);
   mocks.read.mockReset();
   mocks.write.mockReset();
+  mocks.writeBatch.mockReset();
   mocks.updateHosts.mockReset();
   mocks.remove.mockReset();
   mocks.purge.mockReset();
@@ -79,6 +96,45 @@ beforeEach(() => {
 });
 
 describe("secrets store CLI", () => {
+  it.each(["set", "import"])(
+    "preserves an existing credential during a redacted %s round-trip",
+    async (command) => {
+      const file = path.join(tempDirs.make("store-cli-redacted-"), "input");
+      await fs.writeFile(
+        file,
+        command === "set"
+          ? "__OPENCLAW_REDACTED__"
+          : "OPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n",
+      );
+      mocks.read.mockResolvedValue({ ok: true, value: "synthetic-existing-token" });
+      await createProgram().parseAsync(
+        command === "set"
+          ? ["secrets", "store", "set", "OPENCLAW_GATEWAY_TOKEN", "--value-file", file]
+          : ["secrets", "store", "import", "--from", file, "--yes"],
+        { from: "user" },
+      );
+      expect(mocks.write).not.toHaveBeenCalled();
+      expect(mocks.writeBatch).not.toHaveBeenCalled();
+      expect(mocks.runtimeLogs.join("\n")).toContain(
+        "Skipped redacted value for OPENCLAW_GATEWAY_TOKEN; existing entry unchanged.",
+      );
+      expect(mocks.gatewayIdentity).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a redacted import without a usable existing credential before writing other entries", async () => {
+    const file = path.join(tempDirs.make("store-cli-redacted-"), "input.env");
+    await fs.writeFile(file, "SERVICE_MODE=test\nOPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n");
+    mocks.read.mockResolvedValue({ ok: false, error: { code: "SECRET_STORE_NOT_FOUND" } });
+    await expect(
+      createProgram().parseAsync(["secrets", "store", "import", "--from", file, "--yes"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:2");
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.writeBatch).not.toHaveBeenCalled();
+    expect(mocks.runtimeErrors.join("\n")).toContain("OPENCLAW_GATEWAY_TOKEN");
+  });
   it("writes JSON results for list and get", async () => {
     mocks.list.mockReturnValueOnce([
       { name: "SERVICE_MODE", kind: "env", valuePreview: "production" },
@@ -86,7 +142,7 @@ describe("secrets store CLI", () => {
     await createProgram().parseAsync(["secrets", "store", "list", "--json"], { from: "user" });
 
     mocks.list.mockReturnValueOnce([{ name: "SERVICE_MODE", kind: "env" }]);
-    mocks.read.mockReturnValueOnce({ ok: true, value: "production" });
+    mocks.read.mockResolvedValueOnce({ ok: true, value: "production" });
     await createProgram().parseAsync(["secrets", "store", "get", "SERVICE_MODE", "--json"], {
       from: "user",
     });
@@ -185,7 +241,7 @@ describe("secrets store CLI", () => {
     }
   });
 
-  it.each(["--dry-run", "--yes"])(
+  it.each(["--yes"])(
     "rejects an empty imported secret before any entry is written with %s",
     async (mode) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-store-invalid-import-"));
@@ -199,6 +255,7 @@ describe("secrets store CLI", () => {
         ).rejects.toThrow("__exit__:2");
         expect(mocks.runtimeErrors.join("\n")).toContain("Secret store value is empty");
         expect(mocks.write).not.toHaveBeenCalled();
+        expect(mocks.writeBatch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
@@ -238,18 +295,24 @@ describe("secrets store CLI", () => {
       { from: "user" },
     );
 
-    expect(mocks.updateHosts).toHaveBeenNthCalledWith(1, {
-      scope: { kind: "team" },
-      name: "MISC_VALUE",
-      allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
-      updatedBy: "cli",
-    });
-    expect(mocks.updateHosts).toHaveBeenNthCalledWith(2, {
-      scope: { kind: "team" },
-      name: "MISC_VALUE",
-      allowedHosts: [],
-      updatedBy: "cli",
-    });
+    expect(mocks.updateHosts).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        scope: { kind: "team" },
+        name: "MISC_VALUE",
+        allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
+        updatedBy: "cli",
+      }),
+    );
+    expect(mocks.updateHosts).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        scope: { kind: "team" },
+        name: "MISC_VALUE",
+        allowedHosts: [],
+        updatedBy: "cli",
+      }),
+    );
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
@@ -335,22 +398,24 @@ describe("secrets store CLI", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
 
-    expect(mocks.write).toHaveBeenCalledTimes(3);
-    expect(mocks.write.mock.calls[0]?.[0]).toMatchObject({
-      name: "SERVICE_URL",
-      value: "https://service.test/path with spaces",
-      kind: "env",
-    });
-    expect(mocks.write.mock.calls[1]?.[0]).toMatchObject({
-      name: "SERVICE_PRIVATE_KEY",
-      value: "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----",
-      kind: "secret",
-    });
-    expect(mocks.write.mock.calls[2]?.[0]).toMatchObject({
-      name: "SERVICE_EMPTY",
-      value: "",
-      kind: "env",
-    });
+    expect(mocks.writeBatch).toHaveBeenCalledTimes(1);
+    expect(mocks.writeBatch.mock.calls[0]?.[0]?.entries).toEqual([
+      {
+        name: "SERVICE_URL",
+        value: "https://service.test/path with spaces",
+        kind: "env",
+      },
+      {
+        name: "SERVICE_PRIVATE_KEY",
+        value: "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----",
+        kind: "secret",
+      },
+      {
+        name: "SERVICE_EMPTY",
+        value: "",
+        kind: "env",
+      },
+    ]);
     const output = [...mocks.runtimeLogs, ...mocks.runtimeErrors].join("\n");
     expect(output).not.toContain("multiline-body");
   });

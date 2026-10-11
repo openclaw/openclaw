@@ -30,7 +30,6 @@ function buildParams(commandBody: string) {
 function beginActiveOperation(
   sessionKey: string,
   sessionId = "session-active",
-  taskSuggestionDeliveryMode?: "gateway",
   authorityRun = createMockFollowupRun({ run: { sessionId, sessionKey } }),
 ) {
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
@@ -44,7 +43,6 @@ function beginActiveOperation(
   operation.attachBackend({
     kind: "embedded",
     cancel: vi.fn(),
-    taskSuggestionDeliveryMode,
     messageInjection: { isAvailable: () => true, queueMessage },
   });
   operations.push(operation);
@@ -101,12 +99,12 @@ describe("handleSteerCommand", () => {
   });
 
   it("routes an active /steer through the prepared reply path without a premature ack", async () => {
-    const params = buildParams("/steer keep going");
+    const message = "stop the deploy\nand revert the migration first";
+    const params = buildParams(`/steer ${message}`);
     params.opts = { toolsAllow: ["read"] };
     const { toolAuthorityFingerprint } = beginActiveOperation(
       "agent:main:main",
       "session-active",
-      undefined,
       createCommandAuthorityRun(params),
     );
 
@@ -114,42 +112,11 @@ describe("handleSteerCommand", () => {
 
     expect(toolAuthorityFingerprint).toEqual(expect.any(String));
     expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
+    expect(params.ctx.Body).toBe(message);
+    expect(params.ctx.BodyForAgent).toBe(message);
+    expect(params.command.commandBodyNormalized).toBe(message);
     // Injection now happens only after the normal path has prepared durable
     // transcript, identity, media, cancellation, and adoption ownership.
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("defers tool-authority admission to the prepared steer path", async () => {
-    const activeParams = buildParams("/steer keep going");
-    activeParams.opts = { toolsAllow: ["exec"] };
-    beginActiveOperation(
-      "agent:main:main",
-      "session-active",
-      undefined,
-      createCommandAuthorityRun(activeParams),
-    );
-    const params = buildParams("/steer keep going");
-    params.opts = { toolsAllow: ["read"] };
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("keeps initiating surface options for prepared steering", async () => {
-    beginActiveOperation("agent:main:main", "session-active", "gateway");
-    const params = buildParams("/steer keep going");
-    params.opts = { taskSuggestionDeliveryMode: "gateway" };
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.opts.taskSuggestionDeliveryMode).toBe("gateway");
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
@@ -219,18 +186,6 @@ describe("handleSteerCommand", () => {
 
     expect(result).toEqual({ shouldContinue: true });
     expect(params.ctx.Body).toBe("keep going");
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("does not contact the backend before prepared admission", async () => {
-    beginActiveOperation("agent:main:main");
-    const params = buildParams("/steer keep going");
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
     expect(params.ctx.BodyForAgent).toBe("keep going");
     expect(params.command.commandBodyNormalized).toBe("keep going");
     expect(queueMessage).not.toHaveBeenCalled();

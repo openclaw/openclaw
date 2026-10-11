@@ -257,15 +257,6 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
-  fun freshFailedRowConsumesTheWatch() {
-    val resolver = TurnRecapResolver()
-    resolver.resolve(session, true, done(previousEndedAt))
-
-    assertNull(resolver.resolve(session, false, row(status = "failed", endedAt = runEndedAt)))
-    assertNull(resolver.resolve(session, false, done(runEndedAt + 1_000L)))
-  }
-
-  @Test
   fun leavingTheSessionAbandonsUnsettledButKeepsSettled() {
     val resolver = TurnRecapResolver()
     resolver.resolve(session, true, done(previousEndedAt))
@@ -291,8 +282,8 @@ class ChatTurnRecapResolverTest {
 
   @Test
   fun formatsZeroOneAndCompactTokenCounts() {
-    assertEquals(TurnRecapTokenFormat(singular = false, count = "0"), turnRecapTokenFormat(0L))
-    assertEquals(TurnRecapTokenFormat(singular = true, count = "1"), turnRecapTokenFormat(1L))
+    assertEquals("0", formatCompactTokenCount(0L, Locale.US))
+    assertEquals("1", formatCompactTokenCount(1L, Locale.US))
     assertEquals("1.2k", formatCompactTokenCount(1_234L, Locale.US))
     assertEquals("1.3k", formatCompactTokenCount(1_250L, Locale.US))
     assertEquals("1,2k", formatCompactTokenCount(1_234L, Locale.GERMANY))
@@ -302,11 +293,10 @@ class ChatTurnRecapResolverTest {
   private fun transcript(
     newestItemId: String?,
     completedEndedAt: Long? = null,
-    transcriptSessionKey: String? = session,
     completedNewestItemId: String? = newestItemId.takeIf { completedEndedAt != null },
   ): TurnRecapTranscriptState =
     TurnRecapTranscriptState(
-      sessionKey = transcriptSessionKey,
+      sessionKey = session,
       newestItemId = newestItemId,
       completedEndedAt = completedEndedAt,
       completedNewestItemId = completedNewestItemId,

@@ -9,7 +9,7 @@ import type { BrowserPanelControllerHost } from "./browser-panel-operation-owner
 interface BrowserPanelNativePresentationHost {
   readonly host: Pick<
     BrowserPanelControllerHost,
-    "isConnected" | "browserPanelIsOpen" | "renderRoot"
+    "isConnected" | "browserPanelIsOpen" | "renderRoot" | "sessionKey"
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly activeTargetId: string | null;
@@ -33,7 +33,7 @@ export class BrowserPanelNativePresentation {
   private intersecting = true;
   private occluded = false;
   private frame: number | null = null;
-  private lastPayload = "";
+  private lastPresentation: { key: string } | null = null;
   private connected = false;
 
   constructor(private readonly controller: BrowserPanelNativePresentationHost) {}
@@ -80,7 +80,7 @@ export class BrowserPanelNativePresentation {
     this.unsubscribeOcclusion = undefined;
     document.removeEventListener("scroll", this.schedule, true);
     window.removeEventListener("resize", this.schedule);
-    this.lastPayload = "";
+    this.lastPresentation = null;
     void postNativeBrowserMessage({ type: "release-scope", scope: this.scope });
   }
 
@@ -88,6 +88,14 @@ export class BrowserPanelNativePresentation {
     if (!this.connected) {
       return;
     }
+    this.synchronizeStage();
+    if (!this.canPresent()) {
+      this.hide();
+    }
+    this.schedule();
+  }
+
+  private synchronizeStage(): void {
     const stage = this.controller.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
     if (stage !== this.stage) {
       this.resizeObserver?.disconnect();
@@ -111,10 +119,6 @@ export class BrowserPanelNativePresentation {
         }
       }
     }
-    if (!this.canPresent()) {
-      this.hide();
-    }
-    this.schedule();
   }
 
   readonly schedule = (): void => {
@@ -129,7 +133,7 @@ export class BrowserPanelNativePresentation {
 
   renew(): void {
     // Explicit selection reclaims a tab that another panel scope may now own.
-    this.lastPayload = "";
+    this.lastPresentation = null;
     this.schedule();
   }
 
@@ -152,6 +156,11 @@ export class BrowserPanelNativePresentation {
   }
 
   private report(): void {
+    if (!this.connected) {
+      return;
+    }
+    // Nested Solid content can mount after the owner commit that scheduled this frame.
+    this.synchronizeStage();
     const stage = this.stage;
     if (!stage || !this.canPresent()) {
       this.hide();
@@ -199,11 +208,12 @@ export class BrowserPanelNativePresentation {
       rect,
       visible: Boolean(tabId),
     };
-    const serialized = JSON.stringify(payload);
-    if (serialized === this.lastPayload) {
+    const presentation = { key: JSON.stringify(payload) };
+    if (presentation.key === this.lastPresentation?.key) {
       return;
     }
-    this.lastPayload = serialized;
+    this.lastPresentation = presentation;
+    const sessionKey = this.controller.host.sessionKey;
     this.presentedTabId = tabId;
     if (tabId) {
       // Native resolves duplicate presentations of one tab in favor of the
@@ -211,7 +221,13 @@ export class BrowserPanelNativePresentation {
       this.lastPresented = ++presentationOrder;
     }
     void postNativeBrowserMessage(payload).then((reply) => {
-      if (reply && !reply.ok && this.connected) {
+      if (
+        reply &&
+        !reply.ok &&
+        this.connected &&
+        this.controller.host.sessionKey === sessionKey &&
+        this.lastPresentation === presentation
+      ) {
         this.controller.reportError(reply.error);
       }
     });

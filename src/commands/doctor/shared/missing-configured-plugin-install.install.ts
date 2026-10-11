@@ -31,7 +31,12 @@ import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
+  resolvePluginNpmPackageDir,
 } from "../../../plugins/install-paths.js";
+import {
+  copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
+} from "../../../plugins/install-transaction.js";
 import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
@@ -39,39 +44,18 @@ import {
   resolveNpmInstallRecordSpec,
 } from "../../../plugins/installs.js";
 import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
-import { isClawHubTrustSkippedOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
 import type { DownloadableInstallCandidate } from "./missing-configured-plugin-install.candidates.js";
-import {
-  resolveLegacyNpmPackageInstallPath,
-  resolveNpmPackageInstallPath,
-} from "./missing-configured-plugin-install.records.js";
+import { resolveLegacyNpmPackageInstallPath } from "./missing-configured-plugin-install.records.js";
 import {
   resolveRecordedInstallCandidate,
   type InstallCandidateRepairReason,
 } from "./missing-configured-plugin-install.targets.js";
 
-export function isActionableClawHubSkippedOutcome(outcome: {
-  status: string;
-  code?: string;
-}): boolean {
-  return isClawHubTrustSkippedOutcome(outcome);
-}
-
 export function isClawHubReviewNotice(message: string): boolean {
   const audit = stripAnsi(message);
   return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
-}
-
-function formatInstalledConfiguredPluginChange(params: {
-  pluginId: string;
-  installSpec: string;
-  repairReason?: InstallCandidateRepairReason;
-}): string {
-  return params.repairReason === "stale-version-bound-runtime"
-    ? `Refreshed stale configured plugin "${params.pluginId}" from ${params.installSpec}.`
-    : `Installed missing configured plugin "${params.pluginId}" from ${params.installSpec}.`;
 }
 
 export async function installCandidate(params: {
@@ -80,8 +64,9 @@ export async function installCandidate(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   mode?: "install" | "update";
-  preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -163,6 +148,7 @@ async function installCandidatePackage(
   const npmSpecs = candidate.npmSpec
     ? await resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
+        timeoutMs: params.timeoutMs,
         updateChannel: params.updateChannel,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
           ? parseRegistryNpmSpec(candidate.npmSpec)?.name
@@ -249,14 +235,16 @@ async function installCandidatePackage(
             spec,
             source.expectedIntegrity,
           );
-          const options = {
+          const options = copyPluginInstallTransactionRequest(params, {
             spec,
             config: params.config,
+            timeoutMs: params.timeoutMs,
+            workTimeoutMs: params.workTimeoutMs,
             extensionsDir,
             expectedPluginId: candidate.pluginId,
             expectedIntegrity: source.expectedIntegrity,
             onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-          };
+          });
           if (source.source === "clawhub") {
             const result = await installPluginFromClawHub({
               ...options,
@@ -268,6 +256,7 @@ async function installCandidatePackage(
                 warn: (message) => warnings.push(stripAnsi(message)),
               },
             });
+            retainPluginInstallTransaction(params, result);
             return { result, capabilityConsent };
           }
           const mode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
@@ -279,9 +268,10 @@ async function installCandidatePackage(
               trustedSourceLinkedOfficialInstall: candidate.trustedSourceLinkedOfficialInstall,
             });
           let result = await install(mode);
-          if (!result.ok && mode === "install" && isPluginAlreadyExistsError(result.error)) {
+          if (!result.ok && mode === "install" && /\bplugin already exists:/.test(result.error)) {
             result = await install("update");
           }
+          retainPluginInstallTransaction(params, result);
           return { result, capabilityConsent };
         },
         isRetryable: (attempt) =>
@@ -289,15 +279,11 @@ async function installCandidatePackage(
           (source.source === "npm"
             ? isUnavailableNpmTarget(attempt.result)
             : isUnavailableClawHubTarget(attempt.result)),
-        onFallback: (message) => {
-          channelNotices.push(message);
-        },
+        onFallback: (message) => void channelNotices.push(message),
       });
     },
     result: (attempt) => attempt.result,
-    onFallback: (message) => {
-      channelNotices.push(message);
-    },
+    onFallback: (message) => void channelNotices.push(message),
   });
   if (!installResult.ok) {
     return {
@@ -335,6 +321,9 @@ async function installCandidatePackage(
           version: installResult.version,
           ...buildNpmResolutionInstallFields(installResult.npmResolution),
         };
+  const installSpec =
+    (installedSource.source === "npm" ? npmSpecs : clawhubSpecs)?.installSpec ??
+    installedSource.spec;
   return {
     records: {
       ...params.records,
@@ -344,21 +333,13 @@ async function installCandidatePackage(
       }),
     },
     changes: [
-      formatInstalledConfiguredPluginChange({
-        pluginId,
-        installSpec:
-          (installedSource.source === "npm" ? npmSpecs : clawhubSpecs)?.installSpec ??
-          installedSource.spec,
-        repairReason: params.repairReason,
-      }),
+      staleRuntimeRepair
+        ? `Refreshed stale configured plugin "${pluginId}" from ${installSpec}.`
+        : `Installed missing configured plugin "${pluginId}" from ${installSpec}.`,
     ],
     notices: [...channelNotices, ...warnings],
     warnings: [],
   };
-}
-
-function isPluginAlreadyExistsError(error: string): boolean {
-  return /\bplugin already exists:/.test(error);
 }
 
 function resolveExistingCandidateNpmPackagePath(params: {
@@ -371,9 +352,9 @@ function resolveExistingCandidateNpmPackagePath(params: {
   if (!npmName) {
     return null;
   }
-  const packagePath = resolveNpmPackageInstallPath({
+  const packagePath = resolvePluginNpmPackageDir({
     packageName: npmName,
-    npmRoot: params.npmDir,
+    npmDir: params.npmDir,
   });
   if (existsSync(packagePath)) {
     return packagePath;

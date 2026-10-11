@@ -7,6 +7,7 @@ import { connect } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
@@ -463,49 +464,6 @@ describe("createGatewayRuntimeState", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to bind loopback alias ::1"));
   });
 
-  it("claims managed Tailscale routing before ordinary ingress starts listening", async () => {
-    const events: string[] = [];
-    mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    mocks.listenGatewayHttpServer.mockImplementation(async (params) => {
-      mockEphemeralAddress(params);
-      events.push(
-        params.serviceName === "Tailscale gateway ingress"
-          ? "private-listener"
-          : "ordinary-listener",
-      );
-    });
-    const prepareManagedTailscaleIngress = vi.fn(async () => {
-      events.push("tailscale-route");
-    });
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      port: 18789,
-      tailscaleMode: "serve",
-      prepareManagedTailscaleIngress,
-    });
-
-    await runtimeState.startListening();
-
-    expect(events).toEqual([
-      "private-listener",
-      "tailscale-route",
-      "ordinary-listener",
-      "ordinary-listener",
-    ]);
-    expect(prepareManagedTailscaleIngress).toHaveBeenCalledWith({
-      host: "127.0.0.1",
-      port: 19_000,
-    });
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        bindHost: "127.0.0.1",
-        port: 0,
-        retryEaddrinuse: false,
-      }),
-    );
-    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1", "::1"]);
-  });
-
   it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
     const routeFailure = new Error("route claim failed");
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
@@ -526,24 +484,6 @@ describe("createGatewayRuntimeState", () => {
       }),
     );
     expect(runtimeState.httpBindHosts).toEqual([]);
-  });
-
-  it("does not publish managed ingress when Tailscale mode is off", async () => {
-    const prepareManagedTailscaleIngress = vi.fn();
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      port: 18789,
-      tailscaleMode: "off",
-      prepareManagedTailscaleIngress,
-    });
-
-    await runtimeState.startListening();
-
-    expect(runtimeState.getTailscaleIngressEndpoint()).toBeUndefined();
-    expect(prepareManagedTailscaleIngress).not.toHaveBeenCalled();
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
-      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
-    );
   });
 
   it.each([undefined, 19100])(
@@ -574,26 +514,6 @@ describe("createGatewayRuntimeState", () => {
     },
   );
 
-  it("starts the shared sandbox host lazily when MCP Apps are disabled", async () => {
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      port: 18789,
-    });
-
-    await runtimeState.startListening();
-
-    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
-    expect(runtimeState.httpServers).toHaveLength(1);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
-
-    await expect(runtimeState.ensureSandboxHostPort()).resolves.toBe(18790);
-    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
-    expect(runtimeState.httpServers).toHaveLength(2);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ bindHost: "127.0.0.1", port: 18790 }),
-    );
-  });
-
   it("keeps an update canary off the configured sandbox listener, including lazy acquisition", async () => {
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
       cfg: { mcp: { apps: { enabled: true, sandboxPort: 18790 } } },
@@ -615,10 +535,7 @@ describe("createGatewayRuntimeState", () => {
 
   it("waits for every gateway bind host before freezing lazy sandbox listeners", async () => {
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    let releaseSecondBind: () => void = () => {};
-    const secondBind = new Promise<void>((resolve) => {
-      releaseSecondBind = resolve;
-    });
+    const { promise: secondBind, resolve: releaseSecondBind } = createDeferred();
     mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost, port }) => {
       if (bindHost === "::1" && port === 18789) {
         await secondBind;

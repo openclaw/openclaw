@@ -2,7 +2,10 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -10,7 +13,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 const expectedUrl = "http://127.0.0.1/inline.png";
-let downloadCurrentDocumentViaPlaywright: typeof import("./pw-tools-core.downloads.js").downloadCurrentDocumentViaPlaywright;
+import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
 describe("download current document", () => {
   installPwToolsCoreTestHooks();
@@ -20,10 +23,6 @@ describe("download current document", () => {
   let closed: boolean;
   const mainFrame = {};
   const evaluate = vi.fn(async () => {});
-
-  beforeAll(async () => {
-    ({ downloadCurrentDocumentViaPlaywright } = await import("./pw-tools-core.downloads.js"));
-  });
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-download-test-"));
@@ -73,9 +72,12 @@ describe("download current document", () => {
   it("keeps the preview URL and publishes exact bytes under the managed root", async () => {
     const download = makeDownload("http://127.0.0.1/final.png");
     evaluate.mockImplementationOnce(async () => {
+      events.emit("framenavigated", {});
       events.emit("download", download);
     });
-    const result = await start();
+    const result = await start({
+      ssrfPolicy: { allowPrivateNetwork: true, dangerouslyAllowPrivateNetwork: false },
+    });
     expect(result).toMatchObject({ url: download.url(), suggestedFilename: "inline.png" });
     expect(path.dirname(result.path)).toBe(rootDir);
     expect(await fs.readFile(result.path, "utf8")).toBe("exact asset bytes");
@@ -100,14 +102,6 @@ describe("download current document", () => {
 
   it.each([
     { name: "omitted policy", policy: undefined },
-    { name: "empty policy", policy: {} },
-    { name: "legacy private denial", policy: { allowPrivateNetwork: false } },
-    { name: "per-host private exception", policy: { allowedHostnames: ["127.0.0.1"] } },
-    { name: "per-origin private exception", policy: { allowedOrigins: ["http://127.0.0.1"] } },
-    {
-      name: "allowlist despite private access",
-      policy: { dangerouslyAllowPrivateNetwork: true, hostnameAllowlist: ["127.0.0.1"] },
-    },
     {
       name: "blocklist despite private access",
       policy: {
@@ -122,37 +116,6 @@ describe("download current document", () => {
     expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
     expect(await fs.readdir(rootDir)).toEqual([]);
-  });
-
-  it.each([
-    { name: "legacy explicit private permission", policy: { allowPrivateNetwork: true } },
-    {
-      name: "effective private permission",
-      policy: { allowPrivateNetwork: true, dangerouslyAllowPrivateNetwork: false },
-    },
-    {
-      name: "normalized unconstrained hostname entries",
-      policy: {
-        dangerouslyAllowPrivateNetwork: true,
-        hostnameAllowlist: ["", " . ", " * "],
-        blockedHostnames: [" ", " *. "],
-      },
-    },
-    {
-      name: "trust exceptions with global permission",
-      policy: {
-        dangerouslyAllowPrivateNetwork: true,
-        allowedHostnames: ["example.com"],
-        allowedOrigins: ["https://example.com"],
-      },
-    },
-  ])("retains download support for $name", async ({ policy }) => {
-    evaluate.mockImplementationOnce(async () => {
-      events.emit("download", makeDownload());
-    });
-    await expect(start({ ssrfPolicy: policy })).resolves.toMatchObject({
-      suggestedFilename: "inline.png",
-    });
   });
 
   it("validates the final download URL before saving", async () => {
@@ -176,9 +139,11 @@ describe("download current document", () => {
     expect(download.saveAs).not.toHaveBeenCalled();
   });
 
-  it.each(["caller", "navigation", "close"] as const)(
+  it.for(["caller", "navigation", "close"] as const)(
     "cancels an active save on %s and leaves no partial file",
-    async (reason) => {
+    async (reason, { signal, onTestFinished }) => {
+      const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
+      onTestFinished(() => write.mockRestore());
       const controller = new AbortController();
       const download = makeDownload();
       download.saveAs.mockImplementationOnce(async (destination) => {
@@ -199,24 +164,12 @@ describe("download current document", () => {
       await expect(start({ signal: controller.signal })).rejects.toThrow(
         reason === "caller" ? "caller cancelled" : "The tab changed",
       );
-      await vi.waitFor(async () => expect(await fs.readdir(rootDir)).toEqual([]));
+      // The capture rejects before the output owner's staging cleanup has settled.
+      await withinTest(writeSettled.promise, signal);
+      expect(await fs.readdir(rootDir)).toEqual([]);
       expect(download.cancel).toHaveBeenCalledOnce();
     },
   );
-
-  it("does not cancel the current document for subframe navigation", async () => {
-    evaluate.mockImplementationOnce(async () => {
-      events.emit("framenavigated", {});
-      events.emit("download", makeDownload());
-    });
-    await expect(start()).resolves.toMatchObject({ suggestedFilename: "inline.png" });
-  });
-
-  it("cleans up when the page cannot trigger a download", async () => {
-    evaluate.mockRejectedValueOnce(new Error("renderer unavailable"));
-    await expect(start()).rejects.toThrow("renderer unavailable");
-    expect(await fs.readdir(rootDir)).toEqual([]);
-  });
 
   it("expires a missing download without retaining page listeners", async () => {
     await expect(start({ timeoutMs: 500 })).rejects.toThrow("Timeout waiting for download");

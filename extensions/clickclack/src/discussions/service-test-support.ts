@@ -1,6 +1,11 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateActionAuthority,
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
@@ -17,7 +22,7 @@ export const MANAGED_CONTRACT_FIELDS = {
   sidebar_section: "",
 };
 
-function createMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
+export function createDiscussionMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
   const values = new Map<string, { value: T; createdAt: number }>();
   return {
     register(key, value) {
@@ -44,6 +49,88 @@ function createMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
         createdAt: entry.createdAt,
       })),
     clear: () => values.clear(),
+  };
+}
+
+export function asyncDiscussionTestStore<T>(
+  openStore: PluginRuntime["state"]["openSyncKeyedStore"],
+  options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+  authority?: PluginStateActionAuthority,
+): PluginStateKeyedStore<T, 2> {
+  if (options.retention === "retained") {
+    throw new Error("ClickClack discussion fixture expects a bounded store");
+  }
+  const store = openStore<T>(options);
+  authority?.assertCurrent();
+  const observe = (key: string) => ({
+    value: store.lookup(key),
+    comparison: JSON.stringify(store.entries().find((entry) => entry.key === key) ?? null),
+  });
+  return {
+    observe: async (key) => observe(key),
+    compareAndApply: async (key, comparison, intent, compareOptions) => {
+      authority?.assertCurrent();
+      const current = observe(key);
+      if (current.comparison !== comparison) {
+        return { status: "conflict", current };
+      }
+      for (const condition of compareOptions?.conditions ?? []) {
+        const conditionStore = openStore({ ...options, namespace: condition.namespace });
+        const image = conditionStore.entries().find((entry) => entry.key === condition.key) ?? null;
+        if (JSON.stringify(image) !== condition.comparison) {
+          return { status: "conflict", current };
+        }
+      }
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "set") {
+        store.register(key, intent.value);
+      } else {
+        store.delete(key);
+      }
+      return { status: "applied" };
+    },
+    register: async (key, value, opts) => {
+      opts?.assertCurrent?.();
+      store.register(key, value, opts);
+    },
+    registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
+    lookup: async (...args) => store.lookup(...args),
+    lookupMany: async (keys) => keys.map((key) => ({ ok: true, value: store.lookup(key) })),
+    consume: async (...args) => store.consume(...args),
+    delete: async (key, opts) => {
+      opts?.assertCurrent?.();
+      return store.delete(key);
+    },
+    entries: async () => store.entries(),
+    entriesInKeyRange: async ({ keyStartInclusive, keyEndExclusive, limit, order }) =>
+      store
+        .entries()
+        .filter((entry) => entry.key >= keyStartInclusive && entry.key < keyEndExclusive)
+        .toSorted((left, right) =>
+          order === "desc" ? right.key.localeCompare(left.key) : left.key.localeCompare(right.key),
+        )
+        .slice(0, limit),
+    count: async () => store.entries().length,
+    deleteIfEqual: async (key, expected) =>
+      store.lookup(key) === expected ? store.delete(key) : false,
+    moveEntriesFrom: async () => {
+      throw new Error("Discussion stores do not move retained entries");
+    },
+    clear: async () => store.clear(),
+  };
+}
+
+export function discussionChannel<T extends Partial<ClickClackChannel>>(fields: T) {
+  return {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    name: "discussion",
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+    ...fields,
   };
 }
 
@@ -87,27 +174,35 @@ export function createHarness(
 ) {
   let sessionEntry = entry;
   const config = discussionConfig();
-  const store = createMemoryStore<unknown>();
-  const generationStore = createMemoryStore<unknown>();
-  const revokedStore = createMemoryStore<unknown>();
+  const store = createDiscussionMemoryStore<unknown>();
+  const generationStore = createDiscussionMemoryStore<unknown>();
+  const revokedStore = createDiscussionMemoryStore<unknown>();
+  const openSyncKeyedStore =
+    options.openSyncKeyedStore ??
+    (vi.fn((storeOptions: { namespace: string }) => {
+      if (storeOptions.namespace === "discussion-binding-generations") {
+        return generationStore;
+      }
+      if (storeOptions.namespace === "discussion-revoked-channels") {
+        return revokedStore;
+      }
+      return store;
+    }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"]);
   const runtime = createPluginRuntimeMock({
     config: { current: vi.fn(() => config) },
     state: {
-      openSyncKeyedStore:
-        options.openSyncKeyedStore ??
-        (vi.fn((storeOptions: { namespace: string }) => {
-          if (storeOptions.namespace === "discussion-binding-generations") {
-            return generationStore;
-          }
-          if (storeOptions.namespace === "discussion-revoked-channels") {
-            return revokedStore;
-          }
-          return store;
-        }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"]),
+      openSyncKeyedStore,
+      openKeyedStoreV2: <T>(
+        storeOptions: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+        authority?: PluginStateActionAuthority,
+      ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions, authority),
     },
     agent: {
       session: {
         getSessionEntry: vi.fn(() =>
+          sessionEntry ? { sessionId: "session-id", updatedAt: 1, ...sessionEntry } : undefined,
+        ),
+        getSessionEntryAsync: vi.fn(async () =>
           sessionEntry ? { sessionId: "session-id", updatedAt: 1, ...sessionEntry } : undefined,
         ),
       },
@@ -177,12 +272,13 @@ export function createHarness(
     clientFactory: () => client,
     installationId: TEST_INSTALLATION_ID,
     bindingGenerationFactory: options.bindingGenerationFactory ?? (() => TEST_BINDING_GENERATION),
-    startTimer: options.startTimer ?? false,
     ...(options.maxRetainedDetachedBindings !== undefined
       ? { maxRetainedDetachedBindings: options.maxRetainedDetachedBindings }
       : {}),
-    ...(options.gatewayEvents ? { gatewayEvents: options.gatewayEvents } : {}),
   });
+  if (options.gatewayEvents || options.startTimer) {
+    void service.bindGatewayEvents(options.gatewayEvents, createTestPluginServiceScheduler());
+  }
   return {
     runtime,
     service,

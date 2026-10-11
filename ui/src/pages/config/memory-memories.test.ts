@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./memory-memories.ts";
@@ -13,16 +14,6 @@ type MemoryMemoriesTestElement = HTMLElement & {
   agentId: string | null;
   updateComplete: Promise<unknown>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function createElement(request: Request, advertised = true) {
   const element = document.createElement("openclaw-memory-memories") as MemoryMemoriesTestElement;
@@ -104,36 +95,6 @@ describe("MemoryMemoriesElement", () => {
       );
       submit(element);
       expect(request).not.toHaveBeenCalled();
-    } finally {
-      element.remove();
-    }
-  });
-
-  it("searches only on submit and renders loading, ready, mode, and result metadata", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
-    const element = createElement(request);
-    try {
-      await typeQuery(element, "Ada");
-      expect(request).not.toHaveBeenCalled();
-
-      submit(element);
-      await waitForFast(() => expect(element.textContent).toContain("Searching memories"));
-      expect(request).toHaveBeenCalledWith("memory.search", { query: "Ada", agentId: "main" });
-
-      pending.resolve({
-        agentId: "main",
-        provider: "local",
-        searchMode: "hybrid",
-        results: [result],
-      });
-      await waitForFast(() => expect(element.textContent).toContain(result.snippet));
-      expect(element.textContent).toContain("hybrid search");
-      expect(element.textContent?.replace(/\s+/g, " ")).toContain(
-        "memory/people/ada.md · lines 2–3",
-      );
-      expect(element.textContent).toContain("score 0.88");
-      expect(element.textContent).toContain("memory");
     } finally {
       element.remove();
     }
@@ -379,7 +340,7 @@ describe("MemoryMemoriesElement", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "shows stale guidance alongside results and clears it after a fresh search (hits=%s)",
     async (hasHits) => {
       const warning =

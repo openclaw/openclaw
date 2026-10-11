@@ -1,8 +1,9 @@
 import { once } from "node:events";
+import { createAgentHarnessAttemptDeadlineController } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { createCodexAttemptDeadlineController } from "./attempt-deadlines.js";
+import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import {
   CodexAppServerClient,
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -23,7 +24,7 @@ afterEach(() => {
 });
 
 describe("Codex app-server cancellation diagnostics", () => {
-  it.each(["before request", "pending request", "overload backoff", "config fence"] as const)(
+  it.each(["before request", "pending request", "overload backoff"] as const)(
     "preserves the cancellation cause and write certainty during %s",
     async (phase) => {
       vi.useFakeTimers();
@@ -34,19 +35,8 @@ describe("Codex app-server cancellation diagnostics", () => {
       if (phase === "before request") {
         controller.abort(reason);
       }
-      if (phase === "config fence") {
-        harness.client.setThreadSessionRequestGuard(
-          ({ abortMessage }) =>
-            new Promise((_resolve, reject) => {
-              controller.signal.addEventListener("abort", () => reject(new Error(abortMessage)), {
-                once: true,
-              });
-            }),
-        );
-      }
-      const method = phase === "config fence" ? "thread/resume" : "turn/start";
       const result = harness.client
-        .request(method, { threadId: "receiver" }, { signal: controller.signal })
+        .request("turn/start", { threadId: "receiver" }, { signal: controller.signal })
         .catch((error: unknown) => error);
       if (phase === "overload backoff") {
         const sent = JSON.parse(await harness.waitForWrite(0));
@@ -125,9 +115,10 @@ describe("Codex app-server cancellation diagnostics", () => {
         .catch((error: unknown) => error);
       await turnReceived;
       const onTimeout = vi.fn(() => controller.abort(reason));
-      const deadline = createCodexAttemptDeadlineController({
+      const deadline = createAgentHarnessAttemptDeadlineController({
         startedAtMs: Date.now() - 15_000,
         timeoutMs: 1_000,
+        settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
         signal: controller.signal,
         onTimeout,
       });

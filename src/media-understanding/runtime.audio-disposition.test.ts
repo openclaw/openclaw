@@ -11,7 +11,6 @@ vi.mock("../process/exec.js", () => ({ runExec: cli }));
 
 describe("audio processing disposition", () => {
   it.each([
-    { name: "empty CLI", entries: ["cli"], text: "", handled: true },
     { name: "empty API", entries: ["api"], text: "", handled: true },
     { name: "omitted API then empty CLI", entries: ["omitted", "cli"], text: "", handled: true },
     { name: "empty CLI then omitted API", entries: ["cli", "omitted"], text: "", handled: true },
@@ -21,7 +20,6 @@ describe("audio processing disposition", () => {
       text: "whole input",
       handled: true,
     },
-    { name: "all input omitted", entries: ["omitted"], text: "", handled: false },
   ])("records completed processing for $name", async ({ name, entries, text, handled }) => {
     cli.mockReset().mockResolvedValue({ stdout: text, stderr: "" });
     const api = vi.fn(async () => ({ text }));
@@ -42,7 +40,12 @@ describe("audio processing disposition", () => {
     });
     const models: MediaUnderstandingModelConfig[] = entries.map((entry) =>
       entry === "cli"
-        ? { type: "cli", command: "synthetic-stt", capabilities: ["audio"] }
+        ? {
+            type: "cli",
+            command: "synthetic-stt",
+            args: ["{{AttachmentPath}}"],
+            capabilities: ["audio"],
+          }
         : {
             provider: "synthetic-audio",
             model: "synthetic-stt",

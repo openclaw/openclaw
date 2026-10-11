@@ -23,6 +23,14 @@ export async function terminateCodexAppServerOrphan(
   expected: CodexAppServerProcessIdentity,
 ): Promise<boolean> {
   const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+  // A retired root needs only identity evidence; unrelated processes cannot
+  // make its durable registration live again or restore its former ancestry.
+  const initial = (await readCodexAppServerProcessSnapshot(deadline, [expected.pid])).find(
+    (row) => row.pid === expected.pid,
+  );
+  if (!initial || !hasSameIdentity(initial, expected) || isDeadProcessState(initial.state)) {
+    return true;
+  }
   const result = await terminateCodexAppServerDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
     expected,
@@ -42,7 +50,9 @@ export async function terminateCodexAppServerOrphan(
       }
     }
     while (Date.now() < deadline) {
-      const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
+      const snapshot = await readCodexAppServerProcessSnapshot(deadline, [expected.pid]).catch(
+        () => undefined,
+      );
       if (!snapshot?.some((row) => row.pid === process.pid)) {
         return false;
       }
@@ -61,7 +71,12 @@ export async function terminateCodexAppServerOrphan(
     return false;
   } finally {
     if (contained && !gone) {
-      await signalSameRoot(contained.root, "SIGCONT", Date.now() + MAX_PROCESS_CONTAINMENT_MS);
+      await signalSameProcess(
+        contained.root,
+        "SIGCONT",
+        Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+        "root",
+      );
     }
   }
 }
@@ -72,7 +87,7 @@ export async function terminateCodexAppServerDescendants(
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
-  if (hasExited(child)) {
+  if (child.exitCode != null || child.signalCode != null) {
     return "exited";
   }
   if (process.platform === "win32" || !rootPid || !child.kill) {
@@ -102,7 +117,7 @@ export async function terminateCodexAppServerDescendants(
     return undefined;
   }
   const stoppedDescendants = new Map<string, PosixProcess>();
-  if (!(await signalSameRoot(root, "SIGSTOP", deadline))) {
+  if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root"))) {
     return undefined;
   }
   let resumeRootOnUnwind = true;
@@ -178,7 +193,7 @@ export async function terminateCodexAppServerDescendants(
         for (const descendant of stoppedDescendants.values()) {
           await signalSameProcess(descendant, "SIGCONT", releaseDeadline);
         }
-        await signalSameRoot(root, "SIGCONT", releaseDeadline);
+        await signalSameProcess(root, "SIGCONT", releaseDeadline, "root");
       } else {
         // A live parent still owns these stopped children when inspection fails.
         for (const descendant of stoppedDescendants.values()) {
@@ -211,13 +226,12 @@ async function quiesceDescendants(
       return undefined;
     }
     if (!isSameLiveRoot(currentRoot, root, true)) {
-      if (!(await signalSameRoot(root, "SIGSTOP", deadline)) || Date.now() >= deadline) {
+      if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root")) || Date.now() >= deadline) {
         return undefined;
       }
       continue;
     }
     const snapshotByPid = new Map(snapshot.map((process) => [process.pid, process]));
-    const liveProven: PosixProcess[] = [];
     for (const proven of provenByPid.values()) {
       const current = snapshotByPid.get(proven.pid);
       if (!current) {
@@ -233,12 +247,8 @@ async function quiesceDescendants(
       if (stopped.has(key)) {
         stopped.set(key, current);
       }
-      liveProven.push(current);
     }
-    const descendants = collectDescendants(snapshot, [
-      root.pid,
-      ...liveProven.map(({ pid }) => pid),
-    ]);
+    const descendants = collectDescendants(snapshot, [root.pid, ...provenByPid.keys()]);
     for (const descendant of descendants) {
       const proven = provenByPid.get(descendant.pid);
       if (proven && !hasSameIdentity(proven, descendant)) {
@@ -249,12 +259,8 @@ async function quiesceDescendants(
     if (provenByPid.size > MAX_CONTAINED_PROCESSES) {
       return undefined;
     }
-    const quiescenceTargets = new Map(liveProven.map((process) => [process.pid, process]));
-    for (const descendant of descendants) {
-      quiescenceTargets.set(descendant.pid, descendant);
-    }
     let allStopped = true;
-    for (const descendant of quiescenceTargets.values()) {
+    for (const descendant of provenByPid.values()) {
       if (Date.now() >= deadline) {
         return undefined;
       }
@@ -345,15 +351,6 @@ function isSameLiveRoot(
   );
 }
 
-async function signalSameRoot(
-  root: PosixProcess,
-  signal: NodeJS.Signals,
-  deadline: number,
-): Promise<boolean> {
-  const current = await readCodexAppServerProcess(root.pid, deadline).catch(() => undefined);
-  return Boolean(current && isSameLiveRoot(current, root) && signalProcess(current.pid, signal));
-}
-
 function resumeTransportRoot(
   child: ContainableTransport,
   root: PosixProcess,
@@ -380,13 +377,13 @@ async function signalSameProcess(
   expected: PosixProcess,
   signal: NodeJS.Signals,
   deadline: number,
+  identity: "root" | "descendant" = "descendant",
 ): Promise<boolean> {
   // Portable Node POSIX signals are PID-based, so never retain numeric authority:
   // take this final identity snapshot synchronously immediately before every signal.
   const current = await readCodexAppServerProcess(expected.pid, deadline).catch(() => undefined);
-  return Boolean(
-    current && isSameLiveProcess(current, expected) && signalProcess(current.pid, signal),
-  );
+  const matches = identity === "root" ? isSameLiveRoot : isSameLiveProcess;
+  return Boolean(current && matches(current, expected) && signalProcess(current.pid, signal));
 }
 
 function hasSameIdentity(
@@ -398,10 +395,6 @@ function hasSameIdentity(
 
 function identityKey(row: CodexAppServerProcessIdentity): string {
   return `${row.pid}\0${row.startedAt}`;
-}
-
-function hasExited(child: ContainableTransport): boolean {
-  return child.exitCode != null || child.signalCode != null;
 }
 
 function signalProcess(pid: number, signal: NodeJS.Signals): boolean {

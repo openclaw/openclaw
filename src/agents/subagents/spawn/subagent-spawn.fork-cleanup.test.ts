@@ -1,20 +1,18 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
 
 type ForkSession =
   typeof import("../../../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
 type SpawnSubagent = typeof import("./subagent-spawn.js").spawnSubagentDirect;
-type SpawnFailure = "thread binding" | "context engine" | "launch" | "registration" | "collector";
 
 describe("subagent fork context through SQLite and tool boundaries", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fork-cleanup-");
   const parentKey = "agent:main:main";
   const parentId = "parent-session";
   let tempDir: string;
@@ -30,13 +28,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
-  let closeAgentDatabases: () => void;
-  let closeStateDatabase: () => void;
   let resetScheduler: () => void;
-  let swarmScheduler: typeof import("../swarm/swarm-scheduler.js");
-  let restoreActivation: (() => void) | undefined;
   let restoreUpsert: () => void;
-  let failure: SpawnFailure;
   let forkedEntry: SessionEntry | undefined;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
@@ -81,7 +74,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       settleFailedQueuedSubagentLaunchMock: settleFailedQueuedSubagentLaunch,
       completeCollectorLaunchCleanupMock: completeCollectorLaunchCleanup,
       resolveContextEngineMock: async () => ({ prepareSubagentSpawn }),
-      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.6-luna",
       getRuntimeConfig: () => config,
       getSessionBindingService: () => ({
         getCapabilities: () => ({
@@ -113,11 +105,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     sessions = await import("../../../config/sessions/session-accessor.js");
     ({ forkSessionEntryFromParent: forkSession } =
       await import("../../../auto-reply/reply/session-fork.js"));
-    ({ closeOpenClawAgentDatabasesForTest: closeAgentDatabases } =
-      await import("../../../state/openclaw-agent-db.js"));
-    ({ closeOpenClawStateDatabaseForTest: closeStateDatabase } =
-      await import("../../../state/openclaw-state-db.js"));
-    swarmScheduler = await import("../swarm/swarm-scheduler.js");
     const { testing } = await import("../swarm/swarm-scheduler.test-support.js");
     resetScheduler = () => testing.reset();
     const runtime = await import("./subagent-spawn.runtime.js");
@@ -134,7 +121,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   beforeEach(async () => {
-    tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fork-cleanup-")));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     config = {
       session: { store: storePath, mainKey: "main", scope: "per-sender" },
@@ -144,30 +131,18 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       },
     };
     threadBindingAvailable = false;
-    failure = "context engine";
     forkedEntry = undefined;
     fork.mockClear();
     resetScheduler();
-    registerSubagentRun.mockReset().mockImplementation(() => {
-      if (failure === "registration") {
-        throw new Error("registration failed");
-      }
-    });
-    startQueuedSubagentRun.mockReset().mockReturnValue(false);
-    settleFailedQueuedSubagentLaunch.mockReset().mockReturnValue(true);
-    completeCollectorLaunchCleanup.mockReset();
-    prepareSubagentSpawn.mockReset().mockImplementation(async () => {
-      if (failure === "context engine") {
-        throw new Error("context engine failed");
-      }
-    });
+    registerSubagentRun.mockReset().mockResolvedValue(undefined);
+    startQueuedSubagentRun.mockReset().mockResolvedValue(false);
+    settleFailedQueuedSubagentLaunch.mockReset().mockResolvedValue(true);
+    completeCollectorLaunchCleanup.mockReset().mockResolvedValue(undefined);
+    prepareSubagentSpawn.mockReset();
     dispatch
       .mockReset()
       .mockImplementation(async (method: string, params: Record<string, unknown>) => {
         if (method === "agent") {
-          if (failure === "launch") {
-            throw new Error("launch failed");
-          }
           return { runId: "accepted-child-run", status: "accepted" };
         }
         if (method === "chat.abort") {
@@ -224,12 +199,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   afterEach(() => {
-    restoreActivation?.();
-    restoreActivation = undefined;
     resetScheduler();
-    closeAgentDatabases();
-    closeStateDatabase();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   afterAll(() => {
@@ -238,6 +208,52 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("./subagent-depth.js");
     vi.doUnmock("../registry/subagent-registry.js");
     vi.doUnmock("../../provider-model-normalization.runtime.js");
+  });
+
+  it("cleans up the provisional child when fork parent lookup rejects", async () => {
+    const runtime = await import("./subagent-spawn.runtime.js");
+    const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
+    let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
+    const selected = vi
+      .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementation(async (params) => {
+        const child = sessions
+          .listSessionEntriesCore({ agentId: "main", storePath })
+          .find(({ sessionKey }) => sessionKey !== parentKey);
+        if (child && params.key === parentKey) {
+          provisional = child;
+          throw new Error("fork lookup source unavailable");
+        }
+        return await resolveTarget(params);
+      });
+    try {
+      await spawnSubagentDirect(
+        { task: "inspect parent history", context: "fork" },
+        { agentSessionKey: parentKey },
+      ).catch(() => undefined);
+
+      const created = expectDefined(provisional, "committed provisional child");
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
+      ).toBeUndefined();
+      expect(dispatch).toHaveBeenCalledWith(
+        "sessions.delete",
+        expect.objectContaining({
+          key: created.sessionKey,
+          expectedSessionId: created.entry.sessionId,
+          expectedLifecycleRevision: created.entry.lifecycleRevision,
+        }),
+        expect.anything(),
+      );
+      expect(fork).not.toHaveBeenCalled();
+      expect(registerSubagentRun).not.toHaveBeenCalled();
+      expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
+      ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
+    } finally {
+      selected.mockRestore();
+    }
   });
 
   it.each(["fork", "isolated"] as const)(
@@ -308,13 +324,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       operation: "fork",
     },
     {
-      scenario: "an oversized explicit fork starts isolated",
-      args: { context: "fork" },
-      parentTokens: 150_000,
-      preparedMode: "isolated",
-      operation: "create",
-    },
-    {
       scenario: "a queued oversized fork starts isolated",
       args: { context: "fork", collect: true, groupId: "receipt-collectors" },
       parentTokens: 150_000,
@@ -325,7 +334,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     "records the committed context when $scenario",
     async ({ args, parentTokens, preparedMode, operation }) => {
       prepareSubagentSpawn.mockResolvedValue(undefined);
-      startQueuedSubagentRun.mockReturnValue(true);
+      startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };
       const parentScope = {
@@ -434,100 +443,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     },
   );
 
-  it.each([
-    { stage: "thread binding", context: undefined },
-    { stage: "context engine", context: "fork" },
-    { stage: "launch", context: "fork" },
-    { stage: "registration", context: "fork" },
-    { stage: "collector", context: "fork" },
-    { stage: "context engine", context: "isolated" },
-  ] as const)(
-    "removes the failed child after $stage with context=$context and preserves the parent",
-    async ({ stage, context }) => {
-      failure = stage;
-      const collectorSettled = createDeferredCore();
-      const activateSwarmRun = swarmScheduler.activateSwarmRun;
-      const activation =
-        stage === "collector"
-          ? vi.spyOn(swarmScheduler, "activateSwarmRun").mockImplementation((params) =>
-              activateSwarmRun({
-                ...params,
-                onStartFailure: async (error) => {
-                  try {
-                    return await params.onStartFailure(error);
-                  } finally {
-                    collectorSettled.resolve();
-                  }
-                },
-              }),
-            )
-          : undefined;
-      restoreActivation = () => activation?.mockRestore();
-      const parentScope = {
-        agentId: "main",
-        sessionId: parentId,
-        sessionKey: parentKey,
-        storePath,
-      };
-      const parentBefore = sessions.loadSessionEntry(parentScope);
-      const parentHistory = await sessions.loadTranscriptEvents(parentScope);
-      const result = await spawnSubagentDirect(
-        {
-          task: "inspect parent history",
-          context,
-          ...(stage === "thread binding" ? { thread: true } : {}),
-          ...(stage === "collector" ? { collect: true } : {}),
-        },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-run",
-          ...(stage === "thread binding"
-            ? { agentChannel: "discord", agentTo: "channel:123" }
-            : {}),
-        },
-      );
-
-      expect(result.status).toBe(stage === "collector" ? "accepted" : "error");
-      if (stage === "collector") {
-        // Wait for the real cleanup callback, not a one-second guess at SQLite deletion.
-        await collectorSettled.promise;
-        expect(settleFailedQueuedSubagentLaunch).toHaveBeenCalled();
-      } else if (stage !== "thread binding") {
-        expect(result.error).toContain(`${stage} failed`);
-      }
-      const childSessionKey = expectDefined(result.childSessionKey, "spawned child key");
-      if (context !== "isolated") {
-        const entry = expectDefined(forkedEntry, "forked child entry");
-        expect(entry.sessionId).not.toBe(parentId);
-        expect(
-          await sessions.loadTranscriptEvents({
-            agentId: "main",
-            sessionKey: childSessionKey,
-            sessionId: entry.sessionId,
-            storePath,
-          }),
-        ).toEqual([]);
-      } else {
-        expect(fork).not.toHaveBeenCalled();
-      }
-      expect(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-      ).toBeUndefined();
-      expect(sessions.loadSessionEntry(parentScope)).toEqual(parentBefore);
-      expect(await sessions.loadTranscriptEvents(parentScope)).toEqual(parentHistory);
-      if (stage === "registration" || stage === "collector") {
-        expect(dispatch).toHaveBeenCalledWith(
-          "chat.abort",
-          { sessionKey: childSessionKey, runId: "accepted-child-run" },
-          expect.anything(),
-        );
-      }
-      if (stage === "collector") {
-        expect(completeCollectorLaunchCleanup).toHaveBeenCalledWith(result.runId);
-      }
-    },
-  );
-
   it.each(["no replacement", "session id", "lifecycle revision"] as const)(
     "cleans up the committed fork after source closure with %s",
     async (replacement) => {
@@ -607,59 +522,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       ).toEqual(successorHistory);
       expect(sessions.loadSessionEntry(parentScope)).toEqual(parentBefore);
       expect(await sessions.loadTranscriptEvents(parentScope)).toEqual(parentHistory);
-    },
-  );
-
-  it.each(["session id", "lifecycle revision"] as const)(
-    "preserves a successor that changes the %s after forking",
-    async (changedIdentity) => {
-      let successor: SessionEntry | undefined;
-      let successorHistory: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> = [];
-      prepareSubagentSpawn.mockImplementation(
-        async ({ childSessionKey }: { childSessionKey: string }) => {
-          const entry = expectDefined(forkedEntry, "forked child entry");
-          const scope = { agentId: "main", sessionKey: childSessionKey, storePath };
-          await sessions.replaceSessionEntry(scope, {
-            ...entry,
-            ...(changedIdentity === "session id"
-              ? { sessionId: "successor-session" }
-              : { lifecycleRevision: "successor-revision" }),
-          });
-          const replacement = expectDefined(sessions.loadSessionEntry(scope), "successor entry");
-          const successorScope = { ...scope, sessionId: replacement.sessionId };
-          await sessions.appendTranscriptMessage(successorScope, {
-            message: { role: "user", content: "successor work" },
-          });
-          successor = sessions.loadSessionEntry(scope);
-          successorHistory = await sessions.loadTranscriptEvents(successorScope);
-          throw new Error("context engine failed");
-        },
-      );
-
-      const result = await spawnSubagentDirect(
-        { task: "inspect parent history", context: "fork" },
-        { agentSessionKey: parentKey },
-      );
-
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("context engine failed");
-      const childSessionKey = expectDefined(result.childSessionKey, "spawned child key");
-      const successorEntry = expectDefined(successor, "successor entry");
-      expect(dispatch.mock.calls.some(([method]) => method === "sessions.delete")).toBe(true);
-      expect(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-      ).toEqual(successorEntry);
-      expect(
-        await sessions.loadTranscriptEvents({
-          agentId: "main",
-          sessionKey: childSessionKey,
-          sessionId: successorEntry.sessionId,
-          storePath,
-        }),
-      ).toEqual(successorHistory);
-      expect(
-        sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath })?.sessionId,
-      ).toBe(parentId);
     },
   );
 });

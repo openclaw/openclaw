@@ -1,3 +1,5 @@
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+
 type PermitRelease = () => void;
 type PermitWaiter = {
   expired: () => boolean;
@@ -7,7 +9,7 @@ type PermitWaiter = {
 /**
  * FIFO admission with caller-owned lifetime. Cancellation/deadlines only stop
  * waiting: an acquired permit stays held until its idempotent release is called.
- * A null result means admission was aborted or its deadline elapsed.
+ * acquire returns null on cancellation/expiry; tryAcquire returns null when busy.
  */
 export function createPermitPool(limit: number) {
   let active = 0;
@@ -22,22 +24,23 @@ export function createPermitPool(limit: number) {
       }
       released = true;
       active -= 1;
-      while (waiters.length > 0) {
-        const waiter = waiters.shift();
-        if (!waiter) {
+      for (let waiter = waiters.shift(); waiter; waiter = waiters.shift()) {
+        const expired = waiter.expired();
+        waiter.settle(expired ? null : createRelease());
+        if (!expired) {
           break;
         }
-        if (waiter.expired()) {
-          waiter.settle(null);
-          continue;
-        }
-        waiter.settle(createRelease());
-        break;
       }
     };
   };
 
+  const tryAcquire = (): PermitRelease | null => (active < limit ? createRelease() : null);
+
   return {
+    get pendingCount(): number {
+      return waiters.length;
+    },
+    tryAcquire,
     async acquire({
       signal,
       deadlineAtMs,
@@ -47,21 +50,17 @@ export function createPermitPool(limit: number) {
       if (expired()) {
         return null;
       }
-      if (active < limit) {
-        return createRelease();
+      const releasePermit = tryAcquire();
+      if (releasePermit) {
+        return releasePermit;
       }
       return await new Promise<PermitRelease | null>((resolve) => {
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelDeadline: (() => void) | undefined;
         const cancel = () => waiter.settle(null);
         const waiter: PermitWaiter = {
           expired,
           settle: (release) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            clearTimeout(timer);
+            cancelDeadline?.();
             signal?.removeEventListener("abort", cancel);
             const index = waiters.indexOf(waiter);
             if (index >= 0) {
@@ -70,12 +69,13 @@ export function createPermitPool(limit: number) {
             resolve(release);
           },
         };
-        if (deadlineAtMs !== undefined) {
-          timer = setTimeout(cancel, Math.max(1, deadlineAtMs - Date.now()));
-          timer.unref();
-        }
         signal?.addEventListener("abort", cancel, { once: true });
         waiters.push(waiter);
+        if (deadlineAtMs !== undefined) {
+          cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, cancel, undefined, {
+            unref: true,
+          });
+        }
       });
     },
   };

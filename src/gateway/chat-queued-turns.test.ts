@@ -1,5 +1,5 @@
 import { getEventListeners } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   abortQueuedChatTurnById,
@@ -31,34 +31,48 @@ function registerTurn(
 }
 
 describe("chat-queued-turns", () => {
-  it("registers and completes a queued turn", () => {
+  it("records cancellation while the exact queued owner still exists, then removes it", () => {
     const map = emptyMap();
     const controller = new AbortController();
+    let observedController: AbortController | undefined;
     expect(
       registerQueuedChatTurn({
         chatQueuedTurns: map,
-        runId: "run-a",
+        runId: "run-abort",
         controller,
-        sessionId: "sess-a",
+        sessionId: "sess-abort",
         sessionKey: "main",
-        ownerConnId: "conn-1",
-        ownerDeviceId: "dev-1",
+        onAborted: () => {
+          observedController = map.get("run-abort")?.controller;
+        },
       }),
     ).toBe(true);
-    expect(map.get("run-a")?.sessionKey).toBe("main");
-    expect(completeQueuedChatTurn(map, "run-a", controller)).toBe(true);
-    expect(map.get("run-a")).toBeUndefined();
-    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+    controller.abort();
+    expect(observedController).toBe(controller);
+    expect(map.get("run-abort")).toBeUndefined();
   });
 
-  it("removes the queued entry when its controller aborts", () => {
+  it("does not publish cancellation from a replaced owner", () => {
     const map = emptyMap();
-    const controller = new AbortController();
-    expect(registerTurn(map, "run-abort", controller, "sess-abort")).toBe(true);
-
-    controller.abort();
-
-    expect(map.get("run-abort")).toBeUndefined();
+    const first = new AbortController();
+    const second = new AbortController();
+    let cancelled = false;
+    expect(
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "reused",
+        controller: first,
+        sessionId: "old",
+        sessionKey: "main",
+        onAborted: () => {
+          cancelled = true;
+        },
+      }),
+    ).toBe(true);
+    map.set("reused", { controller: second, sessionId: "new", sessionKey: "main" });
+    first.abort();
+    expect(cancelled).toBe(false);
+    expect(map.get("reused")?.controller).toBe(second);
   });
 
   it("does not let a stale abort listener remove a reused run id", () => {
@@ -192,12 +206,14 @@ describe("chat-queued-turns", () => {
   it.each(["rpc", "restart"])("aborts by runId and preserves %s disposition", (stopReason) => {
     const map = emptyMap();
     const controller = new AbortController();
+    const onAborted = vi.fn();
     registerQueuedChatTurn({
       chatQueuedTurns: map,
       runId: "run-b",
       controller,
       sessionId: "sess-b",
       sessionKey: "main",
+      onAborted,
     });
     const res = abortQueuedChatTurnById(map, {
       runId: "run-b",
@@ -208,6 +224,7 @@ describe("chat-queued-turns", () => {
     expect(controller.signal.aborted).toBe(true);
     expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(stopReason === "restart");
     expect(map.has("run-b")).toBe(false);
+    expect(onAborted).toHaveBeenCalledExactlyOnceWith(stopReason);
   });
 
   it("retains a retired collect source identity until aggregate completion", () => {
@@ -222,7 +239,6 @@ describe("chat-queued-turns", () => {
     });
 
     expect(retireQueuedChatTurnCancellation(map, "run-collected", controller)).toBe(true);
-    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
     expect(
       abortQueuedChatTurnById(map, { runId: "run-collected", sessionKey: "main" }).aborted,
     ).toBe(false);
@@ -232,6 +248,7 @@ describe("chat-queued-turns", () => {
       [],
     );
     expect(completeQueuedChatTurn(map, "run-collected", controller)).toBe(true);
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
   });
 
   it("refuses abort when sessionKey mismatches unless allowed", () => {
@@ -296,37 +313,34 @@ describe("chat-queued-turns", () => {
     expect(local.map((m) => m.runId)).toEqual(["local"]);
   });
 
-  it.each(["rpc", "restart"])(
-    "aborts authorized matches with %s before returning runIds",
-    (stopReason) => {
-      const map = emptyMap();
-      const a = new AbortController();
-      const b = new AbortController();
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: "qa",
-        controller: a,
-        sessionId: "s",
-        sessionKey: "main",
-      });
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: "qb",
-        controller: b,
-        sessionId: "s",
-        sessionKey: "main",
-      });
-      const matches = listQueuedChatTurnsForSession({
-        chatQueuedTurns: map,
-        sessionKeys: ["main"],
-      });
-      const runIds = abortQueuedChatTurns(map, matches, stopReason);
-      expect(runIds.toSorted()).toEqual(["qa", "qb"]);
-      expect(a.signal.aborted).toBe(true);
-      expect(b.signal.aborted).toBe(true);
-      expect(isAgentRunRestartAbortReason(a.signal.reason)).toBe(stopReason === "restart");
-      expect(isAgentRunRestartAbortReason(b.signal.reason)).toBe(stopReason === "restart");
-      expect(map.size).toBe(0);
-    },
-  );
+  it.each(["rpc"])("aborts authorized matches with %s before returning runIds", (stopReason) => {
+    const map = emptyMap();
+    const a = new AbortController();
+    const b = new AbortController();
+    registerQueuedChatTurn({
+      chatQueuedTurns: map,
+      runId: "qa",
+      controller: a,
+      sessionId: "s",
+      sessionKey: "main",
+    });
+    registerQueuedChatTurn({
+      chatQueuedTurns: map,
+      runId: "qb",
+      controller: b,
+      sessionId: "s",
+      sessionKey: "main",
+    });
+    const matches = listQueuedChatTurnsForSession({
+      chatQueuedTurns: map,
+      sessionKeys: ["main"],
+    });
+    const runIds = abortQueuedChatTurns(map, matches, stopReason);
+    expect(runIds.toSorted()).toEqual(["qa", "qb"]);
+    expect(a.signal.aborted).toBe(true);
+    expect(b.signal.aborted).toBe(true);
+    expect(isAgentRunRestartAbortReason(a.signal.reason)).toBe(stopReason === "restart");
+    expect(isAgentRunRestartAbortReason(b.signal.reason)).toBe(stopReason === "restart");
+    expect(map.size).toBe(0);
+  });
 });

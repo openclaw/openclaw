@@ -2,15 +2,13 @@ import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
-  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -36,6 +34,12 @@ import {
   isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramSelfSenderName,
 } from "./group-history-window.js";
+import { isTelegramHistoryNodeAllowed, readTelegramHistoryWindow } from "./history-policy.js";
+import {
+  resolveProviderObservedTelegramThreadSpec,
+  type TelegramCachedMessageNode,
+  type TelegramReplyChainEntry,
+} from "./message-cache-codec.js";
 import {
   resolveTelegramMessageCacheScope,
   type TelegramResolvedMedia,
@@ -44,38 +48,10 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  isTelegramMessageFromCurrentBot,
-  resolveProviderObservedTelegramThreadSpec,
-  type TelegramCachedMessageNode,
-  type TelegramReplyChainEntry,
 } from "./message-cache.js";
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
-function legacyAssistantTextKey(node: TelegramCachedMessageNode, botUserId?: number) {
-  if (node.promptContextProjectionMarker) {
-    return undefined;
-  }
-  const timestamp = (
-    node.sourceMessage as Message & { openclaw_prompt_context_timestamp_ms?: unknown }
-  ).openclaw_prompt_context_timestamp_ms;
-  const legacySelf =
-    isTelegramMessageFromCurrentBot(node.sourceMessage, botUserId) ||
-    (node.sourceMessage.from?.id === 0 && node.sourceMessage.from.is_bot);
-  const body = stripInlineDirectiveTagsForDelivery(node.body ?? "").text.trim();
-  return legacySelf && typeof timestamp === "number" && body
-    ? `text:${timestamp}:${body}`
-    : undefined;
-}
-
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
-
-export type TelegramSessionState = {
-  agentId: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionKey: string;
-  storePath: string;
-  model: string | undefined;
-};
 
 export type ResolveTelegramSessionStateParams = {
   chatId: number | string;
@@ -94,9 +70,6 @@ export type ResolvePromptContextAmbientWatermarkParams = {
   storePath: string;
 };
 
-export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  asFiniteNumber(timestampMs);
-
 export function promptContextBoundaryOptions(
   timestampMs?: number,
   ambientWatermark?: TelegramAmbientTranscriptWatermark,
@@ -104,7 +77,7 @@ export function promptContextBoundaryOptions(
   TelegramMessageContextOptions,
   "promptContextMinTimestampMs" | "promptContextAmbientWatermark"
 > {
-  const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+  const promptContextMinTimestampMs = asFiniteNumber(timestampMs);
   return {
     ...(promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs }),
     ...(ambientWatermark === undefined ? {} : { promptContextAmbientWatermark: ambientWatermark }),
@@ -114,14 +87,8 @@ export function promptContextBoundaryOptions(
 export function latestPromptContextMinTimestampMs(
   ...timestamps: Array<number | undefined>
 ): number | undefined {
-  let latest: number | undefined;
-  for (const timestampMs of timestamps) {
-    const normalized = normalizePromptContextMinTimestampMs(timestampMs);
-    if (normalized !== undefined) {
-      latest = latest === undefined ? normalized : Math.max(latest, normalized);
-    }
-  }
-  return latest;
+  const finite = timestamps.map(asFiniteNumber).filter((timestamp) => timestamp !== undefined);
+  return finite.length > 0 ? Math.max(...finite) : undefined;
 }
 
 export const latestPromptContextAmbientWatermark = (
@@ -136,15 +103,20 @@ export function buildSyntheticTextMessage(params: {
   date?: number;
   from?: Message["from"];
 }): Message {
-  return {
+  const message: Message = {
     ...params.base,
     ...(params.from ? { from: params.from } : {}),
     text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: params.entities?.length ? params.entities : undefined,
     ...(params.date != null ? { date: params.date } : {}),
   };
+  delete message.caption;
+  delete message.caption_entities;
+  if (params.entities?.length) {
+    message.entities = params.entities;
+  } else {
+    delete message.entities;
+  }
+  return message;
 }
 
 export const buildSyntheticContext = (
@@ -180,78 +152,76 @@ export function createTelegramMessageSessionRuntime({
   RegisterTelegramHandlerParams,
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
-  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
-  const resolveTelegramSessionState = (
-    params: ResolveTelegramSessionStateParams,
-  ): TelegramSessionState => {
+  const loadSessionEntry = telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync;
+  const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
-    const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
       params.chatId,
-      topicThreadId,
+      params.threadSpec.id,
       params.runtimeCfg,
     );
-    const { route } = resolveTelegramConversationRoute({
+    const { route, bindingMode } = await resolveTelegramConversationRoute({
+      ...params,
       cfg: params.runtimeCfg,
       accountId,
-      chatId: params.chatId,
-      isGroup: params.isGroup,
-      threadSpec: params.threadSpec,
-      senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });
     const sessionKey = resolveTelegramTargetSession({
+      ...params,
       cfg: params.runtimeCfg,
       route,
-      chatId: params.chatId,
-      isGroup: params.isGroup,
-      senderId: params.senderId,
       dmThreadId,
-      botHasTopicsEnabled: params.botHasTopicsEnabled,
     });
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = loadSessionEntry({ storePath, sessionKey });
-    const storedOverride = resolveStoredModelOverride({
+    const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
+    const overrideParams = {
       sessionEntry: entry,
-      loadSessionEntry: (parentSessionKey) =>
-        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
       }).provider,
+    };
+    // Discover the inherited row before asking the worker to load it.
+    let parentSessionKey: string | undefined;
+    let storedOverride = resolveStoredModelOverride({
+      ...overrideParams,
+      loadSessionEntry: (key) => {
+        parentSessionKey = key;
+        return undefined;
+      },
     });
-    if (storedOverride) {
-      return {
+    if (parentSessionKey) {
+      const parentEntry = await loadSessionEntry({
         agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
         storePath,
-        model: storedOverride.provider
-          ? `${storedOverride.provider}/${storedOverride.model}`
-          : storedOverride.model,
-      };
+        sessionKey: parentSessionKey,
+      });
+      storedOverride = resolveStoredModelOverride({
+        ...overrideParams,
+        loadSessionEntry: () => parentEntry,
+      });
     }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
-    if (provider && model) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: `${provider}/${model}`,
-      };
-    }
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
+      bindingMode,
       sessionEntry: entry,
       sessionKey,
       storePath,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: storedOverride
+        ? storedOverride.provider
+          ? `${storedOverride.provider}/${storedOverride.model}`
+          : storedOverride.model
+        : provider && model
+          ? `${provider}/${model}`
+          : typeof modelCfg === "string"
+            ? modelCfg
+            : modelCfg?.primary,
     };
   };
 
@@ -286,10 +256,10 @@ export function createTelegramMessageContextRuntime({
   opts,
   telegramCfg,
   telegramDeps,
-}: Pick<
-  RegisterTelegramHandlerParams,
-  "cfg" | "accountId" | "ownerAgentId" | "opts" | "telegramCfg" | "telegramDeps"
->) {
+}: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "ownerAgentId" | "telegramCfg"> & {
+  opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
+  telegramDeps: Pick<RegisterTelegramHandlerParams["telegramDeps"], "resolveStorePath">;
+}) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
       telegramDeps.resolveStorePath(cfg.session?.store, {
@@ -325,6 +295,7 @@ export function createTelegramMessageContextRuntime({
       accountId,
       chatId: msg.chat.id,
       msg,
+      historyEligible: true,
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(providerObservedThread ? { providerObservedThread } : {}),
       ...(providerObservedThread?.id != null ? { threadId: providerObservedThread.id } : {}),
@@ -349,21 +320,16 @@ export function createTelegramMessageContextRuntime({
     media: TelegramResolvedMedia;
     botUserId?: number;
   }) => {
-    const cachedNode = await messageCache.get({
-      accountId,
-      chatId: params.chatId,
-      messageId: params.messageId,
-    });
-    if (!cachedNode) {
-      return;
-    }
-    await messageCache.recordResolvedMedia({
+    const mediaParams = {
       accountId,
       chatId: params.chatId,
       messageId: params.messageId,
       media: params.media,
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
-    });
+    };
+    if (await messageCache.get(mediaParams)) {
+      await messageCache.recordResolvedMedia(mediaParams);
+    }
   };
 
   // `MessageReactionUpdated` carries no `message_thread_id`, so the reaction handler
@@ -413,7 +379,7 @@ export function createTelegramMessageContextRuntime({
   const toPromptContextMessage = (
     node: TelegramCachedMessageNode,
     ctx: TelegramContext,
-    flags?: { replyTarget?: boolean },
+    isReplyTarget: boolean | undefined,
     media?: TelegramMediaRef,
   ) => ({
     message_id: node.messageId,
@@ -427,7 +393,7 @@ export function createTelegramMessageContextRuntime({
     media_path: media?.path,
     media_ref: media?.path ? undefined : node.mediaRef,
     reply_to_id: node.replyToId,
-    is_reply_target: flags?.replyTarget === true ? true : undefined,
+    is_reply_target: isReplyTarget === true ? true : undefined,
   });
 
   const buildPromptContextForMessage = async (
@@ -440,54 +406,75 @@ export function createTelegramMessageContextRuntime({
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
     selectedMessageIds?: TelegramPromptContextMessageSelection,
   ): Promise<TelegramPromptContextEntry[]> => {
+    const body = getTelegramTextParts(msg).text.trim();
+    if (
+      /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i.test(body) &&
+      !/^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i.test(body)
+    ) {
+      return [];
+    }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const groupHistoryLimit = Math.max(
-      0,
-      runtimeTelegramCfg.historyLimit ??
-        runtimeCfg.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
+    const groupHistoryLimit = resolvePromptHistoryLimit(
+      runtimeTelegramCfg.historyLimit ?? runtimeCfg.messages?.groupChat?.historyLimit,
     );
     const dmHistoryLimit = resolveTelegramDmHistoryLimit({
       config: runtimeTelegramCfg,
       senderId: msg.from?.id,
     });
+    if (
+      (isGroup ? groupHistoryLimit : dmHistoryLimit) === 0 &&
+      replyChainNodes.length === 0 &&
+      !selectedMessageIds?.size
+    ) {
+      return [];
+    }
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({ accountId, chatId: msg.chat.id, messageId });
-    const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
-    const conversationContext =
-      isGroup && groupHistoryLimit <= 0
-        ? []
-        : await buildTelegramConversationContext({
-            cache: messageCache,
-            messageId,
-            accountId,
-            chatId: msg.chat.id,
-            ...(Number.isFinite(threadId) ? { threadId } : {}),
-            replyChainNodes,
-            recentLimit: isGroup ? groupHistoryLimit : dmHistoryLimit,
-            replyTargetWindowSize: isGroup || dmHistoryLimit > 0 ? 2 : 0,
-            ...(options?.promptContextMinTimestampMs !== undefined
-              ? { minTimestampMs: options.promptContextMinTimestampMs }
-              : {}),
-            ...(isGroup && options?.promptContextAmbientWatermark !== undefined
-              ? {
-                  includeNode: (
-                    node: TelegramCachedMessageNode,
-                    flags?: { replyTarget?: boolean },
-                  ) =>
-                    flags?.replyTarget === true ||
-                    isTelegramHistoryEntryAfterAmbientWatermark(
-                      node,
-                      options.promptContextAmbientWatermark,
-                    ),
-                }
-              : {}),
-          });
+    const threadId =
+      options?.threadSpec?.id ?? (currentNode?.threadId ? Number(currentNode.threadId) : undefined);
+    const historyScope = {
+      cache: messageCache,
+      cfg: runtimeCfg,
+      accountId,
+      chatId: msg.chat.id,
+      ...(Number.isFinite(threadId) ? { threadId } : {}),
+      botUserId: ctx.me?.id ?? opts.botInfo?.id,
+    };
+    const conversationContext = await buildTelegramConversationContext({
+      ...historyScope,
+      messageId,
+      replyChainNodes,
+      recentLimit: isGroup ? 0 : dmHistoryLimit,
+      replyTargetWindowSize: isGroup ? 0 : dmHistoryLimit > 0 ? 2 : 0,
+      ...(options?.promptContextMinTimestampMs !== undefined
+        ? { minTimestampMs: options.promptContextMinTimestampMs }
+        : {}),
+    });
     const conversationContextById = new Map(
       conversationContext.flatMap((entry) =>
         entry.node.messageId ? [[entry.node.messageId, entry] as const] : [],
       ),
     );
+    if (isGroup && groupHistoryLimit > 0) {
+      const history = await readTelegramHistoryWindow({
+        ...historyScope,
+        before: messageId,
+        limit: groupHistoryLimit,
+      });
+      for (const node of history) {
+        if (
+          (options?.promptContextMinTimestampMs !== undefined &&
+            node.timestamp !== undefined &&
+            node.timestamp < options.promptContextMinTimestampMs) ||
+          !isTelegramHistoryEntryAfterAmbientWatermark(node, options?.promptContextAmbientWatermark)
+        ) {
+          continue;
+        }
+        if (node.messageId && !conversationContextById.has(node.messageId)) {
+          conversationContextById.set(node.messageId, { node });
+        }
+      }
+    }
     for (const [selectedMessageId, selection] of selectedMessageIds ?? []) {
       if (selection === "exclude") {
         conversationContextById.delete(selectedMessageId);
@@ -501,26 +488,27 @@ export function createTelegramMessageContextRuntime({
         chatId: msg.chat.id,
         messageId: selectedMessageId,
       });
-      if (node?.messageId) {
+      if (
+        node?.messageId &&
+        (!isGroup || (await isTelegramHistoryNodeAllowed({ ...historyScope, node })))
+      ) {
         conversationContextById.set(node.messageId, { node });
       }
     }
-    const cacheEntries = Array.from(conversationContextById.values()).map((entry) => ({
-      node: entry.node,
-      message: toPromptContextMessage(
-        entry.node,
-        ctx,
-        { replyTarget: entry.isReplyTarget },
-        entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
-      ),
-    }));
+    const cacheEntries = Array.from(conversationContextById.values())
+      .toSorted((left, right) => Number(left.node.messageId) - Number(right.node.messageId))
+      .map((entry) => ({
+        node: entry.node,
+        message: toPromptContextMessage(
+          entry.node,
+          ctx,
+          entry.isReplyTarget,
+          entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+        ),
+      }));
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
-    const legacyAssistantTextKeys = cacheEntries.flatMap(({ node }) => {
-      const key = legacyAssistantTextKey(node, ctx.me?.id ?? opts.botInfo?.id);
-      return key ? [key] : [];
-    });
     const messages = cacheEntries.map((entry) => entry.message);
     return messages.length > 0
       ? [
@@ -530,9 +518,6 @@ export function createTelegramMessageContextRuntime({
             type: "chat_window",
             ...(completeProjectionIds.size > 0
               ? { sessionTranscriptDedupeMessageIds: [...completeProjectionIds] }
-              : {}),
-            ...(legacyAssistantTextKeys.length > 0
-              ? { sessionTranscriptAssistantTextDedupeKeys: legacyAssistantTextKeys }
               : {}),
             payload: {
               order: "chronological",

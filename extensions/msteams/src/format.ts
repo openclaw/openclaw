@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { getMarkdownTableSource } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
+  applyMarkdownTextEdits,
   convertMarkdownTables,
   FormatCapabilityProfile,
   type MarkdownIR,
+  type MarkdownTextEdit,
   markdownToIR,
   markdownToIRWithMeta,
   renderMarkdownWithMarkers,
@@ -61,36 +63,9 @@ function restoreTokens(text: string, prefix: string, values: readonly string[]):
   );
 }
 
-type TextEdit = { start: number; end: number; text: string };
-
-function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly TextEdit[]): MarkdownIR {
-  const ordered = edits.toSorted((a, b) => a.start - b.start);
-  const cumulativeDeltas: number[] = [];
-  const exactEdits = new Map<string, TextEdit>();
-  let text = "";
-  let cursor = 0;
-  let delta = 0;
-  for (const edit of ordered) {
-    text += ir.text.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-    delta += edit.text.length - (edit.end - edit.start);
-    cumulativeDeltas.push(delta);
-    exactEdits.set(`${edit.start}:${edit.end}`, edit);
-  }
-  text += ir.text.slice(cursor);
-  const mapOffset = (offset: number): number => {
-    let low = 0;
-    let high = ordered.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if ((ordered[middle]?.end ?? Number.POSITIVE_INFINITY) <= offset) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return offset + (low > 0 ? (cumulativeDeltas[low - 1] ?? 0) : 0);
-  };
+function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly MarkdownTextEdit[]): MarkdownIR {
+  const { text, mapOffset } = applyMarkdownTextEdits(ir.text, edits);
+  const exactEdits = new Map(edits.map((edit) => [`${edit.start}:${edit.end}`, edit]));
   const mapRange = <T extends { start: number; end: number }>(range: T): T => {
     const exact = exactEdits.get(`${range.start}:${range.end}`);
     const start = mapOffset(range.start);
@@ -383,14 +358,15 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     linkify: false,
     blockquotePrefix: "",
   });
+  const protectedValues = [
+    { prefix: `${tokenPrefix}e`, values: escapedMarkdown },
+    { prefix: `${tokenPrefix}t`, values: rawTables },
+    { prefix: `${tokenPrefix}m`, values: mentions },
+    { prefix: `${tokenPrefix}i`, values: images },
+    { prefix: `${tokenPrefix}h`, values: entities },
+  ];
   const ir = prefixMSTeamsBlockquotes(
-    protectMSTeamsCode(parsed, tokenPrefix, codeRegions, [
-      { prefix: `${tokenPrefix}e`, values: escapedMarkdown },
-      { prefix: `${tokenPrefix}t`, values: rawTables },
-      { prefix: `${tokenPrefix}m`, values: mentions },
-      { prefix: `${tokenPrefix}i`, values: images },
-      { prefix: `${tokenPrefix}h`, values: entities },
-    ]),
+    protectMSTeamsCode(parsed, tokenPrefix, codeRegions, protectedValues),
   );
   const rendered = renderMarkdownWithMarkers(
     ir,
@@ -406,10 +382,8 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );
-  let restored = restoreTokens(rendered, `${tokenPrefix}c`, codeRegions);
-  restored = restoreTokens(restored, `${tokenPrefix}e`, escapedMarkdown);
-  restored = restoreTokens(restored, `${tokenPrefix}t`, rawTables);
-  restored = restoreTokens(restored, `${tokenPrefix}m`, mentions);
-  restored = restoreTokens(restored, `${tokenPrefix}i`, images);
-  return restoreTokens(restored, `${tokenPrefix}h`, entities);
+  return protectedValues.reduce(
+    (text, { prefix, values }) => restoreTokens(text, prefix, values),
+    restoreTokens(rendered, `${tokenPrefix}c`, codeRegions),
+  );
 }

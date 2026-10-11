@@ -15,6 +15,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
@@ -65,7 +66,7 @@ class ChatInlineWidgetCleanupTest {
               }
             assertNotNull(activeServer.takeRequest(5, TimeUnit.SECONDS))
 
-            closePinnedWidgetClientAsync(client)
+            closeWidgetClientAsync(client)
 
             withTimeout(5_000) {
               assertNotSame(caller, cancellationThread.await())
@@ -83,4 +84,23 @@ class ChatInlineWidgetCleanupTest {
         }
       }
     }
+
+  @Test
+  fun requiresEnforcingResponseCspBeforeDelegatingWidgetResources() {
+    assertTrue(hasWidgetResourcePolicy("default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; sandbox allow-scripts"))
+    assertTrue(hasWidgetResourcePolicy(" SANDBOX\tallow-scripts ; DEFAULT-SRC 'none' "))
+    val legacyOrUnrestrictedPolicies =
+      listOf(
+        null,
+        "",
+        "sandbox allow-scripts",
+        "default-src 'none'",
+        "default-src *; sandbox allow-scripts",
+        "default-src 'none'; sandbox allow-scripts allow-same-origin",
+        "default-src *; default-src 'none'; sandbox allow-scripts",
+      )
+    for (policy in legacyOrUnrestrictedPolicies) {
+      assertFalse("Unexpected resource authority from $policy", hasWidgetResourcePolicy(policy))
+    }
+  }
 }

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -172,16 +173,10 @@ function collectJsonStringValues(value: unknown, values: Set<string>): void {
     values.add(value);
     return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectJsonStringValues(item, values);
-    }
-    return;
-  }
   if (!value || typeof value !== "object") {
     return;
   }
-  for (const item of Object.values(value)) {
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
     collectJsonStringValues(item, values);
   }
 }
@@ -204,16 +199,10 @@ export function readRepairJournal(database: DatabaseSync): ReservedKeyRename[] {
     throw new Error("Invalid reserved incognito session key repair journal");
   }
   return parsed.renames.map((item) => {
-    if (
-      !item ||
-      typeof item !== "object" ||
-      Array.isArray(item) ||
-      typeof (item as { from?: unknown }).from !== "string" ||
-      typeof (item as { to?: unknown }).to !== "string"
-    ) {
+    if (!isRecord(item) || typeof item.from !== "string" || typeof item.to !== "string") {
       throw new Error("Invalid reserved incognito session key repair journal entry");
     }
-    return { from: (item as { from: string }).from, to: (item as { to: string }).to };
+    return { from: item.from, to: item.to };
   });
 }
 

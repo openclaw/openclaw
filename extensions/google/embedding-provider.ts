@@ -1,14 +1,16 @@
-// Google provider module implements model/runtime integration.
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  formatEmbeddingTaskText,
+  normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import {
@@ -23,7 +25,6 @@ import {
   readProviderJsonObjectResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -31,11 +32,7 @@ import {
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
-export type GeminiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+export type GeminiEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   modelPath: string;
   apiKeys: string[];
   outputDimensionality?: number;
@@ -61,29 +58,13 @@ const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
 // Mirrors core's own error-body read limit (extractProviderErrorInfo in
 // provider-http-errors.ts) so the clone read below stays bounded like core's.
 const GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES = 16 * 1024;
-const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
-  RETRIEVAL_QUERY: "task: search result | query:",
-  RETRIEVAL_DOCUMENT: "title: none | text:",
-  SEMANTIC_SIMILARITY: "task: sentence similarity | query:",
-  CLASSIFICATION: "task: classification | query:",
-  CLUSTERING: "task: clustering | query:",
-  QUESTION_ANSWERING: "task: question answering | query:",
-  FACT_VERIFICATION: "task: fact checking | query:",
-};
 
-type GeminiTextPart = { text: string };
-type GeminiInlinePart = {
-  inlineData: { mimeType: string; data: string };
-};
-type GeminiPart = GeminiTextPart | GeminiInlinePart;
-type GeminiEmbeddingInputPart = NonNullable<Exclude<EmbeddingInput, string>["parts"]>[number];
-type GeminiEmbeddingRequest = {
-  content: { parts: GeminiPart[] };
+export type GeminiEmbeddingRequest = {
+  content: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
   taskType?: GeminiTaskType;
   outputDimensionality?: number;
   model?: string;
 };
-export type GeminiTextEmbeddingRequest = GeminiEmbeddingRequest;
 
 function malformedGeminiEmbeddingResponse(): Error {
   return new Error("gemini embeddings failed: malformed JSON response");
@@ -93,24 +74,21 @@ function unexpectedGeminiEmbeddingDimensions(expected: number, actual: number): 
   return new Error(`gemini embeddings failed: expected ${expected} dimensions, received ${actual}`);
 }
 
-function readGeminiEmbeddingValues(value: unknown): number[] {
-  if (!Array.isArray(value)) {
-    throw malformedGeminiEmbeddingResponse();
-  }
-  for (const entry of value) {
-    if (typeof entry !== "number" || !Number.isFinite(entry)) {
-      throw malformedGeminiEmbeddingResponse();
-    }
-  }
-  return value;
+/** Direct and downloaded vectors share one invariant before normalization. */
+export function isValidGeminiEmbeddingValues(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  );
 }
 
-function readGeminiSingleEmbedding(payload: Record<string, unknown>): number[] {
-  const embedding = asOptionalRecord(payload.embedding);
-  if (!embedding) {
+function readGeminiEmbeddingValues(embedding: unknown): number[] {
+  const value = asOptionalRecord(embedding)?.values;
+  if (!isValidGeminiEmbeddingValues(value)) {
     throw malformedGeminiEmbeddingResponse();
   }
-  return readGeminiEmbeddingValues(embedding.values);
+  return value;
 }
 
 function readGeminiBatchEmbeddings(
@@ -120,13 +98,7 @@ function readGeminiBatchEmbeddings(
   if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== expectedCount) {
     throw malformedGeminiEmbeddingResponse();
   }
-  return payload.embeddings.map((entry) => {
-    const embedding = asOptionalRecord(entry);
-    if (!embedding) {
-      throw malformedGeminiEmbeddingResponse();
-    }
-    return readGeminiEmbeddingValues(embedding.values);
-  });
+  return payload.embeddings.map(readGeminiEmbeddingValues);
 }
 
 export function buildGeminiEmbeddingRequest(params: {
@@ -138,12 +110,12 @@ export function buildGeminiEmbeddingRequest(params: {
   modelPath?: string;
 }): GeminiEmbeddingRequest {
   const input = typeof params.input === "string" ? { text: params.input } : params.input;
-  const parts = input.parts?.map((part: GeminiEmbeddingInputPart) =>
+  const parts: GeminiEmbeddingRequest["content"]["parts"] = input.parts?.map((part) =>
     part.type === "text"
-      ? ({ text: part.text } satisfies GeminiTextPart)
-      : ({
+      ? { text: part.text }
+      : {
           inlineData: { mimeType: part.mimeType, data: part.data },
-        } satisfies GeminiInlinePart),
+        },
   ) ?? [{ text: input.text }];
   const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
   const request: GeminiEmbeddingRequest = { content: { parts } };
@@ -157,7 +129,7 @@ export function buildGeminiEmbeddingRequest(params: {
           params.taskType === "FACT_VERIFICATION")
           ? "RETRIEVAL_DOCUMENT"
           : params.taskType;
-      first.text = `${GEMINI_EMBEDDING_2_TASK_PREFIXES[taskType]} ${first.text}`;
+      first.text = formatEmbeddingTaskText(first.text, taskType);
     }
   } else if (!isStableEmbedding2) {
     request.taskType = params.taskType;
@@ -191,26 +163,12 @@ function resolveGeminiOutputDimensionality(model: string, requested?: number): n
   }
   return requested;
 }
-function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
-  return resolveMemorySecretInputString({
-    value: remoteApiKey,
-    path: "memory.search.remote.apiKey",
-  });
-}
-
 function normalizeGeminiModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_GEMINI_EMBEDDING_MODEL;
-  }
-  const withoutPrefix = trimmed.replace(/^models\//, "");
-  if (withoutPrefix.startsWith("gemini/")) {
-    return withoutPrefix.slice("gemini/".length);
-  }
-  if (withoutPrefix.startsWith("google/")) {
-    return withoutPrefix.slice("google/".length);
-  }
-  return withoutPrefix;
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: DEFAULT_GEMINI_EMBEDDING_MODEL,
+    prefixes: ["models/gemini/", "models/google/", "models/", "gemini/", "google/"],
+  });
 }
 
 /**
@@ -334,29 +292,24 @@ function normalizeGeminiBaseUrl(raw: string): string {
   if (!trimmed) {
     return DEFAULT_GOOGLE_API_BASE_URL;
   }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
-    const openAiIndex = url.pathname.indexOf("/openai");
-    url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
-      /\/+$/,
-      "",
-    );
-    if (
-      url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
-      url.pathname === "/"
-    ) {
-      url.pathname = "/v1beta";
-    }
-    return url.search ? url.href : url.href.replace(/\/$/, "");
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     return trimmed;
   }
-}
-
-function buildGeminiModelPath(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
+  url.hash = "";
+  // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
+  const openAiIndex = url.pathname.indexOf("/openai");
+  url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
+    /\/+$/,
+    "",
+  );
+  if (
+    url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
+    url.pathname === "/"
+  ) {
+    url.pathname = "/v1beta";
+  }
+  return url.search ? url.href : url.href.replace(/\/$/, "");
 }
 
 export async function createGeminiEmbeddingProvider(
@@ -389,7 +342,10 @@ export async function createGeminiEmbeddingProvider(
       }),
       signal: callOptions?.signal,
     });
-    return sanitizeGeminiEmbedding(readGeminiSingleEmbedding(payload), outputDimensionality);
+    return sanitizeGeminiEmbedding(
+      readGeminiEmbeddingValues(payload.embedding),
+      outputDimensionality,
+    );
   };
 
   const embedDocuments = async (
@@ -448,7 +404,10 @@ async function resolveGeminiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<GeminiEmbeddingClient> {
   const remote = options.remote;
-  const remoteApiKey = resolveRemoteApiKey(remote?.apiKey);
+  const remoteApiKey = resolveMemorySecretInputString({
+    value: remote?.apiKey,
+    path: "memory.search.remote.apiKey",
+  });
   const remoteBaseUrl = remote?.baseUrl?.trim();
   const providerConfig = options.config.models?.providers?.google;
   const providerBaseUrl = normalizeGeminiBaseUrl(
@@ -500,7 +459,7 @@ async function resolveGeminiEmbeddingClient(
         primaryApiKey: apiKey,
       });
   const model = normalizeGeminiModel(options.model);
-  const modelPath = buildGeminiModelPath(model);
+  const modelPath = model.startsWith("models/") ? model : `models/${model}`;
   const outputDimensionality = resolveGeminiOutputDimensionality(model, options.dimensions);
   debugEmbeddingsLog("memory embeddings: gemini client", {
     rawBaseUrl,

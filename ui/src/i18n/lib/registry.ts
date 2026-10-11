@@ -1,12 +1,10 @@
-// Control UI i18n module implements registry behavior.
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
-type LazyLocale = Exclude<Locale, "en">;
 type LocaleModule = Record<string, TranslationMap>;
 
-export const DEFAULT_LOCALE: Locale = "en";
+export const DEFAULT_LOCALE = "en";
 
-const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
+const LAZY_LOCALE_REGISTRY = {
   "zh-CN": () => import("../locales/zh-CN.ts"),
   "zh-TW": () => import("../locales/zh-TW.ts"),
   "pt-BR": () => import("../locales/pt-BR.ts"),
@@ -27,18 +25,16 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
   nl: () => import("../locales/nl.ts"),
   fa: () => import("../locales/fa.ts"),
   ru: () => import("../locales/ru.ts"),
-};
+} satisfies Record<string, () => Promise<LocaleModule>>;
+type LazyLocale = keyof typeof LAZY_LOCALE_REGISTRY;
+export type Locale = typeof DEFAULT_LOCALE | LazyLocale;
 // SAFETY: The record contract guarantees every own key is a LazyLocale.
 const LAZY_LOCALES = Object.keys(LAZY_LOCALE_REGISTRY) as LazyLocale[];
 
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
-  return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
-}
-
-function isLazyLocale(locale: Locale): locale is LazyLocale {
-  return LAZY_LOCALES.includes(locale as LazyLocale);
+  return SUPPORTED_LOCALES.some((locale) => locale === value);
 }
 
 export function resolveNavigatorLocale(browserLanguage: string): Locale {
@@ -62,9 +58,9 @@ export function resolveNavigatorLocale(browserLanguage: string): Locale {
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
-  if (!isLazyLocale(locale)) {
+  if (locale === DEFAULT_LOCALE) {
     return null;
   }
-  const module = await LAZY_LOCALE_REGISTRY[locale]();
+  const module: LocaleModule = await LAZY_LOCALE_REGISTRY[locale]();
   return module[locale.replaceAll("-", "_")] ?? null;
 }

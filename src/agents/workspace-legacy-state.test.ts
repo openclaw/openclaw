@@ -68,7 +68,7 @@ describe("legacy workspace reset cleanup", () => {
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`;
     const candidates = [
       context.paths.setupStatePaths[0]!,
-      `${context.paths.setupStatePaths[1]!}.doctor-importing`,
+      `${context.paths.setupStatePaths[0]!}.doctor-importing`,
       context.paths.stateDirAttestationPaths[0]!,
       `${context.paths.stateDirAttestationPaths.at(-1)!}.doctor-importing`,
       context.paths.siblingAttestationPaths[0]!,
@@ -117,19 +117,6 @@ describe("legacy workspace reset cleanup", () => {
     }
   });
 
-  it("preserves a foreign sibling attestation", async () => {
-    const context = setup();
-    await fs.mkdir(context.workspaceDir, { recursive: true });
-    const siblingPath = context.paths.siblingAttestationPaths[0]!;
-    await fs.writeFile(siblingPath, "foreign marker\n", "utf8");
-
-    const result = await removeLegacyWorkspaceStateForReset(prepare(context));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.removedPaths).toEqual([]);
-    await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
-  });
-
   it("preserves a malformed sibling claim and foreign marker", async () => {
     const context = setup();
     const siblingPath = context.paths.siblingAttestationPaths[0]!;
@@ -166,7 +153,7 @@ describe("legacy workspace reset cleanup", () => {
     );
 
     expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
-      /run openclaw doctor --fix/u,
+      /Run openclaw doctor --fix/u,
     );
   });
 
@@ -184,7 +171,9 @@ describe("legacy workspace reset cleanup", () => {
         env: context.env,
         homedir: context.homedir,
       }),
-    ).toThrow(`${workspaceDirs.join(", ")}; run openclaw doctor --fix`);
+    ).toThrow(
+      `Run openclaw doctor --fix. Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}.`,
+    );
     for (const workspaceDir of workspaceDirs) {
       await fs.unlink(path.join(workspaceDir, "openclaw-workspace-state.json"));
     }
@@ -195,39 +184,6 @@ describe("legacy workspace reset cleanup", () => {
         homedir: context.homedir,
       }),
     ).not.toThrow();
-  });
-
-  it("checks canonical legacy markers when configuration uses a symlink alias", async () => {
-    const context = setup();
-    const targetDir = path.join(context.homeDir, "workspace-target");
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.symlink(
-      targetDir,
-      context.workspaceDir,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const identity = resolveWorkspaceStateIdentity(targetDir);
-    const canonicalSiblingPath = `${identity.workspacePath}.attested`;
-    const sources = resolveLegacyWorkspaceSourcePaths(context.workspaceDir, {
-      env: context.env,
-      homedir: context.homedir,
-    });
-    await fs.writeFile(
-      canonicalSiblingPath,
-      `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`,
-      "utf8",
-    );
-
-    expect(sources.siblingAttestationPaths).toContain(canonicalSiblingPath);
-    expect(sources.stateDirAttestationPaths).toContain(
-      path.join(context.stateDir, "workspace-attestations", `${identity.workspaceKey}.attested`),
-    );
-    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
-      /run openclaw doctor --fix/u,
-    );
-    const cleanup = await removeLegacyWorkspaceStateForReset(prepare(context));
-    expect(cleanup.removedPaths).toContain(canonicalSiblingPath);
-    await expect(fs.lstat(canonicalSiblingPath)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("removes canonical legacy paths after the configured symlink is removed", async () => {

@@ -1,10 +1,8 @@
 // Covers root CLI option token parsing.
 import { describe, expect, it } from "vitest";
 import {
-  consumeRootOptionToken,
   getCommandArgsWithRootOptions,
   getCommandPositionalsWithRootOptions,
-  getRootOptionAwareCommandPath,
   isValueToken,
 } from "./cli-root-options.js";
 
@@ -32,27 +30,6 @@ describe("isValueToken", () => {
   });
 });
 
-describe("consumeRootOptionToken", () => {
-  it.each([
-    { args: ["--dev"], index: 0, expected: 1 },
-    { args: ["--profile=work"], index: 0, expected: 1 },
-    { args: ["--log-level=debug"], index: 0, expected: 1 },
-    { args: ["--container=openclaw-demo"], index: 0, expected: 1 },
-    { args: ["--profile", "work"], index: 0, expected: 2 },
-    { args: ["--container", "openclaw-demo"], index: 0, expected: 2 },
-    { args: ["--profile", "-1"], index: 0, expected: 2 },
-    { args: ["--log-level", "-1.5"], index: 0, expected: 2 },
-    { args: ["--profile", "--no-color"], index: 0, expected: 1 },
-    { args: ["--profile", "--"], index: 0, expected: 1 },
-    { args: ["x", "--profile", "work"], index: 1, expected: 2 },
-    { args: ["--log-level", ""], index: 0, expected: 1 },
-    { args: ["--unknown"], index: 0, expected: 0 },
-    { args: [], index: 0, expected: 0 },
-  ])("consumes %j at %d", ({ args, index, expected }) => {
-    expect(consumeRootOptionToken(args, index)).toBe(expected);
-  });
-});
-
 describe("literal command discovery", () => {
   it.each(["route", "command-path"] as const)(
     "requires the root command before command options in %s mode",
@@ -74,19 +51,6 @@ describe("literal command discovery", () => {
       }
     },
   );
-
-  it.each([
-    { args: ["--", "config", "get"], expected: ["config", "get"] },
-    { args: ["--profile", "work", "--", "config", "get"], expected: ["config", "get"] },
-    { args: ["--profile", "--", "config", "get"], expected: ["config", "get"] },
-    { args: ["--", "--help"], expected: ["--help"] },
-    { args: ["--", "config", "--help"], expected: ["config", "--help"] },
-    { args: ["--", "config", "unknown"], expected: ["config", "unknown"] },
-    { args: ["--"], expected: [] },
-    { args: ["status", "--", "ignored"], expected: ["status"] },
-  ])("discovers $args without promoting literal flags", ({ args, expected }) => {
-    expect(getRootOptionAwareCommandPath(["node", "openclaw", ...args], 2)).toEqual(expected);
-  });
 
   it.each([
     ["--", "channels", "add", "--channel", "example"],

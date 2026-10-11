@@ -5,6 +5,7 @@ import { GatewayClientRequestError } from "../../../packages/gateway-client/src/
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
 import type { listManagedPlugins } from "../../plugins/management-service.js";
+import { formatSelectedEntry } from "../../plugins/reload-entry-guidance.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
@@ -13,9 +14,21 @@ import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 const PLUGINS_TOOL_RESULT_MAX_BYTES = 3_840;
 
 function pluginsToolResult(payload: Record<string, unknown>, refreshUnavailable = false) {
-  const continuation = refreshUnavailable
-    ? "The backend change was applied. Start a new conversation to load changed tool definitions in this runtime; do not repeat the mutation."
-    : undefined;
+  const details = isRecord(payload.details) ? payload.details : undefined;
+  const runtime = isRecord(payload.runtime) ? payload.runtime : details?.runtime;
+  const entries = isRecord(runtime) ? runtime.selectedEntries : undefined;
+  const entry = isRecord(entries) ? Object.values(entries)[0] : undefined;
+  const restartRequired = payload.restartRequired ?? details?.restartRequired;
+  const continuation = [
+    restartRequired === true
+      ? "Restart the Gateway to load changed plugin code; do not repeat the completed mutation."
+      : refreshUnavailable
+        ? "The backend change was applied. Start a new conversation to load changed tool definitions in this runtime; do not repeat the mutation."
+        : undefined,
+    typeof entry === "string" ? formatSelectedEntry(truncateUtf16Safe(entry, 160)) : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const response = continuation ? { ...payload, next: continuation } : payload;
   const size = boundedJsonUtf8Bytes(response, PLUGINS_TOOL_RESULT_MAX_BYTES);
   if (
@@ -24,10 +37,7 @@ function pluginsToolResult(payload: Record<string, unknown>, refreshUnavailable 
   ) {
     return jsonResult(response);
   }
-  const details = isRecord(payload.details) ? payload.details : undefined;
   const persistence = isRecord(details?.persistence) ? details.persistence : undefined;
-  const restartRequired = payload.restartRequired ?? details?.restartRequired;
-  const runtime = isRecord(payload.runtime) ? payload.runtime : details?.runtime;
   const rawWarnings =
     payload.warnings ?? details?.warnings ?? (isRecord(runtime) ? runtime.warnings : undefined);
   const warnings = Array.isArray(rawWarnings)
@@ -104,7 +114,7 @@ export function createPluginsTool(): AnyAgentTool {
     name: "plugins",
     label: "Plugins",
     description:
-      "Inspect, search, install from the official catalog or ClawHub, enable, disable, uninstall, or reload plugins without restarting the Gateway. Reload an installed plugin after editing its local files. Cleanup is best effort; read warnings in the result. Supported conversations refresh their tools at the next model step after running programs settle; finish the current program before using changed tools. Other runtimes may require a new conversation for changed tool names or schemas. Do not repeat completed mutations.",
+      "Inspect, search, install from the official catalog or ClawHub, enable, disable, uninstall, or reload plugins. Reload an installed plugin after editing its local files. Check restartRequired: compiled bundled code needs a Gateway restart. Cleanup is best effort; read warnings in the result. Supported conversations refresh their tools at the next model step after running programs settle; finish the current program before using changed tools. Other runtimes may require a new conversation for changed tool names or schemas. Do not repeat completed mutations.",
     parameters: PluginsToolSchema,
     execute: async (_toolCallId, args, signal) => {
       runtimeRefresh.assertCurrent();

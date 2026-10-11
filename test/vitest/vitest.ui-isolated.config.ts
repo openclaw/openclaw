@@ -16,6 +16,7 @@ export function createUiIsolatedVitestConfig(
     deps: jsdomOptimizedDeps,
     environment: "jsdom",
     env,
+    intersectIncludeFile: true,
     excludeUnitFastTests: false,
     includeOpenClawRuntimeSetup: false,
     isolate: true,
@@ -23,7 +24,10 @@ export function createUiIsolatedVitestConfig(
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
     useNonIsolatedRunner: false,
   });
-  return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()],
+  };
 }
 
 export default createUiIsolatedVitestConfig();

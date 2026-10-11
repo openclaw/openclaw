@@ -1,12 +1,20 @@
+import { html } from "lit";
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
-describe("AppSidebar session scroll fade", () => {
-  it("shows fades only toward additional session content", async () => {
+describe("AppSidebar scroll", () => {
+  it("shows fades only toward additional content", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.contextualSidebar = {
+      key: "systems",
+      data: undefined,
+      loaderPending: false,
+      render: () => html`<p>Gateway machine</p>`,
+    };
+    await sidebar.updateComplete;
     const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body");
     if (!scroller) {
       throw new Error("Expected sidebar body scroller");

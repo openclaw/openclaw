@@ -2,18 +2,23 @@
 import { inspect } from "node:util";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { createPluginCache, withPluginCache } from "../plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
-const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();
-const applyPluginAutoEnableMock =
-  vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>();
-const resolvePluginControlPlaneWorkspaceMock = vi.fn(
-  (params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string }) => ({
+const loadConfigMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../config/config.js").loadConfig>(),
+);
+const applyPluginAutoEnableMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
+);
+const resolvePluginControlPlaneWorkspaceMock = vi.hoisted(() =>
+  vi.fn((params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string }) => ({
     workspaceDir: params.workspaceDir ?? "/resolved-workspace",
     workspaceScope: "selected" as const,
-  }),
+  })),
 );
 const manifestRegistry = { diagnostics: [], plugins: [] };
 const index: PluginMetadataSnapshot["index"] = {
@@ -47,6 +52,7 @@ const metadataSnapshot: PluginMetadataSnapshot = {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
@@ -60,13 +66,13 @@ const metadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "policy",
   workspaceDir: "/resolved-workspace",
 };
-const resolvePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
-const resolveConfigWidePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
+const resolvePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn(() => metadataSnapshot));
+const resolveConfigWidePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn(() => metadataSnapshot));
 
-let resolvePluginRuntimeLoadContext: typeof import("./load-context.resolve.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
 let setPluginRuntimeLoadContext: typeof import("./load-context.js").setPluginRuntimeLoadContext;
 let getPluginRuntimeLoadContext: typeof import("./load-context.js").getPluginRuntimeLoadContext;
+let getReusablePluginRuntimeActivation: typeof import("./load-context.js").getReusablePluginRuntimeActivation;
 let clearRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("../plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
@@ -98,9 +104,12 @@ describe("resolvePluginRuntimeLoadContext", () => {
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../../config/runtime-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js"));
-    ({ resolvePluginRuntimeLoadContext } = await import("./load-context.resolve.js"));
-    ({ buildPluginRuntimeLoadOptions, setPluginRuntimeLoadContext, getPluginRuntimeLoadContext } =
-      await import("./load-context.js"));
+    ({
+      buildPluginRuntimeLoadOptions,
+      setPluginRuntimeLoadContext,
+      getPluginRuntimeLoadContext,
+      getReusablePluginRuntimeActivation,
+    } = await import("./load-context.js"));
   });
 
   beforeEach(() => {
@@ -355,6 +364,40 @@ describe("resolvePluginRuntimeLoadContext", () => {
         expect(diagnostic).not.toContain(configSentinel);
         expect(diagnostic).not.toContain(envSentinel);
       }
+    }
+  });
+
+  it("hashes immutable fleet activation inputs once across registry rebindings", () => {
+    const config = freezeJsonSnapshot({
+      agents: {
+        entries: Object.fromEntries(
+          Array.from({ length: 200 }, (_, agentIndex) => [
+            `agent-${agentIndex}`,
+            { name: `${agentIndex}` },
+          ]),
+        ),
+      },
+    });
+    const env = { HOME: "/tmp/openclaw-activation-fleet" };
+    const context = resolvePluginRuntimeLoadContext({ config, env });
+    const registry = createEmptyPluginRegistry();
+    const keys = vi.spyOn(Object, "keys");
+    try {
+      setPluginRuntimeLoadContext(registry, context);
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const activation = getReusablePluginRuntimeActivation(registry, {
+          config,
+          env,
+          workspaceDir: context.workspaceDir,
+          metadataSnapshot,
+        });
+        expect(activation?.config).toBe(config);
+        expect(activation?.activationSourceConfig).toBe(config);
+        setPluginRuntimeLoadContext(registry, context);
+      }
+      expect(keys.mock.calls.filter(([value]) => value === config.agents.entries)).toHaveLength(1);
+    } finally {
+      keys.mockRestore();
     }
   });
 

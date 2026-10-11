@@ -1,11 +1,12 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const SCRIPT = resolve("scripts/full-release-artifacts.mjs");
 const REPOSITORY = "openclaw/openclaw";
@@ -136,6 +137,9 @@ process.stdout.write(JSON.stringify(response));
     preloadPath,
     `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
+  globalThis.setTimeout = () => { throw new Error("Fixture reached another artifact poll"); };
+}
 globalThis.fetch = async (input) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
@@ -218,19 +222,14 @@ globalThis.fetch = async (input) => {
       : [];
     return { ...result, outputs, calls };
   };
-  const artifact = async (
+  const artifact = (
     name: string,
     fileName: string,
     value: unknown,
     repositoryListing = false,
+    runId = 81,
   ) => {
-    const zip = new JSZip();
-    zip.file(fileName, JSON.stringify(value));
-    const bytes = await zip.generateAsync({
-      type: "nodebuffer",
-      platform: "UNIX",
-      compression: "STORE",
-    });
+    const bytes = makeStoredZip({ [fileName]: JSON.stringify(value) });
     const id = ++artifactId;
     const archivePath = join(root, `artifact-${id}.zip`);
     writeFileSync(archivePath, bytes);
@@ -241,10 +240,10 @@ globalThis.fetch = async (input) => {
       size_in_bytes: bytes.length,
       expired: false,
       expires_at: "2030-01-01T00:00:00Z",
-      workflow_run: { id: 81, head_sha: TOOLING_SHA },
+      workflow_run: { id: runId, head_sha: TOOLING_SHA },
     };
     api(
-      `${repositoryListing ? "actions" : "actions/runs/81"}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
+      `${repositoryListing ? "actions" : `actions/runs/${runId}`}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
       {
         total_count: 1,
         artifacts: [metadata],
@@ -271,6 +270,217 @@ globalThis.fetch = async (input) => {
   return { root, api, run, artifact, ...npm };
 }
 
+function publicationReuseFixture(changedReceipt = false) {
+  const test = fixture();
+  const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
+  const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
+  const fullRef = `refs/heads/${workflowRef}`;
+  test.raw.source.sha = TOOLING_SHA;
+  test.raw.package.sourceSha = TOOLING_SHA;
+  test.raw.producer.workflowRef = `${REPOSITORY}/${WORKFLOW}@${fullRef}`;
+  test.qualified.producer.workflowRef = test.raw.producer.workflowRef;
+  test.qualified.artifact.name = `openclaw-npm-preflight-${TOOLING_SHA}`;
+  const npmRun = workflowRun({
+    status: "completed",
+    conclusion: "success",
+    head_branch: workflowRef,
+    path: `${WORKFLOW}@${fullRef}`,
+  });
+  test.api("actions/runs/81", npmRun);
+  test.api("actions/runs/81/attempts/1", npmRun);
+  for (const descriptor of [test.raw, test.qualified]) {
+    test.api(`actions/artifacts/${descriptor.artifact.id}`, {
+      id: Number(descriptor.artifact.id),
+      name: descriptor.artifact.name,
+      digest: `sha256:${descriptor.artifact.digest}`,
+      size_in_bytes: 256,
+      expired: false,
+      workflow_run: { id: 81, head_sha: TOOLING_SHA },
+    });
+  }
+  const receipt = (stage: string, runId: string, outputs: Record<string, string>) => ({
+    schema: "openclaw.full-release-artifact-receipt/v1",
+    ...artifactRequest(),
+    sourceSha: TOOLING_SHA,
+    workflowRef,
+    stage,
+    dispatchId: `full-release-validation-51-1-artifacts-${stage}`,
+    runId,
+    runAttempt: "1",
+    outputs,
+  });
+  const qualifiedReceipt = structuredClone(test.qualified);
+  if (changedReceipt) {
+    qualifiedReceipt.manifestSha256 = "0".repeat(64);
+  }
+  test.artifact(
+    "full-release-artifact-receipt-81-1",
+    "artifact-receipt.json",
+    receipt("npm", "81", {
+      prepared_bundle_json: JSON.stringify(test.raw),
+      qualified_preflight_bundle_json: JSON.stringify(qualifiedReceipt),
+    }),
+  );
+  const artifactName = `docker-release-${TOOLING_SHA}-1`;
+  const dockerManifest = {
+    schemaVersion: 1,
+    repository: REPOSITORY,
+    sourceSha: TOOLING_SHA,
+    toolingSha: TOOLING_SHA,
+    tag: "v2026.8.1",
+    version: "2026.8.1",
+    imageTagSuffix: "",
+    artifactName,
+    includeBrowser: false,
+    builtAt: "2026-08-01T00:00:00Z",
+    producer: {
+      runId: "91",
+      runAttempt: "1",
+      workflowSha: TOOLING_SHA,
+      workflowRef: `${REPOSITORY}/${WORKFLOW}@${fullRef}`,
+      preparationWorkflowRef: `${REPOSITORY}/.github/workflows/docker-release-prepare.yml@${fullRef}`,
+      jobId: "903",
+      jobName: "Prepare Docker artifacts / Seal prepared Docker images",
+    },
+    architectures: ["amd64", "arm64"].map((architecture, index) => ({
+      architecture,
+      artifact: {
+        id: String(601 + index),
+        name: `${artifactName}-${architecture}`,
+        digest: `sha256:${"d".repeat(64)}`,
+      },
+      images: [
+        {
+          variant: "default",
+          smoke: "success",
+          attestations: "success",
+          manifests: [],
+          indexDigest: `sha256:${"a".repeat(64)}`,
+          imageDigest: `sha256:${"b".repeat(64)}`,
+          configDigest: `sha256:${"c".repeat(64)}`,
+        },
+      ],
+    })),
+  };
+  const docker = {
+    preparedRunId: "91",
+    preparedRunAttempt: "1",
+    preparedArtifactName: artifactName,
+    preparedManifestSha256: sha256(Buffer.from(JSON.stringify(dockerManifest))),
+  };
+  const dockerRun = workflowRun({
+    id: 91,
+    status: "completed",
+    conclusion: "success",
+    head_branch: workflowRef,
+    path: `${WORKFLOW}@${fullRef}`,
+    display_title: "Full Release Artifacts full-release-validation-51-1-artifacts-docker",
+    referenced_workflows: [
+      {
+        path: `${REPOSITORY}/.github/workflows/docker-release-prepare.yml@${TOOLING_SHA}`,
+        sha: TOOLING_SHA,
+        ref: fullRef,
+      },
+    ],
+  });
+  test.api("actions/runs/91", dockerRun);
+  test.api("actions/runs/91/attempts/1", dockerRun);
+  test.api("actions/jobs/903", {
+    id: 903,
+    name: dockerManifest.producer.jobName,
+    run_id: 91,
+    run_attempt: 1,
+    head_sha: TOOLING_SHA,
+    status: "completed",
+    conclusion: "success",
+  });
+  const payloads = dockerManifest.architectures.map(({ artifact }) => {
+    const metadata = {
+      id: Number(artifact.id),
+      name: artifact.name,
+      digest: artifact.digest,
+      size_in_bytes: 256,
+      expired: false,
+      workflow_run: { id: 91, head_sha: TOOLING_SHA },
+    };
+    test.api(`actions/artifacts/${artifact.id}`, metadata);
+    return metadata;
+  });
+  test.artifact(
+    "full-release-artifact-receipt-91-1",
+    "artifact-receipt.json",
+    receipt("docker", "91", {
+      prepared_run_id: docker.preparedRunId,
+      prepared_run_attempt: docker.preparedRunAttempt,
+      prepared_artifact_name: artifactName,
+      prepared_manifest_sha256: docker.preparedManifestSha256,
+    }),
+    false,
+    91,
+  );
+  test.artifact(artifactName, "manifest.json", dockerManifest, false, 91);
+  const sdk = test.artifact(
+    "plugin-sdk-api-release-diff-81-1",
+    "plugin-sdk-api-release-evidence.json",
+    {},
+  ).metadata;
+  const evidence = {
+    schema: "openclaw.release-validation-evidence/v4",
+    valid: true,
+    directRoot: true,
+    conclusions: { allRequiredSucceeded: true },
+    root: { runId: "51", targetSha: TOOLING_SHA },
+    manifest: {
+      workflowName: "Full Release Validation",
+      runId: "51",
+      runAttempt: "1",
+      sourceParentRunAttempt: 1,
+      workflowSha: TOOLING_SHA,
+      targetSha: TOOLING_SHA,
+      workflowRef,
+      workflowFullRef: fullRef,
+      publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: null },
+    },
+  };
+  const validator = join(test.root, "validate-evidence.mjs");
+  writeFileSync(
+    validator,
+    `
+import assert from "node:assert/strict";
+const value = (key) => process.argv[process.argv.indexOf(key) + 1];
+const qualification = JSON.parse(value("--qualification-reuse-json"));
+assert.equal(qualification.candidateSha, "${TOOLING_SHA}");
+assert.equal(qualification.workflowRef, "${currentRef}");
+assert.equal(value("--verifier-source-sha"), "${"f".repeat(40)}");
+process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
+`,
+  );
+  return {
+    ...test,
+    docker,
+    sdk,
+    payloads,
+    env: {
+      EVIDENCE_REUSE: "true",
+      EVIDENCE_POLICY: "exact-target-full-validation-v1",
+      EVIDENCE_SHA: TOOLING_SHA,
+      EVIDENCE_ROOT_RUN_ID: "51",
+      TARGET_SHA: TOOLING_SHA,
+      GITHUB_REF_NAME: currentRef,
+      GITHUB_RUN_ID: "52",
+      QUALIFICATION_INPUTS_JSON: "{}",
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
+      SOURCE_ADMISSION_JSON: JSON.stringify({
+        qualificationAdmission: {
+          workflowHeadBranch: "main",
+          workflowFullRef: "refs/heads/main",
+          workflowSha: "f".repeat(40),
+        },
+      }),
+    },
+  };
+}
+
 function expectRejected(result: ReturnType<ReturnType<typeof fixture>["run"]>, message: string) {
   expect(result.status, result.stderr).not.toBe(0);
   expect(result.stderr).toContain(message);
@@ -278,6 +488,66 @@ function expectRejected(result: ReturnType<ReturnType<typeof fixture>["run"]>, m
 }
 
 describe.skipIf(process.platform === "win32")("immutable release artifact CLI", () => {
+  it.each([
+    "retained",
+    "expired payload",
+    "deleted archive",
+    "expired SDK archive",
+    "missing SDK archive",
+    "wrong SDK attempt",
+    "changed receipt",
+    "changed digest",
+  ])("resolves original publication artifacts for %s without dispatching producers", (scenario) => {
+    const test = publicationReuseFixture(scenario === "changed receipt");
+    const payload = test.payloads[0];
+    assert(payload, "expected Docker payload fixture");
+    if (scenario === "expired payload") {
+      payload.expired = true;
+    }
+    if (scenario === "changed digest") {
+      payload.digest = `sha256:${"0".repeat(64)}`;
+    }
+    if (scenario === "deleted archive") {
+      test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
+    }
+    if (scenario === "expired SDK archive") {
+      test.sdk.expired = true;
+    }
+    if (scenario === "missing SDK archive") {
+      test.api("actions/runs/81/artifacts?name=plugin-sdk-api-release-diff-81-1&per_page=100", {
+        total_count: 0,
+        artifacts: [],
+      });
+    }
+    if (scenario === "wrong SDK attempt") {
+      test.sdk.name = "plugin-sdk-api-release-diff-81-2";
+    }
+    const result = test.run("reuse", test.env);
+    if (scenario === "changed receipt" || scenario === "changed digest") {
+      expectRejected(
+        result,
+        scenario === "changed receipt" ? "npm receipts differ" : "immutable publication tuple",
+      );
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      if (scenario === "retained") {
+        assert(result.outputs.prepared_bundle_json);
+        assert(result.outputs.qualified_preflight_bundle_json);
+        expect(JSON.parse(result.outputs.prepared_bundle_json)).toEqual(test.raw);
+        expect(JSON.parse(result.outputs.qualified_preflight_bundle_json)).toEqual(test.qualified);
+        expect(result.outputs).toMatchObject({
+          publication_artifacts_reused: "true",
+          npm_run_id: "81",
+          npm_run_attempt: "1",
+          prepared_run_id: "91",
+          prepared_run_attempt: "1",
+          prepared_manifest_sha256: test.docker.preparedManifestSha256,
+        });
+      } else {
+        expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
+      }
+    }
+  });
   it.each([
     ["exact active parent", {}, true],
     ["another attempt", { run_attempt: 2 }, false],
@@ -307,18 +577,13 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     }
   });
 
-  it("restores the original producer on attempt two without dispatching or rebuilding", async () => {
+  it("restores the original producer on attempt two without dispatching or rebuilding", () => {
     const test = fixture();
     const admitted = test.run("admit", { GITHUB_RUN_ID: "81" });
     expect(admitted.status, admitted.stderr).toBe(0);
     const recordPath = join(admitted.outputs.directory!, "dispatch.json");
     const recordBytes = readFileSync(recordPath, "utf8");
-    await test.artifact(
-      admitted.outputs.dispatch_name!,
-      "dispatch.json",
-      JSON.parse(recordBytes),
-      true,
-    );
+    test.artifact(admitted.outputs.dispatch_name!, "dispatch.json", JSON.parse(recordBytes), true);
     const first = test.run("resolve");
     expect(first.status, first.stderr).toBe(0);
     expect(first.outputs).toMatchObject({
@@ -349,13 +614,93 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     ).toBe(true);
   });
 
+  it("adopts a newer producer attempt without replacing its original dispatch", () => {
+    const test = fixture();
+    test.artifact(
+      `${DISPATCH_ID}-dispatch`,
+      "dispatch.json",
+      {
+        request: artifactRequest(),
+        runId: "81",
+        runAttempt: "1",
+      },
+      true,
+    );
+    test.api(
+      "actions/runs/81",
+      workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" }),
+    );
+    const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toMatchObject({
+      run_id: "81",
+      run_attempt: "2",
+      dispatch_id: DISPATCH_ID,
+    });
+  });
+
+  it.each(["contents retry", "receipt retry", "replacement preparation failed"] as const)(
+    "collects failed-job recovery with carried-forward npm bytes: %s",
+    (outcome) => {
+      const test = fixture();
+      const current = workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" });
+      test.api("actions/runs/81", current);
+      test.api(
+        "actions/runs/81/attempts/1",
+        workflowRun({ status: "completed", conclusion: "failure" }),
+      );
+      test.api("actions/runs/81/attempts/2", current);
+      if (outcome === "contents retry") {
+        test.qualified.producer.runAttempt = "2";
+        test.qualified.artifact.runAttempt = "2";
+        test.jobs[1]!.run_attempt = 2;
+        test.outputs.qualified_preflight_bundle_json = JSON.stringify(test.qualified);
+      }
+      test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+        total_count: outcome === "contents retry" ? 1 : 2,
+        jobs: outcome === "contents retry" ? [test.jobs[0]] : test.jobs,
+      });
+      test.api("actions/runs/81/attempts/2/jobs?per_page=100&page=1", {
+        total_count: 1,
+        jobs:
+          outcome === "receipt retry"
+            ? [{ ...test.jobs[0], id: 990, name: "Seal artifact producer receipt", run_attempt: 2 }]
+            : outcome === "contents retry"
+              ? [test.jobs[1]]
+              : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
+      });
+      test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
+      const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
+      if (outcome === "replacement preparation failed") {
+        expectRejected(raw, "Successful npm preparation was replaced");
+        return;
+      }
+      expect(raw.status, raw.stderr).toBe(0);
+      expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
+      const sealed = test.run("receipt", {
+        GITHUB_RUN_ID: "81",
+        GITHUB_RUN_ATTEMPT: "2",
+        ARTIFACT_OUTPUTS_JSON: JSON.stringify(test.outputs),
+      });
+      expect(sealed.status, sealed.stderr).toBe(0);
+      test.artifact(
+        "full-release-artifact-receipt-81-2",
+        "artifact-receipt.json",
+        JSON.parse(readFileSync(join(sealed.outputs.directory!, "artifact-receipt.json"), "utf8")),
+      );
+      const receipt = test.run("wait", { ARTIFACT_OUTPUT: "receipt", ARTIFACT_RUN_ATTEMPT: "2" });
+      expect(receipt.status, receipt.stderr).toBe(0);
+      expect(receipt.outputs).toEqual(test.outputs);
+    },
+  );
+
   it.each([
     "missing record",
     "changed request",
     "record names another producer",
-    "another producer attempt",
+    "producer attempt regressed",
     "missing producer",
-  ] as const)("refuses retry reuse with %s", async (failure) => {
+  ] as const)("refuses retry reuse with %s", (failure) => {
     const test = fixture();
     const record = { request: artifactRequest(), runId: "81", runAttempt: "1" };
     if (failure === "changed request") {
@@ -371,17 +716,19 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         artifacts: [],
       });
     } else {
-      await test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
+      test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
     }
-    if (failure === "another producer attempt") {
-      test.api("actions/runs/81", workflowRun({ run_attempt: 2 }));
+    if (failure === "producer attempt regressed") {
+      record.runAttempt = "2";
+      test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
+      test.api("actions/runs/81", workflowRun({ run_attempt: 1 }));
     }
     if (failure === "missing producer") {
       test.api("actions/runs/81", { fixtureError: "HTTP 404: producer missing" });
     }
     const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2", ARTIFACT_RUN_ID: "99" });
     const message =
-      failure === "another producer attempt"
+      failure === "producer attempt regressed"
         ? "producer run identity changed"
         : failure === "missing producer"
           ? "HTTP 404: producer missing"
@@ -390,32 +737,72 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   });
 
   it.each([
+    ["raw", "Prepare npm artifacts / Prepare publishable npm package"],
+    ["receipt", "Prepare npm artifacts / Check npm dependencies"],
+  ] as const)("reports a failed %s producer job before its siblings finish", (output, name) => {
+    const test = fixture();
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 2,
+      jobs: [
+        { ...test.jobs[0], name, conclusion: "failure" },
+        { ...test.jobs[1], status: "in_progress", conclusion: null },
+      ],
+    });
+    test.api("actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100", {
+      total_count: 0,
+      artifacts: [],
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: output,
+      FIXTURE_STOP_ON_WAIT: "true",
+    });
+    expectRejected(result, `${name} ended with failure`);
+    expect(result.stderr).toContain(`https://github.com/${REPOSITORY}/actions/runs/81/job/901`);
+    expect(result.stderr).toContain("Other producer jobs continue running");
+  });
+
+  it("keeps waiting while a queued producer has no jobs", () => {
+    const test = fixture();
+    test.api("actions/runs/81", workflowRun({ status: "queued" }));
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 0,
+      jobs: [],
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: "receipt",
+      FIXTURE_STOP_ON_WAIT: "true",
+    });
+    expectRejected(result, "Fixture reached another artifact poll");
+  });
+
+  it.each([
     "successful raw job",
+    "failed unrelated qualifier",
     "failed raw job",
     "wrong raw attempt",
     "rerun during download",
   ] as const)(
     "requires an exact completed raw job while qualification is still active: %s",
-    async (outcome) => {
+    (outcome) => {
       const test = fixture();
       test.jobs[1]!.status = "in_progress";
       test.jobs[1]!.conclusion = null;
       if (outcome === "failed raw job") {
         test.jobs[0]!.conclusion = "failure";
       }
+      if (outcome === "failed unrelated qualifier") {
+        test.jobs[1]!.status = "completed";
+        test.jobs[1]!.conclusion = "failure";
+      }
       if (outcome === "wrong raw attempt") {
         test.jobs[0]!.run_attempt = 2;
       }
-      await test.artifact(
-        "openclaw-npm-package-descriptor-81-1",
-        "prepared-npm-bundle.json",
-        test.raw,
-      );
+      test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
       const result = test.run("wait", {
         ARTIFACT_OUTPUT: "raw",
         FIXTURE_RERUN_DURING_DOWNLOAD: String(outcome === "rerun during download"),
       });
-      if (outcome === "successful raw job") {
+      if (outcome === "successful raw job" || outcome === "failed unrelated qualifier") {
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
         expect(result.outputs.qualified_preflight_bundle_json).toBeUndefined();
@@ -437,7 +824,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     "attempt changed",
     "qualifier failed",
     "rerun during download",
-  ] as const)("authenticates the terminal qualification receipt: %s", async (outcome) => {
+  ] as const)("authenticates the terminal qualification receipt: %s", (outcome) => {
     const test = fixture();
     test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "success" }));
     test.api(
@@ -464,7 +851,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     if (outcome === "qualifier failed") {
       test.jobs[1]!.conclusion = "failure";
     }
-    await test.artifact("full-release-artifact-receipt-81-1", "artifact-receipt.json", receipt);
+    test.artifact("full-release-artifact-receipt-81-1", "artifact-receipt.json", receipt);
     const result = test.run("wait", {
       ARTIFACT_OUTPUT: "receipt",
       FIXTURE_RERUN_DURING_DOWNLOAD: String(outcome === "rerun during download"),
@@ -486,9 +873,9 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
 
   it.each(["digest changed", "malformed ZIP", "producer failed"] as const)(
     "never exposes raw artifacts after %s",
-    async (failure) => {
+    (failure) => {
       const test = fixture();
-      const archive = await test.artifact(
+      const archive = test.artifact(
         "openclaw-npm-package-descriptor-81-1",
         "prepared-npm-bundle.json",
         test.raw,

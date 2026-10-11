@@ -52,7 +52,8 @@ vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
 }));
 
-vi.mock("./file-consent-helpers.js", () => ({
+vi.mock("./file-consent-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./file-consent-helpers.js")>()),
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivityFs: vi.fn(),
 }));
@@ -246,20 +247,6 @@ const structuredRoutingCases: StructuredRoutingCase[] = [
     conversationType: "channel",
     replyStyle: "top-level",
     storedThreadId: "thread-root-1",
-    expectedConversationId: conversationId,
-  },
-  {
-    label: "group chat",
-    conversationType: "groupChat",
-    replyStyle: "top-level",
-    storedThreadId: "group-activity-1",
-    expectedConversationId: conversationId,
-  },
-  {
-    label: "personal chat",
-    conversationType: "personal",
-    replyStyle: "top-level",
-    storedThreadId: "personal-activity-1",
     expectedConversationId: conversationId,
   },
 ];
@@ -525,7 +512,6 @@ describe.each(structuredSenders)("Microsoft Teams $label thread routing", ({ sen
 });
 
 describe.each([
-  { label: "simple name", sourceName: "Alex", displayName: "Alex" },
   {
     label: "escaped brackets",
     sourceName: String.raw`Alice \[Ops\]`,

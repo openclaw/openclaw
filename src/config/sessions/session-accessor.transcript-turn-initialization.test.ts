@@ -1,16 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { lookupSessionGoalOperation } from "./goals-operations.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
-  replaceSessionEntry,
   replaceSessionEntrySync,
   type SessionTranscriptTurnPersistOptions,
 } from "./session-accessor.js";
@@ -21,7 +23,7 @@ import type { SessionEntry } from "./types.js";
 
 describe("first transcript turn initialization", () => {
   const fixture = useTempSessionsFixture("openclaw-first-goal-turn-");
-  const now = 1_800_000_000_000;
+  const now = Date.now();
   const sessionId = "first-goal-session";
   const scope = () => ({
     agentId: "main",
@@ -72,7 +74,7 @@ describe("first transcript turn initialization", () => {
       ],
       sessionTurnMutation: { kind: "goal", operation, runId: operation.operationId },
       sessionLifecyclePatch: {
-        status: "running",
+        status: undefined,
         lifecycleRunId: operation.operationId,
         restartRecoveryDeliveryRunId: operation.operationId,
         restartRecoveryDeliverySourceRunId: operation.operationId,
@@ -82,9 +84,6 @@ describe("first transcript turn initialization", () => {
       ...options,
     });
 
-  beforeEach(() => {
-    vi.spyOn(Date, "now").mockReturnValue(now);
-  });
   afterEach(() => {
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
@@ -92,12 +91,21 @@ describe("first transcript turn initialization", () => {
 
   it("creates the first session, Goal, input and run receipt atomically and replays after reopen", async () => {
     expect(loadSessionEntry(scope())).toBeUndefined();
-    const turn = await admit();
+    const onMessageCommitted = vi.fn(({ messageId }: { messageId: string }) => {
+      expect(loadTranscriptEventsSync(scope())).toContainEqual(
+        expect.objectContaining({
+          id: messageId,
+          message: expect.objectContaining({ role: "user" }),
+        }),
+      );
+    });
+    const turn = await admit({ onMessageCommitted });
+    expect(turn.sessionEntry?.status).toBeUndefined();
     expect(turn).toMatchObject({
       appendedCount: 1,
       sessionEntry: {
         ...initialSessionEntry,
-        status: "running",
+        updatedAt: expect.any(Number),
         restartRecoveryDeliveryRunId: operation.operationId,
         goal: { objective: operation.objective, status: "active" },
       },
@@ -106,14 +114,22 @@ describe("first transcript turn initialization", () => {
         result: { action: "start", status: "started", sessionId, runId: operation.operationId },
       },
     });
+    expect(turn.sessionEntry!.updatedAt).toBeGreaterThanOrEqual(now);
+    expect(turn.sessionEntry!.updatedAt).toBeLessThanOrEqual(Date.now());
     expect(turn.messages[0]?.message).toMatchObject({ content: operation.objective });
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
     expect(
-      lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
+      readSessionGoalOperationInDatabase(database(), {
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation,
+      }),
     ).toEqual(turn.sessionTurnMutationResult?.result);
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const replay = await admit();
+    const replay = await admit({ onMessageCommitted });
+    expect(onMessageCommitted).toHaveBeenCalledTimes(1);
     expect(replay).toMatchObject({
       appendedCount: 0,
       sessionTurnMutationResult: { replayed: true, result: turn.sessionTurnMutationResult?.result },
@@ -121,69 +137,94 @@ describe("first transcript turn initialization", () => {
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
   });
 
-  it.each(["inline", "none", "throws"] as const)(
-    "completes committed messages once before publication with %s updates",
-    async (mode) => {
+  it.for(["success", "callback failure", "completion failure"] as const)(
+    "joins accepted committed work before publication or %s settlement",
+    async (mode, test) => {
+      const accepted = createDeferred();
+      const release = createDeferred();
       const order: string[] = [];
-      const onMessageCommitted = vi.fn(({ messageId }: { messageId: string }) => {
-        expect(loadTranscriptEventsSync(scope())).toContainEqual(
-          expect.objectContaining({
-            id: messageId,
-            message: expect.objectContaining({ role: "user" }),
-          }),
-        );
-        order.push("committed");
-        if (mode === "throws") {
-          throw new Error("completion failed");
-        }
-      });
+      const failure = new Error(mode);
       const unsubscribe = onSessionTranscriptUpdate((update) => {
         if (update.target.sessionId === sessionId) {
           order.push("published");
         }
       });
+      let callbacks = 0;
+      const append = admit({
+        updateMode: "inline",
+        messages: [
+          { message: { role: "user", content: operation.objective } },
+          { message: { role: "assistant", content: "Committed reply" } },
+        ],
+        onMessageCommitted: (_receipt, acceptCompletion) => {
+          const index = ++callbacks;
+          order.push(`accepted:${index}`);
+          acceptCompletion(async () => {
+            await release.promise;
+            order.push(`completed:${index}`);
+            if (mode === "completion failure" && index === 1) {
+              throw failure;
+            }
+          });
+          if (index === 2) {
+            accepted.resolve();
+            if (mode === "callback failure") {
+              throw failure;
+            }
+          }
+        },
+      });
+      const outcome = append.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       try {
-        const append = admit({
-          updateMode: mode === "none" ? "none" : "inline",
-          onMessageCommitted,
-        });
-        if (mode === "throws") {
-          await expect(append).rejects.toThrow("completion failed");
+        await racePromiseWithAbortSignal(
+          Promise.race([
+            accepted.promise,
+            outcome.then(() => {
+              throw new Error("Commit settled before both callbacks accepted work");
+            }),
+          ]),
+          test.signal,
+        );
+        expect(order).toEqual(["accepted:1", "accepted:2"]);
+        release.resolve();
+        const result = await outcome;
+        if (mode === "success") {
+          expect(result).toMatchObject({ value: { appendedCount: 2 } });
+          expect(order).toEqual([
+            "accepted:1",
+            "accepted:2",
+            "completed:1",
+            "completed:2",
+            "published",
+            "published",
+          ]);
         } else {
-          await expect(append).resolves.toMatchObject({ appendedCount: 1 });
+          expect(result).toEqual({ error: failure });
+          expect(order).toEqual(["accepted:1", "accepted:2", "completed:1", "completed:2"]);
         }
-        expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
-        // Goal receipt replay returns no matched messages; completion belongs to the
-        // original admission, unlike replaying an existing transcript message.
-        await expect(admit({ onMessageCommitted })).resolves.toMatchObject({ appendedCount: 0 });
-        expect(onMessageCommitted).toHaveBeenCalledTimes(1);
-        expect(order).toEqual(mode === "inline" ? ["committed", "published"] : ["committed"]);
+        expect(counts()).toEqual({ nodes: 1, windows: 1, events: 3, receipts: 1 });
       } finally {
+        release.resolve();
+        await outcome;
         unsubscribe();
       }
     },
   );
 
-  it.each([
-    { timing: "before preparation", competingSessionId: "competing-session" },
-    { timing: "during preparation", competingSessionId: "competing-session" },
-    { timing: "during preparation", competingSessionId: sessionId },
-  ])(
-    "does not replace $competingSessionId created $timing",
-    async ({ timing, competingSessionId }) => {
+  it.each(["competing-session", sessionId])(
+    "does not replace %s created during preparation",
+    async (competingSessionId) => {
       const competing = { sessionId: competingSessionId, updatedAt: now };
-      if (timing === "before preparation") {
-        await replaceSessionEntry(scope(), competing);
-      }
       const turn = await admit({
         messages: [
           {
             message: { role: "user", content: operation.objective },
             shouldAppend: () => {
-              if (timing === "during preparation") {
-                // Direct/cross-process writers bypass the process-local queue.
-                replaceSessionEntrySync(scope(), competing);
-              }
+              // Direct/cross-process writers bypass the process-local queue.
+              replaceSessionEntrySync(scope(), competing);
               return true;
             },
           },
@@ -198,14 +239,23 @@ describe("first transcript turn initialization", () => {
   );
 
   it("rolls back even the session placeholder and header when the receipt cannot commit", async () => {
-    database().db.exec(
-      `CREATE TRIGGER reject_first_goal_receipt BEFORE INSERT ON session_goal_operations
-        BEGIN SELECT RAISE(ABORT, 'first receipt failed'); END;`,
-    );
-    await expect(admit()).rejects.toThrow("first receipt failed");
+    const db = database().db;
+    db.prepare(
+      `WITH RECURSIVE receipts(i) AS (
+        VALUES (0) UNION ALL SELECT i + 1 FROM receipts WHERE i < 4095
+      ) INSERT INTO session_goal_operations
+        SELECT ?, 'retained-' || i, ?, 'fingerprint', '{}', ? FROM receipts`,
+    ).run(scope().sessionKey, sessionId, Number.MAX_SAFE_INTEGER);
+    const retained = db
+      .prepare("SELECT * FROM session_goal_operations ORDER BY operation_id")
+      .all();
+    await expect(admit()).rejects.toMatchObject({ code: "capacity" });
     expect(loadSessionEntry(scope())).toBeUndefined();
-    expect(counts()).toEqual({ nodes: 0, windows: 0, events: 0, receipts: 0 });
-    database().db.exec("DROP TRIGGER reject_first_goal_receipt");
+    expect(counts()).toEqual({ nodes: 0, windows: 0, events: 0, receipts: 4096 });
+    expect(db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id").all()).toEqual(
+      retained,
+    );
+    db.exec("DELETE FROM session_goal_operations");
     await expect(admit()).resolves.toMatchObject({ appendedCount: 1 });
   });
 

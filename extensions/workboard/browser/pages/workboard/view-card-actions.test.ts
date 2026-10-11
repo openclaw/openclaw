@@ -1,6 +1,7 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
+import { render } from "@solidjs/web";
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
@@ -12,8 +13,8 @@ import {
 import type { WorkboardCard } from "../../lib/workboard/types.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
-import { renderCardDetailsPanel } from "./view-card-details.ts";
-import type { WorkboardProps } from "./view-helpers.ts";
+import { CardDetailsPanel } from "./view-card-details.tsx";
+import type { WorkboardProps } from "./view-helpers.tsx";
 
 function renderDetails(card: WorkboardCard, overrides: Partial<WorkboardProps> = {}) {
   const host = {};
@@ -21,7 +22,12 @@ function renderDetails(card: WorkboardCard, overrides: Partial<WorkboardProps> =
   state.loaded = true;
   state.cards = [card];
   state.detailCardId = card.id;
+  const [revision, setRevision] = createSignal(0);
   const props: WorkboardProps = {
+    get revision() {
+      return revision();
+    },
+    onRequestUpdate: () => setRevision((previous) => previous + 1),
     host,
     client: null,
     connected: true,
@@ -33,12 +39,13 @@ function renderDetails(card: WorkboardCard, overrides: Partial<WorkboardProps> =
   };
   const container = document.createElement("div");
   document.body.append(container);
+  workboardTestHost().connection.connected = true;
+  const dispose = render(() => createComponent(CardDetailsPanel, props), container);
+  flush();
   onTestFinished(() => {
-    render(nothing, container);
+    dispose();
     container.remove();
   });
-  workboardTestHost().connection.connected = true;
-  render(renderCardDetailsPanel(props), container);
   return { state, props, container };
 }
 
@@ -56,7 +63,10 @@ describe("Workboard card execution actions", () => {
       const card = createWorkboardCard({ sessionKey: key });
       const resolution: WorkboardSessionResolution = { key, status };
       const { container, state, props } = renderDetails(card, { sessionResolution: resolution });
-      const open = container.querySelector<HTMLButtonElement>('button[aria-label="Open session"]');
+      const open =
+        Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Open session",
+        ) ?? null;
       if (canOpen) {
         expectDefined(open, "canonical session action").click();
         expect(props.onOpenSession).toHaveBeenCalledWith({ sessionKey: key });

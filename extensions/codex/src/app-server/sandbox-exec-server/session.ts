@@ -1,19 +1,18 @@
 /** Owns the JSON-RPC protocol and resources of one sandbox execution connection. */
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonValue } from "../protocol.js";
 import {
   closeAllFileReads,
   closeFile,
   copyPath,
-  createDirectory,
-  getMetadata,
   openFile,
   readDirectory,
-  readFile,
+  readFileOrMetadata,
   readFileBlock,
   removePath,
-  writeFile,
+  writeFileOrDirectory,
   type CodexSandboxFileReadHandles,
 } from "./filesystem.js";
 import { httpRequest } from "./http.js";
@@ -23,7 +22,13 @@ import {
   sendError,
   sendResult,
 } from "./json-rpc.js";
-import { readProcess, startProcess, terminateProcess, writeProcess } from "./processes.js";
+import {
+  readProcess,
+  signalProcess,
+  startProcess,
+  terminateProcess,
+  writeProcess,
+} from "./processes.js";
 import type {
   CodexSandboxExecMessageTransport,
   CodexSandboxExecSessionNotifications,
@@ -36,6 +41,7 @@ import type {
 export class CodexSandboxExecSession {
   private readonly processes = new Map<string, ManagedProcess>();
   private readonly fileReads: CodexSandboxFileReadHandles = new Map();
+  private readonly httpRequests = new Set<Promise<void>>();
   private readonly closeController = new AbortController();
   private readonly notifications: CodexSandboxExecSessionNotifications;
   private cleanup?: Promise<void>;
@@ -43,9 +49,9 @@ export class CodexSandboxExecSession {
   constructor(
     private readonly execServer: OpenClawExecServer,
     private readonly transport: CodexSandboxExecMessageTransport,
+    private readonly processAuthority?: CodexNativeProcessClient,
   ) {
     this.notifications = {
-      isOpen: transport.isOpen,
       signal: this.closeController.signal,
       send: (method, params) => {
         if (transport.isOpen()) {
@@ -85,11 +91,19 @@ export class CodexSandboxExecSession {
       // Abort streamed HTTP and file reservations before reaping connection-owned processes.
       this.closeController.abort();
       closeAllFileReads(this.fileReads);
-      this.cleanup = Promise.all(
-        [...this.processes.keys()].map(async (processId) =>
+      this.cleanup = Promise.allSettled([
+        ...this.httpRequests,
+        ...[...this.processes.keys()].map(async (processId) =>
           terminateProcess(this.processes, { processId }),
         ),
-      ).then(() => undefined);
+      ]).then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Codex sandbox execution cleanup failed");
+        }
+      });
     }
     return this.cleanup;
   }
@@ -109,11 +123,19 @@ export class CodexSandboxExecSession {
         return { status: "ready" };
       // Registered exec-server URLs use these process methods, not app-server process/spawn.
       case "process/start":
-        return startProcess(this.execServer, this.processes, this.notifications.send, params);
+        return startProcess(
+          this.execServer,
+          this.processes,
+          this.notifications.send,
+          params,
+          this.processAuthority,
+        );
       case "process/read":
         return await readProcess(this.processes, params);
       case "process/write":
         return writeProcess(this.processes, params);
+      case "process/signal":
+        return await signalProcess(this.processes, params);
       case "process/terminate":
         return await terminateProcess(this.processes, params);
       case "fs/open":
@@ -123,15 +145,12 @@ export class CodexSandboxExecSession {
       case "fs/close":
         return closeFile(this.fileReads, params);
       case "fs/readFile":
-        return await readFile(this.execServer, params);
-      case "fs/writeFile":
-        await writeFile(this.execServer, params);
-        return {};
-      case "fs/createDirectory":
-        await createDirectory(this.execServer, params);
-        return {};
       case "fs/getMetadata":
-        return await getMetadata(this.execServer, params);
+        return await readFileOrMetadata(this.execServer, params, method);
+      case "fs/writeFile":
+      case "fs/createDirectory":
+        await writeFileOrDirectory(this.execServer, params, method);
+        return {};
       case "fs/readDirectory":
         return await readDirectory(this.execServer, params);
       case "fs/remove":
@@ -141,7 +160,7 @@ export class CodexSandboxExecSession {
         await copyPath(this.execServer, params);
         return {};
       case "http/request":
-        return await httpRequest(this.execServer, this.notifications, params);
+        return await httpRequest(this.execServer, this.notifications, params, this.httpRequests);
       default:
         throw new JsonRpcProtocolError(
           JSON_RPC_METHOD_NOT_FOUND,

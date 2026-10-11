@@ -4,47 +4,27 @@ import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
+import type { DiscordUser, DiscordObservedMessage } from "./discord-live.evidence.js";
 import {
-  discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
-  type DiscordQaScenarioRun,
+  type DiscordQaRuntimeEnv,
+  buildDiscordQaConfig,
+  resolveDiscordQaVoiceChannel,
+  waitForDiscordChannelRunning,
 } from "./discord-live.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
-type DiscordRuntimeEnv = ReturnType<
-  typeof discordQaScenarioSupport.testing.resolveDiscordQaRuntimeEnv
->;
-type DiscordIdentity = Awaited<
-  ReturnType<typeof discordQaScenarioSupport.testing.getCurrentDiscordUser>
->;
-type DiscordObservedMessage = Parameters<
-  typeof discordQaScenarioSupport.testing.pollChannelMessages
->[0]["observedMessages"][number];
-export type DiscordQaScenarioEnvironment = {
-  configureScenario: (implementation: DiscordQaScenarioImplementation) => Promise<{
-    cfg: OpenClawConfig;
-    configureTranscriptVoiceAccess?: (authorized: boolean) => Promise<void>;
-    run: DiscordQaScenarioRun;
-    voiceChannel?: Awaited<
-      ReturnType<typeof discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel>
-    >;
-  }>;
-  driverIdentity: DiscordIdentity;
-  observedMessages: DiscordObservedMessage[];
-  outputDir: string;
-  runtimeEnv: DiscordRuntimeEnv;
-  scenario: { id: string; timeoutMs: number; title: string };
-  sutAccountId: string;
-  sutIdentity: DiscordIdentity;
-};
+export type DiscordQaScenarioEnvironment = Awaited<
+  ReturnType<ReturnType<typeof createDiscordQaScenarioEnvironment>["prepareFlow"]>
+>["discordScenarioContext"];
 
 export function createDiscordQaScenarioEnvironment(params: {
   accountId: string;
-  driverIdentity: DiscordIdentity;
-  runtimeEnv: DiscordRuntimeEnv;
-  sutIdentity: DiscordIdentity;
+  driverIdentity: DiscordUser;
+  runtimeEnv: DiscordQaRuntimeEnv;
+  sutIdentity: DiscordUser;
 }) {
   const observedMessages: DiscordObservedMessage[] = [];
   const prepareFlow = async (input: FlowPreparationInput) => {
@@ -59,7 +39,7 @@ export function createDiscordQaScenarioEnvironment(params: {
           }
           const voiceChannel =
             run.kind === "voice-autojoin" || run.kind === "transcripts-voice-authorization"
-              ? await discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel({
+              ? await resolveDiscordQaVoiceChannel({
                   guildId: params.runtimeEnv.guildId,
                   token: params.runtimeEnv.sutBotToken,
                   voiceChannelId: params.runtimeEnv.voiceChannelId,
@@ -67,7 +47,7 @@ export function createDiscordQaScenarioEnvironment(params: {
               : undefined;
           const applyConfig = async (transcriptVoiceAuthorized?: boolean) => {
             const snapshot = await readLiveQaGatewayConfig(input.gateway);
-            const cfg = discordQaScenarioSupport.testing.buildDiscordQaConfig(
+            const cfg = buildDiscordQaConfig(
               snapshot.config as OpenClawConfig,
               {
                 guildId: params.runtimeEnv.guildId,
@@ -119,10 +99,7 @@ export function createDiscordQaScenarioEnvironment(params: {
               timeoutMs: input.timeoutMs,
               waitForConfigRestartSettle: input.waitForConfigRestartSettle,
             });
-            await discordQaScenarioSupport.testing.waitForDiscordChannelRunning(
-              input.gateway as never,
-              params.accountId,
-            );
+            await waitForDiscordChannelRunning(input.gateway as never, params.accountId);
             return cfg;
           };
           const cfg = await applyConfig(false);
@@ -131,7 +108,7 @@ export function createDiscordQaScenarioEnvironment(params: {
             run,
             ...(run.kind === "transcripts-voice-authorization"
               ? {
-                  configureTranscriptVoiceAccess: async (authorized: boolean) =>
+                  configureTranscriptVoiceAccess: async (authorized: boolean): Promise<void> =>
                     void (await applyConfig(authorized)),
                 }
               : {}),
@@ -149,7 +126,7 @@ export function createDiscordQaScenarioEnvironment(params: {
         },
         sutAccountId: params.accountId,
         sutIdentity: params.sutIdentity,
-      } satisfies DiscordQaScenarioEnvironment,
+      },
     };
   };
   return { prepareFlow };

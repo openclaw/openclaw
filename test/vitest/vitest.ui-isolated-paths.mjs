@@ -1,3 +1,5 @@
+import { resolveUiTypeScriptPath } from "./vitest.ui-paths.mjs";
+
 // The shared UI runner reuses its module graph across fresh jsdom registries.
 // Tests in this list depend on module singletons or custom-element registration
 // matching the current registry, so they need a fresh graph in the isolated lane.
@@ -7,14 +9,18 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.ts",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
-  "ui/src/components/github-link-title-tooltip.test.ts",
+  "ui/src/components/link-reader-title-tooltip.test.ts",
   "ui/src/components/markdown-tables.test.ts",
+  "ui/src/components/mcp-app-bridge.test.ts",
+  "ui/src/components/mcp-app-panel.test.tsx",
   "ui/src/components/mcp-app-view.test.ts",
   "ui/src/components/resizable-divider.test.ts",
   "ui/src/components/sidebar-update-card.test.ts",
   "ui/src/components/viewer-facepile.test.ts",
   "ui/src/pages/agents/memory/memory-panel.test.ts",
+  "ui/src/pages/chat/chat-outbox-recovery.test.ts",
   "ui/src/pages/chat/chat-page-attachment-handoff.test.ts",
+  "ui/src/pages/chat/chat-page-session-refresh.test.ts",
   "ui/src/pages/chat/chat-page.test.ts",
   "ui/src/pages/chat/chat-pane-attachment-handoff.test.ts",
   "ui/src/pages/chat/chat-pane-board.test.ts",
@@ -25,20 +31,23 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
   "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
-  "ui/src/pages/chat/chat-pane.message-cut.test.ts",
+  "ui/src/pages/chat/chat-pane-retention.test.ts",
+  "ui/src/pages/chat/chat-pane-swarm-startup.test.ts",
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
-  "ui/src/pages/chat/components/chat-picker-overlay.test.ts",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-message-controls.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
   "ui/src/pages/chat/components/chat-transcript-render.test.ts",
   "ui/src/pages/config/config-page.custom-theme.test.ts",
   "ui/src/pages/config/memory-mutation-owner.test.ts",
   "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/new-session/draft-persistence.test.ts",
   "ui/src/pages/sessions/sessions-page.archived.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file));
 
 const uiIsolatedTestFileSet = new Set(uiIsolatedTestFiles);
 

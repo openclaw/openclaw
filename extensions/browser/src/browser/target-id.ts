@@ -1,7 +1,8 @@
-/**
- * Target id resolution helpers for Browser tab aliases and user-facing ids.
- */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 
 const TAB_LABEL_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -56,10 +57,6 @@ export function assignTabAlias(params: {
 
 type TabAliasEntry = NonNullable<ProfileRuntimeState["tabAliases"]>["byTargetId"][string];
 
-function normalizeReplacementUrl(url: string | undefined): string | undefined {
-  return url?.trim() || undefined;
-}
-
 function findConfidentReplacement(params: {
   staleEntry: TabAliasEntry;
   staleEntries: Array<[targetId: string, entry: TabAliasEntry]>;
@@ -71,14 +68,14 @@ function findConfidentReplacement(params: {
     return newCandidates[0];
   }
 
-  const url = normalizeReplacementUrl(staleEntry.url);
+  const url = normalizeOptionalString(staleEntry.url);
   if (!url) {
     return undefined;
   }
   const staleMatches = staleEntries.filter(
-    ([, entry]) => normalizeReplacementUrl(entry.url) === url,
+    ([, entry]) => normalizeOptionalString(entry.url) === url,
   );
-  const candidates = newCandidates.filter((tab) => normalizeReplacementUrl(tab.url) === url);
+  const candidates = newCandidates.filter((tab) => normalizeOptionalString(tab.url) === url);
   // Duplicate URL buckets have no ordering contract, so only migrate an exact 1:1 bucket.
   return staleMatches.length === 1 && candidates.length === 1 ? candidates[0] : undefined;
 }
@@ -117,7 +114,6 @@ export function assignTabAliases(
   return tabs.map((tab) => assignTabAlias({ profileState, tab }));
 }
 
-/** Result for resolving a user-supplied tab id, label, or target prefix. */
 type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
@@ -134,7 +130,7 @@ export function resolveTargetIdFromTabs(
 
   // Friendly references and raw CDP ids share one input field, so a cross-namespace
   // collision must fail closed instead of silently choosing a different tab.
-  const exactMatches = [
+  let matches = [
     ...new Set(
       tabs
         .filter(
@@ -147,25 +143,41 @@ export function resolveTargetIdFromTabs(
         .map((tab) => tab.targetId),
     ),
   ];
-  const onlyExact = exactMatches[0];
-  if (exactMatches.length === 1 && onlyExact !== undefined) {
-    return { ok: true, targetId: onlyExact };
+  if (matches.length === 0) {
+    const lower = normalizeLowercaseStringOrEmpty(needle);
+    matches = tabs
+      .map((tab) => tab.targetId)
+      .filter((id) => normalizeLowercaseStringOrEmpty(id).startsWith(lower));
   }
-  if (exactMatches.length > 1) {
-    return { ok: false, reason: "ambiguous", matches: exactMatches };
-  }
-
-  const lower = normalizeLowercaseStringOrEmpty(needle);
-  const matches = tabs
-    .map((t) => t.targetId)
-    .filter((id) => normalizeLowercaseStringOrEmpty(id).startsWith(lower));
 
   const only = matches.length === 1 ? matches[0] : undefined;
-  if (only) {
+  if (only !== undefined) {
     return { ok: true, targetId: only };
   }
   if (matches.length === 0) {
     return { ok: false, reason: "not_found" };
   }
   return { ok: false, reason: "ambiguous", matches };
+}
+
+export function resolveBrowserTabOrThrow(
+  input: string,
+  tabs: BrowserTab[],
+  exactTargetId = false,
+): BrowserTab {
+  let targetId = input;
+  if (!exactTargetId) {
+    const resolved = resolveTargetIdFromTabs(input, tabs);
+    if (!resolved.ok) {
+      throw resolved.reason === "ambiguous"
+        ? new BrowserTargetAmbiguousError()
+        : new BrowserTabNotFoundError({ input });
+    }
+    targetId = resolved.targetId;
+  }
+  const tab = tabs.find((candidate) => candidate.targetId === targetId);
+  if (!tab) {
+    throw new BrowserTabNotFoundError({ input });
+  }
+  return tab;
 }

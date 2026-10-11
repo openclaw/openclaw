@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isRealConversationMessage } from "./compaction-real-conversation.js";
+import {
+  createRealConversationClassifier,
+  isRealConversationMessage,
+} from "./compaction-real-conversation.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 type SummaryRole = "branchSummary" | "compactionSummary";
@@ -10,6 +14,20 @@ function summaryMessage(role: SummaryRole, summary: string): AgentMessage {
 }
 
 describe("compaction real conversation classification", () => {
+  it("expires streaming tool-result anchors after the 20-message lookback", () => {
+    const classify = createRealConversationClassifier();
+    expect(classify({ role: "user", content: "Inspect the repo", timestamp: 1 })).toBe(true);
+    const silent = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+    for (let index = 0; index < 19; index += 1) {
+      expect(classify(silent)).toBe(false);
+    }
+    const result = textToolResult("call-1", "read", "package.json") as AgentMessage;
+    expect(classify(result)).toBe(true);
+    expect(classify(result)).toBe(false);
+  });
+
   it.each<SummaryRole>(["branchSummary", "compactionSummary"])(
     "treats non-empty %s messages as conversation anchors",
     (role) => {
@@ -67,6 +85,7 @@ describe("compaction real conversation classification", () => {
   it.each([
     ["thinking-only blocks", [{ type: "thinking", thinking: "checking" }]],
     ["reasoning-only blocks", [{ type: "reasoning", summary: [] }]],
+    ["snake-case tool-call blocks", [{ type: "tool_call", name: "exec", arguments: {} }]],
     ["markup-wrapped heartbeat tokens", "<b>HEARTBEAT_OK</b>"],
   ])("rejects assistant %s as conversation", (_name, content) => {
     const message = { role: "assistant", content } as AgentMessage;

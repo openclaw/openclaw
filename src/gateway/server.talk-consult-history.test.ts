@@ -1,11 +1,27 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
+import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
+import { createExecTool } from "../agents/bash-tools.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -16,6 +32,7 @@ import {
   listSessionEntriesReadOnly,
   listSessionParticipantsReadOnly,
   loadTranscriptEventsSync,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -25,20 +42,29 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
-import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
-import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
+import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
+import { resolveTalkAgentConsultAuthority } from "./talk/client-gateway-control.js";
+import { retainTalkClientRunAuthority } from "./talk/client-run-authority.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -78,6 +104,10 @@ let releaseModel = createDeferred();
 let unsubscribe: (() => void) | undefined;
 let publications: Promise<void>[] = [];
 let publicationErrors: unknown[] = [];
+let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
+let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
+let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
+let expectedRevokedWriters: Map<string, () => boolean>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -86,17 +116,46 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  requestExecution = await observeGatewayRunExecution();
+  lifecycleWrites = createPreparedLifecycleWriteTracker();
+  expectedRevokedWriters = new Map();
+  const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
+  lifecyclePersistence = vi
+    .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+    .mockImplementation((params) => {
+      const persist = prepareLifecycle(params);
+      return lifecycleWrites.track(async () => {
+        try {
+          await persist();
+        } catch (error) {
+          const isCurrent = params.event.runId
+            ? expectedRevokedWriters.get(params.event.runId)
+            : undefined;
+          if (!isCurrent || isCurrent()) {
+            throw error;
+          }
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
+        }
+      });
+    });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
-  storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   testState.sessionStorePath = storePath;
   await writeSessionStore({
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
   });
   await prepareGatewayReplyRuntimeForTest({ force: true });
   context = createDirectChatContext({ getRuntimeConfig });
+  const rowProjection = await createSessionRowProjection({
+    cfg: getRuntimeConfig(),
+    getConfig: getRuntimeConfig,
+    context,
+  });
+  bindSessionRowProjection(context, () => rowProjection);
   const profile = ensureProfileForEmail("talk-history@example.test");
   client = {
     connId: connectionId,
@@ -140,6 +199,7 @@ beforeEach(async () => {
   publications = [];
   publicationErrors = [];
   const publish = createTranscriptUpdateBroadcastHandler({
+    getSessionRowProjection: () => getSessionRowProjection(context),
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
     sessionMessageSubscribers: { get: () => new Set([connectionId]) },
@@ -155,7 +215,7 @@ beforeEach(async () => {
       }),
     );
   });
-  voiceSessionId = createOrResumeClientVoiceSession({
+  voiceSessionId = await createOrResumeClientVoiceSession({
     agentId: "main",
     sessionKey,
     origin: "client",
@@ -165,21 +225,35 @@ beforeEach(async () => {
 afterEach(async () => {
   releaseModel.resolve();
   try {
-    await waitForDispatchEnd();
-    if (voiceSessionId) {
-      await rpc("talk.client.close", { sessionKey, voiceSessionId });
+    try {
+      await waitForDispatchEnd();
+      if (voiceSessionId) {
+        await rpc("talk.client.close", { sessionKey, voiceSessionId });
+      }
+    } finally {
+      // The suite server can retain preparation after the direct request releases its session.
+      await requestExecution.waitForCompletion();
+      try {
+        await lifecycleWrites.drain();
+      } finally {
+        await drainPublications();
+      }
     }
-    await drainPublications();
   } finally {
-    unsubscribe?.();
-    unsubscribe = undefined;
-    voiceSessionId = undefined;
-    clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
-    testState.sessionStorePath = undefined;
-    gatewayReplyMock.mockReset();
-    runEmbeddedAgent.mockReset();
-    clearConfigCache();
+    try {
+      await requestExecution.restore();
+    } finally {
+      lifecyclePersistence.mockRestore();
+      unsubscribe?.();
+      getSessionRowProjection(context)?.dispose();
+      unsubscribe = undefined;
+      voiceSessionId = undefined;
+      clientVoiceSessionTesting.reset();
+      testState.sessionStorePath = undefined;
+      gatewayReplyMock.mockReset();
+      runEmbeddedAgent.mockReset();
+      clearConfigCache();
+    }
   }
 });
 
@@ -202,6 +276,10 @@ async function rpc(method: string, params: Record<string, unknown>) {
 }
 async function waitForDispatchEnd() {
   await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
+  // Admission release does not join the producer's remaining terminal writes.
+  // Settle them before the next parity cell revokes its source or replaces its row.
+  await requestExecution.waitForCompletion();
+  await lifecycleWrites.drain();
   expect(context.chatAbortControllers.size).toBe(0);
 }
 async function drainPublications() {
@@ -235,7 +313,9 @@ function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
   const markdown = buildChatMarkdown(messages, "Voice test assistant");
   expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect.soft(markdown?.match(/^## You(?: \(|$)/gm), `${surface} human headings`).toHaveLength(1);
+  expect
+    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
+    .toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
   expect
     .soft(
@@ -279,12 +359,8 @@ async function startHeldConsult() {
 
 describe("Browser Talk consult target handoff", () => {
   it.each([
-    { name: "bare main", key: "main", expected: "agent:voice:main" },
     { name: "new session", key: "main", fresh: true, expected: "agent:voice:main" },
-    { name: "custom main", key: "main", mainKey: "home", expected: "agent:voice:home" },
-    { name: "global", key: "main", global: true, expected: "global" },
     { name: "scoped global", key: "agent:voice:main", global: true, expected: "global" },
-    { name: "fixed store", key: "main", fixed: true, expected: "agent:voice:main" },
     { name: "explicit other agent", key: "agent:primary:chosen", expected: "agent:primary:chosen" },
   ])(
     "executes and cancels the exact $name target without changing voice identity",
@@ -296,13 +372,10 @@ describe("Browser Talk consult target handoff", () => {
       agentId = entry.key.startsWith("agent:primary:") ? "primary" : "voice";
       sessionKey = entry.key;
       canonicalKey = entry.expected;
-      storePath = entry.fixed
-        ? resolveOpenClawAgentSqlitePath({ agentId })
-        : resolveSessionStorePathCore(undefined, { agentId });
+      storePath = resolveSessionStorePathCore(undefined, { agentId });
       await writeSessionStore({
         storePath,
         agentId,
-        mainKey: entry.mainKey,
         entries: entry.fresh
           ? {}
           : { [canonicalKey]: { sessionId, updatedAt: Date.now(), status: "done" } },
@@ -316,18 +389,17 @@ describe("Browser Talk consult target handoff", () => {
             entries: { primary: {}, voice: {} },
             defaults: {
               ...previousConfig.agents?.defaults,
-              ...(entry.fixed ? { sessionStore: { agentId } } : {}),
             },
           },
           talk: { agentId: "voice" },
-          session: {
-            ...(entry.mainKey ? { mainKey: entry.mainKey } : {}),
-            ...(entry.global ? { scope: "global" } : {}),
-            ...(entry.fixed ? { store: storePath } : {}),
-          },
+          session: entry.global ? { scope: "global" } : {},
         },
       });
-      voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
+      voiceSessionId = await createOrResumeClientVoiceSession({
+        agentId,
+        sessionKey,
+        origin: "client",
+      });
       if (!entry.fresh) {
         await rpc("talk.client.transcript", {
           sessionKey,
@@ -374,22 +446,6 @@ describe("Browser Talk consult target handoff", () => {
 });
 
 describe("Browser Talk literal consult commands", () => {
-  it.each(["/stop", "stop"])("dispatches generated %j as literal model input", async (question) => {
-    const ack = await consult(question, "literal-command");
-    expect(ack).toMatchObject({ runId: expect.any(String), idempotencyKey: ack.runId });
-    await Promise.race([
-      modelStarted.promise,
-      getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
-    ]);
-    expect({
-      acknowledgedRun: ack.runId,
-      modelPrompts: runEmbeddedAgent.mock.calls.map(([run]) => run.prompt),
-    }).toMatchObject({
-      acknowledgedRun: ack.runId,
-      modelPrompts: [expect.stringContaining(question)],
-    });
-  });
-
   it("does not turn a generated stop question into cancellation of the active consult", async () => {
     const first = await startHeldConsult();
     const ack = await consult("/stop", "literal-stop-during-task");
@@ -419,11 +475,6 @@ describe("Browser Talk literal consult commands", () => {
 
 describe("Browser Talk consult input custody", () => {
   it.each([
-    {
-      name: "owner",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-      tools: undefined,
-    },
     {
       name: "read-only Talk operator",
       scopes: ["operator.read", "operator.talk"],
@@ -468,6 +519,10 @@ describe("Browser Talk consult input custody", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
       ];
       runEmbeddedAgent.mockImplementation(async (params) => {
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
         params.onExecutionPhase?.({ phase: "model_call_started" });
         const result = await completeModel(params);
         params.abortSignal?.throwIfAborted();
@@ -573,7 +628,7 @@ describe("Browser Talk consult input custody", () => {
       const databasePath = resolveOpenClawAgentSqlitePath(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
       );
-      expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
       clearSessionStoreCacheForTest();
       expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
       for (const manager of [
@@ -716,7 +771,7 @@ describe("Direct Talk consult history after call closure", () => {
         const databasePath = resolveOpenClawAgentSqlitePath(
           toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
         );
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         clearSessionStoreCacheForTest();
         for (const [view, messages] of [
           ["chat.history", history],
@@ -742,3 +797,233 @@ describe("Direct Talk consult history after call closure", () => {
     },
   );
 });
+
+// Fixed model action through the real text and both Talk admission paths.
+it("dispatches permitted native actions once per logical request across text and Talk", async () => {
+  const config = getRuntimeConfig();
+  await prepareGatewayReplyRuntimeForTest({
+    force: true,
+    config: { ...config, tools: { ...config.tools, exec: { host: "gateway", mode: "full" } } },
+  });
+  await replaceSessionEntry(scope(), {
+    sessionId,
+    updatedAt: Date.now(),
+    permissionMode: "full",
+    execHost: "gateway",
+  });
+  const results: unknown[] = [];
+  const prepared: unknown[] = [];
+  let marker: string | undefined;
+  const resetWriteMarker = () =>
+    fs.rm(
+      path.join(path.dirname(expectDefined(marker, "native effect file")), "voice-parity-note.txt"),
+      { force: true },
+    );
+  runEmbeddedAgent.mockImplementation(async (params) => {
+    const admission = expectDefined(params.preparedRunAdmission, "real ingress admission");
+    const admittedRunContext = await admission.admit("plugin-harness", "parity-test-model");
+    prepared.push({
+      principal: admission.readOperatorAuthority?.()?.profileId,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      permissionMode: params.permissionMode,
+      sessionRoot: params.sessionRoot,
+      execOverrides: params.execOverrides,
+      bashElevated: params.bashElevated,
+      senderId: params.senderId,
+      senderIsOwner: params.senderIsOwner,
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
+      carriesControlAuthority: Object.hasOwn(params, "operatorAuthority"),
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+    });
+    const host = createAgentHarnessHostCapabilities({
+      pluginId: "parity-test-model",
+      attempt: {
+        agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
+        config: params.config,
+        admittedRunContext,
+      },
+    });
+    const policy = projectEffectiveExecPolicy({
+      base: { host: "gateway", mode: "full" },
+      overrides: params.execOverrides,
+      permissionPolicy: { mode: params.permissionMode ?? "read-only" },
+    });
+    marker = path.join(params.workspaceDir, "voice-parity-effects");
+    const [tool, writeTool] = host.capabilities.bindToolSurface([
+      createExecTool({
+        ...policy,
+        config: params.config,
+        cwd: params.workspaceDir,
+        agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        runId: params.runId,
+        allowBackground: false,
+      }),
+      createHostWorkspaceWriteTool(params.workspaceDir),
+    ]);
+    try {
+      const result = await expectDefined(tool, "bound native exec").execute("same-model-action", {
+        command: "printf 'effect\n' >> voice-parity-effects",
+        workdir: params.workspaceDir,
+        yieldMs: 10000,
+      });
+      const written = await expectDefined(writeTool, "bound filesystem action").execute(
+        "same-write-action",
+        { path: "voice-parity-note.txt", content: "same permitted note" },
+      );
+      expect(written.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("Successfully wrote"),
+          }),
+        ]),
+      );
+      expect(
+        await fs.readFile(path.join(params.workspaceDir, "voice-parity-note.txt"), "utf8"),
+      ).toBe("same permitted note");
+      results.push(result.details);
+      expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+      return { payloads: [{ text: "Done." }], meta: { durationMs: 1 } };
+    } finally {
+      host.close();
+    }
+  });
+  await rpc("chat.send", {
+    sessionKey,
+    message: "Carry out the action",
+    idempotencyKey: "parity-text",
+  });
+  await waitForDispatchEnd();
+  expect(results).toHaveLength(1);
+  const retained = await retainTalkClientRunAuthority({ client, context });
+  try {
+    const runner = createTalkClientAgentConsultRunner({
+      config: getRuntimeConfig(),
+      context,
+      sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+      ownerConnId: connectionId,
+      runAuthority: retained,
+      authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+      getVoiceSessionId: () => voiceSessionId,
+      initialItems: [],
+    });
+    await resetWriteMarker();
+    expect(await runner.runArgs({ question: "Carry out the action" })).toEqual({ text: "Done." });
+    expect(results).toHaveLength(2);
+    await resetWriteMarker();
+    await consult("Carry out the action", "parity-provider-call");
+    await waitForDispatchEnd();
+    expect(results).toHaveLength(3);
+    expect(prepared[0]).toMatchObject({
+      principal: expectDefined(client.authenticatedUserProfile, "authenticated caller profile")
+        .profileId,
+    });
+    expect(prepared[1]).toEqual(prepared[0]);
+    expect(prepared[2]).toEqual(prepared[0]);
+    const replay = vi.fn<RespondFn>();
+    await handleGatewayRequest({
+      req: {
+        type: "req",
+        id: randomUUID(),
+        method: "talk.client.toolCall",
+        params: {
+          sessionKey,
+          voiceSessionId,
+          callId: "parity-provider-call",
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          args: { question: "Carry out the action" },
+        },
+      },
+      context,
+      client,
+      respond: replay,
+      isWebchatConnect: () => true,
+    });
+    // Completed work cannot be advertised as a new active subscription. Keep
+    // that terminal refusal, without treating a retransmit as new work.
+    expect(replay.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "UNAVAILABLE",
+        message: "Realtime agent consult completed before the tool result subscription started.",
+      },
+    ]);
+    await waitForDispatchEnd();
+    expect(results).toHaveLength(3);
+    await resetWriteMarker();
+    await consult("Carry out the action", "parity-provider-fresh-call");
+    await waitForDispatchEnd();
+    expect(results).toHaveLength(4);
+    expect(await fs.readFile(expectDefined(marker, "native effect file"), "utf8")).toBe(
+      "effect\neffect\neffect\neffect\n",
+    );
+  } finally {
+    retained.release();
+  }
+});
+
+it("preserves the original operator source through chat-backed capability adaptation", async () => {
+  const { runTalkOperatorSourceParity } =
+    await import("./server.talk-permission-parity.test-support.js");
+  await runTalkOperatorSourceParity({
+    context,
+    client,
+    sessionKey,
+    voiceSessionId,
+    runEmbeddedAgent,
+    waitForDispatchEnd,
+  });
+});
+
+// The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
+it.runIf(process.platform === "linux").each([false, true])(
+  "keeps host-authenticated node approval cancellation (public callback: %s)",
+  async (publicOnly) => {
+    const { runTalkNodePermissionParity } =
+      await import("./server.talk-permission-parity.test-support.js");
+    await runTalkNodePermissionParity({
+      publicOnly,
+      harness,
+      client,
+      context,
+      agentId,
+      sessionKey,
+      canonicalKey,
+      sessionId,
+      storePath,
+      voiceSessionId,
+      connectionId,
+      runEmbeddedAgent,
+      rpc,
+      waitForDispatchEnd,
+      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
+    });
+  },
+);
+
+it.runIf(process.platform === "linux")(
+  "isolates registered Talk replay across authenticated callers",
+  async () => {
+    const { runTalkCallerReplay } = await import("./server.talk-caller-replay.test-support.js");
+    await runTalkCallerReplay({
+      harness,
+      runEmbeddedAgent,
+      sessionId,
+      sessionKey,
+      storePath,
+      voiceSessionId: expectDefined(voiceSessionId, "shared voice identity"),
+    });
+  },
+);

@@ -52,6 +52,20 @@ export type ProgressCardPutParams = Static<typeof ProgressCardPutParamsSchema>;
 export const ProgressCardPutResultSchema = ProgressCardGetResultSchema;
 export type ProgressCardPutResult = Static<typeof ProgressCardPutResultSchema>;
 
+export const ProgressCardRefreshParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  idempotencyKey: NonEmptyString,
+});
+export type ProgressCardRefreshParams = Static<typeof ProgressCardRefreshParamsSchema>;
+
+export const ProgressCardRefreshResultSchema = closedObject({
+  runId: NonEmptyString,
+  status: Type.Literal("accepted"),
+  revision: Type.Integer({ minimum: 1 }),
+});
+export type ProgressCardRefreshResult = Static<typeof ProgressCardRefreshResultSchema>;
+
 export const ProgressCardChangedEventSchema = closedObject({
   sessionKey: NonEmptyString,
   revision: Type.Union([Type.Number(), Type.Null()]),

@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import type { Model } from "../types.js";
+import type { OpenAICompletionsOptions } from "../provider-options.js";
+import type { Context, Model } from "../types.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
@@ -14,7 +15,11 @@ import {
 } from "./openai-completions.test-support.js";
 import { buildOpenAISdkRequestOptions } from "./openai-transport-params.js";
 
-async function captureTransportRequest(model: Model<"openai-completions">) {
+async function captureTransportRequest(
+  model: Model<"openai-completions">,
+  tools: Context["tools"] = [],
+  options: OpenAICompletionsOptions = {},
+) {
   const previousHost = getAiTransportHost();
   let captured: Request | undefined;
   configureAiTransportHost({
@@ -30,8 +35,8 @@ async function captureTransportRequest(model: Model<"openai-completions">) {
   try {
     const stream = createOpenAICompletionsTransportStreamFn()(
       model,
-      { messages: [{ role: "user", content: "hello", timestamp: 1 }], tools: [] } as never,
-      { apiKey: "test-key" } as never,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }], tools } as never,
+      { apiKey: "test-key", ...options } as never,
     );
     if (stream instanceof Promise) {
       throw new Error("OpenAI Chat transport must return its event stream synchronously");
@@ -50,6 +55,54 @@ async function captureTransportRequest(model: Model<"openai-completions">) {
 }
 
 describe("openai completions transport", () => {
+  it.each([
+    {
+      modelId: "gpt-6-astra",
+      endpoint: "official OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      path: "/v1/responses",
+      toolChoice: { type: "function", name: "read" },
+      responsesEffort: "high",
+    },
+    {
+      modelId: "gpt-5.2",
+      endpoint: "official OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      path: "/v1/responses",
+      toolChoice: { type: "function", name: "read" },
+      responsesEffort: "high",
+    },
+    {
+      modelId: "gpt-6-astra",
+      endpoint: "OpenAI-compatible proxy",
+      baseUrl: "https://proxy.example.com/v1",
+      path: "/v1/chat/completions",
+      toolChoice: { type: "function", function: { name: "read" } },
+      responsesEffort: undefined,
+    },
+  ])(
+    "sends $endpoint $modelId reasoning tool turns to $path",
+    async ({ modelId, baseUrl, path, toolChoice, responsesEffort }) => {
+      const request = await captureTransportRequest(
+        makeCompletionsModel({ id: modelId, provider: "openai-api", baseUrl }),
+        [
+          {
+            name: "read",
+            description: "Read a file",
+            parameters: { type: "object", properties: { path: { type: "string" } } },
+          },
+        ],
+        { toolChoice: { type: "function", function: { name: "read" } } },
+      );
+      const body = await request.json();
+
+      expect(new URL(request.url).pathname).toBe(path);
+      expect(body.tool_choice).toEqual(toolChoice);
+      // An unset reasoning selector keeps the managed Completions default (high).
+      expect(body.reasoning?.effort).toBe(responsesEffort);
+    },
+  );
+
   it("passes provider request timeouts to OpenAI SDK per-request options", () => {
     const signal = new AbortController().signal;
     const model = {

@@ -421,9 +421,6 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
   return action.label === label ? action : { ...action, label };
 }
 
-/**
- * Create a message action (sends text when tapped)
- */
 export function messageAction(label: string, text?: string): Action {
   return normalizeLineAction({
     type: "message",
@@ -432,9 +429,6 @@ export function messageAction(label: string, text?: string): Action {
   });
 }
 
-/**
- * Create a URI action (opens a URL when tapped)
- */
 export function uriAction(label: string, uri: string): Action {
   return normalizeLineAction({
     type: "uri",
@@ -443,38 +437,11 @@ export function uriAction(label: string, uri: string): Action {
   });
 }
 
-/**
- * Create a postback action (sends data to webhook when tapped)
- */
 export function postbackAction(label: string, data: string, displayText?: string): Action {
   return normalizeLineAction({
     type: "postback",
     label,
     data,
     displayText,
-  });
-}
-
-/**
- * Create a datetime picker action
- */
-export function datetimePickerAction(
-  label: string,
-  data: string,
-  mode: "date" | "time" | "datetime",
-  options?: {
-    initial?: string;
-    max?: string;
-    min?: string;
-  },
-): Action {
-  return normalizeLineAction({
-    type: "datetimepicker",
-    label,
-    data,
-    mode,
-    initial: options?.initial,
-    max: options?.max,
-    min: options?.min,
   });
 }

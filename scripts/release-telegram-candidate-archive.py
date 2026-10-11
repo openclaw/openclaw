@@ -196,14 +196,6 @@ def _limit(value: str) -> int:
     return parsed
 
 
-def _inside_root(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
-
-
 def validate_tree(
     root_value: str | os.PathLike[str],
     *,
@@ -278,7 +270,7 @@ def validate_tree(
                         target = path.resolve(strict=True)
                     except (OSError, RuntimeError) as error:
                         raise ArchiveGuardError(f"tree has dangling symlink: {path}") from error
-                    if not _inside_root(target, root):
+                    if not target.is_relative_to(root):
                         raise ArchiveGuardError(f"tree has escaping symlink: {path} -> {target}")
                     try:
                         target_stat = target.stat()
@@ -692,34 +684,15 @@ def _build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("archive")
     extract_parser.add_argument("destination")
     extract_parser.add_argument("--allowed-root", required=True)
-    extract_parser.add_argument(
-        "--max-members", type=_limit, default=DEFAULT_MAX_ENTRIES
-    )
-    extract_parser.add_argument(
-        "--max-expanded-bytes",
-        type=_limit,
-        default=DEFAULT_MAX_APPARENT_BYTES,
-    )
-    extract_parser.add_argument(
-        "--max-stream-bytes",
-        type=_limit,
-        default=DEFAULT_MAX_STREAM_BYTES,
-    )
-    extract_parser.add_argument(
-        "--max-extension-bytes",
-        type=_limit,
-        default=DEFAULT_MAX_EXTENSION_BYTES,
-    )
-    extract_parser.add_argument(
-        "--max-extension-total-bytes",
-        type=_limit,
-        default=DEFAULT_MAX_EXTENSION_TOTAL_BYTES,
-    )
-    extract_parser.add_argument(
-        "--max-path-bytes",
-        type=_limit,
-        default=DEFAULT_MAX_PATH_BYTES,
-    )
+    for option, default in (
+        ("--max-members", DEFAULT_MAX_ENTRIES),
+        ("--max-expanded-bytes", DEFAULT_MAX_APPARENT_BYTES),
+        ("--max-stream-bytes", DEFAULT_MAX_STREAM_BYTES),
+        ("--max-extension-bytes", DEFAULT_MAX_EXTENSION_BYTES),
+        ("--max-extension-total-bytes", DEFAULT_MAX_EXTENSION_TOTAL_BYTES),
+        ("--max-path-bytes", DEFAULT_MAX_PATH_BYTES),
+    ):
+        extract_parser.add_argument(option, type=_limit, default=default)
     return parser
 
 

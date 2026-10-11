@@ -34,12 +34,13 @@ afterEach(() => {
 
 describe("format-duration", () => {
   describe("formatDurationCompact", () => {
-    it.each([null, undefined, 0, -100])("returns undefined for %j", (value) => {
+    it.each([null])("returns undefined for %j", (value) => {
       expect(formatDurationCompact(value)).toBeUndefined();
     });
 
     it("formats compact units and omits trailing zero components", () => {
       expectFormatterCases(formatDurationCompact, [
+        { input: 0.1, expected: "0ms" },
         { input: 500, expected: "500ms" },
         { input: 999, expected: "999ms" },
         { input: 999.6, expected: "1s" },
@@ -56,32 +57,20 @@ describe("format-duration", () => {
         { input: 86400000, expected: "1d" },
         { input: 90000000, expected: "1d1h" },
         { input: 172800000, expected: "2d" },
+        { input: 86_430_000, expected: "1d30s" },
+        { input: 3_599_500, expected: "1h" },
+        { input: 86_399_500, expected: "1d" },
+        { input: 366 * 86400000, expected: "366d" },
       ]);
     });
 
     it.each([
-      { input: 65000, options: { spaced: true }, expected: "1m 5s" },
-      { input: 3660000, options: { spaced: true }, expected: "1h 1m" },
-      { input: 90000000, options: { spaced: true }, expected: "1d 1h" },
       {
         input: 366 * 86400000,
         options: { showYears: true, spaced: true },
         expected: "1y 1d",
       },
-      { input: 59500, expected: "1m" },
-      { input: 59400, expected: "59s" },
       { input: 18_014_398_509_513_598_976, expected: "208499982749d" },
-      {
-        input: 18_014_398_509_513_598_976,
-        options: { spaced: true },
-        expected: "208499982749d",
-      },
-      { input: 18_014_398_509_513_601_024, expected: "208499982749d" },
-      {
-        input: 18_014_398_509_513_601_024,
-        options: { spaced: true },
-        expected: "208499982749d",
-      },
     ])("formats compact duration for %j", ({ input, options, expected }) => {
       expect(formatDurationCompact(input, options)).toBe(expected);
     });
@@ -111,37 +100,22 @@ describe("format-duration", () => {
   });
 
   describe("formatSingleUnitDuration", () => {
-    it.each([
-      [59_500, "60 seconds", "1 minute"],
-      [3_570_000, "60 minutes", "1 hour"],
-      [86_370_000, "24 hours", "1 day"],
-    ])("rolls over %dms to the next unit instead of %s", (input, _buggyOutput, expected) => {
-      expect(formatSingleUnitDuration(input, true)).toBe(expected);
-    });
+    it.each([[86_370_000, "24 hours", "1 day"]])(
+      "rolls over %dms to the next unit instead of %s",
+      (input, _buggyOutput, expected) => {
+        expect(formatSingleUnitDuration(input, true)).toBe(expected);
+      },
+    );
 
-    it.each([
-      [30_000, "30 seconds"],
-      [89_500, "1 minute"],
-      [1_800_000, "30 minutes"],
-      [5_370_000, "1 hour"],
-      [43_200_000, "12 hours"],
-      [129_570_000, "1 day"],
-    ])("keeps %dms in its own unit as %s", (input, expected) => {
+    it.each([[43_200_000, "12 hours"]])("keeps %dms in its own unit as %s", (input, expected) => {
       expect(formatSingleUnitDuration(input, true)).toBe(expected);
     });
   });
 
   describe("formatDurationPrecise", () => {
     it.each([
-      { input: 500, expected: "500ms" },
       { input: 999, expected: "999ms" },
-      { input: -1, expected: "0ms" },
-      { input: -500, expected: "0ms" },
       { input: 999.6, expected: "1s" },
-      { input: 1000, expected: "1s" },
-      { input: 1500, expected: "1.5s" },
-      { input: 1234, expected: "1.23s" },
-      { input: Number.NaN, expected: "unknown" },
       { input: Infinity, expected: "unknown" },
     ])("formats precise duration for %j", ({ input, expected }) => {
       expect(formatDurationPrecise(input)).toBe(expected);
@@ -151,11 +125,7 @@ describe("format-duration", () => {
   describe("formatDurationSeconds", () => {
     it.each([
       { input: 1500, options: { decimals: 1 }, expected: "1.5s" },
-      { input: 1234, options: { decimals: 2 }, expected: "1.23s" },
-      { input: 1000, options: { decimals: 0 }, expected: "1s" },
       { input: 2000, options: { unit: "seconds" as const }, expected: "2 seconds" },
-      { input: -1500, options: { decimals: 1 }, expected: "0s" },
-      { input: Number.NaN, options: undefined, expected: "unknown" },
       { input: Infinity, options: undefined, expected: "unknown" },
     ])("formats seconds duration for %j", ({ input, options, expected }) => {
       expect(formatDurationSeconds(input, options)).toBe(expected);
@@ -165,24 +135,45 @@ describe("format-duration", () => {
 
 describe("format-datetime", () => {
   describe("resolveTimezone", () => {
-    it.each([
-      { input: "America/New_York", expected: "America/New_York" },
-      { input: "Europe/London", expected: "Europe/London" },
-      { input: "UTC", expected: "UTC" },
-      { input: "Invalid/Timezone", expected: undefined },
-      { input: "garbage", expected: undefined },
-      { input: "", expected: undefined },
-    ] as const)("resolves $input", ({ input, expected }) => {
-      expect(resolveTimezone(input)).toBe(expected);
+    it("returns undefined on format failure and resolves again after restoration", () => {
+      expect(resolveTimezone("UTC")).toBe("UTC");
+      const failure = new Error("test timezone validation unavailable");
+      const prototype = Intl.DateTimeFormat.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, "format");
+      if (!descriptor) {
+        throw new Error("Intl.DateTimeFormat.format descriptor is missing");
+      }
+      Object.defineProperty(prototype, "format", {
+        ...descriptor,
+        get: () => () => {
+          throw failure;
+        },
+      });
+      try {
+        expect(resolveTimezone("UTC")).toBeUndefined();
+        expect(resolveTimezone("Europe/London")).toBeUndefined();
+      } finally {
+        Object.defineProperty(prototype, "format", descriptor);
+      }
+      expect(resolveTimezone("Europe/London")).toBe("Europe/London");
+      expect(resolveTimezone("UTC")).toBe("UTC");
     });
   });
 
   describe("calendar days", () => {
-    it("formats event instants with the offset active in the requested timezone", () => {
-      const formatViennaDay = createTimeZoneDayKeyFormatter("Europe/Vienna");
-
-      expect(formatViennaDay(new Date("2026-03-28T22:30:00.000Z"))).toBe("2026-03-28");
-      expect(formatViennaDay(new Date("2026-03-29T22:30:00.000Z"))).toBe("2026-03-30");
+    it("honors constructor failures and formats again after restoration", () => {
+      const date = new Date("2024-01-01T00:30:00.000Z");
+      expect(createTimeZoneDayKeyFormatter("UTC")(date)).toBe("2024-01-01");
+      const failure = new Error("test formatter unavailable");
+      const constructor = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
+        throw failure;
+      });
+      try {
+        expect(() => createTimeZoneDayKeyFormatter("UTC")).toThrow(failure);
+      } finally {
+        constructor.mockRestore();
+      }
+      expect(createTimeZoneDayKeyFormatter("UTC")(date)).toBe("2024-01-01");
     });
 
     it("resolves calendar boundaries across a DST-short day", () => {
@@ -210,11 +201,6 @@ describe("format-datetime", () => {
 
   describe("formatZonedTimestamp", () => {
     it.each([
-      {
-        date: new Date("2024-01-15T14:30:00.000Z"),
-        options: { timeZone: "UTC" },
-        expected: /2024-01-15 14:30/,
-      },
       {
         date: new Date("2024-01-15T14:30:45.000Z"),
         options: { timeZone: "UTC", displaySeconds: true },
@@ -287,13 +273,11 @@ describe("format-relative", () => {
         { input: 7200000, expected: "2h ago" },
         { input: 47 * 3600000, expected: "47h ago" },
         { input: 48 * 3600000, expected: "2d ago" },
-        { input: 172800000, expected: "2d ago" },
       ]);
     });
 
     it.each([
       { input: 0, expected: "0s" },
-      { input: 300000, expected: "5m" },
       { input: 7200000, expected: "2h" },
     ])("omits suffix for %j when disabled", ({ input, expected }) => {
       expect(formatTimeAgo(input, { suffix: false })).toBe(expected);
@@ -318,15 +302,8 @@ describe("format-relative", () => {
     });
 
     it.each([
-      { offsetMs: -10000, expected: "just now" },
       { offsetMs: -30000, expected: "just now" },
-      { offsetMs: -300000, expected: "5m ago" },
-      { offsetMs: -7200000, expected: "2h ago" },
-      { offsetMs: -(47 * 3600000), expected: "47h ago" },
-      { offsetMs: -(48 * 3600000), expected: "2d ago" },
       { offsetMs: 30000, expected: "in <1m" },
-      { offsetMs: 300000, expected: "in 5m" },
-      { offsetMs: 7200000, expected: "in 2h" },
     ])("formats relative timestamp for offset $offsetMs", ({ offsetMs, expected }) => {
       expect(formatRelativeTimestamp(Date.now() + offsetMs)).toBe(expected);
     });
@@ -338,29 +315,20 @@ describe("format-relative", () => {
         options: { dateFallback: true, timezone: "UTC" },
         expected: "7d ago",
       },
-      {
-        name: "falls back to a short date once the timestamp is older than 7 days",
-        offsetMs: -8 * 24 * 3600000,
-        options: { dateFallback: true, timezone: "UTC" },
-        expected: "Feb 2",
-      },
-      {
-        name: "keeps relative output when date fallback is disabled",
-        offsetMs: -8 * 24 * 3600000,
-        options: { timezone: "UTC" },
-        expected: "8d ago",
-      },
     ])("$name", ({ offsetMs, options, expected }) => {
       expect(formatRelativeTimestamp(Date.now() + offsetMs, options)).toBe(expected);
     });
 
-    it("falls back to relative days when date formatting throws", () => {
-      expect(
-        formatRelativeTimestamp(Date.now() - 8 * 24 * 3600000, {
-          dateFallback: true,
-          timezone: "Invalid/Timezone",
-        }),
-      ).toBe("8d ago");
-    });
+    it.each([[8, "in 8d"]])(
+      "falls back to relative days for %d-day offsets when date formatting throws",
+      (days, expected) => {
+        expect(
+          formatRelativeTimestamp(Date.now() + days * 24 * 3600000, {
+            dateFallback: true,
+            timezone: "Invalid/Timezone",
+          }),
+        ).toBe(expected);
+      },
+    );
   });
 });

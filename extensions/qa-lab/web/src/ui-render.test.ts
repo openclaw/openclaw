@@ -26,7 +26,6 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     capturePayloadEventSort: "stream",
     capturePayloadExtent: "preview",
     capturePinnedLaneIds: [],
-    capturePreferredDetailView: null,
     captureProviderFilter: [],
     captureQueryPreset: "none",
     captureQueryRows: [],
@@ -73,7 +72,7 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     selectedCaptureEventKey: null,
     selectedCaptureSessionIds: [],
     selectedConversationKey: null,
-    selectedEvidenceEntryId: null,
+    selectedEvidenceEntryKey: null,
     selectedScenarioId: null,
     selectedThreadId: null,
     sidebarCollapsed: false,
@@ -84,29 +83,65 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
   };
 }
 
-function rawRequestCaptureState(params: { payload: string; contentType: string }): UiState {
+describe("QA Lab sidebar rendering", () => {
+  it.each([
+    ["chat", false, false],
+    ["chat", true, true],
+    ["results", false, false],
+    ["results", true, true],
+    ["evidence", false, true],
+    ["evidence", true, true],
+    ["report", false, false],
+    ["report", true, true],
+    ["events", false, false],
+    ["events", true, true],
+    ["capture", false, false],
+    ["capture", true, true],
+  ] as const)(
+    "renders %s with sidebarCollapsed=%s and inert=%s",
+    (activeTab, sidebarCollapsed, inert) => {
+      const state = evidenceState({ activeTab, sidebarCollapsed, sidebarPanel: "config" });
+      const html = renderQaLabUi(state);
+      const sidebar = html.match(/<aside class="sidebar(?:\s[^"]*)?"[^>]*>/gu);
+
+      expect(sidebar).toHaveLength(1);
+      expect(/\sinert(?:\s|=|>)/u.test(sidebar![0]!)).toBe(inert);
+      expect(html).toContain('<select id="provider-mode">');
+      expect(html).toContain('data-sidebar-panel="config"');
+      expect(html).toContain('data-action="toggle-sidebar"');
+      expect(state.sidebarCollapsed).toBe(sidebarCollapsed);
+      expect(state.sidebarPanel).toBe("config");
+    },
+  );
+});
+
+function capturePayloadState(
+  payload: string,
+  layout: UiState["capturePayloadDetailLayout"],
+  overrides: Partial<UiState["captureEvents"][number]> = {},
+): UiState {
+  const event = {
+    contentType: "application/json",
+    dataText: payload,
+    direction: "outbound",
+    flowId: "flow-1",
+    host: "api.example.test",
+    id: 1,
+    kind: "request",
+    method: "POST",
+    path: "/v1/messages",
+    payloadPreview: payload,
+    protocol: "https",
+    provider: "mock",
+    ts: 1,
+    ...overrides,
+  };
   return evidenceState({
     activeTab: "capture",
     captureDetailView: "payload",
-    capturePayloadDetailLayout: "raw",
-    captureEvents: [
-      {
-        contentType: params.contentType,
-        dataText: params.payload,
-        direction: "outbound",
-        flowId: "flow-1",
-        host: "api.example.test",
-        id: 1,
-        kind: "request",
-        method: "POST",
-        path: "/v1/messages",
-        payloadPreview: params.payload,
-        protocol: "https",
-        provider: "mock",
-        ts: 1,
-      },
-    ],
-    selectedCaptureEventKey: "1:flow-1:1:request",
+    capturePayloadDetailLayout: layout,
+    captureEvents: [event],
+    selectedCaptureEventKey: `1:flow-1:1:${event.kind}`,
   });
 }
 
@@ -369,6 +404,111 @@ describe("QA Lab UI evidence render", () => {
     expect(html).not.toContain("/Users/");
   });
 
+  it("renders capture filters with escaped options, selections, and bounded sizes", () => {
+    const kinds = ["response", 'custom<"&>', "request", "ws-frame"];
+    const hosts = ["g.test", "a.test", "f.test", "b.test", 'c<"&>.test', "e.test", "d.test"];
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "capture",
+        captureEvents: hosts.map((host, index) => ({
+          direction: "outbound",
+          flowId: `flow-${index}`,
+          host,
+          kind: kinds[index % kinds.length]!,
+          protocol: "https",
+          provider: 'provider<"&>',
+          ts: index,
+        })),
+        captureHostFilter: ['c<"&>.test', "g.test"],
+        captureKindFilter: ['custom<"&>', "response"],
+        captureProviderFilter: ['provider<"&>'],
+      }),
+    );
+    const controls = [
+      ...html.matchAll(
+        /<label>(Kind|Provider|Host)\s+<select id="([^"]+)" multiple size="(\d+)">([\s\S]*?)<\/select>/g,
+      ),
+    ];
+
+    expect(controls.map(([, label, id, size]) => [label, id, Number(size)])).toEqual([
+      ["Kind", "capture-kind-filter", 4],
+      ["Provider", "capture-provider-filter", 3],
+      ["Host", "capture-host-filter", 6],
+    ]);
+    expect(controls.map((match) => match[4]?.match(/<option[^>]*>[\s\S]*?<\/option>/g))).toEqual([
+      [
+        '<option value="custom&lt;&quot;&amp;&gt;" selected>custom&lt;&quot;&amp;&gt;</option>',
+        '<option value="request">request</option>',
+        '<option value="response" selected>response</option>',
+        '<option value="ws-frame">ws-frame</option>',
+      ],
+      ['<option value="provider&lt;&quot;&amp;&gt;" selected>provider&lt;&quot;&amp;&gt;</option>'],
+      [
+        '<option value="a.test">a.test</option>',
+        '<option value="b.test">b.test</option>',
+        '<option value="c&lt;&quot;&amp;&gt;.test" selected>c&lt;&quot;&amp;&gt;.test</option>',
+        '<option value="d.test">d.test</option>',
+        '<option value="e.test">e.test</option>',
+        '<option value="f.test">f.test</option>',
+        '<option value="g.test" selected>g.test</option>',
+      ],
+    ]);
+  });
+
+  it("keeps empty capture filters visible with three rows", () => {
+    const html = renderQaLabUi(evidenceState({ activeTab: "capture" }));
+    const controls = [
+      ...html.matchAll(
+        /<select id="(capture-(?:kind|provider|host)-filter)" multiple size="3">\s*<\/select>/g,
+      ),
+    ];
+
+    expect(controls.map((match) => match[1])).toEqual([
+      "capture-kind-filter",
+      "capture-provider-filter",
+      "capture-host-filter",
+    ]);
+  });
+
+  it.each([
+    ["most-events", ["a.test", "z.test", "m.test"]],
+    ["most-errors", ["a.test", "z.test", "m.test"]],
+    ["severity", ["z.test", "m.test", "a.test"]],
+    ["alphabetical", ["a.test", "m.test", "z.test"]],
+  ] as const)("orders capture lanes by %s with the same displayed severity", (sort, hosts) => {
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "capture",
+        captureViewMode: "timeline",
+        captureTimelineLaneSort: sort,
+        selectedCaptureEventKey: "1:selected:1000:request",
+        captureEvents: [
+          { host: "z.test", flowId: "selected", ts: 1000, status: 500 },
+          { host: "a.test", flowId: "other", ts: 2000, errorText: "connection failed" },
+          { host: "m.test", flowId: "selected", ts: 3000 },
+          { host: "a.test", flowId: "other", ts: 4000 },
+        ].map((event, index) =>
+          Object.assign(event, {
+            id: index + 1,
+            kind: "request",
+            direction: "outbound",
+            protocol: "https",
+          }),
+        ),
+      }),
+    );
+
+    expect(
+      [...html.matchAll(/data-capture-lane-toggle="([^"]+)"/g)].map((match) => match[1]),
+    ).toEqual(hosts);
+    if (sort === "severity") {
+      expect(html).toContain("severity 77.2");
+      expect(html).toContain("severity 41.2");
+      expect(html).toContain("severity 33.4");
+      expect(html).toContain("1 errors (100%) · focused flow 100% · active now · 1 events");
+    }
+  });
+
   it("maps blocked and skipped evidence statuses to styled tones", () => {
     const html = renderQaLabUi(
       evidenceState({
@@ -380,6 +520,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [{ id: "qa.blocked", role: "primary" }],
               failureReason: "Environment unavailable",
               id: "qa-lab.blocked",
+              key: "0",
+              effective: true,
               kind: "script-test",
               sourcePath: "scripts/blocked.ts",
               status: "blocked",
@@ -390,6 +532,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [{ id: "qa.skipped", role: "primary" }],
               failureReason: null,
               id: "qa-lab.skipped",
+              key: "1",
+              effective: true,
               kind: "vitest-test",
               sourcePath: "extensions/qa-lab/src/skipped.test.ts",
               status: "skipped",
@@ -403,7 +547,7 @@ describe("QA Lab UI evidence render", () => {
           profile: null,
           schemaVersion: 2,
         },
-        selectedEvidenceEntryId: "qa-lab.blocked",
+        selectedEvidenceEntryKey: "0",
       }),
     );
 
@@ -458,6 +602,8 @@ describe("QA Lab UI evidence render", () => {
               coverage: [],
               failureReason: null,
               id: "ux-matrix.web-ui.first-run",
+              key: "0",
+              effective: true,
               kind: "ux-matrix-cell",
               sourcePath: "scripts/ux-matrix/dashboard.ts",
               status: "pass",
@@ -494,6 +640,7 @@ describe("QA Lab UI evidence render", () => {
                   status: "pass",
                   surface: "web-ui",
                   testId: "ux-matrix.web-ui.first-run",
+                  entryKey: "0",
                   title: "UX Matrix: web-ui / first-run",
                 },
                 {
@@ -511,6 +658,7 @@ describe("QA Lab UI evidence render", () => {
                   status: "proof-gap",
                   surface: "cli",
                   testId: null,
+                  entryKey: null,
                   title: null,
                 },
               ],
@@ -527,11 +675,11 @@ describe("QA Lab UI evidence render", () => {
           profile: null,
           schemaVersion: 2,
         },
-        selectedEvidenceEntryId: "ux-matrix.web-ui.first-run",
+        selectedEvidenceEntryKey: "0",
       }),
     );
 
-    expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
+    expect(html).toContain('data-evidence-entry-key="0"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
     expect(html).not.toContain("Coverage:");
@@ -540,15 +688,13 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain("Open video artifact");
     expect(html).not.toContain('src="/api/evidence/artifact?artifactPath=recording.gif"');
     expect(html).not.toContain("<video controls");
-    expect(html).not.toContain('data-evidence-entry-id="null"');
+    expect(html).not.toContain('data-evidence-entry-key="null"');
   });
 
   it("redacts secret-like capture payload fields in raw previews", () => {
     const payload =
       '{"message":"visible context","message":"duplicate context","completion_tokens":100,"cookies":["session=abc"],"apiToken":"secret-token","tokenValue":"token-value-secret","authTokens":["auth-token-secret"],"tokens":{"refresh":"refresh-token-secret"},"AWS_SECRET_ACCESS_KEY":"aws-secret","secretAccessKey":"access-secret","x-goog-api-key":"goog-secret","nested":{"password":"secret-password"}}';
-    const html = renderQaLabUi(
-      rawRequestCaptureState({ payload, contentType: "application/json" }),
-    );
+    const html = renderQaLabUi(capturePayloadState(payload, "raw"));
 
     expect(html).toContain("visible context");
     expect(html).toContain("duplicate context");
@@ -572,31 +718,7 @@ describe("QA Lab UI evidence render", () => {
     const payload =
       '{"apiToken":"secret-token","nested":{"password":"secret-password"},"message":"visible context"';
     for (const capturePayloadDetailLayout of ["raw", "formatted"] as const) {
-      const html = renderQaLabUi(
-        evidenceState({
-          activeTab: "capture",
-          captureDetailView: "payload",
-          capturePayloadDetailLayout,
-          captureEvents: [
-            {
-              contentType: "application/json",
-              dataText: payload,
-              direction: "outbound",
-              flowId: "flow-1",
-              host: "api.example.test",
-              id: 1,
-              kind: "request",
-              method: "POST",
-              path: "/v1/messages",
-              payloadPreview: payload,
-              protocol: "https",
-              provider: "mock",
-              ts: 1,
-            },
-          ],
-          selectedCaptureEventKey: "1:flow-1:1:request",
-        }),
-      );
+      const html = renderQaLabUi(capturePayloadState(payload, capturePayloadDetailLayout));
 
       expect(html).toContain("visible context");
       expect(html).toContain("[redacted]");
@@ -608,27 +730,11 @@ describe("QA Lab UI evidence render", () => {
   it("redacts secret-like SSE data fields in formatted payloads", () => {
     const payload = 'event: message\ndata: {"apiToken":"secret-token","message":"visible"}';
     const html = renderQaLabUi(
-      evidenceState({
-        activeTab: "capture",
-        captureDetailView: "payload",
-        capturePayloadDetailLayout: "formatted",
-        captureEvents: [
-          {
-            contentType: "text/event-stream",
-            dataText: payload,
-            direction: "inbound",
-            flowId: "flow-1",
-            host: "api.example.test",
-            id: 1,
-            kind: "response",
-            path: "/v1/messages",
-            payloadPreview: payload,
-            protocol: "https",
-            provider: "mock",
-            ts: 1,
-          },
-        ],
-        selectedCaptureEventKey: "1:flow-1:1:response",
+      capturePayloadState(payload, "formatted", {
+        contentType: "text/event-stream",
+        direction: "inbound",
+        kind: "response",
+        method: undefined,
       }),
     );
 
@@ -639,9 +745,7 @@ describe("QA Lab UI evidence render", () => {
 
   it("redacts secret-like fields when capture cuts inside a JSON value", () => {
     const payload = '{"apiToken":"secret-token';
-    const html = renderQaLabUi(
-      rawRequestCaptureState({ payload, contentType: "application/json" }),
-    );
+    const html = renderQaLabUi(capturePayloadState(payload, "raw"));
 
     expect(html).toContain("[redacted]");
     expect(html).not.toContain("secret-token");
@@ -651,7 +755,7 @@ describe("QA Lab UI evidence render", () => {
     ["head", `${"a".repeat(279)}😀${"b".repeat(200)}`],
     ["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`],
   ])("keeps the bounded capture %s free of lone surrogates", (_edge, payload) => {
-    const html = renderQaLabUi(rawRequestCaptureState({ payload, contentType: "text/plain" }));
+    const html = renderQaLabUi(capturePayloadState(payload, "raw", { contentType: "text/plain" }));
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
     expect(html).not.toMatch(loneSurrogate);

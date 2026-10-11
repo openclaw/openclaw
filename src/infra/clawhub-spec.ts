@@ -1,6 +1,3 @@
-// Parses explicit ClawHub package install specs.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 /** Parses explicit `clawhub:<name>[@version]` package specs for ClawHub installs. */
 export function parseClawHubPluginSpec(raw: string): {
   name: string;
@@ -8,7 +5,7 @@ export function parseClawHubPluginSpec(raw: string): {
   baseUrl?: string;
 } | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("clawhub:")) {
+  if (!trimmed.toLowerCase().startsWith("clawhub:")) {
     return null;
   }
   const spec = trimmed.slice("clawhub:".length).trim();

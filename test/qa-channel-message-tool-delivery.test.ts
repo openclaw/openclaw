@@ -65,7 +65,7 @@ async function withQaMessageTool(
     });
     try {
       const config = {
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
         session: { dmScope: "per-channel-peer" },
         channels: {
           "qa-channel": { baseUrl: bus.baseUrl, accounts: { secondary: {} } },
@@ -302,7 +302,8 @@ describe("QA message-tool current conversation delivery", () => {
             { target: root },
             { to: root },
             { channelId: root },
-            ...(threadId ? [{ target: `${thread}/${threadId}` }, { threadId }] : []),
+            // Read-capable actions use the host-owned root plus explicit thread identity.
+            ...(threadId ? [{ threadId }] : []),
           ]) {
             const result = await tool.execute(`own-${args.action}`, {
               ...args,

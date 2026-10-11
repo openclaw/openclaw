@@ -1,5 +1,4 @@
 import type { BrowserServerState } from "./server-context.js";
-/** Browser server lifecycle helpers for parallel profile shutdown. */
 import { beginProfileTransition } from "./server-context.lifecycle.js";
 
 /** Invalidate every profile before awaiting any cleanup, then drain in parallel. */

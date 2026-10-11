@@ -73,7 +73,14 @@ console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginE
 }
 
 export async function withShimFixture<T>(
-  wrapper: (typeof TSX_SHIM_WRAPPERS)[number] | "scripts/run-node.mjs",
+  wrapper:
+    | (typeof TSX_SHIM_WRAPPERS)[number]
+    | "scripts/check-changed.mjs"
+    | "scripts/run-tsgo.mjs"
+    | "scripts/run-oxlint.mjs"
+    | "scripts/run-tsgo-core-test-shards.mjs"
+    | "scripts/run-node.mjs"
+    | "scripts/crabbox-wrapper.mjs",
   run: (paths: {
     checkoutRoot: string;
     fixtureRoot: string;
@@ -99,15 +106,19 @@ export async function withShimFixture<T>(
     mkdirSync(path.dirname(wrapperPath), { recursive: true });
     mkdirSync(path.join(checkoutRoot, "scripts", "lib"), { recursive: true });
     copyFileSync(wrapper, wrapperPath);
-    copyFileSync("scripts/tsx.mjs", path.join(checkoutRoot, "scripts", "tsx.mjs"));
-    copyFileSync(
+    for (const source of [
+      "scripts/tsx.mjs",
+      "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/tsx-cli-shim.mjs",
-      path.join(checkoutRoot, "scripts", "lib", "tsx-cli-shim.mjs"),
-    );
-    copyFileSync(
       "scripts/lib/local-check-runtime.mts",
-      path.join(checkoutRoot, "scripts", "lib", "local-check-runtime.mts"),
-    );
+      "scripts/lib/tooling-dependencies.mjs",
+      "scripts/lib/managed-child-process.mts",
+      "scripts/lib/managed-cleanup-handoff.mts",
+      "scripts/lib/vitest-resource-ownership.mts",
+      "scripts/lib/windows-taskkill.mjs",
+    ]) {
+      copyFileSync(source, path.join(checkoutRoot, source));
+    }
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     outcome = {
       value: await run({
@@ -133,7 +144,7 @@ export async function withShimFixture<T>(
     const outputPath = path.join(fixtureRoot, "command-output.log");
     writeFileSync(outputPath, results.map(formatShimResult).join("\n\n"));
     throw new Error(
-      `Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
+      `${callbackError instanceof Error ? `${callbackError.message}\n` : ""}Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
       {
         cause:
           callbackError && callbackError !== unjoined

@@ -1,19 +1,13 @@
-// Discord plugin module implements native command model picker apply behavior.
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
-import type { DiscordLivePolicyReader } from "./live-policy.js";
 import {
   recordDiscordModelPickerRecentModel,
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
-import type { ThreadBindingManager } from "./thread-bindings.js";
-
-type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 type DiscordModelPickerSelectionCommand = {
   prompt: string;
@@ -22,39 +16,24 @@ type DiscordModelPickerSelectionCommand = {
 };
 
 type DiscordModelPickerApplyResult =
-  | { status: "success"; effectiveModelRef: string; noticeMessage: string }
-  | { status: "mismatch"; effectiveModelRef: string; noticeMessage: string }
-  | { status: "rejected"; noticeMessage: string }
-  | { status: "timeout"; noticeMessage: string }
-  | { status: "failed"; noticeMessage: string };
+  | { status: "success" | "mismatch"; effectiveModelRef: string; noticeMessage: string }
+  | { status: "rejected" | "timeout" | "failed"; noticeMessage: string };
 
-function normalizeExpectedRuntime(value: string | undefined): string | undefined {
-  const runtime = value?.trim();
-  if (!runtime) {
-    return undefined;
-  }
-  return runtime === "auto" || runtime === "default" ? "auto" : runtime;
-}
-
-export async function applyDiscordModelPickerSelection(params: {
-  interaction: ButtonInteraction | StringSelectMenuInteraction;
-  selectionCommand: DiscordModelPickerSelectionCommand;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-  cfg: OpenClawConfig;
-  readPolicy?: DiscordLivePolicyReader;
-  discordConfig: DiscordConfig;
-  accountId: string;
-  sessionPrefix: string;
-  threadBindings: ThreadBindingManager;
-  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
-  route: ResolvedAgentRoute;
-  resolvedModelRef: string;
-  selectedRuntime?: string;
-  preferenceScope: DiscordModelPickerPreferenceScope;
-  settleMs: number;
-  resolveCurrentModel: (route: ResolvedAgentRoute) => string;
-  resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
-}): Promise<DiscordModelPickerApplyResult> {
+export async function applyDiscordModelPickerSelection(
+  params: DiscordCommandArgContext & {
+    interaction: ButtonInteraction | StringSelectMenuInteraction;
+    selectionCommand: DiscordModelPickerSelectionCommand;
+    dispatchCommandInteraction: DispatchDiscordCommandInteraction;
+    route: ResolvedAgentRoute;
+    resolvedModelRef: string;
+    selectedRuntime?: string;
+    preferenceScope: DiscordModelPickerPreferenceScope;
+    settleMs: number;
+    resolveCurrentModel: (route: ResolvedAgentRoute) => string;
+    resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
+  },
+): Promise<DiscordModelPickerApplyResult> {
+  const failureNotice = `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`;
   try {
     const dispatchResult = await withTimeout(
       params.dispatchCommandInteraction({
@@ -70,16 +49,14 @@ export async function applyDiscordModelPickerSelection(params: {
         preferFollowUp: true,
         threadBindings: params.threadBindings,
         suppressReplies: true,
+        buildContext: params.buildContext,
         dispatchReplyFromConfig: params.dispatchReplyFromConfig,
         pluginCommandDispatch: { kind: "non-plugin" },
       }),
       12000,
     );
     if (!dispatchResult.accepted) {
-      return {
-        status: "rejected",
-        noticeMessage: `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`,
-      };
+      return { status: "rejected", noticeMessage: failureNotice };
     }
     const hiddenFinalReply = dispatchResult.hiddenFinalReply;
     const effectiveRoute = dispatchResult.effectiveRoute ?? params.route;
@@ -98,7 +75,11 @@ export async function applyDiscordModelPickerSelection(params: {
         noticeMessage: `${hiddenFinalReply.text?.trim()}\n${currentSelection}`,
       };
     }
-    const expectedRuntime = normalizeExpectedRuntime(params.selectedRuntime);
+    const selectedRuntime = params.selectedRuntime?.trim();
+    const expectedRuntime =
+      selectedRuntime === "auto" || selectedRuntime === "default"
+        ? "auto"
+        : selectedRuntime || undefined;
     const verified =
       effectiveModelRef === params.resolvedModelRef &&
       (expectedRuntime === undefined || effectiveRuntime === expectedRuntime);
@@ -110,18 +91,13 @@ export async function applyDiscordModelPickerSelection(params: {
       }).catch(() => undefined);
     }
 
-    return verified
-      ? {
-          status: "success",
-          effectiveModelRef,
-          noticeMessage:
-            hiddenFinalReply?.text?.trim() || `✅ Model set to ${params.resolvedModelRef}.`,
-        }
-      : {
-          status: "mismatch",
-          effectiveModelRef,
-          noticeMessage: `⚠️ Tried to set ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}, but current selection is ${effectiveModelRef} with runtime ${effectiveRuntime}.`,
-        };
+    return {
+      status: verified ? "success" : "mismatch",
+      effectiveModelRef,
+      noticeMessage: verified
+        ? hiddenFinalReply?.text?.trim() || `✅ Model set to ${params.resolvedModelRef}.`
+        : `⚠️ Tried to set ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}, but current selection is ${effectiveModelRef} with runtime ${effectiveRuntime}.`,
+    };
   } catch (error) {
     if (error instanceof Error && error.message === "timeout") {
       return {
@@ -129,9 +105,6 @@ export async function applyDiscordModelPickerSelection(params: {
         noticeMessage: `⏳ Model change to ${params.resolvedModelRef} is still processing. Check /status in a few seconds.`,
       };
     }
-    return {
-      status: "failed",
-      noticeMessage: `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`,
-    };
+    return { status: "failed", noticeMessage: failureNotice };
   }
 }

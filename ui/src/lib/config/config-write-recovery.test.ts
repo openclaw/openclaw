@@ -1,12 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
+import {
+  createGatewayStoreTestStore,
+  stubGatewayStoreTestGlobals,
+} from "../../app/gateway-store.test-support.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setAvatarGatewayOrigin } from "../identity-avatar-context.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
   createConfigServerMock,
-  deferred,
 } from "./config-test-harness.ts";
+import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 const originalRaw = '{ "tools": { "exec": { "node": "original" } } }\n';
 const nodePath = ["tools", "exec", "node"];
@@ -16,12 +24,14 @@ const rawForNode = (node: string) => `${JSON.stringify(nodeConfig(node), null, 2
 function createRecoveryHarness(
   outcome: "own" | "uncommitted" | "foreign" = "own",
   initialRaw = originalRaw,
+  writeMethod: "config.set" | "config.apply" = "config.set",
 ) {
   let storedRaw = initialRaw;
   let hash = "before";
   let getCount = 0;
   const firstAck = deferred<unknown>();
-  const recoveryRead = deferred<void>();
+  let firstApply: Promise<boolean> | undefined;
+  const recoveryRead = deferred();
   const submissions: Array<{ raw: string; baseHash: string }> = [];
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
@@ -41,7 +51,7 @@ function createRecoveryHarness(
       }
       return snapshot;
     }
-    if (method !== "config.set") {
+    if (method !== "config.set" && method !== "config.apply") {
       return {};
     }
     const submission = params as { raw: string; baseHash: string };
@@ -72,6 +82,7 @@ function createRecoveryHarness(
     async start(edit = () => runtimeConfig.patchForm(nodePath, "submitted")) {
       await runtimeConfig.ensureLoaded();
       edit();
+      firstApply = writeMethod === "config.apply" ? runtimeConfig.apply() : undefined;
       await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
       expect(submissions).toHaveLength(1);
       expect(submissions[0]?.baseHash).toBe("before");
@@ -90,6 +101,9 @@ function createRecoveryHarness(
       duringLoad?.();
       recoveryRead.resolve();
       await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      if (firstApply) {
+        await expect(firstApply).resolves.toBe(false);
+      }
       expect(runtimeConfig.state.configLoading).toBe(false);
       expect(submissions).toHaveLength(1);
     },
@@ -103,11 +117,219 @@ function createRecoveryHarness(
 }
 
 describe("config write recovery", () => {
+  it.each([
+    ["save", false],
+    ["apply", false],
+    ["save", true],
+    ["apply", true],
+  ] as const)(
+    "keeps unsettled %s retry on its originating Gateway (same target: %s)",
+    async (operation, sameTarget) => {
+      vi.useFakeTimers();
+      stubGatewayStoreTestGlobals();
+      const store = createGatewayStoreTestStore();
+      const serverA = createConfigServerMock();
+      const serverB = sameTarget ? serverA : createConfigServerMock();
+      const hello = gatewayHelloForMethods([
+        "config.schema",
+        "config.set",
+        "config.apply",
+        "config.patch",
+      ]);
+      const runtimeConfig = createRuntimeConfigCapability(store.gateway);
+      try {
+        store.gateway.start();
+        const originalUrl = store.current().gatewayUrl;
+        store.current().request.mockImplementation(async (method, params) => {
+          if (method === "config.set" || method === "config.apply") {
+            throw new Error("Request timed out");
+          }
+          return serverA.request(method, params);
+        });
+        store.current().opts.onHello?.(hello);
+        await runtimeConfig.ensureLoaded();
+        runtimeConfig.patchForm(["count"], 2);
+        await expect(
+          operation === "apply" ? runtimeConfig.apply() : runtimeConfig.save(),
+        ).resolves.toBe(false);
+        expect(runtimeConfig.state.lastError).toContain("Request timed out");
+
+        store.gateway.connect({
+          gatewayUrl: sameTarget
+            ? `${originalUrl.replace(/\/+$/, "")}/`
+            : "wss://other-gateway.example.test",
+        });
+        const replacement = store.current();
+        replacement.request.mockImplementation((method, params) => serverB.request(method, params));
+        replacement.opts.onHello?.(hello);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+        expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+        const retried = await runtimeConfig.retry();
+        const writes = replacement.request.mock.calls.filter(
+          ([method]) => method === "config.set" || method === "config.apply",
+        );
+        expect.soft(writes).toHaveLength(sameTarget ? 1 : 0);
+        expect(retried).toBe(sameTarget);
+        if (sameTarget) {
+          expect(writes[0]?.[0]).toBe(operation === "apply" ? "config.apply" : "config.set");
+        }
+        await expect(serverB.request("config.get")).resolves.toMatchObject({
+          config: { count: sameTarget ? 2 : 1 },
+        });
+        if (!sameTarget) {
+          expect(runtimeConfig.state.lastError).toContain("different Gateway");
+          const originalDraftBase = runtimeConfig.state.configRawOriginal;
+          // Matching content on another Gateway cannot confirm the original write.
+          await serverB.request("config.apply", {
+            raw: JSON.stringify({ count: 2 }, null, 2) + "\n",
+            baseHash: "hash-1",
+          });
+          await runtimeConfig.refresh();
+          expect(runtimeConfig.state.configRawOriginal).toBe(originalDraftBase);
+          expect(canReloadControlUiDocument()).toBe(false);
+          await expect(runtimeConfig.retry()).resolves.toBe(false);
+          expect(
+            replacement.request.mock.calls.filter(
+              ([method]) => method === "config.set" || method === "config.apply",
+            ),
+          ).toHaveLength(0);
+          if (operation === "save") {
+            store.gateway.connect({ gatewayUrl: originalUrl });
+            store
+              .current()
+              .request.mockImplementation((method, params) => serverA.request(method, params));
+            store.current().opts.onHello?.(hello);
+            await vi.advanceTimersByTimeAsync(0);
+            await expect(runtimeConfig.retry()).resolves.toBe(true);
+            expect(serverA.submissions).toMatchObject([{ method: "config.set" }]);
+          } else {
+            await runtimeConfig.discardDraft();
+            expect(runtimeConfig.state.configFormDirty).toBe(false);
+            expect(canReloadControlUiDocument()).toBe(true);
+            runtimeConfig.patchForm(["count"], 3);
+            await expect(runtimeConfig.save()).resolves.toBe(true);
+            await expect(serverB.request("config.get")).resolves.toMatchObject({
+              config: { count: 3 },
+            });
+          }
+        }
+      } finally {
+        runtimeConfig.setWritesSuspended(true);
+        runtimeConfig.dispose();
+        store.gateway.stop();
+        await vi.dynamicImportSettled();
+        setAvatarGatewayOrigin(null);
+      }
+    },
+  );
+
+  it("shows unresolved reconnect uncertainty and preserves a revert when the old write later commits", async () => {
+    vi.useFakeTimers();
+    const server = createConfigServerMock();
+    const firstWrite = deferred<unknown>();
+    let heldParams: unknown;
+    let first = true;
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "config.set" && first) {
+        first = false;
+        heldParams = params;
+        return firstWrite.promise;
+      }
+      return server.request(method, params);
+    });
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    try {
+      await runtimeConfig.ensureLoaded();
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      runtimeConfig.patchForm(["count"], 1);
+      firstWrite.reject(new Error("Request timed out"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect.soft(canReloadControlUiDocument()).toBe(false);
+      publish(false);
+      expect.soft(canReloadControlUiDocument()).toBe(false);
+      publish(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      expect.soft(canReloadControlUiDocument()).toBe(false);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+      expect(runtimeConfig.state.lastError).toContain("could not be confirmed");
+      await expect(
+        runtimeConfig.patch({ raw: { unrelated: true }, note: "synthetic toggle" }),
+      ).resolves.toBe(false);
+      expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1);
+      await server.request("config.set", heldParams);
+      await runtimeConfig.refresh();
+      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(true);
+      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+      expect(canReloadControlUiDocument()).toBe(true);
+      expect(server.submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+        { count: 2 },
+        { count: 1 },
+      ]);
+    } finally {
+      runtimeConfig.setWritesSuspended(true);
+      firstWrite.resolve({});
+      runtimeConfig.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    "retries the interrupted Apply operation (persisted: %s)",
+    async (persisted) => {
+      vi.useFakeTimers();
+      const server = createConfigServerMock();
+      let failApply = true;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.apply" && failApply) {
+          failApply = false;
+          if (persisted) {
+            await server.request("config.set", params);
+          }
+          throw new Error("Apply outcome is unknown");
+        }
+        return server.request(method, params);
+      });
+      const { runtimeConfig, publish } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      try {
+        await runtimeConfig.ensureLoaded();
+        runtimeConfig.patchForm(["count"], 2);
+        await expect(runtimeConfig.apply()).resolves.toBe(false);
+        publish(false);
+        publish(true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+        await expect(runtimeConfig.retry()).resolves.toBe(true);
+        expect(
+          request.mock.calls
+            .filter(([method]) => method === "config.apply" || method === "config.set")
+            .map(([method]) => method),
+        ).toEqual(["config.apply", "config.apply"]);
+        expect(runtimeConfig.state.configNeedsApply).toBe(false);
+        expect(runtimeConfig.state.lastError).toBeNull();
+        expect(canReloadControlUiDocument()).toBe(true);
+      } finally {
+        runtimeConfig.setWritesSuspended(true);
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
   it("reconciles the bytes dispatched after original-config parsing settles", async () => {
     vi.useFakeTimers();
     const harness = createRecoveryHarness();
     const { runtimeConfig, submissions } = harness;
-    const parsing = deferred<void>();
+    const parsing = deferred();
     try {
       await runtimeConfig.ensureLoaded();
       runtimeConfig.state.configRawOriginalParsePending = parsing.promise;
@@ -166,66 +388,119 @@ describe("config write recovery", () => {
     }
   });
 
-  it.each([
-    { mode: "raw", edit: "revert", next: "raw" },
-    { mode: "form", edit: "revert", next: "form" },
-    { mode: "raw", edit: "newer", next: "raw" },
-    { mode: "form", edit: "newer", next: "form" },
-    { mode: "raw", edit: "revert", next: "form" },
-    { mode: "raw", edit: "newer", next: "form" },
-  ] as const)(
-    "retains a $mode $edit before a subsequent $next edit",
-    async ({ mode, edit, next }) => {
+  const recoveryCases: Array<{
+    outcome: "own" | "uncommitted" | "foreign";
+    mode: "raw" | "form";
+    edit: "revert" | "newer" | "none";
+    next?: "raw" | "form";
+    method?: "config.set" | "config.apply";
+    duringLoad?: boolean;
+  }> = [
+    { outcome: "own", mode: "raw", edit: "revert", next: "raw" },
+    { outcome: "own", mode: "form", edit: "revert", next: "form" },
+    { outcome: "own", mode: "form", edit: "newer", next: "form" },
+    { outcome: "own", mode: "raw", edit: "newer", next: "form" },
+    { outcome: "own", mode: "form", edit: "newer", next: "form", duringLoad: true },
+    { outcome: "foreign", mode: "raw", edit: "newer", method: "config.set" },
+    { outcome: "foreign", mode: "form", edit: "newer", method: "config.apply" },
+    { outcome: "own", mode: "form", edit: "none" },
+    { outcome: "uncommitted", mode: "raw", edit: "revert" },
+  ];
+
+  it.each(recoveryCases)(
+    "reconciles $outcome persistence with a $mode $edit (next: $next, pending read: $duringLoad)",
+    async ({ outcome, mode, edit, next, method, duringLoad }) => {
       vi.useFakeTimers();
-      const harness = createRecoveryHarness();
+      const harness = createRecoveryHarness(outcome, originalRaw, method);
       const { runtimeConfig, submissions } = harness;
       try {
         await harness.start();
-        const node = edit === "revert" ? "original" : "newer";
+        const node = edit === "revert" ? "original" : edit === "none" ? "submitted" : "newer";
         const pendingRaw = edit === "revert" ? originalRaw : `${rawForNode(node)}\n`;
-        if (mode === "raw") {
-          runtimeConfig.setRaw(pendingRaw);
-        } else {
-          runtimeConfig.patchForm(nodePath, node);
-        }
-        expect(runtimeConfig.state.configFormDirty).toBe(edit !== "revert");
-
-        await harness.reconnect();
-        expect(runtimeConfig.state.configFormMode).toBe(mode);
-        expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(nodeConfig(node));
-        if (mode === "raw") {
-          expect(runtimeConfig.state.configRaw).toBe(pendingRaw);
-          expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-        } else {
-          expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
-        }
-        expect(runtimeConfig.state.configFormDirty).toBe(true);
-        expect(runtimeConfig.state.configRawOriginal).toBe(rawForNode("submitted"));
-        expect(runtimeConfig.state.configFormOriginal).toEqual(nodeConfig("submitted"));
-        expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
-        expect(runtimeConfig.state.configNeedsApply).toBe(true);
-
-        // The pre-write document is now a real edit, not a clean revert to stale originals.
-        if (next === "raw") {
-          runtimeConfig.setRaw(originalRaw);
-        } else {
+        if (edit !== "none") {
           if (mode === "raw") {
-            runtimeConfig.setRaw(`${pendingRaw}\n`);
+            runtimeConfig.setRaw(pendingRaw);
+          } else {
+            runtimeConfig.patchForm(nodePath, node);
           }
-          runtimeConfig.patchForm(nodePath, "original");
+          expect(runtimeConfig.state.configFormDirty).toBe(edit !== "revert");
         }
-        expect(runtimeConfig.state.configFormDirty).toBe(true);
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe(next === "form" ? "paused" : "idle");
-        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-        expect(submissions).toHaveLength(1);
-        await expect(runtimeConfig.save()).resolves.toBe(true);
-        expect(submissions[1]).toEqual({
-          raw: next === "raw" ? originalRaw : rawForNode("original"),
-          baseHash: "own-commit",
-        });
-        expect(JSON.parse(harness.storedRaw)).toEqual(nodeConfig("original"));
-        expect(runtimeConfig.state.configFormDirty).toBe(false);
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+        await harness.reconnect(
+          duringLoad
+            ? () => {
+                expect(runtimeConfig.canSet).toBe(true);
+                expect(runtimeConfig.state.configSaving).toBe(false);
+                runtimeConfig.patchForm(nodePath, "original");
+                expect(runtimeConfig.state.configFormDirty).toBe(false);
+              }
+            : undefined,
+        );
+
+        if (outcome === "foreign") {
+          expect(runtimeConfig.state.configDraftBaseHash).toBe("before");
+          expect(runtimeConfig.state.configRawOriginal).toBe(originalRaw);
+          expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(nodeConfig("newer"));
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+          expect(runtimeConfig.state.lastError).toContain("config changed since last load");
+          await expect(runtimeConfig.save()).resolves.toBe(false);
+          expect(harness.storedRaw).toBe(rawForNode("foreign"));
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+        } else if (!next) {
+          expect(runtimeConfig.state.configFormDirty).toBe(false);
+          expect(runtimeConfig.state.configRaw).toBe(harness.storedRaw);
+          expect(runtimeConfig.state.configRawOriginal).toBe(harness.storedRaw);
+          expect(runtimeConfig.state.configDraftBaseHash).toBe(
+            outcome === "own" ? "own-commit" : "before",
+          );
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe(
+            outcome === "own" ? "idle" : "error",
+          );
+          if (outcome === "uncommitted") {
+            expect(runtimeConfig.state.lastError).toContain("could not be confirmed");
+          }
+        } else {
+          expect(runtimeConfig.state.configFormMode).toBe(mode);
+          expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(
+            nodeConfig(duringLoad ? "original" : node),
+          );
+          if (duringLoad) {
+            expect(runtimeConfig.state.configForm).toEqual(nodeConfig("original"));
+          }
+          if (mode === "raw") {
+            expect(runtimeConfig.state.configRaw).toBe(pendingRaw);
+          }
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe(mode === "raw" ? "idle" : "paused");
+          expect(runtimeConfig.state.configFormDirty).toBe(true);
+          expect(runtimeConfig.state.configRawOriginal).toBe(rawForNode("submitted"));
+          expect(runtimeConfig.state.configFormOriginal).toEqual(nodeConfig("submitted"));
+          expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
+          expect(runtimeConfig.state.configNeedsApply).toBe(true);
+
+          if (!duringLoad) {
+            if (next === "raw") {
+              runtimeConfig.setRaw(originalRaw);
+            } else {
+              if (mode === "raw") {
+                runtimeConfig.setRaw(`${pendingRaw}\n`);
+              }
+              runtimeConfig.patchForm(nodePath, "original");
+            }
+          }
+          expect(runtimeConfig.state.configFormDirty).toBe(true);
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe(
+            next === "form" ? "paused" : "idle",
+          );
+          await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+          expect(submissions).toHaveLength(1);
+          await expect(runtimeConfig.save()).resolves.toBe(true);
+          expect(submissions[1]).toEqual({
+            raw: next === "raw" ? originalRaw : rawForNode("original"),
+            baseHash: "own-commit",
+          });
+          expect(JSON.parse(harness.storedRaw)).toEqual(nodeConfig("original"));
+          expect(runtimeConfig.state.configFormDirty).toBe(false);
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+        }
       } finally {
         harness.dispose();
       }
@@ -274,84 +549,6 @@ describe("config write recovery", () => {
       } finally {
         runtimeConfig.setWritesSuspended(true);
         runtimeConfig.dispose();
-      }
-    },
-  );
-
-  it("retains a Devices binding reverted while the recovery read is pending", async () => {
-    vi.useFakeTimers();
-    const harness = createRecoveryHarness();
-    const { runtimeConfig, submissions } = harness;
-    try {
-      await harness.start();
-      runtimeConfig.patchForm(nodePath, "newer");
-      await harness.reconnect(() => {
-        // Devices binding controls remain enabled while config.get is loading.
-        expect(runtimeConfig.canSet).toBe(true);
-        expect(runtimeConfig.state.configSaving).toBe(false);
-        runtimeConfig.patchForm(nodePath, "original");
-        expect(runtimeConfig.state.configFormDirty).toBe(false);
-      });
-      expect(runtimeConfig.state.configForm).toEqual(nodeConfig("original"));
-      expect(runtimeConfig.state.configFormDirty).toBe(true);
-      expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
-      expect(runtimeConfig.state.configRawOriginal).toBe(rawForNode("submitted"));
-      expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
-      await expect(runtimeConfig.save()).resolves.toBe(true);
-      expect(submissions[1]).toEqual({ raw: rawForNode("original"), baseHash: "own-commit" });
-      expect(JSON.parse(harness.storedRaw)).toEqual(nodeConfig("original"));
-    } finally {
-      harness.dispose();
-    }
-  });
-
-  it.each(["raw", "form"] as const)(
-    "never rebases a %s draft onto a foreign write",
-    async (mode) => {
-      vi.useFakeTimers();
-      const harness = createRecoveryHarness("foreign");
-      const { runtimeConfig } = harness;
-      try {
-        await harness.start();
-        if (mode === "raw") {
-          runtimeConfig.setRaw(`${rawForNode("newer")}\n`);
-        } else {
-          runtimeConfig.patchForm(nodePath, "newer");
-        }
-        await harness.reconnect();
-        expect(runtimeConfig.state.configDraftBaseHash).toBe("before");
-        expect(runtimeConfig.state.configRawOriginal).toBe(originalRaw);
-        expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual(nodeConfig("newer"));
-        await expect(runtimeConfig.save()).resolves.toBe(false);
-        expect(harness.storedRaw).toBe(rawForNode("foreign"));
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-      } finally {
-        harness.dispose();
-      }
-    },
-  );
-
-  it.each(["own", "uncommitted"] as const)(
-    "leaves a matching %s document clean",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const harness = createRecoveryHarness(outcome);
-      const { runtimeConfig } = harness;
-      try {
-        await harness.start();
-        if (outcome === "uncommitted") {
-          runtimeConfig.setRaw(originalRaw);
-        }
-        await harness.reconnect();
-        expect(runtimeConfig.state.configFormDirty).toBe(false);
-        expect(runtimeConfig.state.configRaw).toBe(harness.storedRaw);
-        expect(runtimeConfig.state.configRawOriginal).toBe(harness.storedRaw);
-        expect(runtimeConfig.state.configDraftBaseHash).toBe(
-          outcome === "own" ? "own-commit" : "before",
-        );
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-      } finally {
-        harness.dispose();
       }
     },
   );

@@ -31,6 +31,7 @@ export const SessionsResolveCandidateSchema = closedObject({
   agentId: NonEmptyString,
   displayName: Type.Optional(Type.String()),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
 });
 
 export const SessionsResolveResultSchema = Type.Union([

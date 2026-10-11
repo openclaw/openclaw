@@ -1,4 +1,3 @@
-// Minimax provider module implements model/runtime integration.
 import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
@@ -11,9 +10,8 @@ import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { resolveMinimaxMediaRequestConfig } from "./media-provider-runtime.js";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
@@ -52,12 +50,8 @@ function isMinimaxCnHost(value: string | undefined): boolean {
     return false;
   }
   const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const hostname = new URL(candidate).hostname.toLowerCase();
-    return hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(candidate)?.hostname.toLowerCase();
+  return hostname === "minimaxi.com" || (hostname?.endsWith(".minimaxi.com") ?? false);
 }
 
 function resolveMinimaxImageBaseUrl(
@@ -79,7 +73,9 @@ function resolveMinimaxImageBaseUrl(
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
-function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
+export function buildMinimaxImageGenerationProvider(
+  providerId = "minimax",
+): ImageGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
@@ -122,19 +118,12 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         allowPrivateNetwork,
         headers,
         dispatcherPolicy,
-      } = resolveProviderHttpRequestConfig({
+      } = resolveMinimaxMediaRequestConfig({
+        cfg: req.cfg,
+        providerId,
+        apiKey: auth.apiKey,
         baseUrl,
-        defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
-        defaultHeaders: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        provider: providerId,
         capability: "image",
-        transport: "http",
-        request: sanitizeConfiguredModelProviderRequest(
-          req.cfg.models?.providers?.[providerId]?.request,
-        ),
       });
 
       const body: Record<string, unknown> = {
@@ -148,7 +137,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      // Map input images to subject_reference for image-to-image generation
       const ref = req.inputImages?.at(0);
       if (ref) {
         const mime = ref.mimeType || "image/jpeg";
@@ -220,12 +208,4 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }
     },
   };
-}
-
-export function buildMinimaxImageGenerationProvider(): ImageGenerationProvider {
-  return buildMinimaxImageProvider("minimax");
-}
-
-export function buildMinimaxPortalImageGenerationProvider(): ImageGenerationProvider {
-  return buildMinimaxImageProvider("minimax-portal");
 }

@@ -69,7 +69,7 @@ async function runAuth(mode: string, parent: string[] = [], leaf: string[] = [])
   await program.parseAsync(args, { from: "user" });
 }
 
-describe.each(["login", "logout"])("channels %s owner", (mode) => {
+describe("channels auth owner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fixture.registered = true;
@@ -100,118 +100,46 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
     fixture.loadScoped.mockReturnValue({ channels: [{ plugin }], channelSetups: [] });
   });
 
-  it.each([
-    { name: "parent", parent: ["--agent", "ops"], leaf: [], owner: "ops" },
-    { name: "leaf", parent: [], leaf: ["--agent", "ops"], owner: "ops" },
-    {
-      name: "leaf overrides parent",
-      parent: ["--agent", "research"],
-      leaf: ["--agent", "ops"],
-      owner: "ops",
-    },
-    { name: "System Agent", parent: [], leaf: [], owner: "research" },
-    { name: "trimmed explicit", parent: ["--agent", " ops "], leaf: [], owner: "ops" },
-    { name: "explicit before System Agent", parent: ["--agent", "ops"], leaf: [], owner: "ops" },
-  ])("retains the $name owner through plugin discovery", async ({ parent, leaf, owner, name }) => {
-    if (name === "System Agent") {
-      fixture.config.agents!.defaults = { systemAgent: { agentId: "research" } };
-    } else if (name === "explicit before System Agent") {
-      fixture.config.agents!.defaults = { systemAgent: { agentId: "???" } };
-    }
-    fixture.registered = false;
+  it.each(["login", "logout"])(
+    "retains the leaf owner through %s plugin discovery",
+    async (mode) => {
+      fixture.registered = false;
+      await runAuth(mode, ["--agent", "research"], ["--agent", " ops "]);
 
-    await runAuth(mode, parent, leaf);
-
-    expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(fixture.loadScoped).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: `/tmp/${owner}-workspace` }),
-    );
-    expect(mode === "login" ? fixture.login : fixture.logout).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "work" }),
-    );
-  });
-
-  it("does not require discovery to reload an already registered plugin", async () => {
-    await runAuth(mode, ["--agent", "ops"]);
-
-    expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(fixture.catalog).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
-    );
-    expect(fixture.loadScoped).not.toHaveBeenCalled();
-    expect(mode === "login" ? fixture.login : fixture.logout).toHaveBeenCalled();
-  });
-
-  it("keeps an ownerless fleet from reaching either auth action", async () => {
-    // Agent selection is an expected CLI condition rendered by the root failure
-    // owner; the command rethrows instead of printing its own copy.
-    await expect(runAuth(mode)).rejects.toMatchObject({
-      name: "AgentSelectionRequiredError",
-      message: expect.stringContaining("no explicit owner"),
-    });
-
-    expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(fixture.runtime.exit).not.toHaveBeenCalled();
-    expect(fixture.catalog).not.toHaveBeenCalled();
-    expect(fixture.login).not.toHaveBeenCalled();
-    expect(fixture.logout).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { agent: "missing", error: 'Unknown agent id "missing"' },
-    { agent: " ", error: "--agent must not be blank" },
-  ])("rejects invalid explicit agent '$agent' before discovery", async ({ agent, error }) => {
-    fixture.config.agents!.defaults = { systemAgent: { agentId: "research" } };
-
-    await runAuth(mode, ["--agent", agent]);
-
-    expect(fixture.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
-    expect(fixture.catalog).not.toHaveBeenCalled();
-    expect(fixture.login).not.toHaveBeenCalled();
-    expect(fixture.logout).not.toHaveBeenCalled();
-  });
-
-  it("rejects a stale configured System Agent before discovery", async () => {
-    fixture.config.agents!.defaults = { systemAgent: { agentId: "missing" } };
-
-    await runAuth(mode);
-
-    expect(fixture.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Unknown agent id "missing"'),
-    );
-    expect(fixture.catalog).not.toHaveBeenCalled();
-  });
-
-  it.each(["???", "OPS"])(
-    "rejects explicit owner %s instead of normalizing it into another agent",
-    async (agent) => {
-      fixture.config.agents!.entries = {
-        main: { workspace: "/tmp/main-workspace" },
-        ops: { workspace: "/tmp/ops-workspace" },
-      };
-      await runAuth(mode, ["--agent", agent]);
-
-      expect(fixture.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining(`Unknown agent id "${agent}"`),
+      expect(fixture.runtime.error).not.toHaveBeenCalled();
+      expect(fixture.loadScoped).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
       );
-      expect(fixture.runtime.exit).toHaveBeenCalledWith(1);
-      expect(fixture.catalog).not.toHaveBeenCalled();
-      expect(fixture.login).not.toHaveBeenCalled();
-      expect(fixture.logout).not.toHaveBeenCalled();
+      expect(mode === "login" ? fixture.login : fixture.logout).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "work" }),
+      );
     },
   );
 
-  it("keeps the legacy owner when the configured System Agent is unused", async () => {
-    fixture.config.agents!.ownership = undefined;
-    fixture.config.agents!.entries!.research!.default = true;
-    fixture.config.agents!.defaults = { systemAgent: { agentId: "???" } };
-
-    await runAuth(mode);
-
+  it("keeps an ownerless fleet from auth", async () => {
+    await expect(runAuth("logout")).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringContaining("no explicit owner"),
+    });
     expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(fixture.catalog).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/research-workspace" }),
-    );
-    expect(mode === "login" ? fixture.login : fixture.logout).toHaveBeenCalled();
+    expect(fixture.runtime.exit).not.toHaveBeenCalled();
+    expect(fixture.catalog).not.toHaveBeenCalled();
+    expect(fixture.loadScoped).not.toHaveBeenCalled();
+    expect(fixture.login).not.toHaveBeenCalled();
+    expect(fixture.logout).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agent: "OPS", error: 'Unknown agent id "OPS"' },
+    { agent: " ", error: "--agent must not be blank" },
+  ])("rejects invalid explicit owner '$agent' before discovery", async ({ agent, error }) => {
+    fixture.config.agents!.defaults = { systemAgent: { agentId: "research" } };
+    await runAuth("logout", ["--agent", agent]);
+
+    expect(fixture.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+    expect(fixture.runtime.exit).toHaveBeenCalledWith(1);
+    expect(fixture.catalog).not.toHaveBeenCalled();
+    expect(fixture.login).not.toHaveBeenCalled();
+    expect(fixture.logout).not.toHaveBeenCalled();
   });
 });

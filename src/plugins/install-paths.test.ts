@@ -1,6 +1,7 @@
 // Covers managed plugin install path generation.
+import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginGitDir,
@@ -15,6 +16,25 @@ import {
 } from "./installed-plugin-index-store-path.js";
 
 describe("plugin install root context", () => {
+  it.each([
+    { env: { OPENCLAW_HOME: "/operator/home" }, root: "/operator/home/.openclaw" },
+    { env: { OPENCLAW_CONFIG_PATH: "/operator/config/openclaw.json" }, root: "/operator/config" },
+  ])("resolves artifact directories without probing state locations ($root)", ({ env, root }) => {
+    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    try {
+      for (const [resolve, kind] of [
+        [resolveDefaultPluginExtensionsDir, "extensions"],
+        [resolveDefaultPluginNpmDir, "npm"],
+        [resolveDefaultPluginGitDir, "git"],
+      ] as const) {
+        expect(resolve(env, () => "/unused-home")).toBe(path.resolve(root, kind));
+      }
+      expect(exists).not.toHaveBeenCalled();
+    } finally {
+      exists.mockRestore();
+    }
+  });
+
   it("keeps discovery roots on the operator install while runtime state is redirected", async () => {
     const operatorRoots = resolvePluginInstallRoots(
       { OPENCLAW_STATE_DIR: "/operator/openclaw" },

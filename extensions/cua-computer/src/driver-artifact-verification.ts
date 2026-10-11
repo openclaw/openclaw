@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DRIVER_PACKAGE = "@trycua/cua-driver";
 
@@ -75,19 +76,14 @@ function resolveArtifactPlatform(
   return { kind: "not-applicable" };
 }
 
-function readJson(pathname: string): unknown {
-  return JSON.parse(fs.readFileSync(pathname, "utf8"));
-}
-
 export function readPackageIdentity(pathname: string): { name?: string; version?: string } {
-  const value = readJson(pathname);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(JSON.parse(fs.readFileSync(pathname, "utf8")));
+  if (!record) {
     return {};
   }
-  const record = value as Record<string, unknown>;
   return {
-    name: typeof record.name === "string" ? record.name : undefined,
-    version: typeof record.version === "string" ? record.version : undefined,
+    name: readStringField(record, "name"),
+    version: readStringField(record, "version"),
   };
 }
 
@@ -115,10 +111,6 @@ function loadArtifactRecord(
     return undefined;
   }
   return { version, artifact };
-}
-
-function hashFile(pathname: string): string {
-  return createHash("sha256").update(fs.readFileSync(pathname)).digest("hex");
 }
 
 export function inspectCuaDriverArtifacts(
@@ -220,7 +212,7 @@ export function inspectCuaDriverArtifacts(
     }
     let actualDigest: string;
     try {
-      actualDigest = hashFile(pathname);
+      actualDigest = sha256FileSync(pathname).digest;
     } catch {
       const fixHint = `Reinstall OpenClaw on this node host to restore ${platformPackage} ${accepted.version}.`;
       return failure(

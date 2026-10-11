@@ -1,19 +1,23 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
-import { parentPort, workerData } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../../state/openclaw-agent-db-lease.js";
-import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
+import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
   prepareMemorySessionTranscriptProjection,
   type SessionTranscriptProjectionRow,
   type PreparedSessionTranscriptProjection,
   type PreparedSessionTranscriptProjectionMetadata,
-  type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
@@ -29,13 +33,20 @@ type ReconcileWorkerOwner = {
 type ReconcileWorkerPlanInput = ReconcileWorkerOwner & {
   agentId: string;
   path: string;
-  preferredSessionId?: string;
+  sessionIds: string[];
 };
 
 export type SessionTranscriptReconcileWorkerInput =
   | (ReconcileWorkerPlanInput & { mode: "disk"; leaseId: string })
   | { mode: "memory"; sessionIds: string[] }
-  | (ReconcileWorkerOwner & { mode: "release"; leaseId: string });
+  | (ReconcileWorkerOwner & { mode: "release"; leaseId: string; path: string });
+
+export type SessionTranscriptReconcileWorkerTask = {
+  input: SessionTranscriptReconcileWorkerInput;
+  port: MessagePort;
+  coordination?: SqliteMutationWorkerCoordination;
+  sourceIdentity?: string;
+};
 
 export type EncodedTranscriptFtsChunk = {
   rows: Array<{
@@ -54,7 +65,7 @@ export type SessionTranscriptReconcileWorkerMessage =
       rows: PreparedSessionTranscriptProjection["activeRows"];
       sessionId: string;
     }
-  | { type: "done" }
+  | { type: "done"; yielded: boolean }
   | { type: "failed"; error: string }
   | { type: "lease-released" }
   | { type: "lease-release-failed"; error: string }
@@ -63,13 +74,16 @@ export type SessionTranscriptReconcileWorkerMessage =
   | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata }
   | { type: "source-read"; sessionId: string };
 
-type SessionTranscriptReconcileWorkerCommand = { accepted: boolean; type: "continue" };
+type SessionTranscriptReconcileWorkerCommand = {
+  accepted: boolean;
+  type: "continue";
+  yield?: true;
+};
 
-function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseWorkerInput(input: unknown): SessionTranscriptReconcileWorkerInput | undefined {
+  if (!isRecord(input)) {
     return undefined;
   }
-  const input = value as Record<string, unknown>;
   if (
     input.mode === "memory" &&
     Array.isArray(input.sessionIds) &&
@@ -81,22 +95,26 @@ function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput
     return undefined;
   }
   const owner = { stateDir: input.stateDir, externallySupervised: input.externallySupervised };
-  if (input.mode === "release" && typeof input.leaseId === "string") {
-    return { ...owner, mode: "release", leaseId: input.leaseId };
+  if (
+    input.mode === "release" &&
+    typeof input.leaseId === "string" &&
+    typeof input.path === "string"
+  ) {
+    return { ...owner, mode: "release", leaseId: input.leaseId, path: input.path };
   }
-  if (typeof input.agentId !== "string" || typeof input.path !== "string") {
-    return undefined;
-  }
-  if (input.preferredSessionId !== undefined && typeof input.preferredSessionId !== "string") {
+  if (
+    typeof input.agentId !== "string" ||
+    typeof input.path !== "string" ||
+    !Array.isArray(input.sessionIds) ||
+    !input.sessionIds.every((sessionId) => typeof sessionId === "string")
+  ) {
     return undefined;
   }
   const plan = {
     ...owner,
     agentId: input.agentId,
     path: input.path,
-    ...(typeof input.preferredSessionId === "string"
-      ? { preferredSessionId: input.preferredSessionId }
-      : {}),
+    sessionIds: input.sessionIds,
   };
   if (input.mode === "disk" && typeof input.leaseId === "string") {
     return { ...plan, mode: "disk", leaseId: input.leaseId };
@@ -104,22 +122,6 @@ function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput
   return undefined;
 }
 
-function orderSessionIds(sessionIds: string[], preferredSessionId: string | undefined): string[] {
-  if (!preferredSessionId || !sessionIds.includes(preferredSessionId)) {
-    return sessionIds;
-  }
-  return [
-    preferredSessionId,
-    ...sessionIds.filter((sessionId) => sessionId !== preferredSessionId),
-  ];
-}
-
-const parsedInput = parseWorkerInput(workerData);
-if (!parentPort || !parsedInput) {
-  throw new Error("session transcript reconcile worker requires valid worker data");
-}
-const port = parentPort;
-const input: SessionTranscriptReconcileWorkerInput = parsedInput;
 function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
   return {
     OPENCLAW_STATE_DIR: owner.stateDir,
@@ -127,39 +129,62 @@ function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
   };
 }
 
-function releaseLease(owner: ReconcileWorkerOwner & { leaseId: string }): void {
+function releaseLease(
+  owner: ReconcileWorkerOwner & { leaseId: string; path: string },
+  port: MessagePort,
+  readOnlyClosed = false,
+): void {
+  let failure: Error | undefined;
   try {
-    releaseOpenClawAgentDatabaseLease(owner.leaseId, { env: resolveLeaseEnvironment(owner) });
-    closeOpenClawStateDatabase();
-    port.postMessage({ type: "lease-released" } satisfies SessionTranscriptReconcileWorkerMessage);
+    releaseOpenClawAgentDatabaseLease(
+      owner.leaseId,
+      { env: resolveLeaseEnvironment(owner), initializationAgentPaths: [owner.path] },
+      readOnlyClosed ? "read-only" : undefined,
+    );
   } catch (error) {
+    failure = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    closeOpenClawStateDatabase();
+  }
+  if (failure) {
     port.postMessage({
       type: "lease-release-failed",
-      error: error instanceof Error ? error.message : String(error),
+      error: failure.message,
     } satisfies SessionTranscriptReconcileWorkerMessage);
-  } finally {
-    port.close();
+  } else {
+    port.postMessage({ type: "lease-released" } satisfies SessionTranscriptReconcileWorkerMessage);
   }
+  port.close();
 }
 
-function waitForContinue(): Promise<boolean> {
+function waitForContinue(port: MessagePort): Promise<SessionTranscriptReconcileWorkerCommand> {
   return new Promise((resolve, reject) => {
-    port.once("message", (message: SessionTranscriptReconcileWorkerCommand) => {
-      if (message?.type !== "continue" || typeof message.accepted !== "boolean") {
+    port.once("message", (message: unknown) => {
+      if (
+        !isRecord(message) ||
+        message.type !== "continue" ||
+        typeof message.accepted !== "boolean" ||
+        (message.yield !== undefined && message.yield !== true)
+      ) {
         reject(new Error("session transcript reconcile worker received an invalid command"));
         return;
       }
-      resolve(message.accepted);
+      resolve({
+        accepted: message.accepted,
+        type: "continue",
+        ...(message.yield === true ? { yield: true } : {}),
+      });
     });
   });
 }
 
 async function postAndWait(
+  port: MessagePort,
   message: SessionTranscriptReconcileWorkerMessage,
   transferList: ArrayBuffer[] = [],
-): Promise<boolean> {
+): Promise<SessionTranscriptReconcileWorkerCommand> {
   port.postMessage(message, transferList);
-  return await waitForContinue();
+  return await waitForContinue(port);
 }
 
 function encodeFtsChunk(rows: readonly TranscriptIndexEntry[]): EncodedTranscriptFtsChunk {
@@ -196,37 +221,44 @@ function takeFtsChunkEnd(rows: readonly TranscriptIndexEntry[], start: number): 
   return end;
 }
 
-async function streamPreparedProjection(plan: PreparedSessionTranscriptProjection): Promise<void> {
+async function streamPreparedProjection(
+  plan: PreparedSessionTranscriptProjection,
+  port: MessagePort,
+): Promise<boolean> {
   const { activeRows, ftsRows, ...metadata } = plan;
-  if (!(await postAndWait({ type: "plan-start", plan: metadata }))) {
-    return;
+  if (!(await postAndWait(port, { type: "plan-start", plan: metadata })).accepted) {
+    return false;
   }
   for (let offset = 0; offset < activeRows.length; offset += ACTIVE_ROWS_PER_CHUNK) {
     if (
-      !(await postAndWait({
-        type: "active-chunk",
-        rows: activeRows.slice(offset, offset + ACTIVE_ROWS_PER_CHUNK),
-        sessionId: plan.sessionId,
-      }))
+      !(
+        await postAndWait(port, {
+          type: "active-chunk",
+          rows: activeRows.slice(offset, offset + ACTIVE_ROWS_PER_CHUNK),
+          sessionId: plan.sessionId,
+        })
+      ).accepted
     ) {
-      return;
+      return false;
     }
   }
   for (let offset = 0; offset < ftsRows.length;) {
     const end = takeFtsChunkEnd(ftsRows, offset);
     const chunk = encodeFtsChunk(ftsRows.slice(offset, end));
-    const accepted = await postAndWait({ type: "fts-chunk", chunk, sessionId: plan.sessionId }, [
+    const reply = await postAndWait(port, { type: "fts-chunk", chunk, sessionId: plan.sessionId }, [
       chunk.textBytes.buffer,
     ]);
-    if (!accepted) {
-      return;
+    if (!reply.accepted) {
+      return false;
     }
     offset = end;
   }
-  await postAndWait({ type: "plan-finish", sessionId: plan.sessionId });
+  return (
+    (await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId })).yield === true
+  );
 }
 
-async function prepareMemoryProjection(sessionId: string) {
+async function prepareMemoryProjection(sessionId: string, port: MessagePort) {
   const rows = new Map<number, SessionTranscriptProjectionRow>();
   const decoder = new TextDecoder();
   let fragments: string[] = [];
@@ -247,6 +279,7 @@ async function prepareMemoryProjection(sessionId: string) {
         sessionId,
         frame.snapshot.transcriptUpdatedAt,
         rows,
+        frame.snapshot.generation,
       );
       rows.clear();
       return plan;
@@ -263,9 +296,22 @@ async function prepareMemoryProjection(sessionId: string) {
   }
 }
 
-async function run(): Promise<void> {
+async function run(
+  input: SessionTranscriptReconcileWorkerInput,
+  port: MessagePort,
+  coordination?: SqliteMutationWorkerCoordination,
+  sourceIdentity?: string,
+): Promise<void> {
+  const assertSource = () => {
+    if (input.mode === "disk") {
+      if (!sourceIdentity) {
+        throw new Error("Transcript worker lost its captured source identity");
+      }
+      assertExistingDatabaseIdentity(input.path, sourceIdentity);
+    }
+  };
   if (input.mode === "release") {
-    releaseLease(input);
+    releaseLease(input, port);
     return;
   }
   const reconcileInput = input;
@@ -284,6 +330,13 @@ async function run(): Promise<void> {
         path: reconcileInput.path,
         env: resolveLeaseEnvironment(reconcileInput),
       };
+      assertSource();
+      if (coordination?.reconciliation) {
+        assertExistingDatabaseIdentity(
+          coordination.databasePath,
+          coordination.reconciliation.identity,
+        );
+      }
       // The parent knows this identity before admission, even if native exit prevents a reply.
       claimOpenClawAgentDatabaseLease(options, reconcileInput.leaseId);
       const opened = openOpenClawAgentDatabaseReadOnly(options);
@@ -293,23 +346,21 @@ async function run(): Promise<void> {
       closeDatabase = opened.database.close;
       return opened.database;
     })();
-    const sessionIds =
-      reconcileInput.mode === "memory"
-        ? reconcileInput.sessionIds
-        : orderSessionIds(
-            listSessionsNeedingTranscriptIndexReconcile(database!.db),
-            reconcileInput.preferredSessionId,
-          );
-    for (const sessionId of sessionIds) {
+    const sessionIds = reconcileInput.sessionIds;
+    let yielded = false;
+    for (const [index, sessionId] of sessionIds.entries()) {
       const plan =
         reconcileInput.mode === "memory"
-          ? await prepareMemoryProjection(sessionId)
+          ? await prepareMemoryProjection(sessionId, port)
           : prepareSessionTranscriptProjection(database!.db, sessionId);
       if (plan) {
-        await streamPreparedProjection(plan);
+        if (await streamPreparedProjection(plan, port)) {
+          yielded = index < sessionIds.length - 1;
+          break;
+        }
       }
     }
-    terminalMessage = { type: "done" };
+    terminalMessage = { type: "done", yielded };
   } catch (error) {
     terminalMessage = {
       type: "failed",
@@ -318,16 +369,27 @@ async function run(): Promise<void> {
   }
 
   try {
-    closeDatabase?.();
+    // The original read handle and lease remain pinned through the final native phase.
+    if (!coordination?.reconciliation) {
+      closeDatabase?.();
+    }
     port.postMessage(terminalMessage);
     if (reconcileInput.mode === "disk") {
       // The final parent write must finish before this independent deletion fence is released.
-      port.once("message", (message: { type?: unknown }) => {
-        if (message?.type !== "release") {
-          throw new Error("session transcript reconcile worker expected lease release");
-        }
-        releaseLease(reconcileInput);
+      await new Promise<void>((resolve, reject) => {
+        port.once("message", (message: { type?: unknown }) => {
+          if (message?.type !== "release") {
+            reject(new Error("session transcript reconcile worker expected lease release"));
+            return;
+          }
+          resolve();
+        });
       });
+      // Cleanup uses the handles and lease opened by this task, even after retirement.
+      if (coordination?.reconciliation) {
+        closeDatabase?.();
+      }
+      releaseLease(reconcileInput, port, closeDatabase !== undefined);
     }
   } finally {
     if (reconcileInput.mode === "memory") {
@@ -336,4 +398,35 @@ async function run(): Promise<void> {
   }
 }
 
-void run();
+serveWorkerTasks(
+  async (value) => {
+    if (!value || typeof value !== "object" || !("input" in value) || !("port" in value)) {
+      throw new Error("session transcript reconcile worker requires a task");
+    }
+    const input = parseWorkerInput(value.input);
+    if (!input || !(value.port instanceof MessagePort)) {
+      throw new Error("session transcript reconcile worker requires valid task data");
+    }
+    const port = value.port;
+    // SAFETY: The pool owns this private task and its retained phase admission.
+    const { coordination, sourceIdentity } = value as SessionTranscriptReconcileWorkerTask;
+    try {
+      if (input.mode === "memory") {
+        await run(input, port);
+      } else {
+        if (
+          !coordination?.reconciliation ||
+          coordination.actorId !== `transcript:${input.mode}:${input.leaseId}` ||
+          coordination.databasePath !==
+            resolveOpenClawStateSqlitePath(resolveLeaseEnvironment(input))
+        ) {
+          throw new Error("Transcript worker shared-state owner changed");
+        }
+        await run(input, port, coordination, sourceIdentity);
+      }
+    } finally {
+      value.port.close();
+    }
+  },
+  { retireOnError: true },
+);

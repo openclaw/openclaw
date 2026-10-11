@@ -4,14 +4,26 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
+
+const mocks = vi.hoisted(() => ({ readConfigSnapshot: vi.fn(), runGateway: vi.fn() }));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigSnapshot,
+}));
+// mock-isolation: Gateway host initialization must not alter the plugin generation being tested.
+vi.mock("../cli/gateway-cli/run.js", () => ({ runGatewayCommand: mocks.runGateway }));
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
+  waitForGatewayReachable: async () => ({ ok: false }),
+}));
 
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
@@ -69,7 +81,7 @@ it.each([false, true])(
             );
             // Package acquisition is synthetic; the install ledger and post-install invalidation are real.
             await withPluginLifecycleLease({}, async () => {
-              await writePersistedInstalledPluginIndexInstallRecords(
+              await seedInstalledPluginIndex(
                 {
                   codex: {
                     source: "npm",
@@ -93,17 +105,13 @@ it.each([false, true])(
               inventories.push(read.pluginMetadataSnapshot?.byPluginId.has("codex") ?? false);
               return { config: read.snapshot.config };
             };
-            await runQuickstartForegroundGateway(
-              { runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } },
-              {
-                readConfigSnapshot: readStartupConfig,
-                runGateway: async () => {
-                  await readStartupConfig();
-                },
-                waitForGateway: async () => ({ ok: false }),
-                runBrowserHandoff: async () => ({ handedOff: false, reason: "timeout" }),
-              },
-            );
+            mocks.readConfigSnapshot.mockImplementation(readStartupConfig);
+            mocks.runGateway.mockImplementation(async () => {
+              await readStartupConfig();
+            });
+            await runQuickstartForegroundGateway({
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            });
             expect(inventories).toEqual([true, true]);
             expect(readMetadata().byPluginId.has("codex")).toBe(!pinnedCaller);
           };

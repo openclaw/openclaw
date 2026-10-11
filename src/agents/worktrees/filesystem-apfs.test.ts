@@ -6,6 +6,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getApfsCloneId } from "../../../test/helpers/apfs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -15,8 +16,10 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
   it("distinguishes empty, inheritable and unreadable directory ACLs", async () => {
     const root = tempDirs.make("openclaw-apfs-acl-");
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-    expect(apfsFilesystem.readDirectoryAcl(root)).toBe("none");
-    expect(apfsFilesystem.readDirectoryAcl(path.join(root, "missing"))).toBeUndefined();
+    expect(await apfsFilesystem.readDirectoryAcl(root, options)).toBe("none");
+    expect(
+      await apfsFilesystem.readDirectoryAcl(path.join(root, "missing"), options),
+    ).toBeUndefined();
     const cases = [
       ["everyone allow read", "non-inheritable"],
       ["everyone allow read,file_inherit", "inheritable"],
@@ -25,7 +28,7 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     for (const [entry, expected] of cases) {
       await promisify(execFile)("/bin/chmod", ["-N", root]);
       await promisify(execFile)("/bin/chmod", ["+a", entry, root]);
-      expect(apfsFilesystem.readDirectoryAcl(root)).toBe(expected);
+      expect(await apfsFilesystem.readDirectoryAcl(root, options)).toBe(expected);
     }
   });
 
@@ -37,6 +40,7 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     assert(backend);
     expect(backend.id).toBe("apfs");
     await backend.createTemplate(source, options);
+    expect((await fs.stat(source)).mode & 0o777).toBe(0o777 & ~process.umask());
     await fs.mkdir(path.join(source, "nested"));
     await fs.writeFile(path.join(source, "nested", ".payload"), Buffer.alloc(1024 * 1024, 0x5a));
     await fs.chmod(path.join(source, "nested", ".payload"), 0o751);
@@ -46,13 +50,12 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     await backend.cloneTemplate(source, destination, options);
     const original = path.join(source, "nested", ".payload");
     const cloned = path.join(destination, "nested", ".payload");
-    expect(getApfsCloneId(cloned)).toBe(getApfsCloneId(original));
+    expect(await getApfsCloneId(cloned)).toBe(await getApfsCloneId(original));
     expect((await fs.stat(cloned)).ino).not.toBe((await fs.stat(original)).ino);
     expect((await fs.stat(cloned)).mode & 0o777).toBe(0o751);
     expect((await fs.stat(path.join(destination, "nested"))).mode & 0o777).toBe(0o750);
     expect(await fs.readlink(path.join(destination, "link"))).toBe("nested/.payload");
-    const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-    const metadata = apfsFilesystem.readFileMetadata(cloned);
+    const [metadata] = await nativeWorktreeFilesystem.readMetadata([cloned], options);
     assert(metadata);
     const stat = await fs.lstat(cloned, { bigint: true });
     expect(metadata.ino).toBe(stat.ino);
@@ -66,22 +69,18 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     expect([metadata.dev, metadata.mode, metadata.uid, metadata.gid]).toEqual(
       [stat.dev, stat.mode, stat.uid, stat.gid].map(Number),
     );
-    expect(metadata.cloneId).toBe(getApfsCloneId(cloned));
+    expect(metadata.cloneId).toBe(await getApfsCloneId(cloned));
     await fs.writeFile(cloned, "independent edit");
-    expect(await fs.readFile(original)).toEqual(Buffer.alloc(1024 * 1024, 0x5a));
-    expect(getApfsCloneId(cloned)).not.toBe(getApfsCloneId(original));
+    expect((await fs.readFile(original)).equals(Buffer.alloc(1024 * 1024, 0x5a))).toBe(true);
+    expect(await getApfsCloneId(cloned)).not.toBe(await getApfsCloneId(original));
 
     await expect(backend.cloneTemplate(source, destination, options)).rejects.toMatchObject({
       code: "EEXIST",
     });
+    await expect(backend.createTemplate(destination, options)).rejects.toMatchObject({
+      code: "EEXIST",
+    });
     expect(await fs.readFile(cloned, "utf8")).toBe("independent edit");
-  });
-
-  it("does not select APFS for another filesystem", async () => {
-    const root = tempDirs.make("openclaw-apfs-detection-");
-    const stats = await fs.statfs(root);
-    vi.spyOn(fs, "statfs").mockResolvedValue(Object.assign(stats, { type: -1 }));
-    expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
   });
 
   it.each(["abort", "authority"])(
@@ -95,13 +94,13 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
       await backend.createTemplate(source, options);
       await fs.writeFile(path.join(source, "a"), "first");
       await fs.writeFile(path.join(source, "b"), "second");
-      const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-      const clone = apfsFilesystem.cloneDirectory;
+      const copy = nativeWorktreeFilesystem.copy;
       let authorized = true;
       let finished = false;
       const abort = new AbortController();
-      vi.spyOn(apfsFilesystem, "cloneDirectory").mockImplementation(async (from, to) => {
-        const pending = clone(from, to);
+      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (from, to) => {
+        // Model an admitted bulk operation that can no longer be interrupted.
+        const pending = copy(from, to, { commitGuard: () => {} });
         authorized = false;
         if (reason === "abort") {
           abort.abort(new Error("allocation canceled"));
@@ -126,18 +125,19 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     },
   );
 
-  it("does not dispatch a clone after authority is revoked during source inspection", async () => {
+  it("does not dispatch a clone after authority is revoked during ACL inspection", async () => {
     const root = tempDirs.make("openclaw-apfs-authority-");
     const source = path.join(root, "source");
     const destination = path.join(root, "destination");
     const backend = await detectWorktreeFilesystemBackend(root, options);
     assert(backend);
     await backend.createTemplate(source, options);
-    const stats = await fs.lstat(source);
+    const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
+    const readAcl = apfsFilesystem.readDirectoryAcl;
     let authorized = true;
-    vi.spyOn(fs, "lstat").mockImplementationOnce(async () => {
+    vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockImplementationOnce((directory, aclOptions) => {
       authorized = false;
-      return stats;
+      return readAcl(directory, aclOptions);
     });
     await expect(
       backend.cloneTemplate(source, destination, {

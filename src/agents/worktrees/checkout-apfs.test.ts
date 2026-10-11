@@ -2,10 +2,12 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { setImmediate } from "node:timers";
 import timers from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 const exec = promisify(execFile);
 const originalTime = 1_600_000_000;
@@ -58,8 +60,7 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
       await git(destination, "rev-parse", "--git-path", "index"),
     );
     await fs.rm(destination, { recursive: true });
-    const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-    await apfsFilesystem.cloneDirectory(source, destination);
+    await nativeWorktreeFilesystem.copy(source, destination, { commitGuard: () => {} });
     const cloneCompletedAtMs = Date.now();
     // This fixture's source owns .git; the managed service clones a linked template.
     await fs.rm(path.join(destination, ".git"), { recursive: true });
@@ -155,5 +156,47 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
       }),
     ).rejects.toThrow("allocation lease lost");
     await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("observes allocation authority loss while skipping ineligible entries", async () => {
+    const f = await fixture();
+    await fs.utimes(f.sourceIndex, originalTime, originalTime);
+    let authorized = true;
+    await expect(
+      f.copy(() => {
+        if (!authorized) {
+          throw new Error("allocation lease lost");
+        }
+        setImmediate(() => {
+          authorized = false;
+        });
+      }),
+    ).rejects.toThrow("allocation lease lost");
+    await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("leaves files changed during a metadata batch for Git to validate", async () => {
+    const f = await fixture();
+    const before = await git(f.source, "ls-files", "--debug", "clean");
+    const readMetadata = nativeWorktreeFilesystem.readMetadata;
+    const now = vi.spyOn(Date, "now");
+    const metadata = vi
+      .spyOn(nativeWorktreeFilesystem, "readMetadata")
+      .mockImplementation(async (files, options) => {
+        const file = path.join(f.destination, "clean");
+        await fs.chmod(file, (await fs.stat(file)).mode & 0o777);
+        const values = await readMetadata(files, options);
+        now.mockReturnValue(Date.now() + 2_000);
+        return values;
+      });
+    try {
+      expect(await f.copy()).toBe(true);
+    } finally {
+      metadata.mockRestore();
+      now.mockRestore();
+    }
+    expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(before);
+    await git(f.destination, "update-index", "--refresh");
+    expect(await git(f.destination, "status", "--porcelain")).toBe("");
   });
 });

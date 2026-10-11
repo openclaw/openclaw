@@ -1,17 +1,17 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderSecurity } from "./security.ts";
 
 type SecurityViewProps = Parameters<typeof renderSecurity>[0];
 
-type SecurityControl = HTMLElement & { checked?: boolean; disabled: boolean };
+type SecurityControl = HTMLButtonElement | HTMLLabelElement;
 
 function expectButtonByText(container: Element, text: string): SecurityControl {
-  const button = Array.from(container.querySelectorAll<SecurityControl>("button, wa-radio")).find(
-    (candidate) => candidate.textContent?.trim() === text,
-  );
+  const button = Array.from(
+    container.querySelectorAll<SecurityControl>("button, .settings-segmented__btn"),
+  ).find((candidate) => candidate.textContent?.trim() === text);
   if (!(button instanceof HTMLElement)) {
     throw new Error(`Expected button labelled ${text}`);
   }
@@ -19,16 +19,7 @@ function expectButtonByText(container: Element, text: string): SecurityControl {
 }
 
 function selectRadio(control: SecurityControl) {
-  if (control.checked) {
-    return;
-  }
-  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
-  expect(group).not.toBeNull();
-  if (!group) {
-    return;
-  }
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  control.querySelector<HTMLInputElement>(".settings-segmented__input")!.click();
 }
 
 function expectRowByTitle(container: Element, text: string): HTMLElement {
@@ -66,6 +57,8 @@ describe("renderSecurity", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
     render(
       renderSecurity(
@@ -86,14 +79,13 @@ describe("renderSecurity", () => {
     );
 
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    const browserInput = browserRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-    expect(browserInput).toBeInstanceOf(HTMLElement);
+    const browserInput = browserRow.querySelector<HTMLInputElement>(".settings-toggle__input");
+    expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect(browserInput?.checked).toBe(false);
     if (!browserInput) {
       throw new Error("Expected browser switch");
     }
-    browserInput.checked = true;
-    browserInput.dispatchEvent(new Event("change"));
+    browserInput.click();
     expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
 
     selectRadio(expectButtonByText(container, "Full"));
@@ -108,14 +100,19 @@ describe("renderSecurity", () => {
 
     render(renderSecurity(createProps({ configBusy: true, onToolProfileChange })), container);
 
-    const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "Full");
+    const profileButton = expectButtonByText(
+      expectRowByTitle(container, "Available tools"),
+      "Full",
+    );
     expect(
-      (profileButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      profileButton.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled,
     ).toBe(true);
     profileButton.click();
     expect(onToolProfileChange).not.toHaveBeenCalled();
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(browserRow.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(
+      true,
+    );
   });
 
   it("shows gateway auth as a dot status, not a pill", () => {
@@ -129,7 +126,7 @@ describe("renderSecurity", () => {
             execPolicy: "allowlist",
             browserEnabled: true,
             browserEnabledOverridden: false,
-            toolProfile: "full",
+            toolProfile: "",
             toolProfileOverridden: false,
           },
         }),
@@ -151,7 +148,7 @@ describe("renderSecurity", () => {
 
     expectRowByTitle(container, "Pair a device");
     const button = expectButtonByText(container, "Pair device");
-    expect(button.disabled).toBe(false);
+    expect(button).toHaveProperty("disabled", false);
     button.click();
     expect(onPairMobile).toHaveBeenCalledOnce();
   });
@@ -180,7 +177,7 @@ describe("renderSecurity", () => {
             execPolicy: "allowlist",
             browserEnabled: true,
             browserEnabledOverridden: false,
-            toolProfile: "full",
+            toolProfile: "",
             toolProfileOverridden: false,
           },
         }),
@@ -188,11 +185,51 @@ describe("renderSecurity", () => {
       container,
     );
 
-    expect(expectRowByTitle(container, "Browser enabled").textContent).toContain(
-      "Using default: Enabled",
+    expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
+      "Using default:",
     );
-    expect(expectRowByTitle(container, "Tool profile").textContent).toContain(
-      "Using default: Full",
+    expect(expectRowByTitle(container, "Available tools").textContent).toContain(
+      "Using core and default plugin tools. Choose Full to include available optional plugin tools.",
     );
   });
+
+  it.each([
+    { profile: "", overridden: false, busy: false, writes: 1 },
+    { profile: "full", overridden: true, busy: false, writes: 0 },
+    { profile: "", overridden: false, busy: true, writes: 0 },
+  ])(
+    "selects Full without a reselection path: $profile/$busy",
+    ({ profile, overridden, busy, writes }) => {
+      const props = createProps();
+      const onToolProfileChange = vi.fn();
+      const container = document.createElement("div");
+      document.body.append(container);
+      onTestFinished(() => container.remove());
+      render(
+        renderSecurity({
+          ...props,
+          security: { ...props.security, toolProfile: profile, toolProfileOverridden: overridden },
+          configBusy: busy,
+          onToolProfileChange,
+        }),
+        container,
+      );
+
+      expect(onToolProfileChange).not.toHaveBeenCalled();
+      expect(container.querySelectorAll(".settings-segmented__input")).toHaveLength(4);
+      expect(container.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(
+        overridden ? 1 : 0,
+      );
+      const full = expectButtonByText(container, "Full");
+      if (busy || overridden) {
+        full.click();
+      } else {
+        selectRadio(full);
+      }
+      expect(onToolProfileChange).toHaveBeenCalledTimes(writes);
+      if (writes > 0) {
+        expect(onToolProfileChange).toHaveBeenCalledWith("full");
+      }
+    },
+  );
 });

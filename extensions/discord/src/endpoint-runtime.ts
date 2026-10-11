@@ -21,7 +21,11 @@ type DiscordEndpointDescriptor = Readonly<{
 
 export type DiscordEndpointRuntime = Readonly<{
   descriptor: DiscordEndpointDescriptor;
-  fetch: typeof fetch;
+  fetch: (
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+    beforeRequest?: () => void,
+  ) => ReturnType<typeof fetch>;
 }>;
 
 function parseHttpAnchor(value: string, label: string): URL {
@@ -49,29 +53,6 @@ function normalizeRestApiBaseUrl(value: string): URL {
   return url;
 }
 
-function normalizeGatewayOrigin(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("Discord endpoint Gateway origin must be a valid URL");
-  }
-  if (url.protocol !== "wss:" && !(url.protocol === "ws:" && isLoopbackHost(url.hostname))) {
-    throw new Error("Discord endpoint Gateway origin must use WSS or loopback WS");
-  }
-  if (url.protocol === "wss:" && isBlockedHostnameOrIp(url.hostname)) {
-    throw new Error(
-      "Discord endpoint Gateway origin must not target a private/internal/special-use hostname or IP address",
-    );
-  }
-  if (url.username || url.password || url.hash || url.pathname !== "/" || url.search) {
-    throw new Error(
-      "Discord endpoint Gateway origin must be an origin without credentials, path, query, or fragment",
-    );
-  }
-  return url.origin;
-}
-
 function resolveDescriptor(apiUrl: string): DiscordEndpointDescriptor {
   const restApiBaseUrl = normalizeRestApiBaseUrl(apiUrl);
   const gatewayBotUrl = new URL(
@@ -80,10 +61,16 @@ function resolveDescriptor(apiUrl: string): DiscordEndpointDescriptor {
   );
   const gatewayOriginUrl = new URL(restApiBaseUrl.origin);
   gatewayOriginUrl.protocol = gatewayOriginUrl.protocol === "https:" ? "wss:" : "ws:";
+  // Scheme and origin shape come from the validated REST anchor; TLS still forbids private hosts.
+  if (gatewayOriginUrl.protocol === "wss:" && isBlockedHostnameOrIp(gatewayOriginUrl.hostname)) {
+    throw new Error(
+      "Discord endpoint Gateway origin must not target a private/internal/special-use hostname or IP address",
+    );
+  }
   return Object.freeze({
     restApiBaseUrl: restApiBaseUrl.toString().replace(/\/$/u, ""),
     gatewayBotUrl: gatewayBotUrl.toString(),
-    gatewayOrigin: normalizeGatewayOrigin(gatewayOriginUrl.origin),
+    gatewayOrigin: gatewayOriginUrl.origin,
   });
 }
 
@@ -109,13 +96,10 @@ function assertEndpointHttpTarget(target: URL, descriptor: DiscordEndpointDescri
 }
 
 function requestInitFromRequest(request: Request, signal: AbortSignal): RequestInit {
-  const rawDuplex: unknown = Reflect.get(request, "duplex");
   return {
     method: request.method,
     headers: request.headers,
-    ...(request.body
-      ? { body: request.body, ...(rawDuplex === "half" ? { duplex: "half" as const } : {}) }
-      : {}),
+    ...(request.body ? { body: request.body, duplex: "half" as const } : {}),
     signal,
     cache: request.cache,
     credentials: request.credentials,
@@ -127,11 +111,13 @@ function requestInitFromRequest(request: Request, signal: AbortSignal): RequestI
   };
 }
 
-function createEndpointFetch(descriptor: DiscordEndpointDescriptor): typeof fetch {
+function createEndpointFetch(
+  descriptor: DiscordEndpointDescriptor,
+): DiscordEndpointRuntime["fetch"] {
   const allowedOrigins = Array.from(
     new Set([new URL(descriptor.restApiBaseUrl).origin, new URL(descriptor.gatewayBotUrl).origin]),
   );
-  return async (input, init) => {
+  return async (input, init, beforeRequest) => {
     const request = new Request(input, init);
     const target = new URL(request.url);
     assertEndpointHttpTarget(target, descriptor);
@@ -144,6 +130,7 @@ function createEndpointFetch(descriptor: DiscordEndpointDescriptor): typeof fetc
       maxRedirects: 0,
       capture: false,
       auditContext: "discord.endpoint-runtime",
+      beforeRequest,
     });
     try {
       const body = await readResponseWithLimit(
@@ -183,26 +170,20 @@ export function resolveDiscordEndpointMediaGuard(
   url: string,
   retainedRuntime?: DiscordEndpointRuntime | null,
 ): Readonly<{ maxRedirects: 0; ssrfPolicy: SsrFPolicy }> | undefined {
-  if (retainedRuntime === null) {
-    return undefined;
-  }
-  const runtime = retainedRuntime ?? getDiscordEndpointRuntime();
-  if (!runtime) {
-    return undefined;
-  }
-  const target = parseHttpAnchor(url, "Discord endpoint media URL");
-  const restOrigin = new URL(runtime.descriptor.restApiBaseUrl).origin;
-  if (target.origin !== restOrigin) {
-    throw new Error("Discord endpoint media URL is outside the configured REST origin");
-  }
-  return {
-    maxRedirects: 0,
-    ssrfPolicy: { allowedOrigins: [restOrigin], hostnameAllowlist: [target.hostname] },
-  };
+  const guard = resolveEndpointResourceGuard(url, "media", retainedRuntime);
+  return guard ? { maxRedirects: guard.maxRedirects, ssrfPolicy: guard.policy } : undefined;
 }
 
 export function resolveDiscordEndpointAttachmentGuard(
   url: string,
+  retainedRuntime?: DiscordEndpointRuntime | null,
+): Readonly<{ maxRedirects: 0; policy: SsrFPolicy; requireHttps: boolean }> | undefined {
+  return resolveEndpointResourceGuard(url, "attachment upload", retainedRuntime);
+}
+
+function resolveEndpointResourceGuard(
+  url: string,
+  kind: "media" | "attachment upload",
   retainedRuntime?: DiscordEndpointRuntime | null,
 ): Readonly<{ maxRedirects: 0; policy: SsrFPolicy; requireHttps: boolean }> | undefined {
   if (retainedRuntime === null) {
@@ -212,10 +193,10 @@ export function resolveDiscordEndpointAttachmentGuard(
   if (!runtime) {
     return undefined;
   }
-  const target = parseHttpAnchor(url, "Discord endpoint attachment upload URL");
+  const target = parseHttpAnchor(url, `Discord endpoint ${kind} URL`);
   const restOrigin = new URL(runtime.descriptor.restApiBaseUrl).origin;
   if (target.origin !== restOrigin) {
-    throw new Error("Discord endpoint attachment upload URL is outside the configured REST origin");
+    throw new Error(`Discord endpoint ${kind} URL is outside the configured REST origin`);
   }
   return {
     maxRedirects: 0,

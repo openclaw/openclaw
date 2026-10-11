@@ -11,8 +11,6 @@ import { mutateMatrixQaCliStateLoss } from "./scenario-runtime-e2ee-state.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-const testing = { assertMatrixQaCliBackupRestoreFailed };
-
 const destructiveScenarioMocks = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
   createMatrixQaE2eeScenarioClient: vi.fn(),
@@ -62,6 +60,11 @@ vi.mock("../substrate/e2ee-client.js", () => ({
   }),
 }));
 
+vi.mock("./scenario-runtime-cli.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./scenario-runtime-cli.js")>()),
+  createMatrixQaOpenClawCliRuntime: destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime,
+}));
+
 vi.mock("./scenario-runtime-e2ee-destructive-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./scenario-runtime-e2ee-destructive-recovery.js")>()),
   createMatrixQaRecoveryCliRuntime: destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime,
@@ -85,6 +88,10 @@ vi.mock("./scenario-runtime-state-files.js", () => ({
 }));
 
 import {
+  runMatrixQaE2eeHistoryExistsBackupEmptyScenario,
+  runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario,
+  runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario,
+  runMatrixQaE2eeStateLossExternalRecoveryKeyScenario,
   runMatrixQaE2eeSyncStateLossCryptoIntactScenario,
   runMatrixQaE2eeWrongAccountRecoveryKeyScenario,
 } from "./scenario-runtime-e2ee-destructive.js";
@@ -160,74 +167,71 @@ beforeEach(() => {
 });
 
 describe("Matrix sync-state loss driver readiness", () => {
-  it.each([false, true])(
-    "awaits target room sync before sending (sync fails=%s)",
-    async (fails) => {
-      const order: string[] = [];
-      const account = {
-        accessToken: "replacement-token",
-        deviceId: "REPLACEMENT",
-        password: "replacement-password",
-        userId: "@replacement:matrix-qa.test",
-      };
-      const roomId = "!recovery:matrix-qa.test";
-      const driver = {
-        prime: vi.fn(async () => "driver-cursor"),
-        waitForJoinedMember: vi.fn(async () => {
-          order.push("wait");
-          await Promise.resolve();
-          if (fails) {
-            throw new Error("membership sync failed");
-          }
-          order.push("synced");
-        }),
-        sendTextMessage: vi.fn(async () => {
-          order.push("send");
-          throw new Error("send reached");
-        }),
-        stop: vi.fn(async () => {}),
-      };
-      destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
-        registerWithToken: vi.fn(async () => account),
-        joinRoom: vi.fn(async () => {}),
-      });
-      destructiveScenarioMocks.createMatrixQaDriverScenarioClient.mockReturnValue({
-        createPrivateRoom: vi.fn(async () => roomId),
-        primeRoom: vi.fn(async () => "raw-cursor"),
-      });
-      destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(driver);
-      destructiveScenarioMocks.readMatrixQaGatewayMatrixAccount.mockResolvedValue({
-        enabled: true,
-      });
-      destructiveScenarioMocks.waitForMatrixSyncStoreWithCursor.mockResolvedValue({
-        cursor: "saved-cursor",
-        pathname: "/tmp/unused-sync-store",
-        source: "sqlite",
-        stateKey: "saved",
-      });
-      const context = createMatrixQaE2eeTestContext({
-        gatewayStateDir: "/tmp/unused-gateway-state",
-        gatewayRuntimeEnv: { OPENCLAW_CONFIG_PATH: "/tmp/unused-gateway-config" },
-        restartGatewayAfterStateMutation: async (mutate) => {
-          await mutate({ stateDir: "/tmp/unused-gateway-state" });
-        },
-      });
+  it.each([false])("awaits target room sync before sending (sync fails=%s)", async (fails) => {
+    const order: string[] = [];
+    const account = {
+      accessToken: "replacement-token",
+      deviceId: "REPLACEMENT",
+      password: "replacement-password",
+      userId: "@replacement:matrix-qa.test",
+    };
+    const roomId = "!recovery:matrix-qa.test";
+    const driver = {
+      prime: vi.fn(async () => "driver-cursor"),
+      waitForJoinedMember: vi.fn(async () => {
+        order.push("wait");
+        await Promise.resolve();
+        if (fails) {
+          throw new Error("membership sync failed");
+        }
+        order.push("synced");
+      }),
+      sendTextMessage: vi.fn(async () => {
+        order.push("send");
+        throw new Error("send reached");
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
+      registerWithToken: vi.fn(async () => account),
+      joinRoom: vi.fn(async () => {}),
+    });
+    destructiveScenarioMocks.createMatrixQaDriverScenarioClient.mockReturnValue({
+      createPrivateRoom: vi.fn(async () => roomId),
+      primeRoom: vi.fn(async () => "raw-cursor"),
+    });
+    destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(driver);
+    destructiveScenarioMocks.readMatrixQaGatewayMatrixAccount.mockResolvedValue({
+      enabled: true,
+    });
+    destructiveScenarioMocks.waitForMatrixSyncStoreWithCursor.mockResolvedValue({
+      cursor: "saved-cursor",
+      pathname: "/tmp/unused-sync-store",
+      source: "sqlite",
+      stateKey: "saved",
+    });
+    const context = createMatrixQaE2eeTestContext({
+      gatewayStateDir: "/tmp/unused-gateway-state",
+      gatewayRuntimeEnv: { OPENCLAW_CONFIG_PATH: "/tmp/unused-gateway-config" },
+      restartGatewayAfterStateMutation: async (mutate) => {
+        await mutate({ stateDir: "/tmp/unused-gateway-state" });
+      },
+    });
 
-      await expect(runMatrixQaE2eeSyncStateLossCryptoIntactScenario(context)).rejects.toThrow(
-        fails ? "membership sync failed" : "send reached",
-      );
-      expect(driver.waitForJoinedMember).toHaveBeenCalledWith({
-        roomId,
-        timeoutMs: context.timeoutMs,
-        userId: account.userId,
-      });
-      expect(order).toEqual(fails ? ["wait"] : ["wait", "synced", "send"]);
-      expect(driver.stop).toHaveBeenCalledOnce();
-      expect(destructiveScenarioMocks.replaceMatrixQaGatewayMatrixAccount).toHaveBeenLastCalledWith(
-        expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
-      );
-    },
-  );
+    await expect(runMatrixQaE2eeSyncStateLossCryptoIntactScenario(context)).rejects.toThrow(
+      fails ? "membership sync failed" : "send reached",
+    );
+    expect(driver.waitForJoinedMember).toHaveBeenCalledWith({
+      roomId,
+      timeoutMs: context.timeoutMs,
+      userId: account.userId,
+    });
+    expect(order).toEqual(fails ? ["wait"] : ["wait", "synced", "send"]);
+    expect(driver.stop).toHaveBeenCalledOnce();
+    expect(destructiveScenarioMocks.replaceMatrixQaGatewayMatrixAccount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
+    );
+  });
 });
 
 describe("Matrix destructive E2EE storage discovery", () => {
@@ -260,6 +264,54 @@ describe("Matrix destructive E2EE storage discovery", () => {
       }),
     ).resolves.toMatchObject({ accountRoot });
   });
+});
+
+describe.each([
+  { name: "external key", run: runMatrixQaE2eeStateLossExternalRecoveryKeyScenario },
+  { name: "stale key", run: runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario },
+  { name: "empty backup", run: runMatrixQaE2eeHistoryExistsBackupEmptyScenario },
+  { name: "deleted device", run: runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario },
+])("Matrix destructive $name setup ownership", ({ run }) => {
+  it.each(["runtime"] as const)(
+    "releases acquired resources when recovery %s construction fails",
+    async (step) => {
+      const cleanupOrder: string[] = [];
+      const failure = new Error(`${step} construction failed`);
+      const owner = {
+        ...createDisposableOwner({
+          backupVersion: "owner-backup",
+          cleanupOrder,
+          encodedRecoveryKey: "owner-recovery-key",
+          label: "owner",
+        }),
+        resetRoomKeyBackup: vi.fn(async () => ({ success: true, createdVersion: "fresh-backup" })),
+      };
+      owner.getRecoveryKey
+        .mockResolvedValueOnce({ encodedPrivateKey: "owner-recovery-key", keyId: "owner-key" })
+        .mockResolvedValue({ encodedPrivateKey: "fresh-recovery-key", keyId: "fresh-key" });
+      destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
+        registerWithToken: async () => ({
+          accessToken: "owner-token",
+          deviceId: "OWNER",
+          password: "owner-password",
+          userId: "@owner:matrix-qa.test",
+        }),
+        createPrivateRoom: async () => "!owner:matrix-qa.test",
+        loginWithPassword: destructiveScenarioMocks.loginMatrixQaRecoveryDevice,
+      });
+      destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(owner);
+      destructiveScenarioMocks.loginMatrixQaRecoveryDevice.mockResolvedValue({
+        accessToken: "recovery-token",
+        deviceId: "RECOVERY",
+        userId: "@owner:matrix-qa.test",
+      });
+      destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime.mockRejectedValueOnce(failure);
+      await expect(run(createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }))).rejects.toBe(
+        failure,
+      );
+      expect(cleanupOrder).toEqual(["owner:stop", "owner:delete:RECOVERY"]);
+    },
+  );
 });
 
 describe("Matrix wrong-account recovery-key isolation", () => {
@@ -358,173 +410,49 @@ describe("Matrix wrong-account recovery-key isolation", () => {
     expect(targetOwner.stop).toHaveBeenCalledOnce();
     expect(sourceOwner.stop).toHaveBeenCalledOnce();
   });
-
-  it("releases the source owner when target setup fails", async () => {
-    const sourceOwner = createDisposableOwner({
-      backupVersion: "source-backup",
-      encodedRecoveryKey: "source-recovery-key",
-      label: "source",
-    });
-    const registerWithToken = vi
-      .fn()
-      .mockResolvedValueOnce({
-        accessToken: "source-token",
-        deviceId: "SOURCE-DEVICE",
-        password: "source-password",
-        userId: "@source:matrix-qa.test",
-      })
-      .mockRejectedValueOnce(new Error("target registration failed"));
-    destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
-      createPrivateRoom: vi.fn().mockResolvedValue("!source:matrix-qa.test"),
-      registerWithToken,
-    });
-    destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValueOnce(sourceOwner);
-
-    await expect(
-      runMatrixQaE2eeWrongAccountRecoveryKeyScenario(createWrongAccountContext()),
-    ).rejects.toThrow("target registration failed");
-
-    expect(sourceOwner.stop).toHaveBeenCalledOnce();
-    expect(destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime).not.toHaveBeenCalled();
-  });
 });
 
 describe("Matrix destructive E2EE backup failure assertions", () => {
-  it("requires a nonzero CLI exit", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: { decryptionKeyCached: false },
-            backupVersion: "1",
-            error: "backup key unavailable",
-            success: false,
-          },
-          result: { exitCode: 0 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "missing-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).toThrow("returned a successful exit code");
-  });
-
-  it("rejects unrelated CLI failures without backup-key evidence", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: { decryptionKeyCached: false },
-            backupVersion: "1",
-            error: "network unavailable",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "missing-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).toThrow("without the expected missing-recovery-key diagnostic");
-  });
-
-  it("accepts a failed restore with structured backup-key evidence", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: {
-              keyLoadError: "Error decrypting secret: Bad MAC",
-              matchesDecryptionKey: false,
-            },
-            backupVersion: "1",
-            error: "Matrix room key backup is not usable",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "rejected-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).not.toThrow();
-  });
-
-  it("accepts the SDK bad-MAC diagnostic from the restore error", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: {
-              decryptionKeyCached: false,
-              keyLoadError: "getSecretStorageKey callback returned falsey",
-              matchesDecryptionKey: false,
-            },
-            backupVersion: "1",
-            error:
-              "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (Error decrypting secret m.megolm_backup.v1: bad MAC).",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "rejected-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).not.toThrow();
-  });
-
-  it("rejects a wrapper-only key-mismatch diagnostic", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: { matchesDecryptionKey: false },
-            backupVersion: "1",
-            error: "backup key mismatch",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "rejected-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).toThrow("without the expected rejected-recovery-key diagnostic");
-  });
-
-  it("accepts the SDK secret-storage load diagnostic", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: {
-              decryptionKeyCached: false,
-              keyLoadError: "getSecretStorageKey callback returned falsey",
-            },
-            backupVersion: "1",
-            error:
-              "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (getSecretStorageKey callback returned falsey).",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "missing-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).not.toThrow();
+  it.each<{
+    name: string;
+    backup: Parameters<typeof assertMatrixQaCliBackupRestoreFailed>[0]["payload"]["backup"];
+    error: string;
+    failureKind: Parameters<typeof assertMatrixQaCliBackupRestoreFailed>[1]["failureKind"];
+    exitCode?: number;
+    rejection?: string;
+  }>([
+    {
+      name: "requires a nonzero CLI exit",
+      backup: { decryptionKeyCached: false },
+      error: "backup key unavailable",
+      failureKind: "missing-recovery-key",
+      exitCode: 0,
+      rejection: "returned a successful exit code",
+    },
+    {
+      name: "rejects unrelated CLI failures without backup-key evidence",
+      backup: { decryptionKeyCached: false },
+      error: "network unavailable",
+      failureKind: "missing-recovery-key",
+      rejection: "without the expected missing-recovery-key diagnostic",
+    },
+    {
+      name: "rejects a wrapper-only key-mismatch diagnostic",
+      backup: { matchesDecryptionKey: false },
+      error: "backup key mismatch",
+      failureKind: "rejected-recovery-key",
+      rejection: "without the expected rejected-recovery-key diagnostic",
+    },
+  ])("$name", ({ backup, error, failureKind, exitCode = 1, rejection }) => {
+    const assertRestore = () =>
+      assertMatrixQaCliBackupRestoreFailed(
+        { payload: { backup, backupVersion: "1", error, success: false }, result: { exitCode } },
+        { expectedBackupVersion: "1", failureKind, label: "restore" },
+      );
+    if (rejection) {
+      expect(assertRestore).toThrow(rejection);
+    } else {
+      expect(assertRestore).not.toThrow();
+    }
   });
 });

@@ -1,6 +1,5 @@
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./file-preview-modal-registration.ts";
 
@@ -49,15 +48,14 @@ async function mountPreview(width: number, activePath = initialFilePath) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 844);
 
-  const preview = document.createElement("openclaw-file-preview-modal") as OpenClawFilePreviewModal;
+  const preview = document.createElement("openclaw-file-preview-modal");
   preview.style.setProperty("--wa-transition-normal", "150ms");
   preview.files = files;
   preview.activePath = activePath;
   document.body.append(preview);
   await preview.updateComplete;
 
-  const ownerDialog =
-    preview.shadowRoot?.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
+  const ownerDialog = preview.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
   expect(ownerDialog).toBeInstanceOf(HTMLElement);
   const dialog = await resolveRenderedDialog(ownerDialog!);
   return { preview, dialog };
@@ -92,13 +90,13 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     "keeps source and copy visible at a %dpx viewport",
     async (width) => {
       const { preview, dialog } = await mountPreview(width);
-      const list = preview.shadowRoot?.querySelector<HTMLElement>(".list");
-      const detail = preview.shadowRoot?.querySelector<HTMLElement>(".detail");
-      const copy = preview.shadowRoot?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-      const search = preview.shadowRoot?.querySelector<HTMLInputElement>(".search");
-      const source = preview.shadowRoot?.querySelector<HTMLElement>(".code-chunk");
-      const activeItem = preview.shadowRoot?.querySelector<HTMLElement>(".item.is-active");
-      const title = preview.shadowRoot?.querySelector<HTMLElement>(".title");
+      const list = preview.querySelector<HTMLElement>(".list");
+      const detail = preview.querySelector<HTMLElement>(".detail");
+      const copy = preview.querySelector<HTMLButtonElement>(".chat-copy-btn");
+      const search = preview.querySelector<HTMLInputElement>(".search");
+      const source = preview.querySelector<HTMLElement>(".code-chunk");
+      const activeItem = preview.querySelector<HTMLElement>(".item.is-active");
+      const title = preview.querySelector<HTMLElement>(".title");
       expect(list).toBeInstanceOf(HTMLElement);
       expect(detail).toBeInstanceOf(HTMLElement);
       expect(copy).toBeInstanceOf(HTMLButtonElement);
@@ -165,16 +163,16 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     "keeps an empty non-text preview reachable at a %dpx viewport",
     async (width) => {
       const { preview, dialog } = await mountPreview(width, "assets/empty-preview.png");
-      const detail = preview.shadowRoot?.querySelector<HTMLElement>(".detail");
-      const title = preview.shadowRoot?.querySelector<HTMLElement>(".title");
-      const kind = preview.shadowRoot?.querySelector<HTMLElement>(".chip.accent");
-      const detailBody = preview.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+      const detail = preview.querySelector<HTMLElement>(".detail");
+      const title = preview.querySelector<HTMLElement>(".title");
+      const kind = preview.querySelector<HTMLElement>(".chip.accent");
+      const detailBody = preview.querySelector<HTMLElement>(".detail-body");
       expect(detail).toBeInstanceOf(HTMLElement);
       expect(title?.textContent).toBe("assets/empty-preview.png");
       expect(kind?.textContent).toBe("PNG");
       expect(detailBody).toBeInstanceOf(HTMLElement);
-      expect(preview.shadowRoot?.querySelector(".chat-copy-btn")).toBeNull();
-      expect(preview.shadowRoot?.querySelector(".code-chunk")?.textContent).toBe("");
+      expect(preview.querySelector(".chat-copy-btn")).toBeNull();
+      expect(preview.querySelector(".code-chunk")?.textContent).toBe("");
 
       const dialogBounds = dialog.getBoundingClientRect();
       const detailBounds = detail!.getBoundingClientRect();
@@ -188,8 +186,8 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
 
   it("preserves the desktop side-by-side file layout", async () => {
     const { preview, dialog } = await mountPreview(1280);
-    const list = preview.shadowRoot?.querySelector<HTMLElement>(".list");
-    const detail = preview.shadowRoot?.querySelector<HTMLElement>(".detail");
+    const list = preview.querySelector<HTMLElement>(".list");
+    const detail = preview.querySelector<HTMLElement>(".detail");
     expect(list).toBeInstanceOf(HTMLElement);
     expect(detail).toBeInstanceOf(HTMLElement);
 
@@ -236,4 +234,93 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(style.animationName).toBe("openclaw-drawer-in");
     expect(style.animationDuration).toBe("0.2s");
   });
+});
+
+describe.runIf(browserMode)("skill bundle file preview", () => {
+  it.each([390, 768, 1174, 1440])(
+    "renders complete Markdown and navigable folders without search or Copy at %dpx",
+    async (width) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      const trigger = document.createElement("button");
+      trigger.textContent = "Open skill";
+      document.body.append(trigger);
+      trigger.focus();
+      const preview = document.createElement("openclaw-file-preview-modal");
+      preview.layout = "document";
+      preview.label = "Operator guide";
+      preview.activePath = "SKILL.md";
+      const long =
+        "# Full reference\n" +
+        "Complete instructions.\n".repeat(3000) +
+        "Last complete instruction.";
+      preview.files = [
+        {
+          path: "SKILL.md",
+          size: "100 B",
+          contents:
+            "# Guide\n[Reference](references/guide.md)\n```js\nwindow.untrusted = true;\n```\n<script>window.untrusted=true</script>",
+        },
+        { path: "references/guide.md", size: "64 KB", contents: long },
+        { path: "scripts/unlinked.py", size: "20 B", contents: "print('read only')" },
+        {
+          path: "assets/image.png",
+          size: "4 B",
+          contents: "",
+          message: "Binary file cannot be previewed",
+        },
+      ];
+      preview.addEventListener("file-preview-select", (event: Event) => {
+        preview.activePath = (event as CustomEvent<string>).detail;
+      });
+      preview.addEventListener("file-preview-close", () => preview.remove());
+      document.body.append(preview);
+      await preview.updateComplete;
+      const owner = preview.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
+      const dialog = await resolveRenderedDialog(owner);
+      expect(preview.querySelector(".search")).toBeNull();
+      expect(
+        preview.querySelector(".chips, .item-meta, .state, .list-section, .detail-head, .foot"),
+      ).toBeNull();
+      const close = preview.querySelector<HTMLButtonElement>('[aria-label="Close"]')!;
+      expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(width);
+      expect(preview.querySelector(".chat-copy-btn, .code-block-copy, script")).toBeNull();
+      expect(preview.querySelectorAll(".item")).toHaveLength(4);
+      expect(preview.querySelectorAll("details")).toHaveLength(3);
+      const referenceLink = preview.querySelector<HTMLAnchorElement>(".markdown a")!;
+      referenceLink.click();
+      await preview.updateComplete;
+      expect(preview.activePath).toBe("references/guide.md");
+      expect(preview.querySelector(".markdown")!.textContent).toContain(
+        "Last complete instruction.",
+      );
+      expect(preview.querySelector(".markdown")!.textContent).not.toContain("truncated");
+      const binary = preview.querySelector<HTMLButtonElement>('[data-path="assets/image.png"]')!;
+      binary.click();
+      await preview.updateComplete;
+      expect(preview.querySelector(".detail-body")!.textContent).toContain(
+        "Binary file cannot be previewed",
+      );
+      const list = preview.querySelector<HTMLElement>(".list")!.getBoundingClientRect();
+      const detail = preview.querySelector<HTMLElement>(".detail")!.getBoundingClientRect();
+      expect(dialog.getBoundingClientRect().right).toBeLessThanOrEqual(width + 1);
+      expect(detail.width).toBeGreaterThan(200);
+      if (width <= 640) {
+        expect(detail.top).toBeGreaterThanOrEqual(list.bottom - 1);
+      } else {
+        expect(detail.left).toBeGreaterThanOrEqual(list.right - 1);
+      }
+      binary.focus();
+      await userEvent.keyboard("{ArrowDown}");
+      await preview.updateComplete;
+      expect(preview.activePath).toBe("references/guide.md");
+      if (width === 390) {
+        close.click();
+      } else {
+        await userEvent.keyboard("{Escape}");
+      }
+      await expect.poll(() => preview.isConnected).toBe(false);
+      await expect.poll(() => document.activeElement).toBe(trigger);
+    },
+  );
 });

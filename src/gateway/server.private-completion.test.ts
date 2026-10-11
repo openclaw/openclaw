@@ -1,0 +1,1026 @@
+// Real Gateway admission and SQLite receipts with a controlled agent command.
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import type { AgentCommandOpts } from "../agents/command/types.js";
+import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
+import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
+import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
+import {
+  writeSubagentSessionEntry,
+  settleSubagentRegistryPersistenceWork,
+} from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
+import {
+  runExclusiveSessionLifecycleMutation,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
+import { observeSessionWorkAdmissionDrain } from "../sessions/session-lifecycle-admission.test-support.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  ensureSessionInputCompletionsSchema,
+  ensureSessionPendingInputsSchema,
+} from "../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { setAbortedAgentDedupeEntries } from "./agent-turn/agent-dedupe.js";
+import * as agentJobs from "./agent-turn/agent-job.js";
+import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
+import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
+import {
+  readPrivateCompletionRecorder,
+  registerSessionsSendPrivateCompletionTests,
+} from "./server.private-completion.sessions-send.test-support.js";
+import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
+import { loadSessionEntry } from "./session-utils.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  prepareGatewayReplyRuntimeForTest,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
+
+describe("private subagent completion processing receipts", () => {
+  let harness: GatewayServerHarness;
+  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+  let sequence = 0;
+  let sessionKey: string;
+  let sessionId: string;
+  let runId: string;
+  let storePath: string;
+
+  async function start() {
+    const module = await import("./server-kernel.js");
+    const create = module.createGatewayKernel;
+    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
+      kernel = await create(...args);
+      return kernel;
+    });
+    try {
+      harness = await startGatewayServerHarness();
+    } finally {
+      capture.mockRestore();
+    }
+  }
+  installGatewayTestHooks({ scope: "suite", setup: start, cleanup: async () => harness?.close() });
+  beforeEach(async () => {
+    sequence += 1;
+    sessionKey = `agent:main:private-receipt-${sequence}`;
+    sessionId = `private-parent-${sequence}`;
+    runId = `announce:private-child-${sequence}`;
+    storePath = path.join(
+      process.env.OPENCLAW_STATE_DIR!,
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    testState.sessionStorePath = storePath;
+    await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } } });
+    agentCommandMock.mockReset();
+    await prepareGatewayReplyRuntimeForTest();
+  });
+  const scope = () => ({ agentId: "main", sessionKey, sessionId, storePath });
+  const database = () => openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope())));
+  const completions = () =>
+    database()
+      .db.prepare("SELECT * FROM session_input_completions WHERE session_id = ?")
+      .all(sessionId);
+  const pending = () =>
+    database()
+      .db.prepare("SELECT * FROM session_pending_inputs WHERE session_id = ?")
+      .all(sessionId);
+  const transcript = () => sessionAccessor.loadTranscriptEventsSync(scope());
+  const request = (message = "Synthetic private child marker") => ({
+    sessionKey,
+    expectedExistingSessionId: sessionId,
+    idempotencyKey: runId,
+    message,
+    deliver: false,
+    sourceReplyDeliveryMode: "automatic",
+    inputProvenance: {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:main:subagent:synthetic-child",
+    },
+  });
+  const dispatch = (message?: string, onAccepted?: () => void) =>
+    dispatchGatewayMethodInProcess<Record<string, unknown>>("agent", request(message), {
+      privateCompletion: true,
+      expectFinal: true,
+      forceSyntheticClient: true,
+      onAccepted,
+      operatorRoleActor: { kind: "system" },
+      resolveGatewayContext: () => kernel.gatewayRequestContext,
+    });
+  async function restart() {
+    const previousDedupe = kernel.gatewayRequestContext.dedupe;
+    await harness.close();
+    closeOpenClawAgentDatabasesForTest();
+    await start();
+    await prepareGatewayReplyRuntimeForTest({ force: true });
+    expect(kernel.gatewayRequestContext.dedupe).not.toBe(previousDedupe);
+  }
+  const recorder = (input: unknown) => readPrivateCompletionRecorder(input, sessionId);
+
+  registerSessionsSendPrivateCompletionTests(() => ({
+    context: kernel.gatewayRequestContext,
+    sequence,
+    sessionKey,
+    sessionId,
+    completions,
+    pending,
+    transcript,
+    recorder,
+    agentCommandMock,
+  }));
+
+  async function processPrivateInput(input: unknown) {
+    await recorder(input).persistApproved();
+    return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
+  }
+
+  it("binds a settle handoff to the source accepted by pending-input replay", async () => {
+    const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
+    const stage = sessionAccessor.stageSessionPendingInput;
+    const seed = vi
+      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .mockImplementationOnce(async (target, options) => {
+        const previous = expectDefined(
+          await stage(target, {
+            ...options,
+            message: {
+              ...options.message,
+              provenance: {
+                ...options.message.provenance,
+                kind: "inter_session",
+                sourceSessionKey: sourceSessionKeys[1],
+              },
+            },
+          }),
+          "Expected the interrupted scheduling sibling's input",
+        );
+        previous.finish("interrupted");
+        await previous.settled?.();
+        return await stage(target, options);
+      });
+    agentCommandMock.mockImplementationOnce(async (input) => {
+      const command = input as AgentCommandOpts;
+      expect(command.inputProvenance?.sourceSessionKey).toBe(sourceSessionKeys[1]);
+      expect(command.trustedInternalHandoff?.sourceSessionKey).toBe(sourceSessionKeys[1]);
+      await recorder(input).persistApproved();
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    try {
+      const result = await runAnnounceAgentCall({
+        agentParams: {
+          ...request(),
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_settle",
+            sourceSessionKey: sourceSessionKeys[0],
+          },
+        },
+        privateCompletion: true,
+        expectFinal: true,
+        settleWakeSourceSessionKeys: sourceSessionKeys,
+        delegatedToolPolicyHandoff: {
+          sourceSessionKey: sourceSessionKeys[0],
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          idempotencyKey: runId,
+          settleBatch: { sourceSessionKeys, isCurrent: () => true },
+        },
+        isExecutionAllowed: () => true,
+        resolveGatewayContext: () => kernel.gatewayRequestContext,
+      });
+      expect(result).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+    } finally {
+      seed.mockRestore();
+    }
+  });
+
+  it.each(["rpc", "stop", "restart", "foreign-session"])(
+    "preserves only a matching intentional pre-admission stop: %s",
+    async (reason) => {
+      const intentional = reason === "rpc" || reason === "stop";
+      setAbortedAgentDedupeEntries({
+        dedupe: kernel.gatewayRequestContext.dedupe,
+        keys: [`agent:${runId}`],
+        runId,
+        agentId: "main",
+        sessionKey: reason === "foreign-session" ? "agent:main:other-parent" : sessionKey,
+        stopReason: reason === "foreign-session" ? "rpc" : reason,
+      });
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
+      if (intentional) {
+        expect(await dispatch()).toMatchObject({ status: "timeout", stopReason: reason });
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        expect(pending()).toEqual([]);
+        expect(completions()).toEqual([]);
+        expect(await dispatch()).toMatchObject({ status: "timeout", stopReason: reason });
+        expect(agentCommandMock).not.toHaveBeenCalled();
+      } else {
+        expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["handled-hook", "yielded"] as const)(
+    "does not repeat completed parent work after restart before child delivery save (%s)",
+    async (kind) => {
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const inputRecorder = recorder(input);
+        expect(completions()).toEqual([]);
+        expect(pending()).toMatchObject([{ run_id: runId }]);
+        if (kind !== "handled-hook") {
+          expect(await inputRecorder.persistApproved()).toMatchObject({ appended: true });
+        }
+        return {
+          payloads: [],
+          meta: { durationMs: 1, ...(kind === "yielded" ? { yielded: true } : {}) },
+        };
+      });
+      expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(completions()).toMatchObject([{ run_id: runId, succeeded: 1 }]);
+      expect(pending()).toEqual([]);
+      const committed = transcript();
+      expect(JSON.stringify(committed).includes("Synthetic private child marker")).toBe(
+        kind !== "handled-hook",
+      );
+      // The subagent delivery owner has received no saved acknowledgement yet.
+      // Its replay must reconcile from SQLite, not the old process's dedupe map.
+      await restart();
+      expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      expect(transcript()).toEqual(committed);
+      expect(pending()).toEqual([]);
+      await expect(dispatch("changed child result")).rejects.toThrow("conflicts");
+    },
+  );
+
+  it.for(["source changed", "provider failed"] as const)(
+    "settles private execution without confusing cancellation and failure: %s",
+    async (cause, { signal }) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      let allowed = true;
+      let processingCount = 0;
+      signal.addEventListener("abort", () => release.resolve(), { once: true });
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        entered.resolve();
+        await release.promise;
+        try {
+          await command.onExecutionStarted?.();
+          processingCount += 1;
+          throw new Error("synthetic provider failure");
+        } catch (error) {
+          // Exercise the real persisted lifecycle projection using the command's
+          // error classification, not a mock that silently drops lifecycle errors.
+          await lifecycleState.persistGatewaySessionLifecycleEvent({
+            sessionKey,
+            event: {
+              runId,
+              sessionId,
+              ts: Date.now(),
+              data: {
+                phase: "error",
+                error: error instanceof Error ? error.message : String(error),
+                ...resolveAgentRunErrorLifecycleFields(error, command.abortSignal),
+              },
+            },
+          });
+          throw error;
+        }
+      });
+      const observation = runAnnounceAgentCall({
+        agentParams: request(),
+        privateCompletion: true,
+        expectFinal: true,
+        signal,
+        isExecutionAllowed: () => allowed,
+        resolveGatewayContext: () => kernel.gatewayRequestContext,
+      });
+      const observed = expect(observation).rejects.toThrow(
+        cause === "source changed"
+          ? "subagent source lifecycle changed before completion delivery"
+          : "synthetic provider failure",
+      );
+      await entered.promise;
+      allowed = cause !== "source changed";
+      release.resolve();
+      await observed;
+      await expect
+        .poll(() => kernel.gatewayRequestContext.chatAbortControllers.has(runId))
+        .toBe(false);
+      const cancelled = cause === "source changed";
+      expect(processingCount).toBe(cancelled ? 0 : 1);
+      const failedNotice = transcript().some((event) =>
+        JSON.stringify(event).includes("run-failed-before-reply"),
+      );
+      expect.soft(failedNotice).toBe(!cancelled);
+      const session = loadSessionEntry(sessionKey).entry;
+      expect.soft(session?.status === "failed").toBe(!cancelled);
+      expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)).toMatchObject({
+        ok: cancelled,
+        payload: cancelled ? { status: "timeout", stopReason: "rpc" } : { status: "error" },
+      });
+      if (cancelled) {
+        expect(completions()).toMatchObject([{ run_id: runId, succeeded: 0 }]);
+        expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
+          reason: "cancelled",
+          stopReason: "rpc",
+        });
+        expect(pending()).toEqual([]);
+        kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
+        expect(await dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
+        await restart();
+        expect(await dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        expect(
+          transcript().some((event) => JSON.stringify(event).includes("run-failed-before-reply")),
+        ).toBe(false);
+      } else {
+        expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
+          reason: "failed",
+          error: "synthetic provider failure",
+        });
+      }
+    },
+  );
+
+  it("resumes admitted but unprocessed input after a Gateway restart", async ({ signal }) => {
+    const committed = createDeferred();
+    const release = createDeferred();
+    let processingCount = 0;
+    signal.addEventListener("abort", () => release.resolve(), { once: true });
+    agentCommandMock.mockImplementationOnce(async (input) => {
+      const command = input as AgentCommandOpts;
+      expect(await recorder(input).persistApproved()).toMatchObject({ appended: true });
+      committed.resolve();
+      command.abortSignal!.addEventListener("abort", () => release.resolve(), { once: true });
+      await release.promise;
+      command.abortSignal!.throwIfAborted();
+      throw new Error("restart must interrupt before private processing");
+    });
+    const interrupted = dispatch();
+    const observed = interrupted.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await committed.promise;
+    expect(completions()).toEqual([]);
+    expect(processingCount).toBe(0);
+    const before = transcript();
+    await harness.server.close({
+      reason: "gateway restart",
+      restartExpectedMs: 0,
+      drainTimeoutMs: 0,
+    });
+    await observed;
+    closeOpenClawAgentDatabasesForTest();
+    await start();
+    await prepareGatewayReplyRuntimeForTest({ force: true });
+    agentCommandMock.mockImplementationOnce(async (input) => {
+      await recorder(input).persistApproved();
+      processingCount += 1;
+      return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
+    });
+    expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+    expect(processingCount).toBe(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    expect(transcript()).toEqual(before);
+    expect(pending()).toEqual([]);
+  });
+
+  it("publishes a failed final when the required receipt write fails, then permits retry", async () => {
+    ensureSessionInputCompletionsSchema(database().db);
+    const refusal = refusePendingInputCommit({
+      operation: "complete",
+      message: "synthetic receipt write unavailable",
+      sessionId,
+      runId,
+    });
+    agentCommandMock.mockImplementation(processPrivateInput);
+    try {
+      let acceptedEntry: ChatAbortControllerEntry | undefined;
+      await expect(
+        dispatch(undefined, () => {
+          acceptedEntry = kernel.gatewayRequestContext.chatAbortControllers.get(runId);
+        }),
+      ).rejects.toThrow("synthetic receipt write unavailable");
+      const active = expectDefined(acceptedEntry, "accepted private receipt controller");
+      await expectDefined(active.executionSettlement, "private receipt execution").completion;
+      expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
+      expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)).toMatchObject({
+        ok: false,
+        payload: { status: "error" },
+      });
+      expect(completions()).toEqual([]);
+    } finally {
+      refusal.mockRestore();
+    }
+    expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    expect(completions()).toMatchObject([{ succeeded: 1 }]);
+  });
+
+  it("retries a private queue timeout and settles processing without caller-thread pending-input writes", async () => {
+    const hostSql = observeHostDataSql();
+    try {
+      const timedOut = await dispatch(undefined, () => {
+        expect(
+          abortChatRunById(kernel.gatewayRequestContext, {
+            runId,
+            sessionKey,
+            stopReason: "timeout",
+          }).aborted,
+        ).toBe(true);
+      });
+      expect(timedOut).toMatchObject({ status: "timeout", stopReason: "timeout" });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(pending()).toMatchObject([{ state: "interrupted" }]);
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
+      expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      expect(pending()).toEqual([]);
+      expect(
+        hostSql.queries.filter((sql) =>
+          /^\s*(?:insert|update|delete|replace)\b.*\b(?:session_pending_inputs|session_input_completions)\b/is.test(
+            sql,
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+  });
+
+  it.for(["processed", "cancelled"] as const)(
+    "keeps delayed private admission %s after the announcement wait expires",
+    async (outcome, { signal }) => {
+      const held = createDeferred();
+      const release = createDeferred();
+      const caller = new AbortController();
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        run: async () => {
+          held.resolve();
+          await release.promise;
+        },
+      });
+      await held.promise;
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
+      const awaitingAdmission = createDeferred();
+      const beginAdmission = sessionLifecycle.beginSessionWorkAdmission;
+      const admission = vi
+        .spyOn(sessionLifecycle, "beginSessionWorkAdmission")
+        .mockImplementation((params) => {
+          const result = beginAdmission(params);
+          if (params.scope === storePath && [...params.identities].includes(sessionKey)) {
+            awaitingAdmission.resolve();
+          }
+          return result;
+        });
+      const requests = vi.spyOn(kernel.gatewayRequestContext, "trackExecution");
+      const joinRequests = async () => {
+        let joined = 0;
+        while (joined < requests.mock.results.length) {
+          const batch = requests.mock.results.slice(joined);
+          joined += batch.length;
+          await Promise.allSettled(
+            batch.flatMap((result) => (result.type === "return" ? [result.value] : [])),
+          );
+        }
+      };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const observation = runAnnounceAgentCall({
+        agentParams: request(),
+        privateCompletion: true,
+        expectFinal: true,
+        timeoutMs: 200,
+        signal: caller.signal,
+        isExecutionAllowed: () => true,
+        resolveGatewayContext: () => kernel.gatewayRequestContext,
+      });
+      const timedOut = expect(observation).rejects.toThrow("gateway request timeout for agent");
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            awaitingAdmission.promise,
+            observation,
+            "Announcement settled before its session admission wait",
+          ),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(200);
+        vi.useRealTimers();
+        await timedOut;
+        expect(await dispatch()).toMatchObject({ status: "in_flight", admissionPending: true });
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        expect(completions()).toEqual([]);
+        if (outcome === "cancelled") {
+          caller.abort(new Error("requester stopped"));
+        }
+        release.resolve();
+        await mutation;
+        await joinRequests();
+        expect(completions()).toMatchObject([
+          { run_id: runId, succeeded: outcome === "processed" ? 1 : 0 },
+        ]);
+        if (outcome === "cancelled") {
+          expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
+            reason: "cancelled",
+            stopReason: "rpc",
+          });
+          expect(agentCommandMock).not.toHaveBeenCalled();
+          return;
+        }
+        expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        expect(pending()).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        try {
+          await Promise.allSettled([mutation, timedOut]);
+          await joinRequests();
+        } finally {
+          requests.mockRestore();
+          admission.mockRestore();
+        }
+      }
+    },
+  );
+
+  it.each(["admission", "queued-abort"] as const)(
+    "publishes failure and retains retry when the worker commit refuses %s",
+    async (phase) => {
+      ensureSessionPendingInputsSchema(database().db);
+      ensureSessionInputCompletionsSchema(database().db);
+      const refusal = refusePendingInputCommit({
+        operation: phase === "admission" ? "stage" : "complete",
+        message: "synthetic private transaction failure",
+        sessionId,
+        runId,
+      });
+      const aborted: Array<{ runId: string; entry: ChatAbortControllerEntry }> = [];
+      try {
+        await expect(
+          dispatch(
+            undefined,
+            phase === "queued-abort"
+              ? () => {
+                  aborted.push({
+                    runId,
+                    entry: expectDefined(
+                      kernel.gatewayRequestContext.chatAbortControllers.get(runId),
+                      "Expected the accepted run's cancellation owner",
+                    ),
+                  });
+                  abortChatRunById(kernel.gatewayRequestContext, {
+                    runId,
+                    sessionKey,
+                    stopReason: "timeout",
+                  });
+                }
+              : undefined,
+          ),
+        ).rejects.toThrow("synthetic private transaction failure");
+        await Promise.all(
+          aborted.map(
+            async ({ entry }) =>
+              expectDefined(entry.executionSettlement, "private abort execution").completion,
+          ),
+        );
+        expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        expect(completions()).toEqual([]);
+        if (phase === "admission") {
+          expect(pending()).toEqual([]);
+        } else {
+          expect(pending()).toMatchObject([{ state: "interrupted" }]);
+        }
+      } finally {
+        refusal.mockRestore();
+      }
+      agentCommandMock.mockImplementationOnce(processPrivateInput);
+      expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.for([false, true])(
+    "preserves an operator stop after private input consumption across retry and restart (terminal first=%s)",
+    async (terminalFirst, { signal }) => {
+      const metadataOverlap = holdMetadataThroughSubagentStop({
+        sessionKey: `agent:main:subagent:private-descendant-${sequence}`,
+        sessionId: `private-descendant-${sequence}-session`,
+        storePath,
+        signal,
+      });
+      onTestFinished(() => metadataOverlap.dispose());
+      const consumed = createDeferred();
+      const release = createDeferred();
+      signal.addEventListener("abort", () => release.resolve(), { once: true });
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        await command.onExecutionStarted?.();
+        await recorder(input).persistApproved();
+        consumed.resolve();
+        command.abortSignal!.addEventListener("abort", () => release.resolve(), { once: true });
+        await release.promise;
+        command.abortSignal!.throwIfAborted();
+        throw new Error("operator stop must prevent further work");
+      });
+      const first = dispatch();
+      const observed = first.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await consumed.promise;
+      const descendantRunId = `private-descendant-${sequence}`;
+      const childSessionKey = `agent:main:subagent:${descendantRunId}`;
+      const childSessionId = `${descendantRunId}-session`;
+      const terminalPublished = createDeferred();
+      const releaseTerminalWait = () => terminalPublished.resolve();
+      signal.addEventListener("abort", releaseTerminalWait, { once: true });
+      let observedTerminal = false;
+      if (terminalFirst) {
+        const acquire = vi.spyOn(
+          SubagentLifecycleController.prototype,
+          "acquireTerminalCompletionLock",
+        );
+        acquire.mockRestore();
+        const lock = vi
+          .spyOn(SubagentLifecycleController.prototype, "acquireTerminalCompletionLock")
+          .mockImplementation(async function (this: SubagentLifecycleController, targetRunId) {
+            const unlock = await acquire.call(this, targetRunId);
+            return () => {
+              unlock();
+              const entry = subagentRuns.get(targetRunId);
+              if (
+                targetRunId === descendantRunId &&
+                entry?.endedReason === "subagent-killed" &&
+                entry.killReconciliation?.taskCancellationAccepted === true
+              ) {
+                observedTerminal = true;
+                terminalPublished.resolve();
+              }
+            };
+          });
+        const stop = observeSessionWorkAdmissionDrain(async (params, released) => {
+          if (released && [...params.identities].includes(childSessionKey)) {
+            await terminalPublished.promise;
+            signal.throwIfAborted();
+          }
+        });
+        onTestFinished(() => {
+          stop();
+          lock.mockRestore();
+        });
+      }
+      onTestFinished(() => {
+        terminalPublished.resolve();
+        signal.removeEventListener("abort", releaseTerminalWait);
+      });
+      const childStarted = createDeferred();
+      const releaseChild = createDeferred();
+      let childAbortSignal: AbortSignal | undefined;
+      signal.addEventListener("abort", () => releaseChild.resolve(), { once: true });
+      await writeSubagentSessionEntry({
+        stateDir: process.env.OPENCLAW_STATE_DIR!,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        defaultSessionId: childSessionId,
+      });
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        expect(command.runId).toBe(descendantRunId);
+        expect(command.sessionId).toBe(childSessionId);
+        childAbortSignal = command.abortSignal;
+        await command.onExecutionStarted?.();
+        await command.userTurnTranscriptRecorder?.persistApproved();
+        childStarted.resolve();
+        command.abortSignal!.addEventListener("abort", () => releaseChild.resolve(), {
+          once: true,
+        });
+        await releaseChild.promise;
+        command.abortSignal!.throwIfAborted();
+        throw new Error("operator stop must interrupt the continuation child");
+      });
+      const child = dispatchGatewayMethodInProcess<Record<string, unknown>>(
+        "agent",
+        {
+          sessionKey: childSessionKey,
+          expectedExistingSessionId: childSessionId,
+          idempotencyKey: descendantRunId,
+          message: "Synthetic continuation child",
+          deliver: false,
+        },
+        {
+          expectFinal: true,
+          forceSyntheticClient: true,
+          operatorRoleActor: { kind: "system" },
+          resolveGatewayContext: () => kernel.gatewayRequestContext,
+        },
+      );
+      const observedChild = child.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      const childWaitEntered = createDeferred();
+      const waitForAgentJob = agentJobs.waitForAgentJob;
+      const waitObservation = vi
+        .spyOn(agentJobs, "waitForAgentJob")
+        .mockImplementation((params) => {
+          const wait = waitForAgentJob(params);
+          if (params.runId === descendantRunId) {
+            childWaitEntered.resolve();
+          }
+          return wait;
+        });
+      // Cancellation must release the admission barrier so cleanup can join both producers.
+      const releaseWaitAdmission = () => childWaitEntered.resolve();
+      signal.addEventListener("abort", releaseWaitAdmission, { once: true });
+      try {
+        await Promise.race([
+          childStarted.promise,
+          observedChild.then(() => {
+            throw new Error("continuation child finished before execution started");
+          }),
+        ]);
+        await registerSubagentRun({
+          runId: descendantRunId,
+          childSessionKey,
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: runId,
+          requesterDisplayKey: sessionKey,
+          task: "synthetic continuation child",
+          cleanup: "keep",
+          expectsCompletionMessage: false,
+        });
+        // Keep both producers live until the child's registration and wait request
+        // are admitted; a slow socket handshake must not hide the outstanding wait.
+        await expect
+          .poll(() =>
+            listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).some(
+              (run) => run.runId === descendantRunId,
+            ),
+          )
+          .toBe(true);
+        signal.throwIfAborted();
+        await childWaitEntered.promise;
+        signal.throwIfAborted();
+        expect(
+          await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+            sessionKey,
+            runId,
+          }),
+        ).toMatchObject({ aborted: true });
+        expect(childAbortSignal?.aborted).toBe(true);
+        if (terminalFirst) {
+          expect(observedTerminal).toBe(true);
+        }
+        await metadataOverlap.assertCompleted();
+        expect(loadSessionEntry(childSessionKey).entry).toMatchObject({
+          sessionId: childSessionId,
+          label: metadataOverlap.label,
+          abortedLastRun: true,
+        });
+      } finally {
+        metadataOverlap.releaseForCleanup();
+        try {
+          signal.removeEventListener("abort", releaseWaitAdmission);
+          waitObservation.mockRestore();
+          if (kernel.gatewayRequestContext.chatAbortControllers.has(runId)) {
+            await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+              sessionKey,
+              runId,
+            });
+          }
+          if (kernel.gatewayRequestContext.chatAbortControllers.has(descendantRunId)) {
+            await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+              sessionKey: childSessionKey,
+              runId: descendantRunId,
+            });
+          }
+          release.resolve();
+          releaseChild.resolve();
+          await Promise.all([observed, observedChild]);
+        } finally {
+          await metadataOverlap.dispose();
+        }
+      }
+      await settleSubagentRegistryPersistenceWork();
+      expect(await observedChild).toMatchObject({
+        value: { status: "timeout", stopReason: "rpc" },
+      });
+      expect(
+        listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).find(
+          (run) => run.runId === descendantRunId,
+        ),
+      ).toMatchObject({ endedReason: "subagent-killed", execution: { status: "terminal" } });
+      expect(completions()).toMatchObject([{ succeeded: 0 }]);
+      expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
+        reason: "cancelled",
+        stopReason: "rpc",
+      });
+      expect(pending()).toEqual([]);
+      expect(await observed).toMatchObject({ value: { status: "timeout", stopReason: "rpc" } });
+      // Retire only this run's process projection to exercise the durable receipt.
+      // Matching pre-admission Stop cache replay is covered separately above.
+      kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
+      expect(await dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
+      await restart();
+      expect(await dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
+      expect(
+        agentCommandMock.mock.calls.map(([input]) => {
+          const command = input as AgentCommandOpts;
+          return { runId: command.runId, sessionId: command.sessionId };
+        }),
+      ).toEqual([
+        { runId, sessionId },
+        { runId: descendantRunId, sessionId: childSessionId },
+      ]);
+    },
+  );
+
+  it.each(["resolved", "rejected", "abandoned"] as const)(
+    "preserves executing private timeout facts (%s)",
+    async (kind) => {
+      const consumed = createDeferred<ReturnType<typeof recorder>>();
+      const release = createDeferred();
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        await command.onExecutionStarted?.();
+        const inputRecorder = recorder(input);
+        await inputRecorder.persistApproved();
+        inputRecorder.markSentToProvider?.();
+        consumed.resolve(inputRecorder);
+        // Hold the producer after abort so lifecycle projection cannot stand
+        // in for execution settlement; abandoned work also outlives the grace.
+        await release.promise;
+        if (kind === "rejected") {
+          command.abortSignal!.throwIfAborted();
+        }
+        return {
+          payloads: [],
+          meta: {
+            durationMs: 1,
+            aborted: true,
+            stopReason: "timeout",
+            timeoutPhase: "provider",
+            providerStarted: true,
+          },
+        };
+      });
+      const first = dispatch();
+      const observed = first.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error: String(error) }),
+      );
+      const inputRecorder = await consumed.promise;
+      const active = expectDefined(
+        kernel.gatewayRequestContext.chatAbortControllers.get(runId),
+        "executing controller",
+      );
+      expect(active.executionStarted).toBe(true);
+      const releaseTerminalWrite = createDeferred();
+      const terminalWrites = createPreparedLifecycleWriteTracker();
+      let terminalWrite: Promise<void> | undefined;
+      const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
+      const delayedTerminalWrite =
+        kind === "abandoned"
+          ? vi
+              .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+              .mockImplementation((params) => {
+                const persist = prepareLifecycle(params);
+                if (params.event.runId !== runId) {
+                  return persist;
+                }
+                return terminalWrites.track(() => releaseTerminalWrite.promise.then(persist));
+              })
+          : undefined;
+      active.expiresAtMs = Date.now() - 1;
+      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const { createGatewayMaintenanceStateForTest } =
+        await import("./test-helpers.maintenance-state.js");
+      const clock = createGatewaySchedulerClock(Date.now());
+      const now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+      const timers = startGatewayMaintenanceTimers({
+        ...createGatewayMaintenanceStateForTest(),
+        ...kernel.gatewayRequestContext,
+        scheduler: createTestGatewayScheduler(clock.clock),
+        logHealth: { info: vi.fn(), error: vi.fn() },
+        runWorktreeGc: async () => undefined,
+        runDeliveryQueueMediaGc: async () => undefined,
+        runManagedOutgoingMediaGc: async () => undefined,
+      });
+      try {
+        await clock.advanceBy(60_000);
+        expect(active.controller.signal.aborted).toBe(true);
+        expect(active.abortStopReason).toBe("timeout");
+        expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
+        expect(completions()).toEqual([]);
+        if (kind === "abandoned") {
+          // Keep the real terminal write and raw execution pending through timeout settlement.
+          await terminalWrites.accepted;
+          terminalWrite = active.projectSessionTerminalPersistence;
+          expect(terminalWrite).toBeInstanceOf(Promise);
+          await clock.advanceBy(60_000);
+          await awaitGateBeforeSettlement(
+            expectDefined(inputRecorder.waitForPendingInputSettlement?.(), "input settlement"),
+            expectDefined(active.projectSessionTerminalPersistence, "terminal persistence"),
+            "Terminal persistence settled before its held write was released",
+          );
+          expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
+          expect(active.executionSettlement?.status).toBe("pending");
+          expect(active.projectSessionTerminalPending).toBe(true);
+          expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
+            reason: "timed_out",
+            status: "timeout",
+            stopReason: "timeout",
+          });
+        }
+      } finally {
+        await timers.stopPeriodicTasks();
+        await timers.skillUsageCleanup();
+        now.mockRestore();
+        releaseTerminalWrite.resolve();
+        release.resolve();
+        try {
+          await terminalWrites.drain(...(terminalWrite ? [terminalWrite] : []));
+        } finally {
+          delayedTerminalWrite?.mockRestore();
+        }
+      }
+      const response = await observed;
+      const rows = completions();
+      const outcome = JSON.parse(String(rows[0]?.outcome_json));
+      expect(response).toMatchObject({ value: { status: "timeout", stopReason: "timeout" } });
+      expect(outcome).toMatchObject({ status: "timeout", stopReason: "timeout" });
+      expect(
+        await waitForChatAbortControllerRemoval({
+          entries: kernel.gatewayRequestContext.chatAbortControllers,
+          targets: [{ runId, entry: active }],
+          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        }),
+      ).toBe(true);
+      expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
+      expect(active.projectSessionTerminalPersisted).toBe(true);
+      if (kind === "resolved") {
+        expect(outcome).toMatchObject({
+          reason: "hard_timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        });
+        expect(response).toMatchObject({
+          value: { timeoutPhase: "provider", providerStarted: true },
+        });
+      } else {
+        expect(outcome.reason).toBe("timed_out");
+        expect(outcome.timeoutPhase).toBeUndefined();
+        expect(outcome.providerStarted).toBeUndefined();
+      }
+      kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        await recorder(input).persistApproved();
+        return { payloads: [], meta: { durationMs: 1 } };
+      });
+      expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    },
+  );
+});

@@ -26,12 +26,6 @@ import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { isFailoverError } from "../failover-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
-type ModelCallFailureKind = Extract<
-  TrustedDiagnosticEventInput,
-  { type: "model.call.error" }
->["failureKind"];
-
 const MAX_CAPTURED_CONTENT_BYTES = 128 * 1024;
 const FALLBACK_RESPONSE_RESERVE_BYTES = 16 * 1024;
 const MAX_CAPTURED_OUTPUT_MESSAGES = 200;
@@ -191,16 +185,10 @@ function assistantMessageHasText(message: unknown): boolean {
   if (typeof message.content === "string") {
     return message.content.length > 0;
   }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const limit = Math.min(message.content.length, MAX_CAPTURED_OUTPUT_BLOCKS);
-  for (let index = 0; index < limit; index += 1) {
-    if (isTextAssistantContentBlock(message.content[index])) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    Array.isArray(message.content) &&
+    message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS).some(isTextAssistantContentBlock)
+  );
 }
 
 // Claude's assistant envelopes can contain native tool arguments and opaque
@@ -213,43 +201,37 @@ function normalizeClaudeAssistantMessage(
   if (!isRecord(message)) {
     return undefined;
   }
+  if (message.content === "") {
+    return undefined;
+  }
   const content: Record<string, unknown>[] = [];
-  if (typeof message.content === "string") {
-    if (message.content.length === 0) {
-      return undefined;
+  const sourceBlocks =
+    typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : Array.isArray(message.content)
+        ? message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS)
+        : [];
+  if (Array.isArray(message.content) && sourceBlocks.length < message.content.length) {
+    budget.truncated = true;
+  }
+  for (const [index, sourceBlock] of sourceBlocks.entries()) {
+    if (isTextAssistantContentBlock(sourceBlock)) {
+      releaseFallbackReserve(budget);
     }
-    releaseFallbackReserve(budget);
-    const text = captureTextWithinBudget(message.content, budget);
-    if (text !== undefined && budget.remainingItems > 0) {
-      content.push({ type: "text", text });
-      budget.remainingItems -= 1;
-    } else if (text !== undefined) {
-      budget.truncated = true;
+    const block = assistantContentBlock(sourceBlock, budget);
+    if (block) {
+      if (budget.remainingItems > 0) {
+        content.push(block);
+        budget.remainingItems -= 1;
+      } else {
+        budget.truncated = true;
+      }
     }
-  } else if (Array.isArray(message.content)) {
-    const sourceBlocks = message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS);
-    if (sourceBlocks.length < message.content.length) {
-      budget.truncated = true;
-    }
-    for (const [index, sourceBlock] of sourceBlocks.entries()) {
-      if (isTextAssistantContentBlock(sourceBlock)) {
-        releaseFallbackReserve(budget);
+    if (budget.remainingBytes <= 0 || budget.remainingItems <= 0) {
+      if (sourceBlocks.slice(index + 1).some(isCapturableAssistantContentBlock)) {
+        budget.truncated = true;
       }
-      const block = assistantContentBlock(sourceBlock, budget);
-      if (block) {
-        if (budget.remainingItems > 0) {
-          content.push(block);
-          budget.remainingItems -= 1;
-        } else {
-          budget.truncated = true;
-        }
-      }
-      if (budget.remainingBytes <= 0 || budget.remainingItems <= 0) {
-        if (sourceBlocks.slice(index + 1).some(isCapturableAssistantContentBlock)) {
-          budget.truncated = true;
-        }
-        break;
-      }
+      break;
     }
   }
   if (content.length === 0) {
@@ -264,20 +246,6 @@ function normalizeClaudeAssistantMessage(
     content,
     ...(stopReason !== undefined ? { stopReason } : {}),
   };
-}
-
-function hasTextContent(messages: readonly Record<string, unknown>[]): boolean {
-  return messages.some(
-    (message) =>
-      Array.isArray(message.content) &&
-      message.content.some(
-        (block) =>
-          isRecord(block) &&
-          block.type === "text" &&
-          typeof block.text === "string" &&
-          block.text.length > 0,
-      ),
-  );
 }
 
 function appendOutputTruncationMarker(messages: Record<string, unknown>[]): void {
@@ -305,20 +273,6 @@ function privateData(params: {
     ...(params.errorMessage ? { errorMessage: params.errorMessage } : {}),
     ...(params.modelContent ? { modelContent: params.modelContent } : {}),
   };
-}
-
-function failureKindForClaudeCli(
-  error: unknown,
-  abortSignal: AbortSignal | undefined,
-): ModelCallFailureKind | undefined {
-  if (isFailoverError(error) && error.reason === "timeout") {
-    return "timeout";
-  }
-  const inferred = diagnosticErrorFailureKind(error);
-  if (inferred) {
-    return inferred;
-  }
-  return abortSignal?.aborted ? "aborted" : undefined;
 }
 
 function usageField(usage: CliUsage | undefined): { usage?: CliUsage } {
@@ -351,6 +305,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
   const trace = freezeDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope());
   const baseFields = {
     runId: params.context.params.runId,
+    ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     callId: `${params.context.params.runId}:claude-cli:${crypto.randomUUID()}`,
     ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
     sessionId: params.context.params.sessionId,
@@ -427,7 +382,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const messages = capturedAssistantMessages.slice();
     const responseText = output?.rawText ?? output?.text;
     if (
-      !hasTextContent(messages) &&
+      !messages.some(assistantMessageHasText) &&
       responseText &&
       messages.length < MAX_CAPTURED_OUTPUT_MESSAGES
     ) {
@@ -539,7 +494,11 @@ export function createClaudeCliModelCallDiagnostics(params: {
         return;
       }
       terminalEmitted = true;
-      const failureKind = failureKindForClaudeCli(error, params.context.params.abortSignal);
+      const failureKind =
+        isFailoverError(error) && error.reason === "timeout"
+          ? "timeout"
+          : (diagnosticErrorFailureKind(error) ??
+            (params.context.params.abortSignal?.aborted ? "aborted" : undefined));
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.error",

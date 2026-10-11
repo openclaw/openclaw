@@ -1,20 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function createSecondaryHydrationPane() {
   const secondaryResponse = new Promise<never>(() => {});
@@ -37,6 +30,7 @@ function createSecondaryHydrationPane() {
     SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     "session.discussion.info",
     "sessions.patch",
+    "system.info",
   ]);
   const commitEffects: AfterCommitEffect[] = [];
   const afterCommit = vi.fn((effect: AfterCommitEffect) => {
@@ -113,6 +107,7 @@ describe("chat pane session hydration", () => {
     await Promise.resolve();
     expect(listBranches).toHaveBeenCalledOnce();
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "system.info",
       "session.discussion.info",
       "sessions.companion.state",
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -188,7 +183,10 @@ describe("chat pane session hydration", () => {
     pane.presented = true;
     expect(commitEffects).toHaveLength(1);
     commitEffects[0]!(vi.fn());
-    expect(request).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual([
+      "chat.metadata",
+      "models.list",
+    ]);
     runAnimationFrame();
     runAnimationFrame();
     await Promise.resolve();

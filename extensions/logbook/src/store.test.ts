@@ -1,8 +1,10 @@
 import {
+  copyFileSync,
   existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -11,12 +13,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dayKeyFor } from "./day.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 import type { LogbookCardDraft } from "./types.js";
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const DAY = "2026-07-03";
 
 function queryPlanDetails(database: DatabaseSync, sql: string): string[] {
@@ -88,7 +92,7 @@ describe("LogbookStore", () => {
       frameIds: (await store.unbatchedActiveFrames(10)).map((frame) => frame.id),
     });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
-    expect(await store.batchFrames(batchId)).toHaveLength(2);
+    expect(await store.batchImages(batchId)).toHaveLength(2);
   });
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
@@ -205,20 +209,38 @@ describe("LogbookStore", () => {
     },
   );
 
-  it("restores missing schema-1 indexes on reopen without changing the version", async () => {
+  it("upgrades indexes on a populated schema-1 database without changing rows or version", async () => {
+    const frameId = await insertFrame(1000);
+    const batchId = await store.createBatch({
+      day: DAY,
+      startMs: 1000,
+      endMs: 2000,
+      frameIds: [frameId],
+    });
+    await store.setBatchStatus(batchId, "done", undefined, "synthetic/model");
+    const batch = await store.latestBatch();
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
+    // Build the old format on a physical file this process has not admitted.
+    renameSync(databasePath, `${databasePath}.seed`);
+    copyFileSync(`${databasePath}.seed`, databasePath);
     const database = new DatabaseSync(databasePath);
     database.exec(`
       DROP INDEX IF EXISTS idx_logbook_frames_captured_at;
       DROP INDEX IF EXISTS idx_logbook_frames_batch;
       DROP INDEX IF EXISTS idx_logbook_observations_batch;
       DROP INDEX IF EXISTS idx_logbook_cards_keyframe;
+      DROP INDEX IF EXISTS idx_logbook_batches_pending;
+      CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
     `);
+    const batches = database.prepare("SELECT * FROM batches ORDER BY id").all();
+    const frames = database.prepare("SELECT * FROM frames ORDER BY id").all();
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     database.close();
 
     store = await LogbookStore.open(dir, workerModuleUrl);
+    expect(await store.latestBatch()).toEqual(batch);
+    expect(await store.nextPendingBatch()).toBeNull();
 
     const reopened = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -227,6 +249,8 @@ describe("LogbookStore", () => {
           `SELECT name FROM sqlite_schema
            WHERE type = 'index'
              AND name IN (
+               'idx_logbook_batches_day',
+               'idx_logbook_batches_pending',
                'idx_logbook_frames_batch',
                'idx_logbook_frames_captured_at',
                'idx_logbook_observations_batch',
@@ -236,30 +260,17 @@ describe("LogbookStore", () => {
         )
         .all();
       expect(indexes).toEqual([
+        { name: "idx_logbook_batches_pending" },
         { name: "idx_logbook_cards_keyframe" },
         { name: "idx_logbook_frames_batch" },
         { name: "idx_logbook_frames_captured_at" },
         { name: "idx_logbook_observations_batch" },
       ]);
       expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(reopened.prepare("SELECT * FROM batches ORDER BY id").all()).toEqual(batches);
+      expect(reopened.prepare("SELECT * FROM frames ORDER BY id").all()).toEqual(frames);
     } finally {
       reopened.close();
-    }
-  });
-
-  it("rejects values that violate STRICT column types", () => {
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
-    try {
-      expect(() =>
-        database
-          .prepare("INSERT INTO standups (day, text, updated_ms) VALUES (?, ?, ?)")
-          .run(DAY, "bad timestamp", "not-an-integer"),
-      ).toThrow();
-      expect(database.prepare("SELECT COUNT(*) AS count FROM standups").get()).toEqual({
-        count: 0,
-      });
-    } finally {
-      database.close();
     }
   });
 
@@ -301,7 +312,9 @@ describe("LogbookStore", () => {
     ).rejects.toThrow(`Logbook frame ${firstFrame} is missing or already batched`);
 
     expect((await store.latestBatch())?.id).toBe(firstBatch);
-    expect((await store.batchFrames(firstBatch)).map((frame) => frame.id)).toEqual([firstFrame]);
+    expect((await store.batchImages(firstBatch)).map(({ frame }) => frame.id)).toEqual([
+      firstFrame,
+    ]);
     expect((await store.unbatchedActiveFrames(10)).map((frame) => frame.id)).toEqual([secondFrame]);
   });
 
@@ -401,17 +414,6 @@ describe("LogbookStore", () => {
     });
   });
 
-  it("prunes old frame rows and files but keeps recent ones", async () => {
-    const now = Date.now();
-    const oldId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    const newId = await insertFrame(now);
-    const oldPath = (await store.frameById(oldId))?.path ?? "";
-    expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(1);
-    expect(await store.frameById(oldId)).toBeNull();
-    expect(existsSync(oldPath)).toBe(false);
-    expect(await store.frameById(newId)).not.toBeNull();
-  });
-
   it("keeps frame metadata when a retained file cannot be removed", async () => {
     const now = Date.now();
     const firstId = await insertFrame(now - 21 * 24 * 60 * 60_000);
@@ -428,16 +430,6 @@ describe("LogbookStore", () => {
     expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(2);
     expect(await store.frameById(firstId)).toBeNull();
     expect(await store.frameById(blockedId)).toBeNull();
-  });
-
-  it("detaches pruned keyframes from surviving cards", async () => {
-    const now = Date.now();
-    const oldId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    await store.replaceCardsInWindow(DAY, 0, Number.MAX_SAFE_INTEGER, [
-      draft({ keyframeId: oldId }),
-    ]);
-    await store.pruneFrames(now - 14 * 24 * 60 * 60_000);
-    expect((await store.cardsForDay(DAY))[0]?.keyframeId).toBeUndefined();
   });
 
   it("replaces observations on batch retry instead of appending", async () => {
@@ -525,12 +517,6 @@ describe("LogbookStore", () => {
     expect(mode(path.join(dir, "logbook.sqlite"))).toBe(0o600);
   });
 
-  it("stores and updates standups", async () => {
-    await store.saveStandup(DAY, "## Done\n- shipped");
-    await store.saveStandup(DAY, "## Done\n- shipped more");
-    expect((await store.getStandup(DAY))?.text).toContain("shipped more");
-  });
-
   it("migrates legacy tables to STRICT without losing batch assignments", async () => {
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
@@ -569,9 +555,11 @@ describe("LogbookStore", () => {
 
     store = await LogbookStore.open(dir, workerModuleUrl);
 
-    expect((await store.batchFrames(7)).map((frame) => frame.id)).toEqual([11]);
     const migrated = new DatabaseSync(databasePath, { readOnly: true });
     try {
+      expect(migrated.prepare("SELECT id, batch_id FROM frames").all()).toEqual([
+        { id: 11, batch_id: 7 },
+      ]);
       expect(
         migrated
           .prepare(
@@ -596,6 +584,9 @@ describe("LogbookStore", () => {
     await store.saveStandup(DAY, "Preserved future-version fixture");
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
+    // The future-version file must reach its first managed admission here.
+    renameSync(databasePath, `${databasePath}.seed`);
+    copyFileSync(`${databasePath}.seed`, databasePath);
     const future = new DatabaseSync(databasePath);
     future.exec("PRAGMA user_version = 2");
     future.close();

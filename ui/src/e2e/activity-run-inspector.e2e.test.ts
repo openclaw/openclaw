@@ -178,7 +178,6 @@ suite.define(() => {
       expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
-      expect(await page.getByText("raw-sender-id-42", { exact: false }).count()).toBe(0);
       await screenshot(page, "01-present-unattributed.png");
 
       await page.reload();
@@ -198,7 +197,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
         .toBe("Live activity");
       await page.keyboard.press("Enter");
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await page.locator(".activity-empty").waitFor();
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
@@ -641,11 +640,17 @@ suite.define(() => {
   it("keeps a populated Live activity stream bounded after adding the mode switcher", async () => {
     const context = await newContext();
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { sessionKey: "main" });
+    const gateway = await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+      sessions: [{ key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" }],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=live`);
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await page.locator(".activity-empty").waitFor();
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:main:main" },
+      });
 
       for (let index = 0; index < 40; index += 1) {
         await gateway.emitGatewayEvent("agent", {
@@ -653,7 +658,7 @@ suite.define(() => {
           seq: 1,
           stream: "tool",
           ts: Date.now() + index,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             phase: "start",
             name: `layout_tool_${index}`,

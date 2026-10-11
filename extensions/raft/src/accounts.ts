@@ -1,4 +1,3 @@
-// Raft account resolution keeps CLI profiles scoped to their channel account.
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -14,17 +13,11 @@ type RaftAccountConfig = {
   defaultAccount?: string;
 };
 
-export type ResolvedRaftAccount = {
-  accountId: string;
-  name: string | undefined;
-  enabled: boolean;
-  configured: boolean;
-  profile: string | null;
-};
+export type ResolvedRaftAccount = ReturnType<typeof resolveRaftAccount>;
 
 const {
-  listAccountIds,
-  resolveDefaultAccountId,
+  listAccountIds: listRaftAccountIds,
+  resolveDefaultAccountId: resolveDefaultRaftAccountId,
   resolveAccountConfig: resolveMergedRaftAccountConfig,
 } = createAccountListHelpers<RaftAccountConfig>(RAFT_CHANNEL_ID, {
   normalizeAccountId,
@@ -35,19 +28,11 @@ const {
   },
 });
 
-export const listRaftAccountIds = listAccountIds;
-export const resolveDefaultRaftAccountId = resolveDefaultAccountId;
+export { listRaftAccountIds, resolveDefaultRaftAccountId };
 
-function resolveRaftConfig(cfg: OpenClawConfig): RaftAccountConfig | undefined {
-  return cfg.channels?.[RAFT_CHANNEL_ID] as RaftAccountConfig | undefined;
-}
-
-export function resolveRaftAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ResolvedRaftAccount {
+export function resolveRaftAccount(params: { cfg: OpenClawConfig; accountId?: string | null }) {
   const accountId = normalizeAccountId(params.accountId ?? resolveDefaultRaftAccountId(params.cfg));
-  const channel = resolveRaftConfig(params.cfg);
+  const channel = params.cfg.channels?.[RAFT_CHANNEL_ID] as RaftAccountConfig | undefined;
   const merged = resolveMergedRaftAccountConfig(params.cfg, accountId);
   const configuredProfile = normalizeOptionalString(merged.profile);
   const envProfile =

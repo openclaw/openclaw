@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -10,16 +13,20 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
-function seedAttached(environmentId: string) {
-  support.seedBootstrapping(environmentId);
-  support.testState.store.transition({
+async function seedAttached(environmentId: string) {
+  await support.seedBootstrapping(environmentId);
+  await support.testState.store.transition({
     environmentId,
     from: "bootstrapping",
     to: "ready",
     patch: support.readyPatch(environmentId, {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     }),
   });
   return support.testState.store.transition({
@@ -48,11 +55,11 @@ function createDispatch(
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: support.testState.root }, begin()),
+        await reclaim({ kind: "local", path: support.testState.root }, await begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+      ...createWorkerWorkspaceRecoveryFixture({
+        resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
+      }),
     }),
     (_request, run) => run(),
   );
@@ -63,17 +70,20 @@ describe("targeted worker placement recovery", () => {
   beforeEach(() => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     });
   });
 
   it("does not wait for a sibling provider inspection; full sweeps still inspect and maintain it", async () => {
     const targetId = "worker-target";
     const siblingId = "worker-sibling";
-    const identity = seedAttached(targetId);
-    support.seedReady(siblingId);
+    const identity = await seedAttached(targetId);
+    await support.seedReady(siblingId);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    seedActivePlacement(placements, {
+    await seedActivePlacement(placements, {
       environmentId: targetId,
       ownerEpoch: identity.ownerEpoch,
       executionMode: "remote-exec",
@@ -142,7 +152,7 @@ describe("targeted worker placement recovery", () => {
       },
     });
     const active = await harness.service.dispatch(REQUEST);
-    placements.beginPlacementMove({
+    await placements.beginPlacementMove({
       sessionId: active.sessionId,
       source: {
         generation: active.generation,
@@ -160,14 +170,14 @@ describe("targeted worker placement recovery", () => {
         targeted.then(() => "target-finished"),
         cleanupStarted.promise.then(() => "unrelated-move-cleanup"),
       ]);
-      retainedAfterTarget = placements.getPlacementMove(active.sessionId);
+      retainedAfterTarget = await placements.getPlacementMoveAsync(active.sessionId);
     } finally {
       releaseCleanup.resolve();
       await targeted;
     }
     await dispatch.reconcileActive();
     expect(placements.get(active.sessionId)?.state).toBe("local");
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(first).toBe("target-finished");
@@ -179,14 +189,14 @@ describe("targeted worker placement recovery", () => {
     async (match) => {
       const sourceId = "worker-move-source";
       const destinationId = "worker-move-destination";
-      const sourceIdentity = seedAttached(sourceId);
+      const sourceIdentity = await seedAttached(sourceId);
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const active = seedActivePlacement(placements, {
+      const active = await seedActivePlacement(placements, {
         environmentId: sourceId,
         ownerEpoch: sourceIdentity.ownerEpoch,
         executionMode: "remote-exec",
       });
-      const begun = placements.beginPlacementMove({
+      const begun = await placements.beginPlacementMove({
         sessionId: active.sessionId,
         source: {
           generation: active.generation,
@@ -195,13 +205,13 @@ describe("targeted worker placement recovery", () => {
         },
         target: { kind: "profile", profileId: "development" },
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: sourceId,
         ownerEpoch: sourceIdentity.ownerEpoch,
         expectedGeneration: begun.placement.generation,
       });
-      placements.completePlacementMoveSourceToLocal({
+      await placements.completePlacementMoveSourceToLocal({
         operationId: begun.intent.operationId,
         sessionId: active.sessionId,
         expectedGeneration: reconciling.generation,
@@ -209,8 +219,8 @@ describe("targeted worker placement recovery", () => {
       const environments = support.createService(support.createProvider());
       await environments.destroy(sourceId);
       if (match === "destination") {
-        const destination = seedAttached(destinationId);
-        seedActivePlacement(placements, {
+        const destination = await seedAttached(destinationId);
+        await seedActivePlacement(placements, {
           environmentId: destinationId,
           ownerEpoch: destination.ownerEpoch,
           executionMode: "remote-exec",
@@ -218,7 +228,7 @@ describe("targeted worker placement recovery", () => {
       }
       const dispatch = createDispatch(environments, placements);
       await dispatch.reconcileActive(match === "source" ? sourceId : destinationId);
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(placements.get(active.sessionId)?.state).toBe(
         match === "source" ? "failed" : "active",
       );

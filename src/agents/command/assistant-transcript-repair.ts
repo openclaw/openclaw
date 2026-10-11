@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { loadTranscriptAppendRuntime } from "./runtime-loaders.js";
 
@@ -18,20 +19,7 @@ type AssistantTranscriptRepairContext = {
   config: OpenClawConfig;
 };
 
-const EMPTY_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-} as const;
+const EMPTY_USAGE = buildUsageWithNoCost({});
 
 /** Records a final whose canonical transcript append failed. */
 export async function persistAssistantTranscriptRepairRecord(params: {
@@ -59,6 +47,7 @@ export async function persistAssistantTranscriptRepairRecord(params: {
   };
   try {
     await persistAgentSession({
+      agentId: context.sessionAgentId,
       sessionStore: context.sessionStore,
       sessionKey: context.sessionKey,
       storePath: context.storePath,
@@ -97,9 +86,9 @@ export async function repairPendingAssistantTranscriptTurns(params: {
   }
 
   const { appendExactAssistantMessageToSessionTranscript } = await loadTranscriptAppendRuntime();
-  const remaining = [...backlog];
-  while (remaining.length > 0) {
-    const item = remaining[0]!;
+  // Keep the backlog fixed across awaited appends.
+  const pending = [...backlog];
+  for (const item of pending) {
     let result: Awaited<ReturnType<typeof appendExactAssistantMessageToSessionTranscript>>;
     try {
       result = await appendExactAssistantMessageToSessionTranscript({
@@ -135,7 +124,6 @@ export async function repairPendingAssistantTranscriptTurns(params: {
       log.warn(`Assistant transcript repair failed for ${context.sessionKey}: ${result.reason}`);
       throw new Error("Previous assistant reply is still pending transcript recovery; retry.");
     }
-    remaining.shift();
     if (result.ok) {
       log.info(`Re-appended missing assistant transcript turn for ${context.sessionKey}`);
     } else {
@@ -149,6 +137,7 @@ export async function repairPendingAssistantTranscriptTurns(params: {
   }
   try {
     await persistAgentSession({
+      agentId: context.sessionAgentId,
       sessionStore: context.sessionStore,
       sessionKey: context.sessionKey,
       storePath: context.storePath,

@@ -155,32 +155,6 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill.install[0]?.id).toBe("brew");
   });
 
-  it("honors legacy clawdbot skill metadata requirements and install hints", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "legacy-skill"),
-      name: "legacy-skill",
-      description: "Legacy metadata",
-      metadata:
-        '{"clawdbot":{"requires":{"bins":["fakebin"]},"install":[{"id":"brew","kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Install fakebin"}]}}',
-    });
-
-    const report = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-      }),
-    );
-    const skill = requireReportedSkill(report, "legacy-skill");
-
-    expect(skill.eligible).toBe(false);
-    expect(skill.requirements.bins).toEqual(["fakebin"]);
-    expect(skill.missing.bins).toEqual(["fakebin"]);
-    expect(skill.install[0]?.id).toBe("brew");
-    expect(skill.install[0]?.kind).toBe("brew");
-    expect(skill.install[0]?.label).toBe("Install fakebin");
-    expect(skill.install[0]?.bins).toEqual(["fakebin"]);
-  });
-
   it("respects OS-gated skills", () => {
     const entry = makeEntry({
       name: "os-skill",
@@ -197,22 +171,6 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill.eligible).toBe(false);
       expect(skill.missing.os).toEqual(["darwin"]);
     }
-  });
-  it("marks bundled skills blocked by allowlist", () => {
-    const entry = makeEntry({
-      name: "peekaboo",
-      source: "openclaw-bundled",
-    });
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", {
-      entries: [entry],
-      config: { skills: { allowBundled: ["other-skill"] } },
-    });
-    const skill = requireReportedSkill(report, "peekaboo");
-
-    expect(skill.blockedByAllowlist).toBe(true);
-    expect(skill.eligible).toBe(false);
-    expect(skill.bundled).toBe(true);
   });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {

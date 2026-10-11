@@ -193,12 +193,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
     }
 
     private func configureGraph() throws {
-        self.running = false
-        if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
-            self.hasTap = false
-        }
-        self.clearPlayback()
-        self.engine.stop()
+        self.stopGraph()
         guard let codec = self.codec
         else { throw WatchRealtimeMediaError.unavailable(String(localized: "Voice audio is not ready.")) }
         let input = self.engine.inputNode
@@ -230,6 +225,15 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
         self.engine.prepare()
         try self.engine.start()
         self.running = true
+    }
+
+    private func stopGraph() {
+        self.running = false
+        if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
+            self.hasTap = false
+        }
+        self.clearPlayback()
+        self.engine.stop()
     }
 
     private func capture(_ buffer: AVAudioPCMBuffer) {
@@ -277,17 +281,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
             AVAudioFrameCount(ceil(Double(buffer.frameLength) * WatchOpusCodec.sampleRate / buffer.format.sampleRate)) +
             960
         guard let output = AVAudioPCMBuffer(pcmFormat: codec.pcmFormat, frameCapacity: capacity) else { return }
-        var supplied = false
-        var error: NSError?
-        _ = resampler.convert(to: output, error: &error) { _, status in
-            guard !supplied else { status.pointee = .noDataNow
-                return nil
-            }
-            supplied = true
-            status.pointee = .haveData
-            return buffer
-        }
-        if let error { throw error }
+        _ = try resampler.convert(buffer, to: output)
         for index in 0..<Int(output.frameLength) {
             frame.floatChannelData![0][self.frameOffset] = output.floatChannelData![0][index]
             self.frameOffset += 1
@@ -363,12 +357,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
     }
 
     private func finishStopIfPossible() {
-        self.running = false
-        if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
-            self.hasTap = false
-        }
-        self.clearPlayback()
-        self.engine.stop()
+        self.stopGraph()
         self.observations.forEach { NotificationCenter.default.removeObserver($0) }
         self.observations.removeAll()
         let start = self.startContinuation

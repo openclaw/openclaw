@@ -1,19 +1,10 @@
-/**
- * Gateway config mutation for local non-interactive onboarding.
- *
- * This module owns port/bind/auth validation and existing-setting preservation
- * before the final config write happens.
- */
+// setupWizardCommand admits option syntax before dispatch. Checks here depend
+// on saved configuration or the environment at application time.
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../../cli/command-format.js";
-import { formatInvalidPortOption } from "../../../cli/error-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  isValidEnvSecretRefId,
-  resolveSecretInputRef,
-  type SecretRef,
-} from "../../../config/types.secrets.js";
+import { resolveSecretInputRef } from "../../../config/types.secrets.js";
 import { provisionGatewayTokenStoreRef } from "../../../gateway/auth-token-store-ref.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createGatewayEnvSecretRef } from "../../../secrets/ref-contract.js";
@@ -21,61 +12,29 @@ import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.j
 import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
-/** Resolves what `gateway.auth.token` should hold once setup owns the token value. */
-function resolveGeneratedTokenInput(params: {
-  config: OpenClawConfig;
-  secretInputMode: OnboardOptions["secretInputMode"];
-  token: string | undefined;
-  ambientEnvOnly: boolean;
-}): SecretRef | string {
-  if (params.secretInputMode !== "ref") {
-    return params.token ?? randomToken();
-  }
-  if (params.ambientEnvOnly) {
-    return createGatewayEnvSecretRef(params.config, "OPENCLAW_GATEWAY_TOKEN");
-  }
-  return provisionGatewayTokenStoreRef({
-    config: params.config,
-    ...(params.token ? { token: params.token } : {}),
-  }).ref;
-}
-
 /** Applies gateway CLI options to the pending config and returns normalized runtime settings. */
-export function applyNonInteractiveGatewayConfig(params: {
+export async function applyNonInteractiveGatewayConfig(params: {
   nextConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
-}): {
+}): Promise<{
   nextConfig: OpenClawConfig;
   port: number;
   bind: string;
   authMode: string;
   tailscaleMode: string;
-} | null {
+} | null> {
   const { opts, runtime } = params;
-
-  const gatewayPort = opts.gatewayPort;
-  if (
-    gatewayPort !== undefined &&
-    (!Number.isFinite(gatewayPort) || gatewayPort <= 0 || gatewayPort > 65_535)
-  ) {
-    rejectOnboardingOption(opts, runtime, formatInvalidPortOption("--gateway-port"));
+  const reject = (message: string): null => {
+    rejectOnboardingOption(opts, runtime, message);
     return null;
-  }
+  };
 
   const existingGateway = params.nextConfig.gateway;
-  const port = gatewayPort ?? params.defaultPort;
+  const port = opts.gatewayPort ?? params.defaultPort;
   let bind = opts.gatewayBind ?? existingGateway?.bind ?? "loopback";
   const explicitAuthMode = opts.gatewayAuth;
-  if (
-    explicitAuthMode !== undefined &&
-    explicitAuthMode !== "token" &&
-    explicitAuthMode !== "password"
-  ) {
-    rejectOnboardingOption(opts, runtime, 'Invalid --gateway-auth. Use "token" or "password".');
-    return null;
-  }
   const hasExplicitTokenAuthInput =
     opts.gatewayToken !== undefined || opts.gatewayTokenRefEnv !== undefined;
   let authMode =
@@ -108,12 +67,9 @@ export function applyNonInteractiveGatewayConfig(params: {
     if (customBindHostIssue) {
       const setCommand = formatCliCommand("openclaw config set gateway.customBindHost <ipv4>");
       const interactiveCommand = formatCliCommand("openclaw onboard");
-      rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         `--gateway-bind custom requires gateway.customBindHost: ${customBindHostIssue}. Set it with ${setCommand} and rerun, or run ${interactiveCommand} interactively to be prompted for it.`,
       );
-      return null;
     }
   }
   const changesAuthOrTailscale =
@@ -122,10 +78,17 @@ export function applyNonInteractiveGatewayConfig(params: {
     authMode = "token";
   }
   if (changesAuthOrTailscale && tailscaleMode === "funnel" && authMode !== "password") {
+    if (authMode === "trusted-proxy") {
+      return reject(
+        'Tailscale Funnel requires password auth, but the Gateway is configured with "trusted-proxy" auth. ' +
+          "Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.",
+      );
+    }
     authMode = "password";
   }
 
-  let nextConfig = params.nextConfig;
+  const nextConfig = params.nextConfig;
+  let auth = existingGateway?.auth;
   const explicitGatewayToken = normalizeGatewayTokenInput(opts.gatewayToken);
   const envGatewayToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
   const existingTokenInput = nextConfig.gateway?.auth?.token;
@@ -143,87 +106,31 @@ export function applyNonInteractiveGatewayConfig(params: {
   const gatewayTokenRefEnv = normalizeOptionalString(opts.gatewayTokenRefEnv ?? "") ?? "";
 
   if (authMode === "token") {
+    auth = { ...auth, mode: "token" };
     if (gatewayTokenRefEnv) {
-      // Env refs must be validated before writing config because the daemon
-      // install plan will later depend on this exact env-var id.
-      if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
-        rejectOnboardingOption(
-          opts,
-          runtime,
-          "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
-        );
-        return null;
-      }
-      if (explicitGatewayToken) {
-        // Avoid ambiguous persistence: a plaintext token and a ref target cannot
-        // both represent the same gateway auth field.
-        rejectOnboardingOption(
-          opts,
-          runtime,
-          "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
-        );
-        return null;
-      }
       const resolvedFromEnv = process.env[gatewayTokenRefEnv]?.trim();
       if (!resolvedFromEnv) {
-        rejectOnboardingOption(
-          opts,
-          runtime,
+        return reject(
           `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard --non-interactive")}.`,
         );
-        return null;
       }
-      nextConfig = {
-        ...nextConfig,
-        gateway: {
-          ...nextConfig.gateway,
-          auth: {
-            ...nextConfig.gateway?.auth,
-            mode: "token",
-            token: createGatewayEnvSecretRef(nextConfig, gatewayTokenRefEnv),
-          },
-        },
-      };
-    } else if (!explicitGatewayToken && existingTokenRef) {
-      // Preserve an already-configured SecretRef on re-onboard. Without this
-      // branch, an ambient OPENCLAW_GATEWAY_TOKEN (or randomToken() fallback)
-      // would silently overwrite {source, provider, id} with a plaintext
-      // literal, de-secretref-ing the gateway.
-      nextConfig = {
-        ...nextConfig,
-        gateway: {
-          ...nextConfig.gateway,
-          auth: {
-            ...nextConfig.gateway?.auth,
-            mode: "token",
-            // token field intentionally preserved as the existing SecretRef.
-          },
-        },
-      };
-    } else {
-      // `--secret-input-mode ref` covers the gateway token too. An ambient
-      // OPENCLAW_GATEWAY_TOKEN keeps its env ref so a later rotation still wins;
-      // copying it into the store would silently pin the stale value. Anything else
-      // is a value setup itself holds, with nothing for an env/file/exec ref to point
-      // at, so the shared secret store keeps it and config keeps only the reference.
-      const tokenInput = resolveGeneratedTokenInput({
-        config: nextConfig,
-        secretInputMode: opts.secretInputMode,
-        token: gatewayToken,
-        ambientEnvOnly:
-          !explicitGatewayToken && !existingPlaintextToken && Boolean(envGatewayToken),
-      });
-      nextConfig = {
-        ...nextConfig,
-        gateway: {
-          ...nextConfig.gateway,
-          auth: {
-            ...nextConfig.gateway?.auth,
-            mode: "token",
-            token: tokenInput,
-          },
-        },
-      };
+      auth.token = createGatewayEnvSecretRef(nextConfig, gatewayTokenRefEnv);
+    } else if (explicitGatewayToken || !existingTokenRef) {
+      // Preserve configured refs unless an explicit token replaces them. Reference
+      // mode keeps ambient tokens rotatable via their env ref; values held by
+      // setup itself belong in the shared secret store.
+      if (opts.secretInputMode !== "ref") {
+        auth.token = gatewayToken ?? randomToken();
+      } else if (!explicitGatewayToken && !existingPlaintextToken && envGatewayToken) {
+        auth.token = createGatewayEnvSecretRef(nextConfig, "OPENCLAW_GATEWAY_TOKEN");
+      } else {
+        auth.token = (
+          await provisionGatewayTokenStoreRef({
+            config: nextConfig,
+            ...(gatewayToken ? { token: gatewayToken } : {}),
+          })
+        ).ref;
+      }
     }
   }
 
@@ -235,48 +142,38 @@ export function applyNonInteractiveGatewayConfig(params: {
           normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
         : normalizeOptionalString(input);
     if (!password) {
-      rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
       );
-      return null;
     }
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        auth: {
-          ...nextConfig.gateway?.auth,
-          mode: "password",
-          ...(input !== undefined
-            ? {
-                password:
-                  opts.secretInputMode === "ref"
-                    ? createGatewayEnvSecretRef(nextConfig, "OPENCLAW_GATEWAY_PASSWORD")
-                    : password,
-              }
-            : {}),
-        },
-      },
+    auth = {
+      ...auth,
+      mode: "password",
+      ...(input !== undefined
+        ? {
+            password:
+              opts.secretInputMode === "ref"
+                ? createGatewayEnvSecretRef(nextConfig, "OPENCLAW_GATEWAY_PASSWORD")
+                : password,
+          }
+        : {}),
     };
   }
 
-  nextConfig = {
-    ...nextConfig,
-    gateway: {
-      ...nextConfig.gateway,
-      port,
-      bind,
-      tailscale: {
-        ...nextConfig.gateway?.tailscale,
-        mode: tailscaleMode,
+  return {
+    nextConfig: {
+      ...nextConfig,
+      gateway: {
+        ...existingGateway,
+        ...(auth ? { auth } : {}),
+        port,
+        bind,
+        tailscale: {
+          ...existingGateway?.tailscale,
+          mode: tailscaleMode,
+        },
       },
     },
-  };
-
-  return {
-    nextConfig,
     port,
     bind,
     authMode,

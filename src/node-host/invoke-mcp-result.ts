@@ -33,7 +33,7 @@ export function boundMcpToolResultPayload(result: {
       MCP_INVOKE_PAYLOAD_MAX_BYTES - usedBytes - prefixBytes - reservedMarkerBytes,
     );
     const measured = boundedJsonUtf8Bytes(result.structuredContent, availableBytes);
-    if (measured.complete && measured.bytes <= availableBytes) {
+    if (measured.complete) {
       structuredContent = result.structuredContent;
       usedBytes += prefixBytes + measured.bytes;
     } else {
@@ -63,11 +63,11 @@ export function boundMcpToolResultPayload(result: {
   let markedTruncated = false;
   const textBoundedContent: McpInvokeContentBlock[] = [];
   for (const block of normalizedBlocks) {
-    if (block.type !== "text" || typeof block.text !== "string") {
-      textBoundedContent.push(block);
-      continue;
-    }
-    if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
+    if (
+      block.type !== "text" ||
+      typeof block.text !== "string" ||
+      totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES
+    ) {
       textBoundedContent.push(block);
       continue;
     }
@@ -98,7 +98,7 @@ export function boundMcpToolResultPayload(result: {
       MCP_INVOKE_PAYLOAD_MAX_BYTES - usedBytes - separatorBytes - reservedMarkerBytes,
     );
     const measured = boundedJsonUtf8Bytes(block, availableBytes);
-    if (!measured.complete || measured.bytes > availableBytes) {
+    if (!measured.complete) {
       payloadTruncated = true;
       continue;
     }

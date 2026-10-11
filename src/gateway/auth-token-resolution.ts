@@ -1,18 +1,13 @@
-// Gateway auth token resolution applies explicit/config/SecretRef/env
-// precedence with caller-controlled env fallback behavior.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { trimToUndefined } from "./credentials.js";
 import {
-  resolveConfiguredSecretInputWithFallback,
+  resolveCanonicalConfiguredSecretInputWithFallback,
   type SecretInputUnresolvedReasonStyle,
 } from "./resolve-configured-secret-input-string.js";
 
-// Single-token resolver for local gateway auth consumers that need to know
-// whether the winning token came from explicit args, config, SecretRef, or env.
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref";
 
-/** Resolves gateway.auth.token with configurable env fallback and SecretRef diagnostics. */
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -24,6 +19,7 @@ export async function resolveGatewayAuthToken(params: {
   source?: GatewayAuthTokenResolutionSource;
   secretRefConfigured: boolean;
   unresolvedRefReason?: string;
+  unresolvedRefCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
   const explicitToken = trimToUndefined(params.explicitToken);
   if (explicitToken) {
@@ -34,7 +30,7 @@ export async function resolveGatewayAuthToken(params: {
     };
   }
 
-  const resolved = await resolveConfiguredSecretInputWithFallback({
+  const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
     config: params.cfg,
     env: params.env,
     value: params.cfg.gateway?.auth?.token,
@@ -51,5 +47,6 @@ export async function resolveGatewayAuthToken(params: {
       : {}),
     secretRefConfigured: resolved.secretRefConfigured,
     ...(resolved.unresolvedRefReason ? { unresolvedRefReason: resolved.unresolvedRefReason } : {}),
+    ...(resolved.unresolvedRefCode ? { unresolvedRefCode: resolved.unresolvedRefCode } : {}),
   };
 }

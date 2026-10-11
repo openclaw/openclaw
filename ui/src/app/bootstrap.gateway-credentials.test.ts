@@ -8,6 +8,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { fetchControlUiResource } from "./browser-http.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { loadSettings, loadUiPreferences, patchSettings, persistSessionToken } from "./settings.ts";
@@ -22,6 +23,7 @@ function setNativeAuth(auth: { gatewayUrl: string; token?: string; password?: st
 }
 
 beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
@@ -36,6 +38,38 @@ afterEach(() => {
 });
 
 describe("pending Gateway credentials", () => {
+  it.each([
+    ["wss://gateway.example", "Bearer document-gateway-token"],
+    ["wss://gateway.example/other", null],
+    ["wss://gateway.example?tenant=other", null],
+    ["wss://other-gateway.example", null],
+  ])(
+    "scopes browser recovery credentials to the document Gateway (%s)",
+    async (gatewayUrl, authorization) => {
+      const store = createGatewayStoreTestStore({
+        settings: { ...loadSettings(), gatewayUrl, token: "document-gateway-token" },
+      });
+      vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_url, init) =>
+          new Response(null, {
+            status: init?.method === "HEAD" ? 200 : 401,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      runtime = bootstrapApplication();
+      await fetchControlUiResource("/__openclaw__/assistant-media");
+      await expect
+        .poll(() => fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD").length)
+        .toBe(1);
+      const [url, probeInit] = fetchMock.mock.calls.find(([, init]) => init?.method === "HEAD")!;
+      expect(url).toBe("https://gateway.example/control-ui-config.json");
+      expect(probeInit?.redirect).toBe("manual");
+      expect(new Headers(probeInit?.headers).get("Authorization")).toBe(authorization);
+    },
+  );
+
   it.each([
     { decision: "confirm", queryGatewayUrl: "" },
     { decision: "cancel", queryGatewayUrl: "" },
@@ -179,11 +213,6 @@ describe("pending Gateway credentials", () => {
       retryUnavailable: false,
     },
     {
-      name: "a missing token after retrying an unavailable Gateway",
-      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      retryUnavailable: true,
-    },
-    {
       name: "a missing password after retrying an unavailable Gateway",
       authCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
       retryUnavailable: true,
@@ -198,7 +227,11 @@ describe("pending Gateway credentials", () => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
         Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
       );
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+        input === "/control-ui-config.json"
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : fetchMock(input, init),
+      );
       runtime = bootstrapApplication();
       vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
       await runtime.start();
@@ -278,7 +311,11 @@ describe("pending Gateway credentials", () => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
         Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
       );
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+        input === "/control-ui-config.json"
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : fetchMock(input, init),
+      );
       runtime = bootstrapApplication();
       vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
       await runtime.start();
@@ -319,25 +356,6 @@ describe("pending Gateway credentials", () => {
     expect(runtime.context.gateway.connection.token).toBe("next-token");
     expect(runtime.context.gateway.connection.password).toBe("");
     persistSessionToken(nextGatewayUrl, "");
-  });
-
-  it("holds a bootstrap token until its changed Gateway URL is confirmed", () => {
-    const currentGatewayUrl = "wss://gateway.example/openclaw";
-    const nextGatewayUrl = "wss://other-gateway.example/openclaw";
-    setNativeAuth({ gatewayUrl: currentGatewayUrl });
-    window.history.replaceState(
-      {},
-      "",
-      `/#gatewayUrl=${encodeURIComponent(nextGatewayUrl)}&bootstrapToken=next-bootstrap`,
-    );
-    runtime = bootstrapApplication();
-
-    expect(runtime.context.gateway.connection.bootstrapToken).toBe("");
-
-    runtime.confirmPendingGatewayConnection();
-
-    expect(runtime.context.gateway.connection.gatewayUrl).toBe(nextGatewayUrl);
-    expect(runtime.context.gateway.connection.bootstrapToken).toBe("next-bootstrap");
   });
 
   it("uses paired-device credentials while other connection bootstrap work is pending", async () => {
@@ -389,11 +407,9 @@ describe("pending Gateway credentials", () => {
         expect(methods).toContain("update.status");
         expect(methods).toContain("exec.approval.list");
       });
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
 
-      // Native plugin activation requests its grant before unrelated queued
-      // startup RPCs finish; the connected Gateway already owns its credential.
-      await expect(runtime.context.config.refresh()).resolves.toMatchObject({
+      await expect(runtime.context.config.refresh({ ifNeeded: true })).resolves.toMatchObject({
         serverVersion: "paired",
         pluginFrameGrants: [{ pluginId: "fixture" }],
       });

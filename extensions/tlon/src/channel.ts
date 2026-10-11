@@ -1,8 +1,7 @@
-// Tlon plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
   createRuntimeOutboundDelegates,
@@ -33,27 +32,9 @@ const TLON_CHANNEL_ID = "tlon" as const;
 
 const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
-const tlonSetupWizardProxy = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg, accountId }) =>
-    await (
-      await loadTlonChannelRuntime()
-    ).tlonSetupWizard.status.resolveConfigured({
-      cfg,
-      accountId,
-    }),
-  resolveStatusLines: async ({ cfg, accountId, configured }) =>
-    (await (
-      await loadTlonChannelRuntime()
-    ).tlonSetupWizard.status.resolveStatusLines?.({
-      cfg,
-      accountId,
-      configured,
-    })) ?? [],
-  finalize: async (params) =>
-    await (
-      await loadTlonChannelRuntime()
-    ).tlonSetupWizard.finalize!(params),
-}) satisfies NonNullable<ChannelPlugin["setupWizard"]>;
+const tlonSetupWizardProxy = createTlonSetupWizardBase(
+  async (params) => await (await loadTlonChannelRuntime()).tlonSetupWizard.finalize!(params),
+);
 
 const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
@@ -95,7 +76,12 @@ const tlonMessageAdapter = createChannelMessageAdapterFromOutbound({
   outbound: tlonChannelOutbound,
 });
 
-export const tlonPlugin = createChatChannelPlugin({
+export const tlonPlugin = createChatChannelPlugin<
+  ReturnType<typeof resolveTlonAccount>,
+  unknown,
+  unknown,
+  2
+>({
   base: {
     id: TLON_CHANNEL_ID,
     meta: {
@@ -152,7 +138,7 @@ export const tlonPlugin = createChatChannelPlugin({
         looksLikeId: (target) => Boolean(parseTlonTarget(target)),
         hint: formatTargetHint(),
       },
-      resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
+      resolveOutboundSessionRoute: resolveTlonOutboundSessionRoute,
     },
     message: tlonMessageAdapter,
     status: createComputedAccountStatusAdapter<ReturnType<typeof resolveTlonAccount>>({
@@ -198,6 +184,7 @@ export const tlonPlugin = createChatChannelPlugin({
       }),
     }),
     gateway: {
+      apiVersion: 2,
       startAccount: async (ctx) =>
         await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
     },

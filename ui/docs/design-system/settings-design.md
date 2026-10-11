@@ -1,6 +1,6 @@
 # Settings Design Language
 
-Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css`; templates are built through the helpers in `ui/src/components/settings-ui.ts`.
+Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css`. Solid views use `ui/src/components/solid/settings-ui.tsx`; unported Lit views keep the template helpers in `ui/src/components/settings-ui.ts`.
 
 ## Anatomy
 
@@ -22,11 +22,13 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
 
 ## Rules
 
-- **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`). Badges (`.settings-count`) exist only for genuine counts.
+- **Do not narrate unchanged defaults.** Controls and placeholders show the effective value. Omit repetitive “Using default” descriptions; keep useful help, scope, reset controls, and default references for customized values.
+- **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`) by default. Permissions use neutral text without dots, with a small checkmark for granted access and aligned action buttons; an ungranted permission is a choice, not an error. Badges (`.settings-count`) exist only for genuine counts.
 - **Spacing uses `--space-*` tokens** (`base.css`); no hardcoded paddings/gaps.
 - **Motion budget:** color/background transitions only. No enter animations, staggered reveals, or hover glows.
 - **Buttons:** default `.btn` (quiet). `--accent` primary at most once per view. Danger actions live in a `danger: true` section at the page bottom.
 - **One control set.** Use `renderSettingsToggleRow` (preferred: label-wrapped, whole row clickable, accessible name for free) or `renderSettingsToggle` with a required `ariaLabel`, `renderSettingsSegmented`, `.settings-select`, `.settings-input`. Do not add another toggle or badge variant.
+- **Disabled state follows the current form.** Switches and segmented radios use native inputs. A disabled fieldset suppresses activation; controls recover when it is enabled again, while explicitly disabled groups and options stay disabled. Read the input's effective `:disabled` state rather than copying fieldset state into component properties.
 - **Every control needs an accessible name.** Row titles are plain text, not `<label>`s — selects/inputs in a control slot must carry `aria-label` (usually the row title string).
 - **No new page CSS files for settings surfaces.** Page-specific styles belong in `settings.css` only when a primitive is genuinely missing — extend the system, don't fork it.
 
@@ -58,6 +60,18 @@ renderSettingsPage([
 ```
 
 Custom content inside a group (tables, meters) is allowed as an escape hatch — keep it inside one `.settings-group` and match row paddings (`--space-3 --space-4`).
+
+Solid views use the matching `SettingsPage`, `SettingsSection`, `SettingsRow`,
+`SettingsToggleRow`, and `SettingsSegmented` components. Their children and control
+props accept JSX; selection stays with the caller. Returning `false` from a
+control's `onChange` restores the accepted value synchronously. The shared native
+handlers also preserve direct-activation callbacks and RTL arrow navigation.
+
+Mount settings views inside `ShellLayoutProvider` from
+`ui/src/app/shell-layout-traits-solid.tsx`, passing the shell's `ShellLayoutOwner`
+and the connected route host. Settings layout boundaries publish their traits
+before evaluating descendant content, so measurements see the correct shell
+classes. Keep this owner shared with the Lit shell adapter during migration.
 
 ## Phone and native embed layouts
 

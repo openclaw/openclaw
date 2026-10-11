@@ -1,10 +1,3 @@
-/**
- * Twitch channel plugin for OpenClaw.
- *
- * Main plugin export combining all adapters (outbound, actions, status, gateway).
- * This is the primary entry point for the Twitch channel integration.
- */
-
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import {
@@ -21,7 +14,6 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,
@@ -35,7 +27,6 @@ import {
   getAccountConfig,
   resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
-  resolveTwitchSnapshotAccountId,
   twitchConfigAdapter,
   type ResolvedTwitchAccount,
 } from "./config.js";
@@ -44,13 +35,7 @@ import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
 import { twitchSetupPlugin } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
-import type {
-  ChannelLogSink,
-  ChannelPlugin,
-  ChannelResolveKind,
-  ChannelResolveResult,
-  TwitchAccountConfig,
-} from "./types.js";
+import type { ChannelLogSink, ChannelPlugin, TwitchAccountConfig } from "./types.js";
 import { isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
 
 function normalizeTwitchMessagingTarget(target: string): string {
@@ -64,13 +49,6 @@ function normalizeTwitchMessagingTarget(target: string): string {
   return normalizeTwitchChannel(channelTarget);
 }
 
-/**
- * Twitch channel plugin.
- *
- * Implements the ChannelPlugin interface to provide Twitch chat integration
- * for OpenClaw. Supports message sending, receiving, access control, and
- * status monitoring.
- */
 export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
   createChatChannelPlugin<ResolvedTwitchAccount>({
     pairing: {
@@ -152,19 +130,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
       },
       actions: twitchMessageActions,
       resolver: {
-        resolveTargets: async ({
-          cfg,
-          accountId,
-          inputs,
-          kind,
-          runtime,
-        }: {
-          cfg: OpenClawConfig;
-          accountId?: string | null;
-          inputs: string[];
-          kind: ChannelResolveKind;
-          runtime: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
-        }): Promise<ChannelResolveResult[]> => {
+        resolveTargets: async ({ cfg, accountId, inputs, kind, runtime }) => {
           const account = getAccountConfig(cfg, accountId ?? resolveDefaultTwitchAccountId(cfg));
           if (!account) {
             return inputs.map((input) => ({
@@ -189,11 +155,9 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         probeAccount: async ({ account, timeoutMs }) => await probeTwitch(account, timeoutMs),
         collectStatusIssues: collectTwitchStatusIssues,
         resolveAccountSnapshot: ({ account, cfg }) => {
-          const resolvedAccountId =
-            account.accountId || resolveTwitchSnapshotAccountId(cfg, account);
-          const { configured } = resolveTwitchAccountContext(cfg, resolvedAccountId);
+          const { configured } = resolveTwitchAccountContext(cfg, account.accountId);
           return {
-            accountId: resolvedAccountId,
+            accountId: account.accountId,
             enabled: account.enabled !== false,
             configured,
           };

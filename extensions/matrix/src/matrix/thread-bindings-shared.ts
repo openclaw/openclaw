@@ -1,26 +1,19 @@
-// Matrix plugin module implements thread bindings shared behavior.
-import type {
-  BindingTargetKind,
-  SessionBindingRecord,
+import {
+  projectThreadBindingRecord,
+  resolveThreadBindingLifecycle,
+  warnPluginSdkDeprecation,
+  type AccountScopedConversationBindingRecord,
+  type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 type MatrixThreadBindingTargetKind = "subagent" | "acp";
 
-export type MatrixThreadBindingRecord = {
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  targetKind: MatrixThreadBindingTargetKind;
-  targetSessionKey: string;
-  agentId?: string;
-  label?: string;
-  boundBy?: string;
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-};
+export type MatrixThreadBindingRecord =
+  AccountScopedConversationBindingRecord<MatrixThreadBindingTargetKind> & {
+    parentConversationId?: string;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+  };
 
 export type MatrixThreadBindingManager = {
   accountId: string;
@@ -32,11 +25,14 @@ export type MatrixThreadBindingManager = {
   }) => MatrixThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => MatrixThreadBindingRecord[];
   listBindings: () => MatrixThreadBindingRecord[];
+  /** @deprecated Use touchBindingAsync; removed in the next Plugin SDK major. */
   touchBinding: (bindingId: string, at?: number) => MatrixThreadBindingRecord | null;
+  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
   setIdleTimeoutBySessionKey: (params: {
     targetSessionKey: string;
     idleTimeoutMs: number;
   }) => MatrixThreadBindingRecord[];
+  /** @deprecated Use setMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
   setMaxAgeBySessionKey: (params: {
     targetSessionKey: string;
     maxAgeMs: number;
@@ -45,9 +41,24 @@ export type MatrixThreadBindingManager = {
   stop: () => Promise<void>;
 };
 
+export type MatrixThreadBindingManagerV2 = MatrixThreadBindingManager & {
+  touchBindingAsync: (bindingId: string, at?: number) => Promise<void>;
+  removeBindingsAsync: (
+    records: readonly MatrixThreadBindingRecord[],
+  ) => Promise<MatrixThreadBindingRecord[]>;
+  setIdleTimeoutBySessionKeyAsync: (params: {
+    targetSessionKey: string;
+    idleTimeoutMs: number;
+  }) => Promise<MatrixThreadBindingRecord[]>;
+  setMaxAgeBySessionKeyAsync: (params: {
+    targetSessionKey: string;
+    maxAgeMs: number;
+  }) => Promise<MatrixThreadBindingRecord[]>;
+};
+
 type MatrixThreadBindingManagerCacheEntry = {
   storageKey: string;
-  manager: MatrixThreadBindingManager;
+  manager: MatrixThreadBindingManagerV2;
 };
 
 const MANAGERS_BY_ACCOUNT_ID = new Map<string, MatrixThreadBindingManagerCacheEntry>();
@@ -61,30 +72,11 @@ export function resolveBindingKey(params: {
   return `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`;
 }
 
-function toSessionBindingTargetKind(raw: MatrixThreadBindingTargetKind): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-export function toMatrixBindingTargetKind(raw: BindingTargetKind): MatrixThreadBindingTargetKind {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
-export function resolveEffectiveBindingExpiry(params: {
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-}): {
-  expiresAt?: number;
-  reason?: "idle-expired" | "max-age-expired";
-} {
-  return resolveThreadBindingLifecycle(params);
-}
-
 export function toSessionBindingRecord(
   record: MatrixThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
 ): SessionBindingRecord {
-  const lifecycle = resolveEffectiveBindingExpiry({
+  const lifecycle = resolveThreadBindingLifecycle({
     record,
     defaultIdleTimeoutMs: defaults.idleTimeoutMs,
     defaultMaxAgeMs: defaults.maxAgeMs,
@@ -92,28 +84,16 @@ export function toSessionBindingRecord(
   const idleTimeoutMs =
     typeof record.idleTimeoutMs === "number" ? record.idleTimeoutMs : defaults.idleTimeoutMs;
   const maxAgeMs = typeof record.maxAgeMs === "number" ? record.maxAgeMs : defaults.maxAgeMs;
-  return {
-    bindingId: resolveBindingKey(record),
-    targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+  return projectThreadBindingRecord(record, {
     conversation: {
       channel: "matrix",
-      accountId: record.accountId,
       conversationId: record.conversationId,
       parentConversationId: record.parentConversationId,
     },
-    status: "active",
-    boundAt: record.boundAt,
-    expiresAt: lifecycle.expiresAt,
-    metadata: {
-      agentId: record.agentId,
-      label: record.label,
-      boundBy: record.boundBy,
-      lastActivityAt: record.lastActivityAt,
-      idleTimeoutMs,
-      maxAgeMs,
-    },
-  };
+    bindingId: resolveBindingKey(record),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+    lifecycle: { ...lifecycle, idleTimeoutMs, maxAgeMs },
+  });
 }
 
 export function setBindingRecord(record: MatrixThreadBindingRecord): void {
@@ -160,40 +140,84 @@ export function deleteMatrixThreadBindingManagerEntry(accountId: string): void {
 
 export function getMatrixThreadBindingManager(
   accountId: string,
-): MatrixThreadBindingManager | null {
+): MatrixThreadBindingManagerV2 | null {
   return MANAGERS_BY_ACCOUNT_ID.get(accountId)?.manager ?? null;
 }
 
-export function setMatrixThreadBindingIdleTimeoutBySessionKey(params: {
-  accountId: string;
-  targetSessionKey: string;
-  idleTimeoutMs: number;
-}): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
-  if (!manager) {
-    return [];
-  }
-  return manager.setIdleTimeoutBySessionKey(params).map((record) =>
-    toSessionBindingRecord(record, {
-      idleTimeoutMs: manager.getIdleTimeoutMs(),
-      maxAgeMs: manager.getMaxAgeMs(),
-    }),
-  );
+function createMatrixThreadBindingTimeoutSetter<
+  Params extends { accountId: string; targetSessionKey: string },
+>(
+  method:
+    | "setMatrixThreadBindingIdleTimeoutBySessionKey"
+    | "setMatrixThreadBindingMaxAgeBySessionKey",
+  update: (manager: MatrixThreadBindingManager, params: Params) => MatrixThreadBindingRecord[],
+) {
+  return (params: Params): SessionBindingRecord[] => {
+    warnPluginSdkDeprecation({
+      pluginId: "matrix",
+      family: "conversation-bindings",
+      method,
+      replacement: `await ${method}Async()`,
+      compatibility: "Legacy methods return cached results synchronously and defer persistence.",
+    });
+    const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
+    if (!manager) {
+      return [];
+    }
+    return update(manager, params).map((record) =>
+      toSessionBindingRecord(record, {
+        idleTimeoutMs: manager.getIdleTimeoutMs(),
+        maxAgeMs: manager.getMaxAgeMs(),
+      }),
+    );
+  };
 }
 
-export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
-  accountId: string;
-  targetSessionKey: string;
-  maxAgeMs: number;
-}): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
-  if (!manager) {
-    return [];
-  }
-  return manager.setMaxAgeBySessionKey(params).map((record) =>
-    toSessionBindingRecord(record, {
-      idleTimeoutMs: manager.getIdleTimeoutMs(),
-      maxAgeMs: manager.getMaxAgeMs(),
-    }),
-  );
+/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+export const setMatrixThreadBindingIdleTimeoutBySessionKey = createMatrixThreadBindingTimeoutSetter(
+  "setMatrixThreadBindingIdleTimeoutBySessionKey",
+  (manager, params: { accountId: string; targetSessionKey: string; idleTimeoutMs: number }) =>
+    manager.setIdleTimeoutBySessionKey(params),
+);
+
+/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+export const setMatrixThreadBindingMaxAgeBySessionKey = createMatrixThreadBindingTimeoutSetter(
+  "setMatrixThreadBindingMaxAgeBySessionKey",
+  (manager, params: { accountId: string; targetSessionKey: string; maxAgeMs: number }) =>
+    manager.setMaxAgeBySessionKey(params),
+);
+
+function createMatrixThreadBindingAsyncTimeoutSetter<
+  Params extends { accountId: string; targetSessionKey: string },
+>(
+  update: (
+    manager: MatrixThreadBindingManagerV2,
+    params: Params,
+  ) => Promise<MatrixThreadBindingRecord[]>,
+) {
+  return async (params: Params): Promise<SessionBindingRecord[]> => {
+    const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
+    if (!manager) {
+      return [];
+    }
+    const records = await update(manager, params);
+    return records.map((record) =>
+      toSessionBindingRecord(record, {
+        idleTimeoutMs: manager.getIdleTimeoutMs(),
+        maxAgeMs: manager.getMaxAgeMs(),
+      }),
+    );
+  };
 }
+
+export const setMatrixThreadBindingIdleTimeoutBySessionKeyAsync =
+  createMatrixThreadBindingAsyncTimeoutSetter(
+    (manager, params: { accountId: string; targetSessionKey: string; idleTimeoutMs: number }) =>
+      manager.setIdleTimeoutBySessionKeyAsync(params),
+  );
+
+export const setMatrixThreadBindingMaxAgeBySessionKeyAsync =
+  createMatrixThreadBindingAsyncTimeoutSetter(
+    (manager, params: { accountId: string; targetSessionKey: string; maxAgeMs: number }) =>
+      manager.setMaxAgeBySessionKeyAsync(params),
+  );

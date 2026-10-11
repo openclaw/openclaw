@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -6,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
@@ -13,15 +16,19 @@ import {
   type WorkerInferenceContext,
   type WorkerInferenceEventParams,
   type WorkerInferenceModelRef,
+  type WorkerInferenceStartParams,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { Usage } from "../llm/types.js";
 import { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
 import { createWorkerImageHistory } from "./replay-images.test-support.js";
 import { fitWorkerReplayImages } from "./replay-message-window.js";
-import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
+import {
+  isWorkerTranscriptMessageFrameSafe,
+  WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+} from "./transcript-message.js";
 import { createWorkerConnection } from "./worker-connection.js";
-import { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 
 const modelRef: WorkerInferenceModelRef = { provider: "test", model: "test-model" };
 const usage: Usage = {
@@ -32,21 +39,6 @@ const usage: Usage = {
   totalTokens: 3,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-
-it("keeps an already fitting image projection by reference", () => {
-  const messages: WorkerInferenceContext["messages"] = [
-    {
-      role: "user",
-      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
-      timestamp: 1,
-    },
-  ];
-  expect(
-    fitWorkerReplayImages(messages, (candidate) =>
-      Buffer.byteLength(JSON.stringify(candidate), "utf8"),
-    ),
-  ).toBe(messages);
-});
 
 function createClient() {
   return new WorkerInferenceProxyClient(
@@ -80,24 +72,36 @@ function createClient() {
   );
 }
 
-function createAdapterFixture(computerContextEpoch?: {
-  value: number;
-  frameToolCallId?: string;
-  frameImageIdentity?: string;
-}) {
+function createAdapterFixture(
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  },
+  events: WorkerInferenceEventParams["event"][] = [],
+  gap = false,
+) {
   const client = createClient();
-  const start = vi.spyOn(client, "start").mockResolvedValue({
-    type: "done",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "Done." }],
-      api: "openai-responses",
-      provider: "test",
-      model: "test-model",
-      stopReason: "stop",
-      usage,
-      timestamp: 1,
-    },
+  const start = vi.spyOn(client, "start").mockImplementation(async (request, handlers) => {
+    if (gap) {
+      handlers?.onStreamGap?.({ expectedSeq: 1, receivedSeq: 2 });
+    }
+    events.forEach((event, index) =>
+      handlers?.onEvent?.({ ...request, seq: index + (gap ? 2 : 1), event }),
+    );
+    return {
+      type: "done",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        api: "openai-responses",
+        provider: "test",
+        model: "test-model",
+        stopReason: "stop",
+        usage,
+        timestamp: 1,
+      },
+    };
   });
   const options = {
     client,
@@ -111,7 +115,241 @@ function createAdapterFixture(computerContextEpoch?: {
   return { client, start, stream: createWorkerInferenceStreamAdapter(options) };
 }
 
+function inferenceFrameBytes(request: WorkerInferenceStartParams): number {
+  return Buffer.byteLength(
+    JSON.stringify({
+      type: "req",
+      id: "00000000-0000-4000-8000-000000000000",
+      method: "worker.inference.start",
+      params: request,
+    }),
+    "utf8",
+  );
+}
+
+function inferenceRequest(context: WorkerInferenceContext): WorkerInferenceStartParams {
+  return {
+    runEpoch: 1,
+    sessionId: "session-1",
+    runId: "run-1",
+    turnId: "turn-1:1",
+    modelRef,
+    context,
+    options: {},
+  };
+}
+
+it("keeps text and thinking content and signatures in their own stream blocks", async () => {
+  const fixture = createAdapterFixture(undefined, [
+    { type: "text_start", contentIndex: 0, contentSignature: "initial-text" },
+    { type: "text_delta", contentIndex: 0, delta: "hello" },
+    { type: "text_end", contentIndex: 0, contentSignature: "final-text" },
+    { type: "thinking_start", contentIndex: 1 },
+    { type: "thinking_delta", contentIndex: 1, delta: "reasoning" },
+    { type: "thinking_end", contentIndex: 1, contentSignature: "final-thinking" },
+  ]);
+  try {
+    const ended = [];
+    for await (const event of fixture.stream({
+      modelRef,
+      context: { messages: [] },
+      options: {},
+    })) {
+      if (event.type === "text_end" || event.type === "thinking_end") {
+        ended.push({
+          type: event.type,
+          content: event.content,
+          block: event.partial.content[event.contentIndex],
+        });
+      }
+    }
+    expect(ended).toEqual([
+      {
+        type: "text_end",
+        content: "hello",
+        block: { type: "text", text: "hello", textSignature: "final-text" },
+      },
+      {
+        type: "thinking_end",
+        content: "reasoning",
+        block: { type: "thinking", thinking: "reasoning", thinkingSignature: "final-thinking" },
+      },
+    ]);
+  } finally {
+    fixture.client.dispose();
+  }
+});
+
+it.each([
+  ["text", "end", { type: "text_end", contentIndex: 0 }],
+  ["thinking", "delta", { type: "thinking_delta", contentIndex: 0, delta: "wrong block" }],
+] as const)(
+  "rejects %s %s when its content block has the wrong kind",
+  async (kind, suffix, event) => {
+    const fixture = createAdapterFixture(undefined, [
+      { type: kind === "text" ? "thinking_start" : "text_start", contentIndex: 0 },
+      event,
+    ]);
+    try {
+      await expect(
+        fixture.stream({ modelRef, context: { messages: [] }, options: {} }).result(),
+      ).resolves.toMatchObject({
+        stopReason: "error",
+        errorMessage: `worker inference ${kind} ${suffix} has no active ${kind} block`,
+      });
+    } finally {
+      fixture.client.dispose();
+    }
+  },
+);
+
+it("tolerates missing text and thinking blocks after a stream gap", async () => {
+  const fixture = createAdapterFixture(
+    undefined,
+    [
+      { type: "text_delta", contentIndex: 0, delta: "missing" },
+      { type: "text_end", contentIndex: 0 },
+      { type: "thinking_delta", contentIndex: 1, delta: "missing" },
+      { type: "thinking_end", contentIndex: 1 },
+    ],
+    true,
+  );
+  try {
+    const types = [];
+    for await (const event of fixture.stream({
+      modelRef,
+      context: { messages: [] },
+      options: {},
+    })) {
+      types.push(event.type);
+    }
+    expect(types).toEqual(["done"]);
+  } finally {
+    fixture.client.dispose();
+  }
+});
+
+it("preserves the provider failure and usage after an oversized partial response", async () => {
+  const fixture = createAdapterFixture();
+  fixture.start.mockImplementation(async (request, handlers) => {
+    const events: WorkerInferenceEventParams["event"][] = [
+      { type: "text_start", contentIndex: 0 },
+      { type: "text_delta", contentIndex: 0, delta: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+    ];
+    events.forEach((event, index) => handlers?.onEvent?.({ ...request, seq: index + 1, event }));
+    return { type: "error", reason: "provider-error", message: "429: rate limit exceeded", usage };
+  });
+
+  try {
+    const result = await fixture
+      .stream({ modelRef, context: { messages: [] }, options: {} })
+      .result();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "429: rate limit exceeded",
+      usage,
+      content: [],
+    });
+    expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
+  } finally {
+    fixture.client.dispose();
+  }
+});
+
+it("rejects an oversized successful reply without truncating it or losing its usage", async () => {
+  const fixture = createAdapterFixture();
+  const reply: Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] = {
+    role: "assistant",
+    content: [{ type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) }],
+    api: "openai-responses",
+    provider: modelRef.provider,
+    model: modelRef.model,
+    stopReason: "stop",
+    usage,
+    timestamp: 1,
+  };
+  fixture.start.mockResolvedValue({ type: "done", message: reply });
+
+  try {
+    const result = await fixture
+      .stream({ modelRef, context: { messages: [] }, options: {} })
+      .result();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Worker inference result exceeds the transcript message limit.",
+      usage,
+      content: [],
+    });
+    expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
+    expect(reply.content).toEqual([
+      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+    ]);
+  } finally {
+    fixture.client.dispose();
+  }
+});
+
 it.each([false, true])(
+  "bounds screenshot serialization work while preserving the fitted request (oversized: %s)",
+  async (oversized) => {
+    const messages = createWorkerImageHistory();
+    for (const message of messages) {
+      if (message.role === "assistant") {
+        continue;
+      }
+      for (const part of message.content) {
+        if (part.type === "image") {
+          part.data = "A".repeat(oversized ? 8 * 1024 * 1024 : 8);
+        }
+      }
+    }
+    const context = { messages, systemPrompt: 'Inspect café 😀 with quotes " and a slash \\.' };
+    const request = inferenceRequest(context);
+    const originalBytes = inferenceFrameBytes(request);
+    const expected = fitWorkerReplayImages(messages, (candidate) =>
+      inferenceFrameBytes({ ...request, context: { ...context, messages: candidate } }),
+    );
+    const originalContents = messages.map((message) => message.content);
+    const fixture = createAdapterFixture();
+    const stringify = JSON.stringify;
+    let serializedBytes = 0;
+    const frameMessageCounts: number[] = [];
+    const serialization = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+      const encoded = stringify(value, ...args);
+      if (encoded !== undefined) {
+        serializedBytes += Buffer.byteLength(encoded, "utf8");
+      }
+      if (isRecord(value) && value.method === "worker.inference.start") {
+        frameMessageCounts.push(
+          (value.params as WorkerInferenceStartParams).context.messages.length,
+        );
+      }
+      return encoded;
+    });
+    try {
+      await fixture.stream({ modelRef, context, options: {} }).result();
+    } finally {
+      serialization.mockRestore();
+      fixture.client.dispose();
+    }
+    const [sent] = expectDefined(fixture.start.mock.calls[0], "inference start");
+    expect(sent.context.messages).toEqual(expected);
+    expect(inferenceFrameBytes(sent)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+    );
+    for (const [index, message] of messages.entries()) {
+      expect(message.content).toBe(originalContents[index]);
+    }
+    if (oversized) {
+      // Several removals must not re-encode all stable screenshots for every candidate.
+      expect(serializedBytes).toBeLessThan(originalBytes * 2);
+    } else {
+      expect(frameMessageCounts).toEqual([messages.length]);
+    }
+  },
+);
+
+it.each([true])(
   "fits observed screenshot history without changing durable messages (user image: %s)",
   async (userImage) => {
     const messages = createWorkerImageHistory(userImage);

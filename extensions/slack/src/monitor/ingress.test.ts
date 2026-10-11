@@ -17,11 +17,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
@@ -124,6 +123,7 @@ function attachBoltMemberIngress(params: {
   usersInfoFetch?: NonNullable<WebClientOptions["fetch"]>;
   pollIntervalMs?: number;
 }) {
+  installSlackTestRuntime();
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue: params.queue,
@@ -279,10 +279,8 @@ describe("Slack durable ingress", () => {
 
   it("acknowledges a durable event before dispatch starts", async () => {
     await withQueue(async (queue) => {
-      let releaseAck = () => {};
-      const ackGate = new Promise<void>((resolve) => {
-        releaseAck = resolve;
-      });
+      const ackStarted = createDeferred<void>();
+      const ackGate = createDeferred<void>();
       const order: string[] = [];
       const processEvent = vi.fn(async (event: ReceiverEvent) => {
         order.push("dispatch");
@@ -291,21 +289,31 @@ describe("Slack durable ingress", () => {
       const { ingress, receive } = attachIngress(queue, processEvent);
       const ack = vi.fn(async () => {
         order.push("ack-start");
-        await ackGate;
+        ackStarted.resolve();
+        await ackGate.promise;
         order.push("ack-complete");
       });
       ingress.start();
 
       const receiving = receive(createReceiverEvent("Ev-ack-order", ack));
-      await vi.waitFor(() => expect(ack).toHaveBeenCalledTimes(1));
-      expect(processEvent).not.toHaveBeenCalled();
+      try {
+        await Promise.race([ackStarted.promise, receiving]);
+        expect(ack).toHaveBeenCalledTimes(1);
+        expect(processEvent).not.toHaveBeenCalled();
 
-      releaseAck();
-      await receiving;
-      await ingress.waitForIdle();
+        ackGate.resolve();
+        await receiving;
+        await ingress.waitForIdle();
 
-      expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
-      await ingress.stop();
+        expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
+      } finally {
+        ackGate.resolve();
+        try {
+          await receiving;
+        } finally {
+          await ingress.stop();
+        }
+      }
     });
   });
 
@@ -983,85 +991,6 @@ describe("Slack durable ingress", () => {
         await first.ingress.stop();
         await restarted?.ingress.stop();
       }
-    });
-  });
-});
-
-describe("Slack relay durable ingress", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  const relayMessage = {
-    type: "message",
-    channel: "C_RELAY",
-    team: "T_TEST",
-    user: "U_TEST",
-    ts: "1700000001.000200",
-    text: "relayed",
-  };
-
-  it("dedupes a router redelivery by logical message identity, not delivery id", async () => {
-    await withQueue(async (queue) => {
-      const dispatched: unknown[] = [];
-      const ingress = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      ingress.attachRelayDispatch(async (message) => {
-        dispatched.push(message);
-      });
-      ingress.start();
-
-      await ingress.acceptRelayEvent({ deliveryId: "delivery-1", message: relayMessage });
-      await ingress.waitForIdle();
-      // Redelivery after a lost ack carries a fresh delivery id but the same message.
-      await ingress.acceptRelayEvent({ deliveryId: "delivery-2", message: relayMessage });
-      await ingress.waitForIdle();
-
-      expect(dispatched).toHaveLength(1);
-      expect(dispatched[0]).toMatchObject({ channel: "C_RELAY", text: "relayed" });
-      await ingress.stop();
-    });
-  });
-
-  it("retries a claimed relay event until a dispatcher attaches", async () => {
-    await withQueue(async (queue) => {
-      const detached = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      // Accept durably, then stop before any dispatcher exists (crash window).
-      await detached.acceptRelayEvent({ deliveryId: "delivery-3", message: relayMessage });
-      await detached.stop();
-
-      const dispatched: unknown[] = [];
-      const recovered = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 25,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      recovered.start();
-      await recovered.waitForIdle();
-      expect(dispatched).toHaveLength(0);
-
-      recovered.attachRelayDispatch(async (message) => {
-        dispatched.push(message);
-      });
-      // First retry obeys the drain's backoff; give it room without flake.
-      await vi.waitFor(
-        async () => {
-          await recovered.waitForIdle();
-          expect(dispatched).toHaveLength(1);
-        },
-        { timeout: 15_000, interval: 250 },
-      );
-      await recovered.stop();
     });
   });
 });

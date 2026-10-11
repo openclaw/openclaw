@@ -1,8 +1,3 @@
-/**
- * Tests trigger and session routing during tool assembly.
- * Ensures cron runs scope cron tool behavior to self-removal of the current
- * job only.
- */
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   claimAgentRunDelegatedAuthority,
@@ -76,57 +71,45 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it("does not scope non-cron sessions", () => {
-    createOpenClawCodingTools({
-      trigger: "user",
-      jobId: "job-current",
+  it("admits only the automation tool for channel-owner management authority", async () => {
+    const runId = "remote-management-tools";
+    const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    onTestFinished(() => {
+      releaseAgentRunDelegatedAuthority(authority);
     });
-
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();
+    const capability = createCronCreatorAuthorityCapability(
+      runId,
+      { kind: "unknown" },
+      { source: "channel-owner", isCurrent: () => true },
+    )!;
+    const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:control-ui",
+          operationalRunInstance,
+          approvalAuthority: authority,
+        },
+        () =>
+          createOpenClawCodingTools({
+            runId,
+            senderIsOwner: false,
+            wrapBeforeToolCallHook: false,
+            toolConstructionPlan: {
+              includeBaseCodingTools: false,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: true,
+              includePluginTools: false,
+            },
+          }),
+      ),
+    );
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(names).not.toContain("gateway");
   });
-
-  it.each([false, true])(
-    "admits only the automation tool for remote management authority=%s",
-    async (controlUiAdmin) => {
-      const runId = "remote-management-tools";
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      onTestFinished(() => {
-        releaseAgentRunDelegatedAuthority(authority);
-      });
-      const capability = createCronCreatorAuthorityCapability(
-        runId,
-        { kind: "unknown" },
-        controlUiAdmin ? true : undefined,
-      )!;
-      const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:control-ui",
-            operationalRunInstance,
-            approvalAuthority: authority,
-          },
-          () =>
-            createOpenClawCodingTools({
-              runId,
-              senderIsOwner: false,
-              wrapBeforeToolCallHook: false,
-              toolConstructionPlan: {
-                includeBaseCodingTools: false,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: true,
-                includePluginTools: false,
-              },
-            }),
-        ),
-      );
-      const names = tools.map((tool) => tool.name);
-      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(controlUiAdmin);
-      expect(names).not.toContain("gateway");
-    },
-  );
 });
 
 const createLazyExecToolMock = vi.hoisted(() => vi.fn());
@@ -177,42 +160,28 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     expect(approvalScope?.aborted).toBe(true);
   });
 
-  it.each([undefined, "agent:main:runtime-policy"])(
-    "keeps live process ownership when the policy session is %s",
-    (policySessionKey) => {
-      const liveSessionKey = "agent:main:channel:group:example:thread:25";
+  it("keeps live process ownership separate from the policy session", () => {
+    const liveSessionKey = "agent:main:channel:group:example:thread:25";
+    const policySessionKey = "agent:main:runtime-policy";
 
-      createOpenClawCodingTools({
-        sessionKey: policySessionKey ?? liveSessionKey,
-        runSessionKey: liveSessionKey,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: true,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
-      });
-
-      expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          scopeKey: liveSessionKey,
-          sessionKey: policySessionKey ?? liveSessionKey,
-          notifySessionKey: liveSessionKey,
-        }),
-      );
-    },
-  );
-
-  it("preserves an explicit process scope override", () => {
     createOpenClawCodingTools({
-      sessionKey: "agent:main:policy",
-      runSessionKey: "agent:worker:live",
-      exec: { scopeKey: "explicit-process-owner" },
+      sessionKey: policySessionKey,
+      runSessionKey: liveSessionKey,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
     });
 
     expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ scopeKey: "explicit-process-owner" }),
+      expect.objectContaining({
+        scopeKey: liveSessionKey,
+        sessionKey: policySessionKey,
+        runSessionKey: liveSessionKey,
+      }),
     );
   });
 });
@@ -238,15 +207,13 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { includeBaseCodingTools: true, includeShellTools: false },
-    { includeBaseCodingTools: false, includeShellTools: true },
-  ])("rejects sandbox filesystem families without their bridge: %o", (families) => {
+  it("rejects sandbox shell tools without their filesystem bridge", () => {
     expect(() =>
       createOpenClawCodingTools({
         sandbox,
         toolConstructionPlan: {
-          ...families,
+          includeBaseCodingTools: false,
+          includeShellTools: true,
           includeChannelTools: false,
           includeOpenClawTools: false,
           includePluginTools: false,

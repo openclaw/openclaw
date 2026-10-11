@@ -1,5 +1,6 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "./openclaw-runtime-config.js";
 import type { MemorySearchDeadlineControlOptions } from "./search-deadline-control.js";
 export type MemorySource = "memory" | "sessions";
 
@@ -17,7 +18,6 @@ export type MemoryEntryProvenance = {
   supersedesKey?: string;
 };
 
-/** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -37,6 +37,29 @@ export type MemorySearchResult = {
   provenance?: MemoryEntryProvenance;
 };
 
+/** CLI search contract shared by the Gateway adapter and the owning memory plugin. */
+export type MemoryCliSearchParams = {
+  manager: MemorySearchManager;
+  cfg: OpenClawConfig;
+  agentId: string;
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+  assertCurrent?: () => void;
+};
+
+export type MemoryCliSearchResult = {
+  results: MemorySearchResult[];
+  stale?: true;
+  warning?: string;
+  action?: string;
+};
+
+export type MemoryCliSearchOutcome =
+  | MemoryCliSearchResult
+  | { agentId: string; status: "disabled" }
+  | { agentId: string; status: "failed"; error: string };
+
 /** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
 export function isMemoryOriginEligibleForAutomaticInjection(
   originClass: unknown,
@@ -50,7 +73,6 @@ export function isAutomaticMemoryEntryEligible(
   return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
 }
 
-/** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
@@ -60,7 +82,6 @@ export type MemoryEmbeddingProbeResult = {
   cacheExpiresAtMs?: number;
 };
 
-/** Progress event emitted during memory sync. */
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
@@ -99,7 +120,6 @@ export type MemorySearchRuntimeDebug = {
   };
 };
 
-/** Successful memory-file excerpt, optionally paginated/truncated. */
 type MemoryReadSuccessResult = {
   status: "ok";
   text: string;
@@ -124,17 +144,10 @@ type MemoryReadNotFoundResult = {
 export type MemoryReadResult = MemoryReadSuccessResult | MemoryReadNotFoundResult;
 
 /** Pre-status result accepted only from registered memory managers during migration. */
-export type LegacyMemoryReadResult = {
+export type LegacyMemoryReadResult = Omit<MemoryReadSuccessResult, "status"> & {
   status?: never;
-  text: string;
-  path: string;
-  truncated?: boolean;
-  from?: number;
-  lines?: number;
-  nextFrom?: number;
 };
 
-/** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryVectorIndexState =
   | { state: "empty" }
   | { state: "complete" }
@@ -209,8 +222,18 @@ export type MemoryIndexIdentityState =
     }
   | ({ status: "mismatched"; reason: string } & (
       | {
-          code: "provenance_version" | "chunking_version";
+          code: "provenance_version" | "chunking_version" | "embedding_input_format";
           owner: "openclaw";
+          // Older-chunking corpus marker: set only when every configuration-owned
+          // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
+          // matches, so a pending OpenClaw chunking upgrade cannot mask a narrowed
+          // scope. It excludes embedding identity — provider, model, provider
+          // settings, and vector dims may differ — and does not establish keyword
+          // retrieval availability; consumers must still check usable FTS before
+          // treating the index as servable.
+          chunkingVersionOnly?: boolean;
+          /** Older embedding format with the same corpus; requires usable FTS for retrieval. */
+          lexicalCompatible?: boolean;
         }
       | {
           code:
@@ -259,9 +282,26 @@ export function resolveMemoryIndexIdentityDiagnostic(
   }
   if (
     identity.owner === "openclaw" &&
-    (identity.code === "provenance_version" || identity.code === "chunking_version")
+    (identity.code === "provenance_version" ||
+      identity.code === "chunking_version" ||
+      identity.code === "embedding_input_format")
   ) {
-    return { status: "mismatched", reason, code: identity.code, owner: "openclaw" };
+    return {
+      status: "mismatched",
+      reason,
+      code: identity.code,
+      owner: "openclaw",
+      ...(identity.code === "chunking_version" &&
+      identity.chunkingVersionOnly === true &&
+      identity.versionOrder !== "newer"
+        ? { chunkingVersionOnly: true }
+        : {}),
+      ...(identity.code === "embedding_input_format" &&
+      identity.lexicalCompatible === true &&
+      identity.versionOrder !== "newer"
+        ? { lexicalCompatible: true }
+        : {}),
+    };
   }
   if (
     identity.owner === "configuration" &&
@@ -292,15 +332,65 @@ export function formatMemoryIndexRebuildGuidance(
   return `${command}. ${disclosure}`;
 }
 
+export function resolveMemoryIndexSearchDiagnostic(
+  diagnostic: MemoryIndexIdentityDiagnostic,
+  status: Partial<
+    Pick<MemoryProviderStatus, "provider" | "requestedProvider" | "lastSyncError" | "custom">
+  >,
+  agentId?: string,
+) {
+  const repairFailure = diagnostic.owner === "openclaw" && status.lastSyncError?.trim();
+  const newerIndex =
+    diagnostic.owner === "openclaw" &&
+    diagnostic.status === "mismatched" &&
+    asNullableRecord(status.custom?.indexIdentity)?.versionOrder === "newer";
+  if (repairFailure && !newerIndex) {
+    const guidance = {
+      warning: `Memory index repair failed: ${repairFailure}. The existing index was left unchanged.`,
+      action: `Run: openclaw memory status --deep${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}. Resolve the reported sync failure before retrying the search.`,
+    };
+    return {
+      error: repairFailure,
+      ...guidance,
+      staleness: { stale: true as const, ...guidance },
+    };
+  }
+  const cause =
+    diagnostic.owner === "configuration"
+      ? `the current memory configuration no longer matches the index (${diagnostic.reason})`
+      : diagnostic.code === "metadata_missing"
+        ? `the memory index metadata is missing (${diagnostic.reason}); no configuration change is needed`
+        : newerIndex
+          ? diagnostic.reason
+          : `this OpenClaw version changed the memory index format (${diagnostic.reason}); no configuration change is needed`;
+  const guidance = formatMemoryIndexRebuildGuidance(status, agentId);
+  const priorFailure = repairFailure ? ` Previous memory sync failed: ${repairFailure}.` : "";
+  return {
+    error: diagnostic.reason,
+    warning: `Tell the user: memory search is paused because ${cause}.${priorFailure}`,
+    action: newerIndex
+      ? `Tell the user to upgrade OpenClaw or reindex explicitly: ${guidance}`
+      : `Tell the user to run: ${guidance}`,
+    staleness: {
+      stale: true as const,
+      warning: `Memory index is stale: ${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code}). Search results may be incomplete.${priorFailure}`,
+      action: newerIndex
+        ? `Upgrade OpenClaw or reindex explicitly: ${guidance}`
+        : `Run: ${guidance}`,
+    },
+  };
+}
+
 export function resolveMemorySearchStaleness(
   status: Pick<MemoryProviderStatus, "custom" | "lastSyncError"> &
     Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
-  const reason = diagnostic
-    ? `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`
-    : status.lastSyncError?.trim();
+  if (diagnostic) {
+    return resolveMemoryIndexSearchDiagnostic(diagnostic, status, agentId).staleness;
+  }
+  const reason = status.lastSyncError?.trim();
   if (!reason) {
     return null;
   }
@@ -311,7 +401,6 @@ export function resolveMemorySearchStaleness(
   };
 }
 
-/** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
   search(
     query: string,

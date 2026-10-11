@@ -10,7 +10,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardSelectParams } from "../wizard/prompts.js";
 import { installPluginFromArchive, installPluginFromNpmSpec } from "./install.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
 import {
   clearPluginLoaderCache,
@@ -19,6 +18,7 @@ import {
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { buildPluginRegistrySnapshotReport } from "./status-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { registryPackages, startStaticRegistry } from "./test-helpers/npm-registry-fixtures.js";
 
 const install = vi.hoisted(() =>
@@ -27,13 +27,13 @@ const install = vi.hoisted(() =>
   >(),
 );
 const modelPicker = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/model-picker.js").promptModelAllowlist>(),
+  vi.fn<typeof import("../flows/model-picker.js").promptModelAllowlist>(),
 );
 vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: install,
 }));
-vi.mock("../commands/model-picker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/model-picker.js")>()),
+vi.mock("../flows/model-picker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/model-picker.js")>()),
   promptModelAllowlist: modelPicker,
 }));
 
@@ -145,7 +145,7 @@ it.each([
         if (!result.ok) {
           throw new Error(result.error);
         }
-        await writePersistedInstalledPluginIndexInstallRecords(
+        await seedInstalledPluginIndex(
           {
             [pluginId]: {
               source,

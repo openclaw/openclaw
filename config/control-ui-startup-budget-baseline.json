@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 355143,
-  "reason": "Integrated Control UI changes since the 2026-09-11 baseline (initial catalog snapshot on connect, read-only session sharing, dashboard embedding, and dependency updates) now measure 355143 B on main (+603 B, 0.17%); an independent exact-head build measured 355143 B (within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained.",
-  "updatedAt": "2026-09-13"
+  "startupJsGzipBytes": 450000,
+  "reason": "Solid transition allowance: Peter approved relaxing the startup budget while Lit and Solid coexist (2026-10-11). Main measured 422,013 B gzip at 9fec51a0; the 450,000 B ceiling leaves headroom for remaining ports. Restore to 374,285 B or lower after the Lit sweep (the Solid shell saves about 18 KB). Retain the 64 B build-variance and 512 B growth allowances and all request, CSS, asset, and route budgets except the startup CSS request count (2 during the transition).",
+  "updatedAt": "2026-10-11"
 }

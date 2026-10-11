@@ -10,7 +10,6 @@ import {
   type StreamFunction,
 } from "@openclaw/ai";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
-// Meta tests cover plugin registration and catalog shape.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
@@ -24,6 +23,14 @@ import { wrapMetaProviderStream } from "./stream.js";
 
 const CATALOG_CAP_MODEL_ID = "muse-spark-1.3";
 const initialAiTransportHost = getAiTransportHost();
+
+function captureProvider() {
+  return expectDefined(capturePluginRegistration(plugin).providers[0], "Meta provider");
+}
+
+function captureCompletionWrapper() {
+  return expectDefined(captureProvider().wrapSimpleCompletionStreamFn, "Meta completion hook");
+}
 
 function resolveCatalogModel(modelId: string): Model<"openai-responses"> {
   const provider = buildMetaProvider();
@@ -77,11 +84,7 @@ describe("meta provider", () => {
   });
 
   it("registers the Meta provider with api-key auth", () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider) {
-      throw new Error("Expected Meta provider");
-    }
+    const provider = captureProvider();
     expect(provider).toMatchObject({
       id: "meta",
       label: "Meta",
@@ -110,11 +113,7 @@ describe("meta provider", () => {
   });
 
   it("does not wrap projected non-Responses Meta models for either stream hook", () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider) {
-      throw new Error("Expected Meta provider");
-    }
+    const provider = captureProvider();
     const model = {
       ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
       api: "openclaw-provider-stream:meta:muse-spark-1.3",
@@ -124,33 +123,20 @@ describe("meta provider", () => {
       if (!hook) {
         throw new Error("Expected Meta stream hook");
       }
-      let capturedPayload: Record<string, unknown> | undefined;
-      const baseStreamFn: StreamFn = (streamModel, _context, options) => {
-        const payload: Record<string, unknown> = {};
-        options?.onPayload?.(payload, streamModel);
-        capturedPayload = payload;
-        return {} as ReturnType<StreamFn>;
-      };
       const wrapped = hook({
         provider: "meta",
         modelId: model.id,
         model,
         sourceApi: "openai-completions",
-        streamFn: baseStreamFn,
+        streamFn: () => createAssistantMessageEventStream(),
       });
 
       expect(wrapped).toBeUndefined();
-      void (wrapped ?? baseStreamFn)(model, { messages: [] }, { maxTokens: 0 });
-      expect(capturedPayload).toEqual({});
     }
   });
 
   it("wraps projected direct completions from a Responses source API", () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider?.wrapSimpleCompletionStreamFn) {
-      throw new Error("Expected Meta direct completion stream wrapper");
-    }
+    const wrapStream = captureCompletionWrapper();
     const model = {
       ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
       api: "openclaw-provider-stream:meta:muse-spark-1.3",
@@ -160,9 +146,9 @@ describe("meta provider", () => {
       const payload: Record<string, unknown> = {};
       options?.onPayload?.(payload, streamModel);
       capturedPayload = payload;
-      return {} as ReturnType<StreamFn>;
+      return createAssistantMessageEventStream();
     };
-    const wrapped = provider.wrapSimpleCompletionStreamFn({
+    const wrapped = wrapStream({
       provider: "meta",
       modelId: model.id,
       model,
@@ -182,107 +168,72 @@ describe("meta provider", () => {
     });
   });
 
-  it("builds the muse-spark-1.1 catalog entry over openai-responses", () => {
+  it.each([
+    { id: "muse-spark-1.3", cost: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 } },
+    {
+      id: "muse-spark-1.3-contributor",
+      cost: { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 },
+    },
+  ])("builds the $id catalog entry over openai-responses", ({ id, cost }) => {
     const providerConfig = buildMetaProvider();
     expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
     expect(providerConfig.api).toBe("openai-responses");
-    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.1");
-    if (!model) {
-      throw new Error("Expected muse-spark-1.1 model");
-    }
+    const model = expectDefined(
+      providerConfig.models.find((m) => m.id === id),
+      id,
+    );
     expect(model.contextWindow).toBe(1048576);
     expect(model.maxTokens).toBe(131072);
     expect(model.reasoning).toBe(true);
     expect(model.input).toEqual(["text", "image"]);
-    expect(model.cost).toEqual({
-      input: 1.25,
-      output: 4.25,
-      cacheRead: 0.15,
-      cacheWrite: 0,
-    });
+    expect(model.cost).toEqual(cost);
   });
 
-  it("builds the muse-spark-1.2 catalog entry over openai-responses", () => {
-    const providerConfig = buildMetaProvider();
-    expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
-    expect(providerConfig.api).toBe("openai-responses");
-    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.2");
-    if (!model) {
-      throw new Error("Expected muse-spark-1.2 model");
-    }
-    expect(model.contextWindow).toBe(1048576);
-    expect(model.maxTokens).toBe(131072);
-    expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.cost).toEqual({
-      input: 1.25,
-      output: 4.25,
-      cacheRead: 0.15,
-      cacheWrite: 0,
-    });
-  });
+  it.each([undefined, 4096])(
+    "preserves the caller output cap %s through Responses",
+    async (maxTokens) => {
+      const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
+      let capturedPayload: Record<string, unknown> | undefined;
+      const fetchMock = vi.fn(async () => completedSseResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const streamFn = wrapMetaProviderStream({
+        provider: "meta",
+        modelId: model.id,
+        model,
+        streamFn: streamSimple,
+      });
+      if (!streamFn) {
+        throw new Error("Expected Meta Responses stream wrapper");
+      }
 
-  it("builds the muse-spark-1.3 catalog entry over openai-responses", () => {
-    const providerConfig = buildMetaProvider();
-    expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
-    expect(providerConfig.api).toBe("openai-responses");
-    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.3");
-    if (!model) {
-      throw new Error("Expected muse-spark-1.3 model");
-    }
-    expect(model.contextWindow).toBe(1048576);
-    expect(model.maxTokens).toBe(131072);
-    expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.cost).toEqual({
-      input: 1.25,
-      output: 4.25,
-      cacheRead: 0.15,
-      cacheWrite: 0,
-    });
-  });
+      const context: Context = {
+        messages: [{ role: "user", content: "Catalog cap probe", timestamp: 0 }],
+      };
+      const stream = await streamFn(model, context, {
+        apiKey: "unit-test-token",
+        maxTokens,
+        onPayload: (payload) => {
+          capturedPayload = payload as Record<string, unknown>;
+        },
+      });
+      const result = await stream.result();
 
-  it("preserves the provider-selected output cap when the caller omits it", async () => {
-    const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async () => completedSseResponse());
-    vi.stubGlobal("fetch", fetchMock);
-    const streamFn = wrapMetaProviderStream({
-      provider: "meta",
-      modelId: model.id,
-      model,
-      streamFn: streamSimple,
-    });
-    if (!streamFn) {
-      throw new Error("Expected Meta Responses stream wrapper");
-    }
-
-    const context: Context = {
-      messages: [{ role: "user", content: "Catalog cap probe", timestamp: 0 }],
-    };
-    const stream = await streamFn(model, context, {
-      apiKey: "unit-test-token",
-      onPayload: (payload) => {
-        capturedPayload = payload as Record<string, unknown>;
-      },
-    });
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(capturedPayload).not.toHaveProperty("max_output_tokens");
-  });
+      expect(result.stopReason).toBe("stop");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      if (maxTokens === undefined) {
+        expect(capturedPayload).not.toHaveProperty("max_output_tokens");
+      } else {
+        expect(capturedPayload?.max_output_tokens).toBe(maxTokens);
+      }
+    },
+  );
 
   it("preserves Meta replay fields through canonical simple-completion aliases", async () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider?.wrapSimpleCompletionStreamFn) {
-      throw new Error("Expected Meta direct completion stream wrapper");
-    }
+    const wrapStream = captureCompletionWrapper();
 
     const registry = createApiRegistry();
     const runtime = createLlmRuntime(registry);
-    const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
+    const sourceModel = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
     let capturedPayload: Record<string, unknown> | undefined;
     let sourceModelApi: Api | undefined;
     const sourceStreamFn: StreamFunction<"openai-responses", SimpleStreamOptions> = (
@@ -332,21 +283,16 @@ describe("meta provider", () => {
           if (providerId !== "meta") {
             return undefined;
           }
-          return (
-            provider.wrapSimpleCompletionStreamFn?.({
-              agentDir: context.agentDir,
-              workspaceDir: context.workspaceDir,
-              provider: context.provider,
-              modelId: context.modelId,
-              model: context.model,
-              streamFn: context.streamFn,
-            }) ?? undefined
-          );
+          const { provider, modelId, model, streamFn } = context;
+          return wrapStream({ provider, modelId, model, streamFn }) ?? undefined;
         },
       },
     });
 
-    const preparedModel = prepareModelForSimpleCompletion({ apiRegistry: registry, model });
+    const preparedModel = prepareModelForSimpleCompletion({
+      apiRegistry: registry,
+      model: sourceModel,
+    });
     expect(preparedModel.api).toMatch(/^openclaw-provider-simple:/);
 
     const result = await runtime.completeSimple(preparedModel, { messages: [] });
@@ -360,139 +306,31 @@ describe("meta provider", () => {
     expect(capturedPayload).not.toHaveProperty("max_output_tokens");
   });
 
-  it.each([
-    {
-      label: "an omitted override",
-      callerMaxTokens: undefined,
-      prepopulatedMaxOutputTokens: undefined,
-      expectedMaxOutputTokens: undefined,
-    },
-    {
-      label: "a positive caller override",
-      callerMaxTokens: 4096,
-      prepopulatedMaxOutputTokens: undefined,
-      expectedMaxOutputTokens: 4096,
-    },
-    {
-      label: "an explicit zero treated as unset by the Responses transport",
-      callerMaxTokens: 0,
-      prepopulatedMaxOutputTokens: undefined,
-      expectedMaxOutputTokens: 131072,
-    },
-    {
-      label: "a pre-populated payload cap",
-      callerMaxTokens: undefined,
-      prepopulatedMaxOutputTokens: 2048,
-      expectedMaxOutputTokens: 2048,
-    },
-    {
-      label: "a pre-populated payload cap with an explicit zero caller cap",
-      callerMaxTokens: 0,
-      prepopulatedMaxOutputTokens: 2048,
-      expectedMaxOutputTokens: 2048,
-    },
-  ])(
-    "preserves catalog cap precedence through the direct completion hook for $label",
-    (testCase) => {
-      const captured = capturePluginRegistration(plugin);
-      const [provider] = captured.providers;
-      if (!provider?.wrapSimpleCompletionStreamFn) {
-        throw new Error("Expected Meta direct completion stream wrapper");
-      }
-      const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
-      let capturedPayload: Record<string, unknown> | undefined;
-      const baseStreamFn: StreamFn = (streamModel, _context, options) => {
-        const payload: Record<string, unknown> = {};
-        if (testCase.prepopulatedMaxOutputTokens !== undefined) {
-          payload.max_output_tokens = testCase.prepopulatedMaxOutputTokens;
-        }
-        if (options?.maxTokens) {
-          payload.max_output_tokens = options.maxTokens;
-        }
-        options?.onPayload?.(payload, streamModel);
-        return {} as ReturnType<StreamFn>;
-      };
-      const streamFn = provider.wrapSimpleCompletionStreamFn({
-        provider: "meta",
-        modelId: model.id,
-        model,
-        streamFn: baseStreamFn,
-      });
-      if (!streamFn) {
-        throw new Error("Expected Meta Responses stream wrapper");
-      }
-
-      void streamFn(
-        model,
-        { messages: [] },
-        {
-          ...(testCase.callerMaxTokens === undefined
-            ? {}
-            : { maxTokens: testCase.callerMaxTokens }),
-          onPayload: (payload) => {
-            capturedPayload = payload as Record<string, unknown>;
-          },
-        },
-      );
-
-      expect(capturedPayload?.max_output_tokens).toBe(testCase.expectedMaxOutputTokens);
-    },
-  );
-
-  it("builds the discounted muse-spark-1.2-contributor catalog entry", () => {
-    const providerConfig = buildMetaProvider();
-    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.2-contributor");
-    if (!model) {
-      throw new Error("Expected muse-spark-1.2-contributor model");
-    }
-    expect(model.contextWindow).toBe(1048576);
-    expect(model.maxTokens).toBe(131072);
-    expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.cost).toEqual({
-      input: 0.1,
-      output: 0.2,
-      cacheRead: 0.002,
-      cacheWrite: 0,
+  it("preserves a pre-populated payload cap when the caller cap is zero", () => {
+    const wrapStream = captureCompletionWrapper();
+    const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
+    const payload: Record<string, unknown> = { max_output_tokens: 2048 };
+    const baseStreamFn: StreamFn = (streamModel, _context, options) => {
+      options?.onPayload?.(payload, streamModel);
+      return createAssistantMessageEventStream();
+    };
+    const streamFn = wrapStream({
+      provider: "meta",
+      modelId: model.id,
+      model,
+      streamFn: baseStreamFn,
     });
-  });
-
-  it("builds the discounted muse-spark-1.3-contributor catalog entry", () => {
-    const providerConfig = buildMetaProvider();
-    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.3-contributor");
-    if (!model) {
-      throw new Error("Expected muse-spark-1.3-contributor model");
+    if (!streamFn) {
+      throw new Error("Expected Meta Responses stream wrapper");
     }
-    expect(model.contextWindow).toBe(1048576);
-    expect(model.maxTokens).toBe(131072);
-    expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.cost).toEqual({
-      input: 0.1,
-      output: 0.2,
-      cacheRead: 0.002,
-      cacheWrite: 0,
-    });
-  });
 
-  it("publishes a non-empty display name for every catalog model", () => {
-    const models = buildMetaProvider().models;
-    expect(models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "muse-spark-1.3", name: "Muse Spark 1.3" },
-      { id: "muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
-      { id: "muse-spark-1.2", name: "Muse Spark 1.2" },
-      { id: "muse-spark-1.2-contributor", name: "Muse Spark 1.2 Contributor" },
-      { id: "muse-spark-1.1", name: "Muse Spark 1.1" },
-    ]);
-    expect(models.every((model) => model.name.trim().length > 0)).toBe(true);
+    void streamFn(model, { messages: [] }, { maxTokens: 0 });
+
+    expect(payload.max_output_tokens).toBe(2048);
   });
 
   it("advertises a high default thinking profile for every reasoning model", () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider) {
-      throw new Error("Expected Meta provider");
-    }
+    const provider = captureProvider();
     const resolveThinkingProfile = expectDefined(
       provider.resolveThinkingProfile,
       "Meta thinking profile resolver",
@@ -530,11 +368,7 @@ describe("meta provider", () => {
   });
 
   it("respects an explicit non-reasoning catalog fact", () => {
-    const captured = capturePluginRegistration(plugin);
-    const [provider] = captured.providers;
-    if (!provider) {
-      throw new Error("Expected Meta provider");
-    }
+    const provider = captureProvider();
     const resolveThinkingProfile = expectDefined(
       provider.resolveThinkingProfile,
       "Meta thinking profile resolver",

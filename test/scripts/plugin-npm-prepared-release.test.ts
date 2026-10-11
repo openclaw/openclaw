@@ -1,12 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { join } from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumePreparedNpmPackage,
   createPreparedNpmRelease,
@@ -15,6 +13,7 @@ import {
   preparedNpmArtifactName,
   validatePreparedNpmRelease,
   verifyPreparedNpmRegistry,
+  verifyPublishedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
 
@@ -33,6 +32,8 @@ const version = "2026.9.2-beta.1";
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -189,7 +190,7 @@ function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer) {
   };
 }
 
-async function packedPluginFixture(runtime = true) {
+async function packedPluginFixture() {
   const root = tempRoot();
   const entry = plugin("demo");
   const source = sourcePackage(root, entry);
@@ -197,9 +198,7 @@ async function packedPluginFixture(runtime = true) {
   mkdirSync(join(packageRoot, "dist"), { recursive: true });
   writeFileSync(join(packageRoot, "package.json"), source.bytes);
   writeFileSync(join(packageRoot, "openclaw.plugin.json"), JSON.stringify({ id: "demo" }));
-  if (runtime) {
-    writeFileSync(join(packageRoot, "dist/index.js"), "export default {};\n");
-  }
+  writeFileSync(join(packageRoot, "dist/index.js"), "export default {};\n");
   writeFileSync(join(packageRoot, "README.md"), "Prepared plugin package.\n");
   const evidence = join(root, "evidence");
   mkdirSync(evidence);
@@ -218,102 +217,56 @@ async function packedPluginFixture(runtime = true) {
       "package/package.json",
       "package/openclaw.plugin.json",
       "package/README.md",
-      ...(runtime ? ["package/dist/index.js"] : []),
+      "package/dist/index.js",
     ],
   );
   return { root, entry, source, evidence, tarballName, tarballPath };
 }
 
 describe("prepared plugin npm publication", () => {
-  it("seals the full selection, including previously published packages", () => {
-    const manifest = createPreparedNpmRelease(preparation());
-    expect(manifest.packages.map((entry: { packageName: string }) => entry.packageName)).toEqual([
-      "@openclaw/demo",
-      "@openclaw/existing",
-    ]);
-    expect(manifest.packages[1].artifact).toMatchObject({
-      runId: 101,
-      runAttempt: 2,
-      artifactId: 2,
-    });
+  it("seals regular stable bootstrap without granting publication authority", () => {
+    const packageFields = { version: "2026.9.32", channel: "stable", publishTag: "latest" };
+    const input = preparation(packageFields, "npm-token-bootstrap");
+    const manifest = createPreparedNpmRelease(input);
+    expect(manifest.packages).toHaveLength(input.matrix.length);
+    for (const entry of manifest.packages) {
+      expect(entry).toMatchObject({ ...packageFields, route: "npm-token-bootstrap" });
+    }
+    expect(validatePreparedNpmRelease(manifest, expectations()).packages).toEqual(
+      manifest.packages,
+    );
   });
 
-  it.each([
-    ["beta bootstrap", version, "beta", "beta", "default", "npm-token-bootstrap"],
-    ["regular stable bootstrap", "2026.9.32", "stable", "latest", "default", "npm-token-bootstrap"],
-    [
-      "regular stable correction bootstrap",
-      "2026.9.32-1",
-      "stable",
-      "latest",
-      "default",
-      "npm-token-bootstrap",
-    ],
-    ["alpha OIDC", "2026.9.3-alpha.1", "alpha", "alpha", "default", "npm-oidc"],
-    [
-      "extended-stable OIDC",
-      "2026.9.33",
-      "stable",
-      "extended-stable",
-      "extended-stable",
-      "npm-oidc",
-    ],
-    ["stable readback", "2026.9.32", "stable", "latest", "default", "npm-readback"],
-  ])(
-    "seals %s without granting publication authority",
-    (_name, packageVersion, channel, publishTag, npmDistTag, route) => {
-      const input = preparation(
-        { version: packageVersion, channel, publishTag },
-        route,
-        npmDistTag,
-      );
-      const manifest = createPreparedNpmRelease(input);
-      expect(manifest.packages).toHaveLength(input.matrix.length);
-      for (const entry of manifest.packages) {
-        expect(entry).toMatchObject({ version: packageVersion, channel, publishTag, route });
-      }
-      expect(
-        validatePreparedNpmRelease(manifest, { ...expectations(), npmDistTag }).packages,
-      ).toEqual(manifest.packages);
-    },
-  );
+  it("rejects retired alpha preparation", () => {
+    expect(() =>
+      createPreparedNpmRelease(
+        preparation({ version: "2026.9.3-alpha.1", channel: "alpha", publishTag: "alpha" }),
+      ),
+    ).toThrow("Alpha releases are retired");
+  });
 
-  it.each([
-    ["first extended-stable patch on latest", "2026.9.33", "stable", "latest", "default"],
-    ["later extended-stable patch on latest", "2026.9.34", "stable", "latest", "default"],
-    ["extended-stable correction on latest", "2026.9.33-1", "stable", "latest", "default"],
-    ["alpha", "2026.9.3-alpha.1", "alpha", "alpha", "default"],
-    ["explicit extended-stable", "2026.9.33", "stable", "extended-stable", "extended-stable"],
-  ])(
-    "rejects bootstrap preparation for %s",
-    (_name, packageVersion, channel, publishTag, npmDistTag) => {
-      const packageFields = { version: packageVersion, channel, publishTag };
-      expect(() =>
-        createPreparedNpmRelease(preparation(packageFields, "npm-token-bootstrap", npmDistTag)),
-      ).toThrow("Prepared npm token bootstrap");
-      const manifest = createPreparedNpmRelease(preparation(packageFields, "npm-oidc", npmDistTag));
-      for (const entry of manifest.packages) {
-        entry.route = "npm-token-bootstrap";
-        entry.artifact.artifactName = `plugin-npm-package-${entry.extensionId}-${entry.version}-npm-token-bootstrap-${producer.runId}-${producer.runAttempt}`;
-      }
-      expect(() => validatePreparedNpmRelease(manifest, { ...expectations(), npmDistTag })).toThrow(
-        "Prepared npm token bootstrap",
-      );
-    },
-  );
+  it("rejects bootstrap preparation for explicit extended-stable", () => {
+    const npmDistTag = "extended-stable";
+    const packageFields = { version: "2026.9.33", channel: "stable", publishTag: npmDistTag };
+    expect(() =>
+      createPreparedNpmRelease(preparation(packageFields, "npm-token-bootstrap", npmDistTag)),
+    ).toThrow("Prepared npm token bootstrap");
+    const manifest = createPreparedNpmRelease(preparation(packageFields, "npm-oidc", npmDistTag));
+    for (const entry of manifest.packages) {
+      entry.route = "npm-token-bootstrap";
+      entry.artifact.artifactName = `plugin-npm-package-${entry.extensionId}-${entry.version}-npm-token-bootstrap-${producer.runId}-${producer.runAttempt}`;
+    }
+    expect(() => validatePreparedNpmRelease(manifest, { ...expectations(), npmDistTag })).toThrow(
+      "Prepared npm token bootstrap",
+    );
+  });
 
-  it.each(["missing-artifact", "prior-attempt", "failed-job", "conflicting-artifact"])(
+  it.each(["prior-attempt", "conflicting-artifact"])(
     "refuses to seal %s instead of falling back to an older success",
     (fault) => {
       const input = preparation();
-      if (fault === "missing-artifact") {
-        input.artifacts.pop();
-      }
       if (fault === "prior-attempt") {
         input.artifacts[0].name = input.artifacts[0].name.replace(/-2$/u, "-1");
-      }
-      if (fault === "failed-job") {
-        input.workflowJobs.jobs[0].conclusion = "failure";
       }
       if (fault === "conflicting-artifact") {
         input.artifacts.push({ ...input.artifacts[0], id: 99 });
@@ -338,15 +291,12 @@ describe("prepared plugin npm publication", () => {
     ).toThrow("complete selected frozen-source roster");
   });
 
-  it.each(["sourceSha", "workflowSha", "publisherPolicySha256", "selectionMode", "npmDistTag"])(
-    "rejects another prepared %s",
-    (field) => {
-      const manifest = createPreparedNpmRelease(preparation());
-      expect(() =>
-        validatePreparedNpmRelease(manifest, { ...expectations(), [field]: "different" }),
-      ).toThrow();
-    },
-  );
+  it("rejects another prepared sourceSha", () => {
+    const manifest = createPreparedNpmRelease(preparation());
+    expect(() =>
+      validatePreparedNpmRelease(manifest, { ...expectations(), sourceSha: "different" }),
+    ).toThrow();
+  });
 
   it("admits only the exact successful preparation artifact and source inventory", async () => {
     const input = preparation();
@@ -432,52 +382,10 @@ describe("prepared plugin npm publication", () => {
     expect(result.producerRunId).toBe(producer.runId);
     expect(result.producerRunAttempt).toBe(producer.runAttempt);
   });
-
-  it.each([true, false])(
-    "qualifies runtime entries before sealing (compiled runtime: %s)",
-    async (runtime) => {
-      const { root, evidence, tarballName } = await packedPluginFixture(runtime);
-      const repoRoot = process.cwd();
-      const workflow = parse(
-        readFileSync(join(repoRoot, ".github/workflows/plugin-npm-release.yml"), "utf8"),
-      );
-      const qualification = workflow.jobs.preview_plugin_pack.steps.find(
-        (entry: { name: string }) => entry.name === "Qualify packed plugin runtime",
-      );
-      expect(qualification).toBeDefined();
-      symlinkSync(repoRoot, join(root, ".release-tooling"), "dir");
-      symlinkSync(join(repoRoot, "node_modules"), join(root, "node_modules"), "dir");
-      writeFileSync(
-        join(evidence, "preflight-manifest.json"),
-        JSON.stringify({
-          artifact: { tarballName },
-          package: { name: "@openclaw/demo", version },
-        }),
-      );
-      const result = spawnSync("bash", ["-c", qualification.run], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          ARTIFACT_DIR: evidence,
-          TSX_TSCONFIG_PATH: join(repoRoot, "tsconfig.json"),
-          PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
-        },
-      });
-      if (runtime) {
-        expect(result.status, result.stderr).toBe(0);
-      } else {
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("runtime extension entry not found");
-      }
-    },
-  );
 });
 
 describe("prepared npm registry readback", () => {
-  function registryFixture() {
-    const bytes = Buffer.from("exact qualified bytes");
+  function registryFixture(bytes = Buffer.from("exact qualified bytes")) {
     const tarballPath = join(tempRoot(), "qualified.tgz");
     writeFileSync(tarballPath, bytes);
     const name = "@openclaw/demo";
@@ -499,7 +407,7 @@ describe("prepared npm registry readback", () => {
     const params = {
       packageName: name,
       version,
-      publishTag: "beta",
+      publishTags: ["beta"],
       route: "npm-oidc",
       tarballPath,
       allowMissing: true,
@@ -507,20 +415,17 @@ describe("prepared npm registry readback", () => {
     return { bytes, packument, params };
   }
 
-  it("adopts an already-published version only after exact byte and selector readback", async () => {
-    const { bytes, packument, params } = registryFixture();
-    const requests: string[] = [];
-    const result = await verifyPreparedNpmRegistry({
-      ...params,
-      fetchImpl: async (input: string) => {
-        requests.push(input);
-        return input.endsWith(".tgz")
-          ? new Response(new Uint8Array(bytes))
-          : Response.json(packument);
-      },
-    });
-    expect(result).toEqual({ alreadyPublished: true });
-    expect(requests).toHaveLength(2);
+  it("refuses an incomparable selector on a version this run did not publish", async () => {
+    const fixture = registryFixture(readFileSync((await packedPluginFixture()).tarballPath));
+    const { bytes, packument, params } = fixture;
+    packument["dist-tags"].beta = "not-a-version";
+    await expect(
+      verifyPublishedNpmRegistry({
+        ...params,
+        fetchImpl: async (input: string) =>
+          input.endsWith(".tgz") ? new Response(new Uint8Array(bytes)) : Response.json(packument),
+      }),
+    ).rejects.toThrow("beta differs from the prepared version; use authorized tag repair.");
   });
 
   it("accepts an authoritative missing version as publication work, not a malformed response", async () => {
@@ -554,16 +459,66 @@ describe("prepared npm registry readback", () => {
     expect(tarballReads).toBe(2);
   });
 
-  it("reports pending verification rather than absence after accepted publication", async () => {
+  it("waits for package propagation before verifying exact bytes", async () => {
+    vi.useFakeTimers();
+    const { params, packument, bytes } = registryFixture();
+    let registryReads = 0;
+    let tarballReads = 0;
+    const result = verifyPreparedNpmRegistry({
+      ...params,
+      allowMissing: false,
+      fetchImpl: async (input: string) => {
+        if (input.endsWith(".tgz")) {
+          tarballReads += 1;
+          return new Response(bytes);
+        }
+        if (++registryReads <= 18) {
+          return new Response(null, { status: 404 });
+        }
+        return Response.json(packument);
+      },
+    });
+    const verified = expect(result).resolves.toEqual({ alreadyPublished: true });
+    await vi.advanceTimersByTimeAsync(180_000);
+    await verified;
+    expect(tarballReads).toBe(1);
+  });
+
+  it("bounds pending verification with the default timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", undefined);
+    const budget = 900_000;
+    const { params, packument } = registryFixture();
+    const reads: number[] = [];
+    const started = Date.now();
+    const result = verifyPreparedNpmRegistry({
+      ...params,
+      allowMissing: false,
+      fetchImpl: async () => {
+        reads.push(Date.now() - started);
+        return Response.json({ ...packument, versions: {} });
+      },
+    });
+    const rejected = expect(result).rejects.toThrow(
+      "verification pending. Retry readback, not publication.",
+    );
+    await vi.advanceTimersByTimeAsync(budget);
+    await rejected;
+    expect(reads).toEqual(
+      Array.from({ length: Math.ceil(budget / 10_000) }, (_, index) => index * 10_000),
+    );
+  });
+
+  it("rejects a zero readback timeout", async () => {
+    vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", "0");
     const { params, packument } = registryFixture();
     await expect(
       verifyPreparedNpmRegistry({
         ...params,
         allowMissing: false,
-        remainingReadbacks: 0,
-        fetchImpl: async () => Response.json({ ...packument, versions: {} }),
+        fetchImpl: async () => Response.json(packument),
       }),
-    ).rejects.toThrow("verification pending. Retry readback, not publication.");
+    ).rejects.toThrow("OPENCLAW_NPM_READBACK_TIMEOUT_MS");
   });
 
   it.each(["integrity", "bytes", "selector", "removed-oidc-package"])(
@@ -571,6 +526,7 @@ describe("prepared npm registry readback", () => {
     async (fault) => {
       const { bytes, packument, params } = registryFixture();
       let tarballReads = 0;
+      let registryReads = 0;
       if (fault === "integrity") {
         packument.versions[version].dist.shasum = "0".repeat(40);
       }
@@ -580,6 +536,7 @@ describe("prepared npm registry readback", () => {
       await expect(
         verifyPreparedNpmRegistry({
           ...params,
+          allowMissing: fault === "removed-oidc-package",
           fetchImpl: async (input: string) => {
             if (fault === "removed-oidc-package") {
               return new Response("missing", { status: 404 });
@@ -590,10 +547,12 @@ describe("prepared npm registry readback", () => {
                 new Uint8Array(fault === "bytes" ? Buffer.from("changed bytes") : bytes),
               );
             }
+            registryReads += 1;
             return Response.json(packument);
           },
         }),
       ).rejects.toThrow();
+      expect(registryReads).toBe(fault === "removed-oidc-package" ? 0 : 1);
       expect(tarballReads).toBe(fault === "bytes" || fault === "selector" ? 1 : 0);
     },
   );

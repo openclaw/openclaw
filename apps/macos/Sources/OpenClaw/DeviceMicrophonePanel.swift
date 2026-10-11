@@ -11,7 +11,7 @@ final class DeviceMicrophoneTestModel {
     var meterLevel: Double = 0
     var meterError: String?
     private let state: AppState
-    private let tester = VoiceWakeTester()
+    private var diagnosticID: UUID?
     private let meter = MicLevelMonitor()
     private let micObserver = AudioInputDeviceObserver()
     private var isActive = false
@@ -48,7 +48,11 @@ final class DeviceMicrophoneTestModel {
         let meterTask = self.meterTask
         meterTask?.cancel()
         self.meterTask = nil
-        self.tester.stop()
+        let diagnosticID = self.diagnosticID
+        self.diagnosticID = nil
+        Task { [wake = self.state.voiceRuntime.wake] in
+            if let diagnosticID { await wake.stopDiagnostic(id: diagnosticID) }
+        }
         self.micObserver.stop()
         self.isTesting = false
         self.state.voiceWakeMeterActive = false
@@ -63,39 +67,48 @@ final class DeviceMicrophoneTestModel {
     func toggleTest() {
         guard self.isActive else { return }
         self.testTask?.cancel()
-        if self.isTesting {
-            self.tester.finalize()
+        let wake = self.state.voiceRuntime.wake
+        if self.isTesting, let diagnosticID = self.diagnosticID {
             self.isTesting = false
             self.testState = .finalizing
             self.testTask = Task { @MainActor in
+                await wake.finalizeDiagnostic(id: diagnosticID)
                 try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, self.isActive, self.testState == .finalizing else { return }
-                self.tester.stop()
+                guard !Task.isCancelled, self.isActive, self.diagnosticID == diagnosticID,
+                      self.testState == .finalizing else { return }
+                await wake.stopDiagnostic(id: diagnosticID)
+                guard self.isActive, self.diagnosticID == diagnosticID else { return }
                 self.testState = .failed(String(localized: "Stopped"))
             }
             return
         }
 
         let triggers = sanitizeVoiceWakeTriggers(self.state.swabbleTriggerWords)
-        self.tester.stop()
+        let previousDiagnosticID = self.diagnosticID
+        let diagnosticID = UUID()
+        self.diagnosticID = diagnosticID
         self.isTesting = true
         self.testState = .requesting
         self.testTask = Task { @MainActor [self] in
             do {
-                try await self.tester.start(
+                if let previousDiagnosticID { await wake.stopDiagnostic(id: previousDiagnosticID) }
+                try await wake.startDiagnostic(
+                    id: diagnosticID,
                     triggers: triggers,
                     micID: self.state.voiceWakeMicID.isEmpty ? nil : self.state.voiceWakeMicID,
                     localeID: self.state.voiceWakeLocaleID,
                     onUpdate: { [weak self] newState in
-                        Task { @MainActor in self?.acceptTestState(newState) }
+                        guard let self, self.diagnosticID == diagnosticID else { return }
+                        self.acceptTestState(newState)
                     })
                 guard !Task.isCancelled, self.isActive else {
-                    self.tester.stop()
+                    await wake.stopDiagnostic(id: diagnosticID)
                     return
                 }
                 try await Task.sleep(for: .seconds(10))
                 guard !Task.isCancelled, self.isActive, self.isTesting else { return }
-                self.tester.stop()
+                await wake.stopDiagnostic(id: diagnosticID)
+                guard !Task.isCancelled, self.isActive, self.diagnosticID == diagnosticID else { return }
                 if case let .hearing(text) = self.testState,
                    let command = VoiceWakeTextUtils.textOnlyCommand(
                        transcript: text,
@@ -111,8 +124,9 @@ final class DeviceMicrophoneTestModel {
             } catch is CancellationError {
                 // Stop/finalize owns cancellation; do not replace its visible result.
             } catch {
-                guard self.isActive else { return }
-                self.tester.stop()
+                guard self.isActive, self.diagnosticID == diagnosticID else { return }
+                await wake.stopDiagnostic(id: diagnosticID)
+                guard self.isActive, self.diagnosticID == diagnosticID else { return }
                 self.testState = .failed(error.localizedDescription)
                 self.isTesting = false
             }
@@ -120,12 +134,20 @@ final class DeviceMicrophoneTestModel {
     }
 
     private func acceptTestState(_ newState: VoiceWakeTestState) {
-        guard self.isActive else { return }
+        guard self.isActive, self.isTesting || self.testState == .finalizing else { return }
+        if !self.isTesting {
+            switch newState {
+            case .detected, .failed: break
+            default: return
+            }
+        }
         self.testState = newState
         switch newState {
         case .detected, .failed:
             self.isTesting = false
-            self.tester.stop()
+            if let diagnosticID = self.diagnosticID {
+                Task { [wake = self.state.voiceRuntime.wake] in await wake.stopDiagnostic(id: diagnosticID) }
+            }
             self.testTask?.cancel()
         default:
             break

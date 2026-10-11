@@ -2,21 +2,15 @@ import {
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const FEISHU_MEDIA_UPLOAD_FAILURE_FALLBACK_TEXT = "Media upload failed. Please try again.";
-
-function hasAsciiControlCharacter(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const code = character.charCodeAt(0);
-    return code <= 0x1f || code === 0x7f;
-  });
-}
 
 async function resolvePublicFeishuMediaReference(
   value: string | undefined,
 ): Promise<string | undefined> {
   const raw = value?.trim();
-  if (!raw || hasAsciiControlCharacter(raw)) {
+  if (!raw || containsAsciiControlCharacter(raw)) {
     return undefined;
   }
   try {

@@ -10,8 +10,37 @@ read_when:
 
 When debugging real providers/models (requires real creds):
 
-- Live suite (models + gateway tool/image probes): `pnpm test:live`
+- Live suite (models + gateway tool/image checks): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Progress-card refresh: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- src/gateway/gateway-progress-refresh.live.test.ts`
+  - Requires `OPENAI_API_KEY` and uses `openai/gpt-5.6-luna` with isolated Gateway state.
+  - Completes an earlier turn, then refreshes during a second turn while a command remains held. The original parent must update the card and retain its final reply. A later idle refresh must update the card without adding chat messages or resuming pending work.
+- Live subagent handoff stress:
+  `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_SUBAGENT_STRESS=1 pnpm test:live -- src/agents/subagents/announce/subagent-yield-resume.live.test.ts`
+  - Requires `OPENAI_API_KEY` and defaults to `openai/gpt-5.6-luna`; select another
+    OpenAI model with `OPENCLAW_LIVE_SUBAGENT_E2E_MODEL`.
+  - Pins the OpenClaw agent harness and uses isolated Gateway state, synthetic
+    files, and externally held HTTP responses. It checks concurrent hidden-result
+    fanout, status-only interrogation of a waiting child tree, operator resume
+    with preserved task identity and replay without duplicate work, child timeout, a live HTTP
+    503 retrieval failure, and cancellation racing an in-flight result after its
+    owner claims the run. Parent reports are checked against held requests,
+    child execution, task delivery state, and hidden results. The 503 case checks
+    that a completed agent turn does not imply a successful retrieval.
+  - Each case incrementally preserves bounded runtime facts, plus final assistant replies, in
+    `.artifacts/qa-e2e/subagent-challenges-*/evidence.json`, including failed runs.
+    Set `OPENCLAW_LIVE_SUBAGENT_EVIDENCE_DIR` to change the output directory.
+    This live lane does not simulate cold process loss; restart and lost-acceptance
+    ownership are covered by `subagent-orphan-recovery.restart-integration.test.ts`.
+  - Defaults to two batches of three children. Set
+    `OPENCLAW_LIVE_SUBAGENT_STRESS_BATCHES` (1–5) and
+    `OPENCLAW_LIVE_SUBAGENT_STRESS_CHILDREN` (1–6) to change the bounded workload.
+- Live Gateway concurrency: dispatch `OpenClaw Performance` on `main` with
+  `mode=gateway-concurrency` and `live_openai_candidate=true`. It runs 96 real
+  turns across 32 agents with 1,000 seeded sessions, concurrent session activity,
+  and load-phase CPU profiles. Dreaming is disabled while ordinary indexing and
+  recaps remain enabled. Results stay in Actions artifacts. See
+  [Gateway concurrency benchmark](/ci/scheduled-workflows#gateway-concurrency-benchmark).
 - Runtime performance reports: dispatch `OpenClaw Performance` with
   `live_openai_candidate=true` for a real `openai/gpt-5.6-luna` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
@@ -23,9 +52,9 @@ When debugging real providers/models (requires real creds):
   includes source-level gateway boot, memory, plugin-pressure, repeated
   fake-model hello-loop, and CLI startup numbers.
 - Docker live model sweep: `pnpm test:docker:live-models`
-  - Each selected model runs a text turn plus a small file-read-style probe.
+  - Each selected model runs a text turn plus a small file-read-style check.
     Models whose metadata advertises `image` input also run a tiny image turn.
-    Disable the extra probes with `OPENCLAW_LIVE_MODEL_FILE_PROBE=0` or
+    Disable the extra checks with `OPENCLAW_LIVE_MODEL_FILE_PROBE=0` or
     `OPENCLAW_LIVE_MODEL_IMAGE_PROBE=0` when isolating provider failures.
   - CI coverage: daily `OpenClaw Scheduled Live And E2E Checks` and manual
     `OpenClaw Release Checks` both call the reusable live/E2E workflow with
@@ -44,12 +73,12 @@ When debugging real providers/models (requires real creds):
 - Codex app-server harness smoke: `pnpm test:docker:live-codex-harness`
   - Runs gateway agent turns through the plugin-owned Codex app-server
     harness, verifies `/codex status` and `/codex models`, and by default
-    exercises image, cron MCP, sub-agent, and Guardian probes. Disable the
-    sub-agent probe with `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0` when
+    exercises image, cron MCP, sub-agent, and Guardian checks. Disable the
+    sub-agent check with `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0` when
     isolating other failures. For a focused sub-agent check, disable the
-    other probes:
+    other checks:
     `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 pnpm test:docker:live-codex-harness`.
-    This exits after the sub-agent probe unless
+    This exits after the sub-agent check unless
     `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY=0` is set.
 - Codex on-demand install smoke: `pnpm test:docker:codex-on-demand`
   - Installs the packaged OpenClaw tarball in Docker, runs OpenAI API-key
@@ -73,7 +102,7 @@ When debugging real providers/models (requires real creds):
     path.
 - OpenClaw first-run Docker smoke: `pnpm test:docker:system-agent-first-run`
   - Starts from an empty OpenClaw state dir and first proves the packaged
-    `openclaw setup` CLI fails closed without inference. It then
+    `openclaw setup` CLI refuses to run without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
     resolve to typed setup, followed by one-shot model, agent, Discord config,

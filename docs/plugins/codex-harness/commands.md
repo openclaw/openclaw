@@ -51,7 +51,7 @@ Common forms:
 - `/codex review` starts Codex native review for the attached thread.
 - `/codex diagnostics [note]` asks before sending Codex feedback for the
   attached thread.
-- `/codex account` shows account and rate-limit status.
+- `/codex account` shows account and rate-limit status for the selected connection. Native Codex accounts stay separate from saved OpenClaw profiles, even when they share an email address. If both reads fail, the command reports that connection's errors.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list` shows configured native plugins; `/codex plugins
@@ -95,16 +95,27 @@ It does not replay a turn whose native outcome is uncertain.
 persists `off` in the OpenClaw session and sends `null` on affected Codex
 harness turns to clear the OpenClaw-owned service-tier override. `/fast default`
 clears only that session layer, so lower-precedence shared defaults may still
-resolve to `on`, `off`, or `auto`.
+resolve to `on`, `off`, `auto`, or `ultrafast`.
 
 `/codex fast` instead changes the bound native Codex conversation preference.
 `/codex fast off` stores `flex` for later conversation-bound native turns; it
 is not a synonym for `/fast off`, and it does not change the shared OpenClaw
 session policy. When a shared Fast-mode run control reaches a Codex harness
 turn, it supersedes `plugins.entries.codex.config.appServer.serviceTier` and
-any binding preference that applies to that turn: Fast on sends `priority`,
+any binding preference that applies to that turn: Fast on starts from `priority`,
 Fast off sends `null`, and auto decides for each model call. The configured or
 bound native tier is used only when no shared run control is supplied.
+
+Ultrafast requires an effective shared `"ultrafast"` selection, from a session or
+run control or an authored `fastModeDefault: "ultrafast"`, and an authenticated
+app-server catalog that advertises it for the selected native model. An unset
+`appServer.enableUltrafast` or `true` permits that selection; `false` sends ordinary
+Fast (`priority`) instead and skips the Ultrafast catalog check. Fast, active Auto,
+and unspecified controls never automatically upgrade. A native `serviceTier:
+"ultrafast"` also starts from `priority` until the shared selection requests it.
+Standard and inactive Auto remain off.
+See [app-server transport](/plugins/codex-harness-reference/app-server-transport)
+for catalog checks and fallback behavior.
 
 `/codex fast status` and `/codex binding` report native preference state, not
 the upstream tier that processed a completed provider request.

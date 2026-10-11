@@ -1,37 +1,205 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as cliExit from "../one-shot-exit.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
+import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 const dirs = createTempDirTracker();
+let stderrWrite: MockInstance<typeof process.stderr.write>;
+
+it("writes successful finalization progress to stderr and failures as errors", async () => {
+  const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
+  setLoggerOverride({ level: "info", file: logPath });
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  await lifecycle.run("doctor", async () => undefined);
+  expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('"status":"in_progress"'));
+  expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('"status":"completed"'));
+  await flushLogger();
+  const phaseRecords = fs
+    .readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((record) => JSON.stringify(record).includes("finalize:doctor"));
+  expect(phaseRecords).toEqual([
+    expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "INFO" }) }),
+    expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "INFO" }) }),
+  ]);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  lifecycle.recordWarnings(["A plugin update was deferred."]);
+  expect(console.warn).toHaveBeenCalledWith(
+    expect.stringContaining('"step":"warning:finalize:doctor:0"'),
+  );
+  await expect(
+    lifecycle.run("plugins", async () => {
+      throw new Error("fixture failure");
+    }),
+  ).rejects.toThrow("fixture failure");
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining('"status":"failed"'));
+  lifecycle.fail();
+});
+
+it.each(["pre-plugin doctor", "post-plugin doctor"])(
+  "preserves %s duration and section diagnostics in run history",
+  (name) => {
+    const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+    lifecycle.attachLedger();
+    const endedAtMs = Date.now();
+    lifecycle.recordDoctorStep({
+      name,
+      command: "openclaw doctor --repair",
+      cwd: "/fixture",
+      durationMs: 3_400,
+      exitCode: 0,
+      diagnostics: ["Doctor sections: config-flow 3.4 s"],
+    });
+    const run = listUpdateRuns()[0]!;
+    expect(run.steps).toEqual(
+      expect.arrayContaining(
+        [name, `diagnostic:${name}`].map((step) =>
+          expect.objectContaining({
+            step,
+            startedAtMs: endedAtMs - 3_400,
+            endedAtMs,
+          }),
+        ),
+      ),
+    );
+  },
+);
+
+it.each([false, true])(
+  "records a Doctor refusal before reporting standalone finalization (nested=%s)",
+  async (nested) => {
+    const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+    lifecycle.attachLedger();
+    const message =
+      "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
+    const privatePath = "/home/example/private-doctor-input";
+    await expect(
+      lifecycle.run("doctor", async () => {
+        const refusal = new UpdateDoctorError(
+          `${message} ${privatePath}`,
+          [{ check: "doctor", code: "doctor-failed", message }],
+          { exitCode: 23 },
+        );
+        const recording = new Error("Warning output failed");
+        throw nested
+          ? new AggregateError([refusal, recording], "Doctor result recording failed", {
+              cause: recording,
+            })
+          : refusal;
+      }),
+    ).rejects.toThrow(nested ? "Doctor result recording failed" : message);
+    lifecycle.fail();
+    expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
+    closeOpenClawStateDatabaseForTest();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "failed",
+      reason: "doctor-failed",
+    });
+    expect(run.steps).toContainEqual(
+      expect.objectContaining({
+        step: "finalize:doctor",
+        status: "failed",
+        exitCode: 23,
+        failureFacts: [{ check: "doctor", code: "doctor-failed", message }],
+      }),
+    );
+    const report = await prepareUpdateFailureReport({
+      attemptId: run.runId,
+      recordedRun: run,
+      result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
+    });
+    expect(report.body).toContain("Reason code: doctor-failed");
+    expect(report.body).toContain(`Failed phase finalize-doctor: exit 23 (${message})`);
+    expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
+  },
+);
+
+it.each([
+  "preflight",
+  "targetConfigValidation",
+  "configSnapshot",
+  "doctor",
+  "plugins",
+  "targetConfigConvergence",
+  "completionCache",
+] as const)("records the %s failure reason without finishing an inherited run", async (phase) => {
+  const inherited = ledger.createUpdateRun({ trigger: "cli" });
+  vi.stubEnv(UPDATE_RUN_ID_ENV, inherited.runId);
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  lifecycle.attachLedger();
+  await expect(
+    lifecycle.run(phase, async () => {
+      throw new Error("phase failed");
+    }),
+  ).rejects.toThrow("phase failed");
+  lifecycle.fail();
+  expect(getUpdateRun(inherited.runId)).toMatchObject({
+    status: "running",
+    reason: `finalize:${phase}`,
+  });
+  ledger.finishUpdateRun(inherited.runId, { status: "failed", reason: "parent-failure" });
+  expect(getUpdateRun(inherited.runId)?.reason).toBe("parent-failure");
+});
+
+it("records a returned failed outcome without requiring an exception", async () => {
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  lifecycle.attachLedger();
+  await lifecycle.run(
+    "plugins",
+    async () => undefined,
+    () => ({
+      outcome: "failed",
+      failureFacts: [{ check: "plugin-update", code: "plugin-update-failed" }],
+    }),
+  );
+  lifecycle.complete(1);
+  expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", reason: "plugin-update-failed" });
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("openclaw-finalize-heartbeat-"));
   vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  resetLogger();
+  setLoggerOverride(null);
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   dirs.cleanup();
 });
 
 it.each(["doctor", "targetConfigConvergence"] as const)(
-  "keeps default %s work and heartbeat alive beyond the former deadline",
+  "keeps default %s work owned without writing to its child's maintenance database",
   async (phase) => {
     const stopChildren = vi.fn();
     const lifecycle = new UpdateFinalizationLifecycle(false, undefined, stopChildren);
@@ -42,30 +210,67 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
       throw new Error("Finalization did not create its update run.");
     }
     const work = createDeferredCore();
-    const timerCount = vi.getTimerCount();
-    const running = withCliProcessScope(() => lifecycle.run(phase, () => work.promise));
+    const entered = createDeferredCore();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
+    const running = withCliProcessScope(() =>
+      lifecycle.run(phase, () => {
+        entered.resolve();
+        return work.promise;
+      }),
+    );
+    await entered.promise;
+    try {
+      const admitted = getUpdateRun(initial.runId);
+      expect(admitted?.origin.driver?.pid).toBe(process.pid);
 
-    await vi.advanceTimersByTimeAsync(240_000);
-    expect(stopChildren).not.toHaveBeenCalled();
-    expect(getUpdateRun(initial.runId)).toMatchObject({ status: "running" });
-    expect(getUpdateRun(initial.runId)?.updatedAtMs).toBeGreaterThan(initial.updatedAtMs);
-    work.resolve();
-    await expect(running).resolves.toBeUndefined();
-    expect(vi.getTimerCount()).toBe(timerCount);
+      await vi.advanceTimersByTimeAsync(ABANDONED_UPDATE_RUN_MS + UPDATE_RUN_HEARTBEAT_MS);
+      expect(stopChildren).not.toHaveBeenCalled();
+      const observed = getUpdateRun(initial.runId);
+      expect(observed).toEqual(admitted);
+      if (!observed) {
+        throw new Error("Finalization lost its update run.");
+      }
+      expect(inspectUpdateRunAbandonment(observed)).toBeUndefined();
+    } finally {
+      work.resolve();
+      await expect(running).resolves.toBeUndefined();
+    }
+    heartbeat.mockClear();
+    await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     lifecycle.complete(0);
     expect(getUpdateRun(initial.runId)?.status).toBe("succeeded");
   },
 );
 
-it("preserves other phase defaults and explicit operator budgets", () => {
+it("still cancels owned children when stalled-finalization diagnostics fail", async () => {
+  const stopChildren = vi.fn();
+  let onStall: (() => void) | undefined;
+  vi.spyOn(cliExit, "watchCliExitAfterOutput").mockImplementation((report) => {
+    onStall = report;
+  });
+  const lifecycle = new UpdateFinalizationLifecycle(false, undefined, stopChildren);
+  await withCliProcessScope(async () => {
+    lifecycle.complete(0);
+    lifecycle.finishRecovery();
+  });
+  expect(onStall).toBeDefined();
+  vi.spyOn(process, "getActiveResourcesInfo").mockImplementation(() => {
+    throw new Error("resource inspection failed");
+  });
+  expect(() => onStall!()).not.toThrow();
+  expect(stopChildren).toHaveBeenCalledOnce();
+});
+
+it("uses generous state and plugin budgets while preserving explicit operator budgets", () => {
   const defaults = new UpdateFinalizationLifecycle(false, undefined, () => {});
   const explicit = new UpdateFinalizationLifecycle(false, 5_000, () => {});
   for (const [phase, budget] of [
-    ["preflight", 30_000],
-    ["targetConfigValidation", 30_000],
-    ["configSnapshot", 30_000],
-    ["plugins", 600_000],
-    ["completionCache", 30_000],
+    ["preflight", 300_000],
+    ["targetConfigValidation", 300_000],
+    ["configSnapshot", 300_000],
+    ["plugins", 1_200_000],
+    ["completionCache", 300_000],
     ["doctor", undefined],
     ["targetConfigConvergence", undefined],
   ] as const) {
@@ -73,6 +278,69 @@ it("preserves other phase defaults and explicit operator budgets", () => {
     expect(explicit.budget(phase)).toBe(5_000);
   }
 });
+
+it("sizes finalization state without blocking the parent on database metadata", async () => {
+  const database = resolveOpenClawStateSqlitePath(process.env);
+  fs.mkdirSync(path.dirname(database), { recursive: true });
+  fs.writeFileSync(database, "");
+  fs.truncateSync(database, 2 * 1024 ** 3);
+  const parentStat = vi.spyOn(fs, "statSync");
+  const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+  await lifecycle.run("preflight", async () => undefined);
+  expect(lifecycle.budget("preflight")).toBe(2_860_000);
+  expect(
+    parentStat.mock.calls.filter(([file]) =>
+      [database, `${database}-wal`, `${database}-shm`, `${database}-journal`].includes(
+        String(file),
+      ),
+    ),
+  ).toEqual([]);
+});
+
+it.each([
+  ["preflight", 30_001],
+  ["targetConfigValidation", 30_001],
+  ["configSnapshot", 30_001],
+  ["completionCache", 30_001],
+  ["plugins", 600_001],
+] as const)(
+  "allows %s to finish beyond its former aggregate deadline",
+  async (phase, elapsedMs) => {
+    const databasePath = resolveOpenClawStateSqlitePath(process.env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    for (const file of [databasePath, `${databasePath}-wal`]) {
+      fs.writeFileSync(file, "");
+      fs.truncateSync(file, 1024 ** 3);
+    }
+    const stopChildren = vi.fn();
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+      throw new Error("Finalization exited before the measured work completed");
+    });
+    const lifecycle = new UpdateFinalizationLifecycle(false, undefined, stopChildren);
+    const work = createDeferredCore();
+    const entered = createDeferredCore();
+    const running = withCliProcessScope(() =>
+      lifecycle.run(phase, () => {
+        entered.resolve();
+        return work.promise;
+      }),
+    );
+    await entered.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(elapsedMs);
+      expect(stopChildren).not.toHaveBeenCalled();
+    } finally {
+      work.resolve();
+      await running;
+    }
+    if (phase !== "plugins") {
+      expect(lifecycle.budget(phase)).toBe(2_860_000);
+    }
+    expect(lifecycle.phaseTimings).toContainEqual(
+      expect.objectContaining({ phase, outcome: "completed" }),
+    );
+  },
+);
 
 it.each([false, true])(
   "renews a long finalization phase and releases its heartbeat (failure=%s)",
@@ -85,7 +353,7 @@ it.each([false, true])(
     }
     expect(initial.origin.driver?.pid).toBe(process.pid);
     const phase = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = lifecycle.run("plugins", () => phase.promise);
     const settled = fails
       ? expect(running).rejects.toThrow("plugin repair failed")
@@ -101,7 +369,8 @@ it.each([false, true])(
       phase.resolve();
     }
     await settled;
-    expect(vi.getTimerCount()).toBe(timerCount);
+    expect(heartbeat).toHaveBeenCalled();
+    heartbeat.mockClear();
     const finishedPhase = getUpdateRun(initial.runId);
     if (fails) {
       expect(finishedPhase?.steps).toContainEqual(
@@ -115,6 +384,7 @@ it.each([false, true])(
       );
     }
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     expect(getUpdateRun(initial.runId)).toEqual(finishedPhase);
     lifecycle.complete(fails ? 1 : 0);
   },
@@ -132,7 +402,7 @@ it("continues finalization after heartbeat errors and warns once for the run", a
   vi.spyOn(ledger, "heartbeatUpdateRun").mockImplementation(() => {
     throw new Error("SQLITE_BUSY: database is locked");
   });
-  for (const phase of ["plugins", "targetConfigConvergence"] as const) {
+  for (const phase of ["plugins", "completionCache"] as const) {
     const work = createDeferredCore();
     const running = lifecycle.run(phase, () => work.promise);
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
@@ -145,3 +415,101 @@ it("continues finalization after heartbeat errors and warns once for the run", a
   expect(warning).toHaveBeenCalledTimes(1);
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
 });
+
+it.each([false, true])(
+  "expires Doctor work at its deadline after custody and despite progress=%s",
+  async (progress) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const lifecycle = new UpdateFinalizationLifecycle(true, 1_000, () => {});
+    const custodyEntered = createDeferredCore();
+    const custodyReady = createDeferredCore();
+    const workEntered = createDeferredCore<{
+      signal: AbortSignal;
+      capture: NonNullable<ReturnType<typeof captureUpdateFinalizationDoctorOutput>>;
+    }>();
+    const settled = createDeferredCore();
+    let finished = false;
+    const running = withCliProcessScope(() =>
+      lifecycle.run(
+        "doctor",
+        async ({ signal }) => {
+          const capture = captureUpdateFinalizationDoctorOutput("pre-plugin")!;
+          capture(Buffer.from("STEP active fixture-validation"), "stderr");
+          workEntered.resolve({ signal, capture });
+          await settled.promise;
+        },
+        undefined,
+        {
+          enter: async () => {
+            custodyEntered.resolve();
+            await custodyReady.promise;
+          },
+        },
+      ),
+    ).then(
+      () => {
+        finished = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        finished = true;
+        return error;
+      },
+    );
+    const beforeCompletion = <T>(admission: Promise<T>) =>
+      Promise.race([
+        admission,
+        running.then((error) => {
+          throw error instanceof Error
+            ? error
+            : new Error("Doctor work completed before fixture admission", { cause: error });
+        }),
+      ]);
+    try {
+      await beforeCompletion(custodyEntered.promise);
+      // Custody precedes the work deadline; total phase time also includes it.
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(finished).toBe(false);
+      custodyReady.resolve();
+      const { signal, capture } = await beforeCompletion(workEntered.promise);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(signal.aborted).toBe(false);
+      if (progress) {
+        capture(Buffer.from("\nPROGRESS fixture-validation"), "stderr");
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason.message).toContain("timed out in doctor after 1000ms");
+      expect(finished).toBe(false);
+      // Reporting must join admitted work after cancellation rather than truncate its duration.
+      await vi.advanceTimersByTimeAsync(100);
+      settled.resolve();
+      expect(await running).toBe(signal.reason);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(lifecycle.phaseTimings).toEqual([
+        { phase: "doctor", startedOffsetMs: 0, durationMs: 4_600, outcome: "failed" },
+      ]);
+      lifecycle.complete(1);
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "failed",
+          stuckPhase: "doctor",
+          doctorOutput: expect.objectContaining({
+            stderr: expect.objectContaining({
+              excerpt: expect.stringContaining(
+                progress ? "PROGRESS fixture-validation" : "STEP active fixture-validation",
+              ),
+            }),
+          }),
+        }),
+      );
+    } finally {
+      custodyReady.resolve();
+      settled.resolve();
+      await running;
+    }
+  },
+);

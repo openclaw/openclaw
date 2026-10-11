@@ -1,8 +1,8 @@
-// Utility-model preparation and completion for progress narration.
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { compactProgressText } from "../../shared/text-truncate.js";
 
 const NARRATION_TIMEOUT_MS = 10_000;
 const NOTES_IN_PROMPT = 15;
@@ -26,24 +26,8 @@ export type ProgressNarrationInput = {
   previousText: string;
 };
 
-export function truncateAtWordBoundary(text: string, maxChars: number): string {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return text;
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
-
 function buildNarrationUserPrompt(input: ProgressNarrationInput): string {
-  const request = truncateAtWordBoundary(
+  const request = compactProgressText(
     input.userMessage.replace(/\s+/g, " ").trim(),
     USER_MESSAGE_PROMPT_CHARS,
   );
@@ -83,6 +67,7 @@ export async function generateNarrationWithUtilityModel(params: {
     signal.throwIfAborted();
     const result = await runIsolatedCompletion({
       ...params.prepared,
+      purpose: "progress-narration",
       config: params.cfg,
       systemPrompt: NARRATION_SYSTEM_PROMPT,
       prompt: buildNarrationUserPrompt(params.input),

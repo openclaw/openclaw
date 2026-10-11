@@ -1,8 +1,3 @@
-/**
- * Session visibility and access helpers for session tools.
- *
- * Adds OpenClaw session-key alias normalization and sandbox requester scoping over SDK visibility contracts.
- */
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -20,14 +15,20 @@ import {
   type SessionVisibilityDecisionPresentationAction,
 } from "../../plugin-sdk/session-visibility-internal.js";
 import {
+  createAgentToAgentPolicy,
   createSessionVisibilityChecker,
+  resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
   type AgentToAgentPolicy,
   type SessionAccessAction,
   type SessionToolsVisibility,
   type SessionVisibilityRow,
 } from "../../plugin-sdk/session-visibility.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
@@ -47,8 +48,7 @@ export {
 } from "../../plugin-sdk/session-visibility.js";
 
 type SessionToolAccessDenied = Extract<SessionVisibilityDecision, { allowed: false }>;
-export type SessionToolAccessResult = SessionVisibilityDecision;
-export type SessionToolActionOperation =
+type SessionToolActionOperation =
   | "archive"
   | "create"
   | "delete"
@@ -57,7 +57,7 @@ export type SessionToolActionOperation =
   | "reset"
   | "restore"
   | "send";
-export type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
+type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
 
 type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
 
@@ -139,27 +139,6 @@ function recordAdmittedSessionDecision(params: {
   });
 }
 
-function recordAdmittedSessionAccessDenial(params: {
-  action: SessionVisibilityDecisionPresentationAction;
-  targetAgentId: string;
-  targetSessionKey: string;
-  denial: SessionToolAccessDenied;
-}): boolean {
-  return recordAdmittedSessionDecision({
-    action: params.action,
-    targetAgentId: params.targetAgentId,
-    targetSessionKey: params.targetSessionKey,
-    outcome: "denied",
-    reasonCode: params.denial.reasonCode,
-    coverageState: params.denial.missingEvidence.length > 0 ? "unknown" : "enforced",
-    policyRefs: params.denial.policyRefs,
-    contextFieldsUsed: params.denial.contextFieldsUsed,
-    missingEvidence: params.denial.missingEvidence,
-    owner: "session-access",
-    decisionBoundary: "session-tool.access",
-  });
-}
-
 /** Queue an owner-native model-mediated session result after its final await. */
 export function recordSessionToolActionFact(params: {
   operation: SessionToolActionOperation;
@@ -215,9 +194,11 @@ export async function runSessionToolActionWithConflictReceipt<T>(params: {
 /** Check one prepared target without re-listing the requester's spawned sessions. */
 export async function resolveSessionToolAccess(params: {
   action: Exclude<SessionAccessAction, "list">;
+  watch?: boolean;
   displayAction?: SessionAccessAction | "search";
   requesterAgentId: string;
   requesterSessionKey: string;
+  sessionReadScopeKey?: string;
   mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
@@ -225,20 +206,44 @@ export async function resolveSessionToolAccess(params: {
   requesterOwned: boolean;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
+  readConfig?: () => OpenClawConfig;
+  sandboxed?: boolean;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionToolAccessResult> {
+}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void; basis?: "scoped-grant" }> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
-    recordAdmittedSessionAccessDenial({
+    recordAdmittedSessionDecision({
       action: params.displayAction ?? params.action,
       targetAgentId: params.targetAgentId,
       targetSessionKey: authorizationTargetSessionKey,
-      denial,
+      outcome: "denied",
+      reasonCode: denial.reasonCode,
+      coverageState: denial.missingEvidence.length > 0 ? "unknown" : "enforced",
+      policyRefs: denial.policyRefs,
+      contextFieldsUsed: denial.contextFieldsUsed,
+      missingEvidence: denial.missingEvidence,
+      owner: "session-access",
+      decisionBoundary: "session-tool.access",
     });
     return denial;
   };
-  const scoped = createSessionVisibilityChecker.resolveScopedAccess({
+  if (params.sessionReadScopeKey) {
+    // Invocation read caps are ceilings: a grant held by the observed session
+    // must not widen the auxiliary reader beyond that selected session.
+    const capped = createSessionVisibilityDecisionChecker({
+      action: params.action,
+      defaultAgentId: params.targetAgentId,
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey: params.sessionReadScopeKey,
+      visibility: "self",
+      a2aPolicy: params.a2aPolicy,
+    }).check({ key: authorizationTargetSessionKey, agentId: params.targetAgentId });
+    if (!capped.allowed) {
+      return deny(capped);
+    }
+  }
+  const scoped = await createSessionVisibilityChecker.resolveScopedAccessAsync({
     action: params.action,
     requesterSessionKey: params.requesterSessionKey,
     // A bare key is not globally unique under explicit ownership. Callers
@@ -246,39 +251,86 @@ export async function resolveSessionToolAccess(params: {
     targetSessionKey: authorizationTargetSessionKey,
   });
   if (scoped) {
-    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId, basis: "scoped-grant" };
   }
-  const decisionChecker = createSessionVisibilityDecisionChecker({
-    action: params.action,
-    defaultAgentId: params.targetAgentId,
-    requesterAgentId: params.requesterAgentId,
-    requesterSessionKey: params.requesterSessionKey,
-    mainSessionKey: params.mainSessionKey,
-    explicitTargetAgentOwnership: !parseAgentSessionKey(authorizationTargetSessionKey),
-    visibility: params.visibility,
-    a2aPolicy: params.a2aPolicy,
-  });
+  const createChecker = () => {
+    const cfg = params.readConfig?.();
+    return createSessionVisibilityDecisionChecker({
+      action: params.action,
+      defaultAgentId: params.targetAgentId,
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey: params.requesterSessionKey,
+      mainSessionKey: cfg
+        ? resolveSandboxedSessionToolContext({
+            cfg,
+            agentSessionKey: params.requesterSessionKey,
+            requesterAgentId: params.requesterAgentId,
+            sandboxed: params.sandboxed,
+          }).mainSessionKey
+        : params.mainSessionKey,
+      explicitTargetAgentOwnership: !parseAgentSessionKey(authorizationTargetSessionKey),
+      watch: params.watch,
+      visibility: cfg
+        ? resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: params.sandboxed === true })
+        : params.visibility,
+      a2aPolicy: cfg
+        ? createAgentToAgentPolicy(cfg, { sandboxed: params.sandboxed })
+        : params.a2aPolicy,
+    });
+  };
   const check = (requesterOwned: boolean) =>
-    decisionChecker.check({
+    createChecker().check({
       key: authorizationTargetSessionKey,
       agentId: params.targetAgentId,
       ...(requesterOwned ? { spawnedBy: params.requesterSessionKey } : {}),
     });
+  const finish = (requesterOwned: boolean) => {
+    const decision = check(requesterOwned);
+    if (!decision.allowed) {
+      return deny(decision);
+    }
+    return {
+      ...decision,
+      ...(params.readConfig &&
+      params.action === "send" &&
+      params.requesterAgentId !== params.targetAgentId
+        ? {
+            assertCurrent: () => {
+              const current = check(requesterOwned);
+              if (!current.allowed) {
+                deny(current);
+                throw new Error(
+                  formatSessionToolAccessDenial(current, {
+                    action: "send",
+                    targetSessionKey: params.targetSessionKey,
+                  }),
+                );
+              }
+            },
+          }
+        : {}),
+    };
+  };
   const initial = check(false);
-  if (initial.allowed) {
-    return initial;
+  // Prepare child lineage even when today's broad policy allows the send: its
+  // independent grant must survive an outbound-policy change before dispatch.
+  const prepareLineage =
+    params.readConfig &&
+    params.action === "send" &&
+    params.requesterAgentId !== params.targetAgentId &&
+    (isAcpSessionKey(authorizationTargetSessionKey) ||
+      isSubagentSessionKey(authorizationTargetSessionKey));
+  if (initial.allowed && !prepareLineage) {
+    return finish(false);
   }
   const requesterOwnedAccess = check(true);
   if (params.requesterOwned) {
-    if (requesterOwnedAccess.allowed) {
-      return requesterOwnedAccess;
-    }
-    return deny(requesterOwnedAccess);
+    return finish(true);
   }
   // Ownership proof can only widen tree visibility; do not let an operational
   // lookup failure replace a deterministic self/A2A policy denial.
   if (!requesterOwnedAccess.allowed) {
-    return deny(initial);
+    return initial.allowed ? finish(false) : deny(initial);
   }
   if (
     params.action === "history" &&
@@ -294,7 +346,7 @@ export async function resolveSessionToolAccess(params: {
       });
       const row = readDescribedSessionVisibilityRow(described?.session);
       if (row?.key === params.targetSessionKey) {
-        const access = decisionChecker.check(row);
+        const access = createChecker().check(row);
         if (!access.allowed) {
           return deny(access);
         }
@@ -314,6 +366,9 @@ export async function resolveSessionToolAccess(params: {
     callGateway: params.callGateway,
   });
   if (!ownership.ok) {
+    if (initial.allowed) {
+      return finish(false);
+    }
     logSessionOwnershipLookupFailure({
       requesterSessionKey: params.requesterSessionKey,
       failure: ownership.error,
@@ -321,12 +376,11 @@ export async function resolveSessionToolAccess(params: {
     return deny(sessionOwnershipLookupDenied(ownership.error.kind));
   }
   if (ownership.value) {
-    return requesterOwnedAccess;
+    return finish(true);
   }
-  return deny(initial);
+  return initial.allowed ? finish(false) : deny(initial);
 }
 
-/** Resolves the requester context used to filter sandboxed session-tool access. */
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
@@ -337,11 +391,7 @@ export function resolveSandboxedSessionToolContext(params: {
   const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
   const requesterSessionKey = normalizeOptionalString(params.agentSessionKey);
   const requesterInternalKey = requesterSessionKey
-    ? resolveInternalSessionKey({
-        key: requesterSessionKey,
-        alias,
-        mainKey,
-      })
+    ? resolveInternalSessionKey({ key: requesterSessionKey, alias })
     : undefined;
   const effectiveRequesterKey = requesterInternalKey ?? alias;
   const restrictToSpawned =

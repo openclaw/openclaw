@@ -11,6 +11,8 @@ sidebarTitle: "Manage jobs"
 
 Day-to-day operation of stored jobs: copy-ready CLI examples, the management commands, run history semantics, and the `cron.*` configuration keys. Part of the [Automations](/automation/cron-jobs) guide.
 
+Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all runs** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
+
 ## CLI examples
 
 <Tabs>
@@ -60,7 +62,7 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
   <Tab title="Command output">
     ```bash
     openclaw automations create "*/15 * * * *" \
-      --name "Queue depth probe" \
+      --name "Queue depth check" \
       --command "scripts/check-queue.sh" \
       --command-cwd "/srv/app" \
       --announce \
@@ -72,11 +74,17 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 
 ## Managing jobs
 
+In the Control UI, an open automation refreshes its next-run time and condition activity when scheduler events arrive. These runtime updates preserve unsaved settings and the saved definition used for conflict detection, including when the selected automation is outside the current list page or filter.
+
 ### Conversational management
 
-In the authenticated Control UI, an administrator with `operator.admin` can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
+An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, or a Control UI administrator with `operator.admin`, can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
 
-The Gateway grants this authority from the authenticated Control UI turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel turns and Control UI turns without `operator.admin` receive no such grant; matching sender IDs, account IDs, or session routes never establish it. If access is denied or a grant expires, retry from a fresh authenticated Control UI administrator turn, or use the **Automations** page.
+Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
+
+The Gateway grants this authority from the authenticated turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel owner membership is rechecked against the current global owner list when the capability is used and immediately before a mutation commits. Channel allowlists, wildcard entries, display names, account IDs, and session routes do not establish ownership. Other channel turns and Control UI turns without `operator.admin` receive no management grant. If access is denied or a grant expires, retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the **Automations** page.
+
+When an admitted owner or administrator turn uses `sessions_yield` to wait for its subagents, the verified requester continuation retains automation management for that task. It receives fresh grants for its new run; the original run's grants expire normally. The continuation remains management-only; it cannot capture new creator execution authority. Removing the channel sender from the global owner list, cancellation, session reset or archive, a new direct user turn, and Gateway restart invalidate the handoff. Ordinary inter-session messages and child results do not grant management access.
 
 Each admin management request records its method, run, operational instance, and success or failure in the Gateway's `cron: admin management` log, alongside the ordinary tool audit record. Management authority does not transfer creator attribution or replace the job's scheduled execution policy.
 
@@ -138,19 +146,37 @@ Archiving a session (Control UI, or `sessions.patch { key, archived: true, expec
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 
+The agent `automations` tool's `run` action waits in the Gateway instead: it returns the finished run (status, error, delivery status, and summary) when the run ends within the call's `timeoutMs` (default 60 seconds, capped at 10 minutes). A longer run returns its `runId`; read it later with the `runs` action and that `runId`. Main-session jobs, and jobs that run in the calling session, return at once because they start only after the calling turn ends.
+
 Run-now delivery measures lateness from when the manual request was accepted. An old pending scheduled slot does not make its fresh output stale; automatic and `--due` runs keep the original scheduled time for that check. A manual run still preserves the job's recurring cadence or future one-shot occurrence.
 
+Running a paused future one-shot leaves it paused and keeps its saved occurrence. Re-enable it when automatic execution is wanted. If a manual run was accepted before the scheduled time but waited past it in the command queue, that occurrence remains available after re-enabling or restarting the Gateway.
+
 Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Requested delivery is required unless the admitted job explicitly sets `delivery.bestEffort: true`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`. An adapter send without a delivery identity stays `unknown`, without an automatic resend that could duplicate the message.
+
+Once a successful one-shot consumes its scheduled occurrence, its finished event and run history omit `nextRunAtMs`, including when the job auto-deletes. An early manual run that preserves a future occurrence still reports that occurrence.
+
+Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
+
+Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
+
+After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all runs** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
+
+Choose **View transcript** on a run to read that run’s recorded conversation, including earlier pages. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page.
 
 Intentional silence (`NO_REPLY`), intentionally empty output, heartbeat acknowledgments, and channel reply transforms record `deliverySuppressionReason` without claiming delivery or triggering delivery-failure alerts. These successful non-outcomes and successful executions with explicit `delivery.bestEffort: true` delete one-shots normally. A transport hook veto instead records a delivery error without an intentional-suppression reason. Active descendants without a final reply, stale interim output, and output emptied by TTS instead record a delivery error. Retained one-shot jobs do not automatically rerun; inspect their history and delivery outcome before retrying or removing them.
 
 Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
+
+Re-enabling an auto-disabled job or an exhausted stream resets its failure counters. API clients reconciling a `declarationKey` can do the same with explicit `enabled: true`; routine declarations that omit enablement preserve stopped jobs, and routine reconciliation preserves existing failure streaks.
 
 The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `effectiveAgentId`, `nextRunAt`, `nextRunAtMs`, `scheduleKind`, `lastRunAt`, `lastRunStatus`) from `automations(action: "list")`. `effectiveAgentId` identifies the resolved execution owner, or is `null` when ownership is unresolved. Run dates are exact ISO timestamps, or `null` when absent; the millisecond fields remain available for programmatic callers. Time-based jobs also include their exact `schedule` (`at`, `every`, or `cron`), including disabled jobs with no next run. Event-driven schedules, payloads, and delivery definitions remain omitted; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews. `cron.add` includes the same dry-run preview on the created job so create-time output names a resolved route or fail-closed outcome.
 
 `openclaw automations create` is an alias for `openclaw automations add`. New jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `automations add|create` or `automations edit` to POST the finished run payload to an HTTP endpoint; webhook delivery cannot combine with chat delivery flags (`--announce`, `--channel`, `--to`, `--thread-id`, `--account`). On `automations edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag) — distinct from `--no-deliver`, which only disables runner fallback delivery.
 
 The webhook URL remains subject to the [strict outbound policy](/automation/cron-jobs/delivery#delivery-and-output); configure `cron.webhookSsrfPolicy` for an intentional local or private receiver.
+
+Clearing **Timeout (seconds)** in the Control UI and saving removes the saved override, restoring the [default runtime budget](/automation/cron-jobs/how-it-works). For API clients, a `cron.update` payload patch sets a timeout with a number, clears it with `timeoutSeconds: null`, and preserves the saved value when `timeoutSeconds` is omitted. New jobs omit the field to use the default; `null` is only an update instruction.
 
 <Note>
 Model override note:
@@ -206,8 +232,13 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
   </Accordion>
   <Accordion title="Maintenance">
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
+
+    Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
+
+    Session retention skips agents with pending or completed deletion while continuing maintenance for healthy agents. Pending deletion cleanup remains owned by the agent deletion operation.
+
   </Accordion>
   <Accordion title="Legacy store migration">
-    `openclaw doctor --fix` imports any `~/.openclaw/cron/jobs.json`, `jobs-state.json`, `jobs-quarantine.json`, and `runs/*.jsonl` files into SQLite and archives the originals with a `.migrated` suffix. Malformed job rows remain recoverable in SQLite while valid jobs keep running.
+    `openclaw doctor --fix` imports supported `jobs-quarantine.json` sidecars into SQLite and archives the originals with a `.migrated` suffix. Retired `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` inputs remain unchanged: install OpenClaw `2026.9.7`, run its Doctor, then upgrade to the latest version. See the [retention policy](/gateway/doctor/config-migrations#retention-policy). Malformed SQLite job rows remain recoverable in quarantine while valid jobs keep running.
   </Accordion>
 </AccordionGroup>

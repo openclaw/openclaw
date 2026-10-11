@@ -5,11 +5,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
+import { SLOW_GATEWAY_REQUEST_MS } from "../slow-request-diagnostics.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type Phase = "setup" | "listing" | "projection" | "previews" | "response" | "handlerExit";
 type RequestMode = { compact: boolean; previewsRequested: boolean; scopeApplied: boolean };
-export type CronListDiagnostics = NonNullable<ReturnType<typeof startCronListDiagnostics>>;
 
 export function startCronListDiagnostics(
   log: Pick<GatewayRequestContext["logGateway"], "warn">,
@@ -82,7 +82,7 @@ export function startCronListDiagnostics(
       mark("handlerExit");
       finished = true;
       const elapsedMs = checkpoint - startedAt;
-      if (elapsedMs < 1_000 || !areDiagnosticsEnabledForProcess()) {
+      if (elapsedMs < SLOW_GATEWAY_REQUEST_MS || !areDiagnosticsEnabledForProcess()) {
         return;
       }
       try {

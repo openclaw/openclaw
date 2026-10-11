@@ -1,4 +1,3 @@
-// Input file helpers normalize inline, fetched, and local media inputs.
 import { MIMEType } from "node:util";
 import {
   classifyAttachmentBytes,
@@ -12,23 +11,21 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
+import type { DocumentExtractionMetadata } from "../plugins/document-extractor-types.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
-/** Image payload shape reused for extracted PDF images and normalized input images. */
-type InputImageContent = PdfExtractedImage;
-
-/** Text/images extracted from an input_file source after MIME-specific processing. */
 type InputFileExtractResult = {
   filename: string;
   text?: string;
-  images?: InputImageContent[];
+  images?: PdfExtractedImage[];
+  metadata?: DocumentExtractionMetadata;
 };
 
-/** PDF extraction limits applied before model-visible input_file content is produced. */
 type InputPdfLimits = {
   maxPages: number;
   maxPixels: number;
@@ -44,28 +41,17 @@ type InputSourceLimits = {
   timeoutMs: number;
 };
 
-/** Resolved input_file limits with normalized MIME allowlist and PDF sub-limits. */
 export type InputFileLimits = InputSourceLimits & { maxChars: number; pdf: InputPdfLimits };
 
-/** Optional config shape accepted by input_file limit resolution. */
-export type InputFileLimitsConfig = {
-  allowUrl?: boolean;
+export type InputFileLimitsConfig = Partial<
+  Omit<InputFileLimits, "allowedMimes" | "pdf" | "urlAllowlist">
+> & {
   allowedMimes?: string[];
-  maxBytes?: number;
-  maxChars?: number;
-  maxRedirects?: number;
-  timeoutMs?: number;
-  pdf?: {
-    maxPages?: number;
-    maxPixels?: number;
-    minTextChars?: number;
-  };
+  pdf?: Partial<InputPdfLimits>;
 };
 
-/** Resolved input_image limits with normalized MIME allowlist and URL fetch controls. */
 export type InputImageLimits = InputSourceLimits;
 
-/** Supported input_image source variants before base64 decoding or guarded URL fetch. */
 export type InputImageSource =
   | {
       type: "base64";
@@ -78,28 +64,13 @@ export type InputImageSource =
       mediaType?: string;
     };
 
-/** Supported input_file source variants before text/PDF extraction. */
-type InputFileSource =
-  | {
-      type: "base64";
-      data: string;
-      mediaType?: string;
-      filename?: string;
-    }
-  | {
-      type: "url";
-      url: string;
-      mediaType?: string;
-      filename?: string;
-    };
+type InputFileSource = InputImageSource & { filename?: string };
 
-/** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {
   buffer: Buffer;
   contentType?: string;
 };
 
-/** Default MIME allowlist for input_image sources. */
 export const DEFAULT_INPUT_IMAGE_MIMES = [
   "image/jpeg",
   "image/png",
@@ -108,7 +79,6 @@ export const DEFAULT_INPUT_IMAGE_MIMES = [
   "image/heic",
   "image/heif",
 ];
-/** Default MIME allowlist for input_file text/PDF extraction. */
 const DEFAULT_INPUT_FILE_MIMES = [
   "text/plain",
   "text/markdown",
@@ -117,39 +87,18 @@ const DEFAULT_INPUT_FILE_MIMES = [
   "application/json",
   "application/pdf",
 ];
-/** Default decoded-byte cap for input_image payloads. */
 export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-/** Default decoded-byte cap for input_file payloads. */
 const DEFAULT_INPUT_FILE_MAX_BYTES = 5 * 1024 * 1024;
-/** Default maximum model-visible characters emitted from input_file text. */
 const DEFAULT_INPUT_FILE_MAX_CHARS = 60_000;
-/** Default redirect cap for guarded input source URL fetches. */
 export const DEFAULT_INPUT_MAX_REDIRECTS = 3;
-/** Default timeout for guarded input source URL fetches. */
 export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
-/** Default PDF page cap for input_file extraction. */
 const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
-/** Default PDF raster pixel cap for extracted input_file images. */
 const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 /** Default text threshold before PDF extraction keeps text-only output. */
 const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
 const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
 
-function rejectOversizedBase64Payload(params: {
-  data: string;
-  maxBytes: number;
-  label: "Image" | "File";
-}): void {
-  const estimated = estimateBase64DecodedBytes(params.data);
-  if (estimated > params.maxBytes) {
-    throw new Error(
-      `${params.label} too large: ${estimated} bytes (limit: ${params.maxBytes} bytes)`,
-    );
-  }
-}
-
-/** Parses a Content-Type header into normalized MIME and optional charset values. */
 function parseContentType(value: string | undefined): {
   mimeType?: string;
   charset?: string;
@@ -172,7 +121,6 @@ export function normalizeMimeList(values: string[] | undefined, fallback: string
   return new Set(input.flatMap((value) => normalizeMimeType(value) ?? []));
 }
 
-/** Resolves input_file extraction limits from partial config and stable defaults. */
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
   return {
     allowUrl: config?.allowUrl ?? true,
@@ -189,18 +137,36 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
   };
 }
 
-/** Fetches an input source URL through SSRF, redirect, timeout, and byte-limit guards. */
-async function fetchWithGuard(
-  url: string,
+async function readInputSource(
+  source: InputImageSource,
   limits: InputSourceLimits,
   kind: "input_image" | "input_file",
   signal?: AbortSignal,
-): Promise<InputFetchResult> {
+): Promise<InputFetchResult & { canonicalData?: string }> {
+  if (source.type === "base64") {
+    const estimated = estimateBase64DecodedBytes(source.data);
+    if (estimated > limits.maxBytes) {
+      const label = kind === "input_image" ? "Image" : "File";
+      throw new Error(`${label} too large: ${estimated} bytes (limit: ${limits.maxBytes} bytes)`);
+    }
+    const canonicalData = canonicalizeBase64(source.data);
+    if (!canonicalData) {
+      throw new Error(`${kind} base64 source has invalid 'data' field`);
+    }
+    return {
+      buffer: Buffer.from(canonicalData, "base64"),
+      contentType: source.mediaType,
+      canonicalData,
+    };
+  }
+  if (kind === "input_image" && source.type !== "url") {
+    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
+  }
   if (!limits.allowUrl) {
     throw new Error(`${kind} URL sources are disabled by config`);
   }
   const { response, release } = await fetchWithSsrFGuard({
-    url,
+    url: source.url,
     maxRedirects: limits.maxRedirects,
     timeoutMs: limits.timeoutMs,
     signal,
@@ -242,53 +208,30 @@ async function fetchWithGuard(
   return result;
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number): string {
+function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number) {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
   const limit = Math.max(0, Math.floor(maxChars));
   const decode = (label: string) => {
     const decoder = new TextDecoder(label);
     let text = "";
-    for (let offset = 0; offset < buffer.length && text.length < limit; offset += 16_384) {
+    // Look past an exact limit: unread bytes may only contain decoder state, not omitted text.
+    for (let offset = 0; offset < buffer.length && text.length <= limit; offset += 16_384) {
       const end = Math.min(offset + 16_384, buffer.length);
       // Preserve charset state across chunks; only actual EOF flushes incomplete bytes.
       text += decoder.decode(buffer.subarray(offset, end), { stream: end < buffer.length });
     }
-    return truncateUtf16Safe(text, limit);
+    const prefix = truncateUtf16Safe(text, limit);
+    return {
+      text: prefix,
+      ...(prefix.length < text.length
+        ? { metadata: { textTruncated: true, imagesTruncated: false } }
+        : {}),
+    };
   };
   try {
     return decode(encoding);
   } catch {
     return decode("utf-8");
-  }
-}
-
-async function withInputFileTimeout<T>(params: {
-  task: (signal: AbortSignal) => Promise<T>;
-  timeoutMs: number;
-  label: string;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
-  signal.throwIfAborted();
-  let onAbort!: () => void;
-  const cancelled = new Promise<never>((_, reject) => {
-    onAbort = () => reject(toErrorObject(signal.reason, "Input file extraction aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  const timeout = setTimeout(
-    () => controller.abort(new Error(`${params.label} timed out after ${timeoutMs}ms`)),
-    timeoutMs,
-  );
-  try {
-    // Legacy extractors may not cooperate, but the worker also receives the deadline cancellation.
-    return await Promise.race([params.task(signal), cancelled]);
-  } finally {
-    clearTimeout(timeout);
-    signal.removeEventListener("abort", onAbort);
   }
 }
 
@@ -332,31 +275,22 @@ export async function normalizeInputImageBuffer(params: {
   return { buffer: normalizedBuffer, mimeType: NORMALIZED_INPUT_IMAGE_MIME };
 }
 
-/** Extracts and normalizes an input_image source from base64 or guarded URL input. */
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
   signal?: AbortSignal,
-): Promise<InputImageContent> {
+): Promise<PdfExtractedImage> {
   signal?.throwIfAborted();
-  let buffer: Buffer;
-  let mimeType: string | undefined;
-  let canonicalData: string | undefined;
-  if (source.type === "base64") {
-    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
-    canonicalData = canonicalizeBase64(source.data);
-    if (!canonicalData) {
-      throw new Error("input_image base64 source has invalid 'data' field");
-    }
-    buffer = Buffer.from(canonicalData, "base64");
-    mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
-  } else if (source.type === "url") {
-    const result = await fetchWithGuard(source.url, limits, "input_image", signal);
-    buffer = result.buffer;
-    mimeType = parseContentType(result.contentType).mimeType;
-  } else {
-    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
-  }
+  const { buffer, contentType, canonicalData } = await readInputSource(
+    source,
+    limits,
+    "input_image",
+    signal,
+  );
+  const mimeType =
+    source.type === "base64"
+      ? (normalizeMimeType(contentType) ?? "image/png")
+      : parseContentType(contentType).mimeType;
   const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
   signal?.throwIfAborted();
   // Conversions replace the buffer; unchanged bytes already have validated base64.
@@ -365,7 +299,6 @@ export async function extractImageContentFromSource(
   return { type: "image", data, mimeType: image.mimeType };
 }
 
-/** Extracts model-visible text and images from an input_file source after MIME validation. */
 export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
@@ -376,27 +309,8 @@ export async function extractFileContentFromSource(params: {
   signal?.throwIfAborted();
   const filename = source.filename || "file";
 
-  let buffer: Buffer;
-  let mimeType: string | undefined;
-  let charset: string | undefined;
-
-  if (source.type === "base64") {
-    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
-    const canonicalData = canonicalizeBase64(source.data);
-    if (!canonicalData) {
-      throw new Error("input_file base64 source has invalid 'data' field");
-    }
-    const parsed = parseContentType(source.mediaType);
-    mimeType = parsed.mimeType;
-    charset = parsed.charset;
-    buffer = Buffer.from(canonicalData, "base64");
-  } else {
-    const result = await fetchWithGuard(source.url, limits, "input_file", signal);
-    const parsed = parseContentType(result.contentType);
-    mimeType = parsed.mimeType;
-    charset = parsed.charset;
-    buffer = result.buffer;
-  }
+  const { buffer, contentType } = await readInputSource(source, limits, "input_file", signal);
+  const { mimeType, charset } = parseContentType(contentType);
 
   const extracted = await extractFileContentFromBuffer({
     buffer,
@@ -436,7 +350,8 @@ export async function extractFileContentFromBuffer(params: {
     (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
   params.signal?.throwIfAborted();
   const mimeType = classification.mime;
-  const charset = classification.charset ?? params.charset;
+  const charset =
+    classification.charset ?? params.charset ?? parseContentType(params.mimeType).charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");
@@ -446,31 +361,52 @@ export async function extractFileContentFromBuffer(params: {
   }
 
   if (mimeType === "application/pdf") {
-    const extracted = await withInputFileTimeout({
-      label: "PDF extraction",
-      timeoutMs: limits.timeoutMs,
-      signal: params.signal,
-      task: (signal) =>
-        extractPdfContent({
-          buffer,
-          signal,
-          maxPages: limits.pdf.maxPages,
-          maxPixels: limits.pdf.maxPixels,
-          minTextChars: limits.pdf.minTextChars,
-          ...(params.config ? { config: params.config } : {}),
-          onImageExtractionError: (err) => {
-            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-          },
-        }),
-    });
-    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
+    const timeoutMs = resolveTimerTimeoutMs(limits.timeoutMs, 1);
+    const controller = new AbortController();
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, controller.signal])
+      : controller.signal;
+    signal.throwIfAborted();
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`PDF extraction timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    let extracted: Awaited<ReturnType<typeof extractPdfContent>>;
+    try {
+      // Legacy extractors may not cooperate, but the worker receives the same cancellation.
+      extracted = await racePromiseWithAbortSignal(
+        () =>
+          extractPdfContent({
+            buffer,
+            signal,
+            maxPages: limits.pdf.maxPages,
+            maxPixels: limits.pdf.maxPixels,
+            minTextChars: limits.pdf.minTextChars,
+            ...(params.config ? { config: params.config } : {}),
+            onImageExtractionError: (err) => {
+              logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+            },
+          }),
+        signal,
+        (abortedSignal) => toErrorObject(abortedSignal.reason, "Input file extraction aborted"),
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+    const text = truncateUtf16Safe(extracted.text, limits.maxChars);
+    const metadata: DocumentExtractionMetadata = {
+      ...extracted.metadata,
+      textTruncated:
+        extracted.metadata?.textTruncated === true || text.length < extracted.text.length,
+      imagesTruncated: extracted.metadata?.imagesTruncated === true,
+    };
     return {
       filename,
       text,
       images: extracted.images.length > 0 ? extracted.images : undefined,
+      metadata,
     };
   }
 
-  const text = decodeTextContent(buffer, charset, limits.maxChars);
-  return { filename, text };
+  return { filename, ...decodeTextContent(buffer, charset, limits.maxChars) };
 }

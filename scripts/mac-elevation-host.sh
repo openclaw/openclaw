@@ -393,18 +393,17 @@ elevation_code_is_resource() {
 } 4<"$1"
 
 verify_elevation_code() (
-  local app workers worker arch signed_path resolved description inventory
+  local app runtime arch signed_path resolved description inventory
   local code_paths=() code_archs=()
   app="$(cd "$1" && pwd -P)" || fail 'could not resolve elevation app'
-  workers="$app/Contents/Resources/node-worker"
-  # Shared app code stays universal; both private workers own a complete, build-matched
-  # native closure. Directory names alone never exempt code from slice validation.
-  # Filesystem aliases must not move worker paths outside the case-sensitive scope below.
-  for signed_path in "$app/Contents" "$app/Contents/Resources" "$workers" "$workers/arm64" "$workers/x86_64"; do
+  runtime="$app/Contents/Resources/runtime"
+  # The shared runtime carries both native optional-package architectures. Its Bun
+  # and SQLite binaries remain universal; filesystem aliases cannot escape this tree.
+  for signed_path in "$app/Contents" "$app/Contents/Resources" "$runtime"; do
     resolved="$(find "${signed_path%/*}" -mindepth 1 -maxdepth 1 -type d -name "${signed_path##*/}" -print)" ||
       fail 'could not scan elevation code'
     [[ "$resolved" == "$signed_path" ]] ||
-      fail "elevation worker directory missing or symlinked: $signed_path (canonical directory spelling required)"
+      fail "elevation runtime directory missing or symlinked: $signed_path (canonical directory spelling required)"
   done
   inventory="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-elevation-code.XXXXXX")" ||
     fail 'could not create elevation code inventory'
@@ -435,12 +434,12 @@ verify_elevation_code() (
         description="${description%%$'\n'*}"
         case "$description" in
           ELF*|PE32*|*COFF*|MS-DOS\ executable*)
-            [[ -z "$arch" ]] || fail "elevation worker contains non-Mach-O native code: $signed_path"
+            [[ -z "$arch" ]] || fail "elevation runtime contains non-Mach-O native code: $signed_path"
             ;;
         esac
         prefix=''; LC_ALL=C IFS= read -r -d '' -n 8 prefix <"$signed_path" || true
         if [[ -n "$arch" && "$prefix" == $'!<thin>\n' ]]; then
-          fail "elevation worker contains unsupported thin archive: $signed_path"
+          fail "elevation runtime contains unsupported thin archive: $signed_path"
         fi
         elevation_code_is_macho "$signed_path" "$description" ||
           [[ -n "$arch" && "$prefix" == $'!<arch>\n' ]] || continue
@@ -460,8 +459,8 @@ verify_elevation_code() (
         esac
         [[ -n "$archs" && "$archs" != *$'\n'* ]] || fail "invalid elevation code slices: $signed_path"
         if [[ -n "$arch" ]]; then
-          [[ " $archs " == *" $arch "* ]] ||
-            fail "elevation worker Mach-O lacks $arch: $signed_path ($archs)"
+          [[ " $archs " == *' arm64 '* || " $archs " == *' x86_64 '* ]] ||
+            fail "elevation runtime Mach-O has no supported architecture: $signed_path ($archs)"
         elif (( (8#$mode & 0111) == 0111 )); then
           [[ " $archs " == *' x86_64 '* && " $archs " == *' arm64 '* ]] ||
             fail "elevation Mach-O is not universal: $signed_path ($archs)"
@@ -515,23 +514,22 @@ verify_elevation_code() (
   while IFS= read -r -d '' signed_path; do
     arch=""
     case "$signed_path" in
-      "$workers") ;;
-      "$workers"/*)
-        arch="${signed_path#"$workers/"}"
-        arch="${arch%%/*}"
-        [[ "$arch" == arm64 || "$arch" == x86_64 ]] ||
-          fail "unexpected elevation worker architecture entry: $signed_path"
+      "$runtime") ;;
+      "$runtime"/*)
+        arch=runtime
         if [[ -L "$signed_path" ]]; then
-          [[ -e "$signed_path" ]] || fail "broken or cyclic elevation worker symlink: $signed_path"
-          resolved="$(stat -f '%R/' -- "$signed_path")" || fail "could not resolve elevation worker symlink: $signed_path"
+          [[ -e "$signed_path" ]] || fail "broken or cyclic elevation runtime symlink: $signed_path"
+          resolved="$(stat -f '%R/' -- "$signed_path")" || fail "could not resolve elevation runtime symlink: $signed_path"
           resolved="${resolved%/}"
           case "$resolved" in
-            "$workers/$arch"|"$workers/$arch"/*) ;;
-            *) fail "elevation worker symlink escapes its architecture tree: $signed_path" ;;
+            "$runtime"|"$runtime"/*) ;;
+            *) fail "elevation runtime symlink escapes its runtime tree: $signed_path" ;;
           esac
         fi
         ;;
     esac
+    [[ ! -f "$signed_path" || "${signed_path##*/}" != node ]] ||
+      fail "elevation app must not contain Node: $signed_path"
     if [[ -f "$signed_path" && ! -L "$signed_path" ]]; then
       code_paths+=("$signed_path")
       code_archs+=("$arch")
@@ -550,38 +548,46 @@ verify_elevation_code() (
   done <"$inventory/paths"
   verify_elevation_code_batch
   # BSD find can silently skip cycles. Canonical traversal ancestors must still
-  # reject a cyclic worker rather than accepting it as a closed payload.
-  find -L "$workers" -type d -print0 | while IFS= read -r -d '' signed_path; do
+  # reject a cyclic runtime rather than accepting it as a closed payload.
+  find -L "$runtime" -type d -print0 | while IFS= read -r -d '' signed_path; do
     [[ -L "$signed_path" ]] || continue
-    resolved="$(stat -f '%R/' -- "$signed_path")" || fail "could not resolve elevation worker directory: $signed_path"
-    [[ "$signed_path/" != "$resolved"* ]] || fail "cyclic elevation worker directory: $signed_path"
-  done || fail 'cyclic or unreadable elevation worker tree'
+    resolved="$(stat -f '%R/' -- "$signed_path")" || fail "could not resolve elevation runtime directory: $signed_path"
+    [[ "$signed_path/" != "$resolved"* ]] || fail "cyclic elevation runtime directory: $signed_path"
+  done || fail 'cyclic or unreadable elevation runtime tree'
 
-  local node entry metadata version commit built_at build_id
+  local binary required metadata version commit built_at build_id
   version="$(plist_value "$app" CFBundleShortVersionString)"
   commit="$(plist_value "$app" OpenClawGitCommit)"
   built_at="$(plist_value "$app" OpenClawBuildTimestamp)"
-  build_id="$(plist_value "$app" OpenClawWorkerBuildID)"
+  build_id="$(plist_value "$app" OpenClawRuntimeBuildID)"
   [[ -n "$version" && -n "$commit" && -n "$built_at" && -n "$build_id" ]] ||
-    fail 'elevation app is missing worker build identity'
-  for arch in arm64 x86_64; do
-    worker="$workers/$arch"
-    node="$worker/bin/node"
-    entry="$worker/lib/node_modules/openclaw/dist/entry.js"
-    metadata="$worker/lib/node_modules/openclaw/dist/build-info.json"
-    [[ -f "$node" && -x "$node" && -f "$entry" && -r "$entry" && -f "$metadata" ]] ||
-      fail "elevation worker payload is incomplete: $worker"
-    resolved="$(stat -f '%R/' -- "$node")" || fail "could not resolve elevation worker Node: $node"
-    resolved="${resolved%/}"
-    description="$(file -b -E "$resolved")" || fail "could not inspect elevation worker Node: $node"
-    elevation_code_is_macho "$resolved" "$description" &&
-      codesign_value_for_arch "$resolved" Format "$arch" >/dev/null ||
-      fail "elevation worker Node must be Mach-O: $node"
-    jq -e -s --arg version "$version" --arg commit "$commit" --arg builtAt "$built_at" --arg buildId "$build_id" '
-      length == 1 and (.[0] |
-        .version == $version and .commit == $commit and .builtAt == $builtAt and .buildId == $buildId)
-    ' "$metadata" >/dev/null 2>&1 || fail "elevation worker build metadata does not match app: $worker"
+    fail 'elevation app is missing runtime build identity'
+  for required in bin/bun lib/libsqlite3.dylib lib/node_modules/openclaw/openclaw.mjs \
+    lib/node_modules/openclaw/dist/mac-node-worker.js \
+    lib/node_modules/openclaw/dist/extensions/browser/setup-entry.js \
+    lib/node_modules/openclaw/dist/control-ui/index.html \
+    lib/node_modules/openclaw/dist/build-info.json; do
+    [[ -f "$runtime/$required" && -r "$runtime/$required" ]] ||
+      fail "elevation runtime payload is incomplete: $runtime/$required"
   done
+  [[ -x "$runtime/bin/bun" ]] || fail "elevation runtime Bun is not executable: $runtime/bin/bun"
+  for binary in "$runtime/bin/bun" "$runtime/lib/libsqlite3.dylib"; do
+    resolved="$(stat -f '%R/' -- "$binary")" || fail "could not resolve elevation runtime binary: $binary"
+    resolved="${resolved%/}"
+    description="$(file -b -E "$resolved")" || fail "could not inspect elevation runtime binary: $binary"
+    elevation_code_is_macho "$resolved" "$description" ||
+      fail "elevation runtime binary must be Mach-O: $binary"
+    for arch in arm64 x86_64; do
+      lipo "$resolved" -verify_arch "$arch" >/dev/null 2>&1 &&
+        codesign_value_for_arch "$resolved" Format "$arch" >/dev/null ||
+        fail "elevation runtime binary lacks native $arch code: $binary"
+    done
+  done
+  metadata="$runtime/lib/node_modules/openclaw/dist/build-info.json"
+  jq -e -s --arg version "$version" --arg commit "$commit" --arg builtAt "$built_at" --arg buildId "$build_id" '
+    length == 1 and (.[0] |
+      .version == $version and .commit == $commit and .builtAt == $builtAt and .buildId == $buildId)
+  ' "$metadata" >/dev/null 2>&1 || fail "elevation runtime build metadata does not match app: $runtime"
 
   local helper="$app/Contents/MacOS/openclaw-mlx-tts"
   if [[ -f "$helper" ]] && grep -q '<key>' <<<"$(entitlements_for "$helper")"; then
@@ -1918,7 +1924,7 @@ tcc_summary() {
   pb="$(peekaboo_bin)"
   [[ -n "$pb" ]] || { printf 'peekaboo CLI unavailable\n'; return 4; }
   if ! permissions_json="$($pb permissions status --all-sources --bridge-socket "$BRIDGE_SOCKET" --json 2>/dev/null)"; then
-    printf 'TCC: unknown (permission probe failed)\n'
+    printf 'TCC: unknown (permission check failed)\n'
     return 4
   fi
   if ! jq -e '
@@ -1933,7 +1939,7 @@ tcc_summary() {
       (.name | type) == "string" and (.isGranted | type) == "boolean"
     )
   ' <<<"$permissions_json" >/dev/null 2>&1; then
-    printf 'TCC: unknown (permission probe returned invalid status)\n'
+    printf 'TCC: unknown (permission check returned invalid status)\n'
     return 4
   fi
   missing="$(jq -r '[.data.sources[]? | select(.isSelected == true) | .permissions[]? | select(.isGranted != true) | .name] | unique | join(", ")' <<<"$permissions_json")"
@@ -3265,7 +3271,7 @@ recover_host() {
       verify_recorded_rollback_app "$APP_PATH"
     then
       # Before custody, the prior app is authenticated by its recorded CDHashes, not
-      # the new elevation payload contract. It may legitimately have no bundled worker.
+      # the new elevation payload contract. It may legitimately have no bundled runtime.
       :
     elif [[ "$RECOVERY_RESUMED" == "1" ]]; then
       verify_recorded_rollback_app "$APP_PATH" ||

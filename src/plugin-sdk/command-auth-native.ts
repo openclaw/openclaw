@@ -3,6 +3,7 @@
  */
 export {
   buildCommandTextFromArgs,
+  canResolveCommandArgMenu,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   listChatCommands,
@@ -34,6 +35,7 @@ export {
 export { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
 export {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   type CommandAuthorization,
 } from "../auto-reply/command-auth.js";
 export { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
@@ -45,6 +47,9 @@ export {
   formatFastModeStatusValue,
   resolveFastModeState,
 } from "../agents/fast-mode.js";
-export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
-export { listSkillCommandsForAgents } from "../skills/discovery/chat-commands.js";
+export type { ModelsProviderData } from "../auto-reply/reply/commands-models-catalog.js";
+export {
+  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
+} from "../skills/discovery/chat-commands.js";
 export { listProviderPluginCommandSpecs } from "../plugins/command-specs.js";

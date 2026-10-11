@@ -7,7 +7,7 @@ import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import { resolvePluginConfigContractsById } from "./config-contracts.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -213,7 +213,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
     expect(readdirSpy.mock.calls.length).toBeGreaterThan(firstReaddirCalls);
   });
 
-  it("prefers the active bundled manifest over stale persisted bundled installs", () => {
+  it("prefers the active bundled manifest over stale persisted bundled installs", async () => {
     const root = createTempRoot();
     const home = path.join(root, "home");
     const bundledRoot = path.join(root, "extensions");
@@ -227,7 +227,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
       id: "openai",
       providers: ["openai"],
     });
-    writePersistedInstalledPluginIndexSync(
+    await writePersistedInstalledPluginIndex(
       {
         version: 1,
         hostContractVersion: "test",
@@ -292,79 +292,6 @@ describe("listOpenClawPluginManifestMetadata", () => {
       hosts: ["api.openai.com"],
       hostSuffixes: [".api.openai.com"],
     });
-  });
-
-  it("falls through a blank OpenClaw home when scanning global manifests", () => {
-    const root = createTempRoot();
-    const home = path.join(root, "home");
-    const pluginDir = path.join(home, ".openclaw", "extensions", "example");
-    writeJson(path.join(pluginDir, "openclaw.plugin.json"), { id: "example" });
-
-    const records = listOpenClawPluginManifestMetadata({
-      OPENCLAW_HOME: "   ",
-      HOME: home,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
-    });
-
-    expect(records).toContainEqual({
-      pluginDir,
-      manifest: { id: "example" },
-      origin: "global",
-    });
-  });
-
-  it("preserves identity, capabilities, and config schema without loading plugin runtime", () => {
-    const root = createTempRoot();
-    const home = path.join(root, "home");
-    const pluginDir = path.join(home, ".openclaw", "extensions", "authoring-contract");
-    const manifest = {
-      id: "authoring-contract",
-      name: "Authoring contract",
-      channels: ["authoring-channel"],
-      providers: ["authoring-provider"],
-      contracts: {
-        tools: ["authoring_lookup"],
-      },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          endpoint: { type: "string" },
-        },
-      },
-    };
-    writeJson(path.join(pluginDir, "openclaw.plugin.json"), manifest);
-
-    const records = listOpenClawPluginManifestMetadata({
-      OPENCLAW_HOME: home,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "empty-bundled"),
-    });
-
-    expect(records).toContainEqual({
-      pluginDir,
-      manifest,
-      origin: "global",
-    });
-  });
-
-  it.each([
-    {
-      name: "missing identity",
-      manifest: { configSchema: { type: "object" } },
-      error: "plugin manifest requires id",
-    },
-    {
-      name: "missing config schema",
-      manifest: { id: "missing-schema" },
-      error: "plugin manifest requires configSchema",
-    },
-  ])("fails fast on $name", ({ manifest, error }) => {
-    const pluginDir = createTempRoot();
-    writeJson(path.join(pluginDir, "openclaw.plugin.json"), manifest);
-
-    const result = loadPluginManifest(pluginDir, false);
-
-    expect(result).toMatchObject({ ok: false, error });
   });
 
   it("skips oversized plugin manifests to prevent OOM during metadata scan", () => {

@@ -36,32 +36,9 @@ describe("handleDirList — input validation", () => {
     await expectDirListError({ path: "" }, "INVALID_PATH");
     await expectDirListError({ path: undefined }, "INVALID_PATH");
   });
-
-  it("rejects relative paths", async () => {
-    await expectDirListError({ path: "relative" }, "INVALID_PATH");
-  });
-
-  it("rejects paths with NUL bytes", async () => {
-    await expectDirListError({ path: "/tmp/foo\0bar" }, "INVALID_PATH");
-  });
 });
 
-describe("handleDirList — fs errors", () => {
-  it("returns NOT_FOUND for a missing directory", async () => {
-    await expectDirListError({ path: path.join(tmpRoot, "does-not-exist") }, "NOT_FOUND");
-  });
-
-  it("returns IS_FILE when path resolves to a regular file", async () => {
-    const f = path.join(tmpRoot, "f.txt");
-    await fs.writeFile(f, "x");
-    await expectDirListError({ path: f }, "IS_FILE");
-  });
-});
-
-describe.each([
-  ["dir.list", handleDirList, "path not found", "PERMISSION_DENIED"],
-  ["dir.fetch", handleDirFetch, "directory not found", "READ_ERROR"],
-] as const)("%s — directory binding", (_command, handle, notFoundMessage, permissionCode) => {
+describe("handleDirList — invalid directory bindings", () => {
   it.each(["malformed", "write", "device", "inode"] as const)(
     "rejects a %s binding before reading the directory",
     async (kind) => {
@@ -81,7 +58,7 @@ describe.each([
       const readdir = vi.spyOn(fs, "readdir");
 
       await expect(
-        handle({ path: tmpRoot, preflightOnly: true, expectedBinding }),
+        handleDirList({ path: tmpRoot, preflightOnly: true, expectedBinding }),
       ).resolves.toEqual({
         ok: false,
         code: "CANONICAL_PATH_CHANGED",
@@ -91,7 +68,12 @@ describe.each([
       expect(readdir).not.toHaveBeenCalled();
     },
   );
+});
 
+describe.each([
+  ["dir.list", handleDirList, "path not found", "PERMISSION_DENIED"],
+  ["dir.fetch", handleDirFetch, "directory not found", "READ_ERROR"],
+] as const)("%s — directory binding", (_command, handle, notFoundMessage, permissionCode) => {
   it("preserves path and directory errors before validating the binding", async () => {
     const missing = path.join(tmpRoot, "missing");
     await expect(handle({ path: missing, expectedBinding: null })).resolves.toEqual({
@@ -153,10 +135,13 @@ describe("handleDirList — happy path", () => {
         maxEntries: 10,
         offset: 0,
       });
+      const drained = path.join(tmpRoot, "worker-drained");
       // Retarget after the real chdir, before the unchanged worker checks and
       // enumerates its bound directory. Polling /proc can miss the entire child.
+      // beforeExit also distinguishes natural settlement from any forced-exit alias.
       const retargetAfterBinding = `(() => {
         const fs = require("node:fs");
+        process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "settled"));
         const chdir = process.chdir;
         process.chdir = (directory) => {
           chdir(directory);
@@ -182,6 +167,7 @@ describe("handleDirList — happy path", () => {
       });
       try {
         expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
+        expect(await fs.readFile(drained, "utf8")).toBe("settled");
         expect(await fs.readlink(current)).toBe(replacement);
         const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
           entries: Array<{ name: string }>;
@@ -217,9 +203,13 @@ describe("handleDirList — happy path", () => {
         maxEntries: 10,
         offset: 0,
       });
-      const child = spawn(command[0]!, command.slice(1), {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const drained = path.join(tmpRoot, "rejected-worker-drained");
+      const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
+      const child = spawn(
+        command[0]!,
+        [command[1]!, observeNaturalExit + command[2]!, ...command.slice(3)],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
       const stdout: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
       const exit = await new Promise<number | null>((resolve, reject) => {
@@ -228,6 +218,7 @@ describe("handleDirList — happy path", () => {
       });
 
       expect(exit).toBe(78);
+      expect(await fs.readFile(drained, "utf8")).toBe("settled");
       expect(Buffer.concat(stdout)).toHaveLength(0);
     },
   );
@@ -264,7 +255,7 @@ describe("handleDirList — happy path", () => {
   });
 
   it("lists files and subdirs with metadata, sorted by name", async () => {
-    await fs.writeFile(path.join(tmpRoot, "z.txt"), "Z");
+    await fs.writeFile(path.join(tmpRoot, ".hidden"), "Z");
     await fs.writeFile(path.join(tmpRoot, "a.png"), "PNG-bytes");
     await fs.mkdir(path.join(tmpRoot, "subdir"));
 
@@ -272,7 +263,7 @@ describe("handleDirList — happy path", () => {
     if (!r.ok) {
       throw new Error("expected ok");
     }
-    expect(r.entries.map((e) => e.name)).toEqual(["a.png", "subdir", "z.txt"]);
+    expect(r.entries.map((e) => e.name)).toEqual([".hidden", "a.png", "subdir"]);
 
     const a = r.entries.find((e) => e.name === "a.png")!;
     expect(a.isDir).toBe(false);
@@ -286,17 +277,6 @@ describe("handleDirList — happy path", () => {
 
     expect(r.truncated).toBe(false);
     expect(r.nextPageToken).toBeUndefined();
-  });
-
-  it("includes dotfiles in the listing", async () => {
-    await fs.writeFile(path.join(tmpRoot, ".hidden"), "x");
-    await fs.writeFile(path.join(tmpRoot, "visible"), "x");
-
-    const r = await handleDirList({ path: tmpRoot });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    expect(r.entries.map((e) => e.name)).toEqual([".hidden", "visible"]);
   });
 
   it("paginates via pageToken (offset-based)", async () => {

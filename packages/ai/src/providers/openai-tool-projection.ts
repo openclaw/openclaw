@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
-import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
+import {
+  prepareRuntimeToolInputSchema,
+  projectRuntimeToolInputSchema,
+} from "./tool-schema-json-projection.js";
+import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 type OpenAIToolDescriptor = {
   readonly name?: unknown;
@@ -53,6 +57,19 @@ function unreadableToolDiagnostic(toolIndex: number): OpenAIToolProjectionDiagno
 
 /** Snapshots direct/custom tool descriptors before OpenAI payload construction. */
 export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): OpenAIToolProjection {
+  return projectOpenAIToolDescriptors(tools);
+}
+
+/** Package-private facts are consumed before the projection or payload can escape. */
+export function prepareOpenAITools(tools: readonly OpenAIToolDescriptor[]) {
+  const schemas = new Map<Record<string, unknown>, PreparedToolSchemaNormalization>();
+  return { projection: projectOpenAIToolDescriptors(tools, schemas), schemas };
+}
+
+function projectOpenAIToolDescriptors(
+  tools: readonly OpenAIToolDescriptor[],
+  schemas?: Map<Record<string, unknown>, PreparedToolSchemaNormalization>,
+): OpenAIToolProjection {
   let inputToolCount: number;
   try {
     inputToolCount = tools.length;
@@ -68,6 +85,9 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
   const diagnostics: OpenAIToolProjectionDiagnostic[] = [];
   for (let toolIndex = 0; toolIndex < inputToolCount; toolIndex += 1) {
     let tool: OpenAIToolDescriptor;
+    let name: string | undefined;
+    let parameters: unknown;
+    let readPath = `tool[${toolIndex}]`;
     try {
       const candidate = tools[toolIndex];
       if (!candidate) {
@@ -75,41 +95,28 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
         continue;
       }
       tool = candidate;
-    } catch {
-      diagnostics.push(unreadableToolDiagnostic(toolIndex));
-      continue;
-    }
-
-    let name: unknown;
-    try {
-      name = tool.name;
-    } catch {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is unreadable`],
-      });
-      continue;
-    }
-    if (typeof name !== "string" || !name) {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is empty`],
-      });
-      continue;
-    }
-
-    let parameters: unknown;
-    try {
+      readPath += ".name";
+      const nameValue = tool.name;
+      if (typeof nameValue !== "string" || !nameValue) {
+        diagnostics.push({ toolIndex, violations: [`${readPath} is empty`] });
+        continue;
+      }
+      name = nameValue;
+      readPath = `${name}.parameters`;
       parameters = tool.parameters;
     } catch {
       diagnostics.push({
         toolIndex,
-        toolName: name,
-        violations: [`${name}.parameters is unreadable`],
+        ...(name ? { toolName: name } : {}),
+        violations: [`${readPath} is unreadable`],
       });
       continue;
     }
-    const schemaProjection = projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
+    const prepared = schemas
+      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`)
+      : undefined;
+    const schemaProjection =
+      prepared?.projection ?? projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
     if (!isRecord(schemaProjection.schema) || schemaProjection.violations.length > 0) {
       diagnostics.push({
         toolIndex,
@@ -120,6 +127,9 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
             : [`${name}.parameters must be a JSON object schema`],
       });
       continue;
+    }
+    if (prepared?.normalization) {
+      schemas?.set(schemaProjection.schema, prepared.normalization);
     }
 
     let descriptionValue: unknown;
@@ -144,14 +154,104 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
   };
 }
 
-function requireProjectedFunction(
-  name: string,
+type ToolChoice = OpenAIResponsesToolChoice | OpenAICompletionsSdkToolChoice;
+
+function reconcileToolChoice(
+  choice: OpenAIResponsesToolChoice,
   projection: OpenAIToolProjection,
-  choiceLabel: string,
-): void {
-  if (!projection.tools.some((tool) => tool.name === name)) {
-    throw new Error(`${choiceLabel} requested unavailable tool "${name}" after schema conversion`);
+  responses: true,
+): OpenAIResponsesToolChoice | undefined;
+function reconcileToolChoice(
+  choice: OpenAICompletionsSdkToolChoice,
+  projection: OpenAIToolProjection,
+  responses: false,
+): OpenAICompletionsSdkToolChoice | undefined;
+function reconcileToolChoice(
+  choice: ToolChoice,
+  projection: OpenAIToolProjection,
+  responses: boolean,
+): ToolChoice | undefined {
+  const label = responses ? "OpenAI Responses" : "OpenAI Chat Completions";
+  if (choice === "auto") {
+    return projection.tools.length > 0 ? choice : undefined;
   }
+  if (choice === "required") {
+    if (projection.tools.length === 0) {
+      throw new Error(
+        `${label} tool_choice requires a tool, but no tools survived schema conversion`,
+      );
+    }
+    return choice;
+  }
+  if (choice === "none" || !isRecord(choice)) {
+    return choice;
+  }
+  const choiceType = choice.type;
+  if (!responses && choiceType === "custom") {
+    throw new Error(
+      "OpenAI Chat Completions custom tool_choice is unsupported because this adapter emits function tools only",
+    );
+  }
+  if (choiceType === "function") {
+    const functionChoice = responses ? choice : choice.function;
+    const functionName = isRecord(functionChoice) ? functionChoice.name : undefined;
+    if (typeof functionName !== "string") {
+      return choice;
+    }
+    if (!projection.tools.some((tool) => tool.name === functionName)) {
+      throw new Error(
+        `${label} tool_choice requested unavailable tool "${functionName}" after schema conversion`,
+      );
+    }
+    return responses
+      ? { type: "function", name: functionName }
+      : { type: "function", function: { name: functionName } };
+  }
+  if (choiceType !== "allowed_tools") {
+    return choice;
+  }
+
+  const allowedConfig = responses ? choice : choice.allowed_tools;
+  if (!isRecord(allowedConfig)) {
+    return choice;
+  }
+  const { mode, tools } = allowedConfig;
+  if ((mode !== "auto" && mode !== "required") || !Array.isArray(tools)) {
+    return choice;
+  }
+  const responseTools: OpenAIResponsesAllowedToolChoice["tools"] = [];
+  const completionTools: OpenAICompletionsAllowedToolChoice["allowed_tools"]["tools"] = [];
+  for (const tool of tools) {
+    if (!isRecord(tool) || tool.type !== "function") {
+      if (responses) {
+        responseTools.push(tool);
+      }
+      continue;
+    }
+    const functionChoice = responses ? tool : tool.function;
+    const functionName = isRecord(functionChoice) ? functionChoice.name : undefined;
+    if (
+      typeof functionName === "string" &&
+      projection.tools.some((projectedTool) => projectedTool.name === functionName)
+    ) {
+      if (responses) {
+        responseTools.push({ type: "function", name: functionName });
+      } else {
+        completionTools.push({ type: "function", function: { name: functionName } });
+      }
+    }
+  }
+  if (responseTools.length === 0 && completionTools.length === 0) {
+    if (mode === "auto") {
+      return "none";
+    }
+    throw new Error(
+      `${label} tool_choice requires a tool, but no allowed tools survived schema conversion`,
+    );
+  }
+  return responses
+    ? { type: "allowed_tools", mode, tools: responseTools }
+    : { type: "allowed_tools", allowed_tools: { mode, tools: completionTools } };
 }
 
 /** Keeps Responses tool choices aligned with surviving function schemas. */
@@ -159,65 +259,7 @@ export function reconcileOpenAIResponsesToolChoice(
   choice: OpenAIResponsesToolChoice,
   projection: OpenAIToolProjection,
 ): OpenAIResponsesToolChoice | undefined {
-  if (choice === "auto") {
-    return projection.tools.length > 0 ? choice : undefined;
-  }
-  if (choice === "required") {
-    if (projection.tools.length === 0) {
-      throw new Error(
-        "OpenAI Responses tool_choice requires a tool, but no tools survived schema conversion",
-      );
-    }
-    return choice;
-  }
-  if (choice === "none" || !isRecord(choice)) {
-    return choice;
-  }
-  const choiceType = choice.type;
-  if (choiceType === "function") {
-    const functionName = choice.name;
-    if (typeof functionName !== "string") {
-      return choice;
-    }
-    requireProjectedFunction(functionName, projection, "OpenAI Responses tool_choice");
-    return { type: "function", name: functionName };
-  }
-  if (choiceType !== "allowed_tools") {
-    return choice;
-  }
-
-  const mode = choice.mode;
-  const tools = choice.tools;
-  if ((mode !== "auto" && mode !== "required") || !Array.isArray(tools)) {
-    return choice;
-  }
-  const normalizedAllowedTools: OpenAIResponsesAllowedToolChoice["tools"] = [];
-  for (const tool of tools) {
-    if (!isRecord(tool) || tool.type !== "function") {
-      normalizedAllowedTools.push(tool);
-      continue;
-    }
-    const functionName = tool.name;
-    if (
-      typeof functionName === "string" &&
-      projection.tools.some((projectedTool) => projectedTool.name === functionName)
-    ) {
-      normalizedAllowedTools.push({ type: "function", name: functionName });
-    }
-  }
-  if (normalizedAllowedTools.length === 0) {
-    if (mode === "auto") {
-      return "none";
-    }
-    throw new Error(
-      "OpenAI Responses tool_choice requires a tool, but no allowed tools survived schema conversion",
-    );
-  }
-  return {
-    type: "allowed_tools",
-    mode,
-    tools: normalizedAllowedTools,
-  };
+  return reconcileToolChoice(choice, projection, true);
 }
 
 /** Keeps Chat Completions tool choices aligned with surviving function schemas. */
@@ -225,81 +267,23 @@ export function reconcileOpenAICompletionsToolChoice(
   choice: OpenAICompletionsSdkToolChoice,
   projection: OpenAIToolProjection,
 ): OpenAICompletionsSdkToolChoice | undefined {
-  if (choice === "auto") {
-    return projection.tools.length > 0 ? choice : undefined;
-  }
-  if (choice === "required") {
-    if (projection.tools.length === 0) {
-      throw new Error(
-        "OpenAI Chat Completions tool_choice requires a tool, but no tools survived schema conversion",
-      );
-    }
-    return choice;
-  }
-  if (choice === "none" || !isRecord(choice)) {
-    return choice;
-  }
-  const choiceType = choice.type;
-  if (choiceType === "custom") {
-    throw new Error(
-      "OpenAI Chat Completions custom tool_choice is unsupported because this adapter emits function tools only",
-    );
-  }
-  if (choiceType === "function") {
-    const functionChoice = choice.function;
-    if (!isRecord(functionChoice)) {
-      return choice;
-    }
-    const functionName = functionChoice.name;
-    if (typeof functionName !== "string") {
-      return choice;
-    }
-    requireProjectedFunction(functionName, projection, "OpenAI Chat Completions tool_choice");
-    return { type: "function", function: { name: functionName } };
-  }
-  if (choiceType !== "allowed_tools") {
-    return choice;
-  }
+  return reconcileToolChoice(choice, projection, false);
+}
 
-  const allowedConfig = choice.allowed_tools;
-  if (!isRecord(allowedConfig)) {
-    return choice;
-  }
-  const mode = allowedConfig.mode;
-  const tools = allowedConfig.tools;
-  if ((mode !== "auto" && mode !== "required") || !Array.isArray(tools)) {
-    return choice;
-  }
-  const normalizedAllowedTools: OpenAICompletionsAllowedToolChoice["allowed_tools"]["tools"] = [];
-  for (const tool of tools) {
-    if (!isRecord(tool) || tool.type !== "function") {
-      continue;
-    }
-    const functionChoice = tool.function;
-    const functionName = isRecord(functionChoice) ? functionChoice.name : undefined;
-    if (
-      typeof functionName === "string" &&
-      projection.tools.some((projectedTool) => projectedTool.name === functionName)
-    ) {
-      normalizedAllowedTools.push({
-        type: "function",
-        function: { name: functionName },
-      });
-    }
-  }
-  if (normalizedAllowedTools.length === 0) {
-    if (mode === "auto") {
-      return "none";
-    }
-    throw new Error(
-      "OpenAI Chat Completions tool_choice requires a tool, but no allowed tools survived schema conversion",
-    );
+/** Re-expresses an object Chat Completions tool choice in the Responses wire shape. */
+export function toOpenAIResponsesToolChoice(
+  choice: Exclude<NonNullable<OpenAICompletionsToolChoice>, string>,
+): OpenAIResponsesToolChoice {
+  if (choice.type === "function") {
+    return { type: "function", name: choice.function.name };
   }
   return {
     type: "allowed_tools",
-    allowed_tools: {
-      mode,
-      tools: normalizedAllowedTools,
-    },
+    mode: choice.allowed_tools.mode,
+    tools: choice.allowed_tools.tools.map((tool) =>
+      tool.type === "function" && isRecord(tool.function) && typeof tool.function.name === "string"
+        ? { type: "function", name: tool.function.name }
+        : tool,
+    ),
   };
 }

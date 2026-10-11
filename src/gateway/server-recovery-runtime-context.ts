@@ -12,26 +12,16 @@ type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions 
   timeoutMs?: number;
 };
 
-type ActiveGatewayRecoveryRuntime = {
-  owner: symbol;
-  runtime: GatewayRecoveryRuntime;
-};
-
-let activeRuntime: ActiveGatewayRecoveryRuntime | undefined;
+let activeRuntime: { runtime: GatewayRecoveryRuntime } | undefined;
 
 /** Registers the recovery principal owned by the latest process-global Gateway instance. */
 export function registerGatewayRecoveryRuntime(runtime: GatewayRecoveryRuntime): () => void {
-  const owner = Symbol("gateway-recovery-runtime");
-  activeRuntime = { owner, runtime };
-  let released = false;
+  const registration = { runtime };
+  activeRuntime = registration;
   return () => {
-    if (released) {
-      return;
-    }
-    released = true;
     // An older Gateway may finish closing after its replacement has registered.
     // Never let that stale close clear the replacement's recovery authority.
-    if (activeRuntime?.owner === owner) {
+    if (activeRuntime === registration) {
       activeRuntime = undefined;
     }
   };

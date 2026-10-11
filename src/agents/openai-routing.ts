@@ -4,16 +4,22 @@
  * Custom OpenAI-compatible base URLs intentionally bypass Codex-runtime defaults.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type {
+  LegacyAgentListEntry,
+  OpenClawConfigWithLegacyRoster,
+} from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
-  resolveAgentScopedRuntimeOverride,
+  type EmbeddedAgentRuntime,
 } from "./agent-runtime-id.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import {
   resolveAgentRuntimePolicyAgentId,
@@ -113,10 +119,24 @@ export function parseModelRefProvider(value: unknown): string | undefined {
   return normalizeProviderId(value.trim().slice(0, slashIndex));
 }
 
+/** Reads the retired whole-agent runtime opt-out from pre-admission plugin-setup config. */
+function resolveRetiredAgentRuntimeOptOut(params: {
+  config?: OpenClawConfigWithLegacyRoster;
+  agentId?: string;
+}): EmbeddedAgentRuntime | undefined {
+  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  // resolveAgentEntry returns the stored entry object, so retired fields survive on raw input.
+  const entry: LegacyAgentListEntry | undefined =
+    agentId && params.config ? resolveAgentEntry(params.config, agentId) : undefined;
+  return normalizeOptionalAgentRuntimeId(
+    entry?.agentRuntime?.id ?? params.config?.agents?.defaults?.agentRuntime?.id,
+  );
+}
+
 /** Returns true when selected model config should ensure the Codex plugin exists. */
 export function modelSelectionShouldEnsureCodexPlugin(params: {
   model?: string;
-  config?: OpenClawConfig;
+  config?: OpenClawConfigWithLegacyRoster;
   agentId?: string;
 }): boolean {
   const provider = parseModelRefProvider(params.model);
@@ -137,7 +157,7 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
     return configuredRuntime === "codex";
   }
   if (!configuredPolicy) {
-    const agentRuntime = resolveAgentScopedRuntimeOverride({
+    const agentRuntime = resolveRetiredAgentRuntimeOptOut({
       config: params.config,
       agentId: params.agentId,
     });

@@ -2,9 +2,11 @@ import type { SessionsListResult } from "../../api/types.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
-import { chatOutboxDeliveryKey, type StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -14,7 +16,9 @@ import {
   normalizeAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
@@ -23,40 +27,100 @@ import {
 } from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatState } from "./chat-state-contract.ts";
-import { admitChatSubmission, shouldDisplayChatSubmission } from "./history-merge.ts";
+import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import {
+  admitChatSubmission,
+  retireChatSubmissionDisplay,
+  shouldDisplayChatSubmission,
+} from "./history-merge.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
+  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+export function formatChatQueueAdmissionError(
+  result: Exclude<ChatQueueAdmissionResult, "admitted">,
+  editing: boolean,
+): string {
+  if (result === "source-changed") {
+    return t("chat.queue.editSourceChanged");
+  }
+  if (result === "full") {
+    return t("chat.queue.full");
+  }
+  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+}
+
+export function isChatResetCommand(text: string) {
+  const parsed = parseSlashCommand(text);
+  return (
+    parsed?.command.key === "new" ||
+    (parsed?.command.key === "reset" && !/^soft(?:\s|$)/i.test(parsed.args))
+  );
+}
 
 /** Commands and Goals have their own terminal receipts; chat needs input consumption. */
 export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
-// This holds ordinary admission, not offline queuing or stop/approval controls.
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  agentId?: string,
+): string | null {
+  if (isExpiredIncognitoSession(host, sessionKey)) {
+    return t("chat.incognitoExpiredTitle");
+  }
+  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  if (sendDisabledReason) {
+    return sendDisabledReason;
+  }
+  return chatConnectionPendingReason(host);
+}
+
 export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+  agentId?: string,
+): string | null {
+  return (
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
+}
+
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
+}
+
+// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Renderers show loading only for these transient holds, never terminal expiry.
+export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
   sessionKey: string,
   initialTurnPending = false,
 ): string | null {
-  if (host.connected && host.client && !host.client.recoveryScopeReady) {
-    return t("chat.queue.connectionPending");
-  }
-  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
-    ? t("chat.queue.initialTurnPending")
-    : null;
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
 }
 
 export function formatTerminalChatSendAckError(
@@ -71,7 +135,7 @@ export function formatTerminalChatSendAckError(
 }
 
 function preserveDeliveredUserTurn(
-  state: ChatState,
+  state: ChatHost,
   submission: RetainedChatSubmission | undefined,
 ): void {
   if (submission?.kind !== "delivered" || !submission.pending) {
@@ -84,16 +148,7 @@ function preserveDeliveredUserTurn(
       !state.currentSessionId ||
       submission.sessionId === state.currentSessionId
     ) {
-      // Custody may already own this source before its first delivery retention.
-      if (
-        getChatPendingInputs(state)?.page.items.some(
-          (input) => input.runId === submission.pendingRunId,
-        )
-      ) {
-        submission.pending = false;
-        return;
-      }
-      admitChatSubmission(state, submission);
+      admitChatSubmission(state, getChatPendingInputs(state)?.page.items, submission);
     }
     return;
   }
@@ -101,7 +156,6 @@ function preserveDeliveredUserTurn(
     const target = { sessionKey, agentId };
     const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
     if (
-      state.chatSubmissions &&
       shouldDisplayChatSubmission(
         submission,
         findChatSubmissionMessage(cached, submission.pendingRunId, true),
@@ -114,23 +168,35 @@ function preserveDeliveredUserTurn(
 
 type DeliveredTurnRetirement = "retired" | "retained" | "stale";
 
-/** Transfer every byte to the transcript/cache before retiring its durable owner. */
+/** Preserve local display bytes until canonical consumption retires the submission. */
 export function retireDeliveredQueuedUserTurn(
   host: ChatHost,
   runId: string | undefined,
   scope: StoredChatOutboxScope,
-  options?: { retainUntilConsumed: boolean },
+  options?: { retainUntilConsumed?: boolean; inputConsumed?: boolean },
 ): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
   const client = host.client;
   const owner = client ?? host;
   const submissions = host.chatSubmissions;
   const deliveryKey = chatOutboxDeliveryKey(host, scope, runId);
-  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
-  if (!stored) {
+  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope);
+  if (options?.inputConsumed && runId) {
     const remembered = submissions.readDelivered(deliveryKey, owner);
-    if (remembered) {
-      preserveDeliveredUserTurn(host, remembered);
+    if (remembered && !persistedSteerTargetRunId(remembered.message)) {
+      remembered.pending = false;
     }
+    if (
+      visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
+      (!stored?.sessionId || stored.sessionId === host.currentSessionId)
+    ) {
+      retireChatSubmissionDisplay(host, new Set([runId]), { awaitTranscriptReceipt: true });
+    }
+    return !stored || removeDeliveredQueuedChatSendForRun(host, runId, scope)
+      ? "retired"
+      : "retained";
+  }
+  if (!stored) {
+    preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
     return "retired";
   }
   const connectionEpoch = host.connectionEpoch;
@@ -140,7 +206,7 @@ export function retireDeliveredQueuedUserTurn(
     host.connected === connected &&
     host.connectionEpoch === connectionEpoch &&
     payloadOwnerIsCurrent();
-  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope);
   const commit = (
     message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
   ): DeliveredTurnRetirement => {
@@ -149,21 +215,17 @@ export function retireDeliveredQueuedUserTurn(
     }
     const current = currentItem();
     if (!current) {
-      const remembered = submissions.readDelivered(deliveryKey, owner);
-      if (!remembered) {
-        return "stale";
-      }
-      preserveDeliveredUserTurn(host, remembered);
-      return "retired";
+      preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+      // Consumption can retire the outbox during hydration. A replacement
+      // attempt still owns the row; an absent row must not swallow chat.final.
+      return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before
     // the first pane removes the outbox item and releases its Blob/preview URLs.
+    const remembered = submissions.readDelivered(deliveryKey, owner);
     const submission = submissions.retain({
       kind: "delivered",
       deliveryKey,
@@ -172,7 +234,12 @@ export function retireDeliveredQueuedUserTurn(
       agentId: stored.agentId,
       sessionId: stored.sessionId,
       pendingRunId: stored.sendRunId,
-      message,
+      message:
+        remembered?.kind === "delivered" &&
+        remembered.pending &&
+        persistedSteerTargetRunId(remembered.message)
+          ? remembered.message
+          : message,
     });
     preserveDeliveredUserTurn(host, submission);
     const beforeRemoval = currentItem();
@@ -218,14 +285,20 @@ export function retireDeliveredQueuedUserTurn(
       }
     }
     const current = currentItem();
-    if (!current || !sameQueuedDeliveryVersion(current, stored)) {
+    if (!current) {
+      return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
+    }
+    if (!sameQueuedDeliveryVersion(current, stored)) {
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
     // Delivery proof must never become a fresh-send retry because local bytes
     // were unavailable. Keep the same run identity and its no-replay barrier.
     updateQueuedMessage(host, stored.id, (item) =>
-      failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
+      failOutboxPayload(
+        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        reason,
+      ),
     );
     return "retained";
   });

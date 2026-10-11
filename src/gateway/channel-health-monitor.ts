@@ -2,15 +2,14 @@ import {
   isFutureDateTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-// Gateway channel health monitor.
-// Periodically evaluates channel account health and restarts stale runtimes.
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   resolveChannelRestartReason,
-  type ChannelHealthPolicy,
 } from "./channel-health-policy.js";
 import type { ChannelManager } from "./server-channels.js";
 
@@ -37,6 +36,7 @@ type ChannelHealthTimingPolicy = {
 
 type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
+  scheduler: GatewayScheduler;
   checkIntervalMs?: number;
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
@@ -58,18 +58,6 @@ type RestartRecord = {
   pendingContinuationUsed?: boolean;
 };
 
-function resolveTimingPolicy(
-  deps: Pick<ChannelHealthMonitorDeps, "timing">,
-): ChannelHealthTimingPolicy {
-  return {
-    monitorStartupGraceMs: deps.timing?.monitorStartupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
-    channelConnectGraceMs: deps.timing?.channelConnectGraceMs ?? DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-    staleEventThresholdMs:
-      deps.timing?.staleEventThresholdMs ?? DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-  };
-}
-
-/** Start the periodic channel health monitor and return its stop handle. */
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,
@@ -78,28 +66,25 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abortSignal,
   } = deps;
   const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
-  const timing = resolveTimingPolicy(deps);
+  const timing = {
+    monitorStartupGraceMs: deps.timing?.monitorStartupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
+    channelConnectGraceMs: deps.timing?.channelConnectGraceMs ?? DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+    staleEventThresholdMs:
+      deps.timing?.staleEventThresholdMs ?? DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  };
+  const scheduler = deps.scheduler.scope();
 
   const cooldownMs = cooldownCycles * checkIntervalMs;
   const restartRecords = new Map<string, RestartRecord>();
-  const startedAt = Date.now();
+  const startedAt = scheduler.now();
   let stopped = false;
   let abandonInFlightRestart = false;
   let activeCheck: Promise<void> | null = null;
-  let timer: ReturnType<typeof setTimeout> | null = null;
   const suppressedAccounts = new Set<string>();
-
-  const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
-
-  function pruneOldRestarts(record: RestartRecord, now: number) {
-    record.restartsThisHour = record.restartsThisHour.filter(
-      (r) => !isFutureDateTimestampMs(r.at, { nowMs: now }) && now - r.at < ONE_HOUR_MS,
-    );
-  }
 
   async function runCheckWork() {
     try {
-      const now = Date.now();
+      const now = scheduler.now();
       if (
         !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
         now - startedAt < timing.monitorStartupGraceMs
@@ -108,13 +93,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       if (channelManager.getAutostartSuppression() !== null) {
-        await channelManager.recoverAutostartSuppression();
+        await channelManager.recoverAutostartSuppression(scheduler.signal);
       }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-        if (!accounts) {
+        if (!accounts || snapshot.reloadingChannels?.has(channelId)) {
           continue;
         }
         const autostartSuppressed =
@@ -139,10 +124,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId, accountId)) {
             continue;
           }
-          const key = rKey(channelId, accountId);
+          const key = `${channelId}:${accountId}`;
           if (autostartSuppressed) {
             if (status.running !== true && !suppressedAccounts.has(key)) {
-              log.info?.(
+              log.info(
                 `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
               );
               suppressedAccounts.add(key);
@@ -162,18 +147,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (trackedRecord?.pendingContinuationUsed && leftPendingRestart) {
             trackedRecord.pendingContinuationUsed = false;
           }
-          const healthPolicy: ChannelHealthPolicy = {
+          const health = evaluateChannelHealth(status, {
             channelId,
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
-          };
-          const health = evaluateChannelHealth(status, healthPolicy);
+          });
           if (health.healthy) {
             continue;
           }
           if (health.reason === "terminal-disconnect" || health.reason === "blocked") {
-            log.info?.(
+            log.info(
               `[${channelId}:${accountId}] health-monitor: skipping restart, ${health.reason}`,
             );
             continue;
@@ -207,9 +191,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
-          pruneOldRestarts(record, now);
+          record.restartsThisHour = record.restartsThisHour.filter(
+            (r) => !isFutureDateTimestampMs(r.at, { nowMs: now }) && now - r.at < ONE_HOUR_MS,
+          );
           if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
-            log.warn?.(
+            log.warn(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
             continue;
@@ -217,7 +203,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           const reason = resolveChannelRestartReason(status, health);
 
-          log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
+          log.info(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
           if (continuingPendingRestart) {
             record.pendingContinuationUsed = true;
@@ -244,57 +230,31 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             channelManager.resetRestartAttempts(channelId, accountId);
             await channelManager.startChannel(channelId, accountId);
           } catch (err) {
-            log.error?.(
-              `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
-            );
+            log.error(`[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`);
           }
         }
       }
     } catch (err) {
-      log.error?.(`health-monitor: check failed: ${String(err)}`);
+      if (!scheduler.signal.aborted) {
+        log.error(`health-monitor: check failed: ${String(err)}`);
+      }
     }
   }
 
   function runCheck(): Promise<void> {
-    if (stopped) {
-      return Promise.resolve();
-    }
-    if (activeCheck) {
-      return activeCheck;
-    }
-    const check = runCheckWork().finally(() => {
-      if (activeCheck === check) {
-        activeCheck = null;
-      }
+    activeCheck = runCheckWork().finally(() => {
+      activeCheck = null;
       if (stopped) {
         abortSignal?.removeEventListener("abort", shutdown);
       }
     });
-    activeCheck = check;
-    return check;
-  }
-
-  function scheduleCheck(delayMs: number) {
-    timer = setTimeout(() => {
-      timer = null;
-      void runCheck().finally(() => {
-        if (!stopped) {
-          scheduleCheck(checkIntervalMs);
-        }
-      });
-    }, delayMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
+    return activeCheck;
   }
 
   function retire(abandonRestart: boolean) {
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    scheduler.beginClose();
     if (!activeCheck) {
       abortSignal?.removeEventListener("abort", shutdown);
     }
@@ -307,24 +267,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     if (!check) {
       return;
     }
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await Promise.race([
-      check.then(() => "idle" as const),
-      new Promise<"timeout">((resolve) => {
-        timeout = setTimeout(() => resolve("timeout"), CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS);
-        if (typeof timeout === "object" && "unref" in timeout) {
-          timeout.unref();
-        }
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (outcome === "timeout") {
+    if (!(await settlesWithin(check, CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS))) {
       // A late provider stop must not block lifecycle ownership or restart after
       // the replacement/shutdown handoff has already continued.
       shutdown();
-      log.warn?.(
+      log.warn(
         `health-monitor handoff exceeded ${CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS}ms; abandoning delayed restart`,
       );
     }
@@ -335,10 +282,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abandonInFlightRestart = true;
   } else {
     abortSignal?.addEventListener("abort", shutdown, { once: true });
-    // One lifecycle-owned timer runs first when startup grace expires, then rearms only after
-    // each check settles so slow provider recovery cannot overlap the next evaluation.
-    scheduleCheck(resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0));
-    log.info?.(
+    scheduler.schedule({
+      id: "channel-health-monitor",
+      atMs: startedAt + resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0),
+      everyMs: checkIntervalMs,
+      run: runCheck,
+    });
+    log.info(
       `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
     );
   }

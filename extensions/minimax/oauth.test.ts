@@ -266,7 +266,7 @@ describe("loginMiniMaxPortalOAuth", () => {
           title: "MiniMax OAuth",
           code: "CODE",
           expiresInMinutes: 1,
-          message: "Open https://example.com/device to approve access.",
+          message: "Enter this one-time code to approve access.",
         });
         return tokenResponse();
       },

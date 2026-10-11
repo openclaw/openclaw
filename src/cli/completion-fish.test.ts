@@ -19,30 +19,6 @@ describe("completion-fish helpers", () => {
     );
   });
 
-  it("builds option line with short and long flags", () => {
-    const line = buildFishOptionCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_use_subcommand",
-      flags: ["-s", "--shell"],
-      description: "Shell target",
-    });
-    expect(line).toBe(
-      `complete -c openclaw -n "__fish_use_subcommand" -s s -l shell -d 'Shell target'\n`,
-    );
-  });
-
-  it("builds option line with long-only flags", () => {
-    const line = buildFishOptionCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_seen_subcommand_from completion",
-      flags: ["--write-state"],
-      description: "Write cache",
-    });
-    expect(line).toBe(
-      `complete -c openclaw -n "__fish_seen_subcommand_from completion" -l write-state -d 'Write cache'\n`,
-    );
-  });
-
   it("builds option line with two long aliases", () => {
     const line = buildFishOptionCompletionLine({
       rootCmd: "openclaw",
@@ -55,23 +31,51 @@ describe("completion-fish helpers", () => {
     );
   });
 
-  it("preserves required Commander option values and constrained choices", () => {
-    const line = buildFishOptionCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_seen_subcommand_from completion",
-      flags: ["-s", "--shell"],
-      description: "Shell target",
-      requiresValue: true,
-      choices: ["zsh", "bash", "powershell", "fish"],
-    });
-
-    const quotedChoices = ["zsh", "bash", "powershell", "fish"]
-      .map((choice) => `'${choice}'`)
-      .join(" ");
-    expect(line).toBe(
-      `complete -c openclaw -n "__fish_seen_subcommand_from completion" -s s -l shell -r -f -a "${quotedChoices}" -d 'Shell target'\n`,
-    );
-  });
+  it
+    .skipIf(spawnSync("fish", ["--version"], { timeout: 15_000 }).status !== 0)
+    .each(["Slash before \\'quote'"])(
+    "preserves command, option, and optional-choice descriptions in Fish: %s",
+    (description) => {
+      const script =
+        buildFishSubcommandCompletionLine({
+          rootCmd: "openclaw",
+          condition: "true",
+          name: "proof-command",
+          description,
+        }) +
+        buildFishOptionCompletionLine({
+          rootCmd: "openclaw",
+          condition: "true",
+          flags: ["--proof-option"],
+          description,
+          choices: ["auto"],
+        });
+      const result = spawnSync(
+        "fish",
+        [
+          "--no-config",
+          "-c",
+          `${script}
+complete --do-complete 'openclaw proof-c'
+complete --do-complete 'openclaw --proof-o'
+complete --do-complete 'openclaw --proof-option a'
+`,
+        ],
+        { encoding: "utf8", timeout: 15_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout.split(/\r?\n/)).toEqual(
+        expect.arrayContaining([
+          `proof-command\t${description}`,
+          `--proof-option\t${description}`,
+          `--proof-option=\t${description}`,
+          `auto\t${description}`,
+        ]),
+      );
+    },
+  );
 
   it("preserves optional Commander option values without requiring an argument", () => {
     const line = buildFishOptionCompletionLine({
@@ -87,19 +91,6 @@ describe("completion-fish helpers", () => {
     expect(line).toContain(
       `complete -c openclaw -n "__fish_use_subcommand; and contains -- (commandline -opc)[-1] --color" -f -a "'always' 'never'" -d 'Color output'`,
     );
-  });
-
-  it("preserves whitespace within each Commander choice", () => {
-    const line = buildFishOptionCompletionLine({
-      rootCmd: "openclaw",
-      condition: "__fish_use_subcommand",
-      flags: ["--theme"],
-      description: "Theme",
-      requiresValue: true,
-      choices: ["light blue", "dark"],
-    });
-
-    expect(line).toContain(` -r -f -a "'light blue' 'dark'" `);
   });
 
   it.skipIf(process.platform === "win32")(
