@@ -168,8 +168,8 @@ export function createPluginNativeAdmission(
     Boolean(
       namespace &&
       (!privateNativeCopies ||
-          (!namespace.referenceRoot &&
-            !Object.values(namespace.members).some((member) => member.admissionHardlinks))),
+        (!namespace.referenceRoot &&
+          !Object.values(namespace.members).some((member) => member.admissionHardlinks))),
     );
   const inspectSource = captureHooks?.onSourceDescriptor
     ? (source: string, stat: fs.BigIntStats, admitted = false) =>
