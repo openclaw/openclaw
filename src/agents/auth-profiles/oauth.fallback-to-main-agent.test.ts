@@ -7,10 +7,7 @@ import {
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
 } from "../../plugin-sdk/file-lock.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
@@ -18,8 +15,8 @@ import { isSettledOAuthRefreshFailure, OAuthRefreshFailureError } from "./oauth-
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import * as profiles from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 const { getOAuthApiKeyMock, refreshCredentialMock } = vi.hoisted(() => {
@@ -313,21 +310,27 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
     store.lastGood = { openai: profileId };
     saveAuthProfileStore(store, mainAgentDir);
-    getOAuthApiKeyMock.mockImplementationOnce(async () => {
-      openOpenClawAgentDatabase({
-        agentId: "main",
-        path: resolveAuthProfileDatabasePath(mainAgentDir),
-      }).db.exec("ALTER TABLE auth_profile_state DROP COLUMN updated_at");
-      throw new Error("refresh_token_reused");
-    });
-    const failure = await resolveApiKeyForProfile({
-      store,
-      profileId,
-      agentDir: mainAgentDir,
-    }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
-    expect(String(failure)).toContain("refresh_token_reused");
-    expect(String(failure)).not.toContain("no column named updated_at");
-    expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
+    const cleanup = vi
+      .spyOn(profiles, "clearLastGoodProfileWithLock")
+      .mockRejectedValueOnce(new Error("synthetic last-good cleanup failure"));
+    try {
+      getOAuthApiKeyMock.mockRejectedValueOnce(new Error("refresh_token_reused"));
+      const failure = await resolveApiKeyForProfile({
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+      }).catch((error: unknown) => error);
+      expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith({
+        provider: "openai",
+        profileId,
+        agentDir: undefined,
+      });
+      expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
+      expect(String(failure)).toContain("refresh_token_reused");
+      expect(String(failure)).not.toContain("synthetic last-good cleanup failure");
+    } finally {
+      cleanup.mockRestore();
+    }
   });
 });

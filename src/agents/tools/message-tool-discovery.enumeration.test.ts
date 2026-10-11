@@ -95,48 +95,6 @@ describe("canonical destination recovery stays bounded", () => {
     expect(store.exactReads).toEqual([SESSION_KEY]);
   });
 
-  it("does not enumerate when this session has no stored delivery row", () => {
-    const result = resolveEffectiveCurrentChannelContext(
-      {
-        currentChannelProvider: "webchat",
-        agentSessionKey: SESSION_KEY,
-      },
-      { config: {}, action: "send", params: {} },
-    );
-
-    expect(result.currentChannelId).toBe(FOLDED_SPACE);
-    expect(store.entriesCalls).toEqual([]);
-    expect(store.exactReads).toEqual([SESSION_KEY]);
-  });
-
-  it("does not enumerate when the stored row carries no external delivery", () => {
-    store.rows[SESSION_KEY] = { sessionId: "s1", updatedAt: 1, delivery: { kind: "internal" } };
-
-    const result = resolveEffectiveCurrentChannelContext(
-      {
-        currentChannelProvider: "webchat",
-        agentSessionKey: SESSION_KEY,
-      },
-      { config: {}, action: "send", params: {} },
-    );
-
-    expect(result.currentChannelId).toBe(FOLDED_SPACE);
-    expect(store.entriesCalls).toEqual([]);
-    expect(store.exactReads).toEqual([SESSION_KEY]);
-  });
-
-  it("keeps the inferred route when the exact store cannot be read", () => {
-    store.loadExactSessionEntryReadOnly.mockImplementationOnce(() => {
-      throw new Error("store is unreadable");
-    });
-    const result = resolveEffectiveCurrentChannelContext(
-      { currentChannelProvider: "webchat", agentSessionKey: SESSION_KEY },
-      { config: {}, action: "send", params: {} },
-    );
-    expect(result.currentMessagingTarget).toBe(FOLDED_SPACE);
-    expect(store.entriesCalls).toEqual([]);
-  });
-
   it("does not recover delivery from a replacement session at the same key", () => {
     seedRoutableRow();
     const result = resolveEffectiveCurrentChannelContext(

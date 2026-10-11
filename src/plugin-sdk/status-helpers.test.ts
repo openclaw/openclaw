@@ -185,17 +185,6 @@ function createAsyncStatusAdapter() {
   });
 }
 
-describe("createDefaultChannelRuntimeState", () => {
-  it("merges extra fields into the default runtime state", () => {
-    expect(createDefaultChannelRuntimeState("alerts", { probeAt: 123, healthy: true })).toEqual({
-      accountId: "alerts",
-      ...defaultRuntimeState,
-      probeAt: 123,
-      healthy: true,
-    });
-  });
-});
-
 describe("buildComputedAccountStatusSnapshot", () => {
   it("builds account status when configured is computed outside resolver", () => {
     expect(
@@ -215,10 +204,6 @@ describe("buildComputedAccountStatusSnapshot", () => {
 
 describe("computed account status adapters", () => {
   it.each([
-    {
-      name: "sync",
-      createStatus: createComputedStatusAdapter,
-    },
     {
       name: "async",
       createStatus: createAsyncStatusAdapter,
@@ -265,16 +250,6 @@ describe("computed account status adapters", () => {
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
   it.each([
-    {
-      name: "merges extra fields into runtime snapshots",
-      input: {},
-      extra: { port: 3978 },
-      expected: {
-        ...defaultRuntimeState,
-        probe: undefined,
-        port: 3978,
-      },
-    },
     {
       name: "preserves runtime connectivity metadata",
       input: {

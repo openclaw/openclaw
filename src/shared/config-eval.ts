@@ -120,7 +120,6 @@ function* binaryCandidates(search: ReturnType<typeof resolveBinarySearch>, bin: 
   }
 }
 
-/** Checks PATH for an executable binary, including PATHEXT candidates on Windows. */
 export function hasBinary(bin: string): boolean {
   const cache = resolveBinaryCache();
   if (cache.hits.has(bin)) {

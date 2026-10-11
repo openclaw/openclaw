@@ -126,6 +126,22 @@ describe("update cli option collisions", () => {
     expect(updateCommand).not.toHaveBeenCalled();
   });
 
+  it("passes explicit release-retention inspection only to immutable adoption", async () => {
+    await run([
+      ...adoptionArgs,
+      "--previous-updater-stopped",
+      "--enable-activation",
+      "--inspect-release-retention",
+    ]);
+    expect(mocks.updateAdoptImmutableCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inspectReleaseRetention: true,
+        enableActivation: true,
+      }),
+    );
+    expect(updateCommand).not.toHaveBeenCalled();
+  });
+
   it("passes exact immutable SHA selection only to the update action", async () => {
     const sha = "a".repeat(40);
     await run(["update", "--sha", sha]);

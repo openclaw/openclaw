@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
@@ -8,6 +9,7 @@ import { createContext as createGatewayContext } from "../../../gateway/server-p
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -22,7 +24,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import * as workerContext from "../../../state/openclaw-state-worker-context.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
@@ -31,16 +32,15 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
-import {
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
-} from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
+  SubagentRegistryVersionConflictError,
 } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -108,7 +108,35 @@ async function register(...entries: SubagentRunRecord[]) {
   );
 }
 
-it("restores bounded payload pages from one snapshot and retains their physical row versions", async () => {
+it("revalidates the live registry source without enumerating the process environment", () => {
+  const context = captureOpenClawStateWorkerContext();
+  const originalEnv = process.env;
+  let stateDir = originalEnv.OPENCLAW_STATE_DIR;
+  let enumerations = 0;
+  process.env = new Proxy(originalEnv, {
+    get(target, key) {
+      return key === "OPENCLAW_STATE_DIR" ? stateDir : Reflect.get(target, key);
+    },
+    ownKeys(target) {
+      enumerations++;
+      return Reflect.ownKeys(target);
+    },
+  });
+  try {
+    for (let index = 0; index < 30; index++) {
+      assertSubagentRegistryWriteSourceCurrent(context);
+    }
+    stateDir = path.join(state.stateDir, "replacement");
+    expect(() => assertSubagentRegistryWriteSourceCurrent(context)).toThrow(
+      "Queued registry write lost its original database",
+    );
+  } finally {
+    process.env = originalEnv;
+  }
+  expect(enumerations).toBe(0);
+});
+
+it("streams bounded restore batches in one read and retains snapshot row versions", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>
     Object.assign(entry(`paged-${index}`), {
       createdAt,
@@ -117,35 +145,37 @@ it("restores bounded payload pages from one snapshot and retains their physical 
   );
   const fixtureRows = new Map(entries.map((row) => [row.runId, row]));
   saveSubagentRegistryChangesToSqlite(fixtureRows, [...fixtureRows.keys()]);
+  openOpenClawStateDatabase()
+    .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
+    .run("paged-0");
   const read = stateReads.executeExistingOpenClawStateRead;
   const payloadBytes: number[] = [];
   const observe = vi
     .spyOn(stateReads, "executeExistingOpenClawStateRead")
-    .mockImplementation(async (options, command, readOptions) => {
-      const reply = await read(options, command, readOptions);
-      if (
-        reply?.ok &&
-        reply.type === "subagents.runs" &&
-        reply.projection === undefined &&
-        reply.page
-      ) {
-        payloadBytes.push(Buffer.byteLength(JSON.stringify([...reply.runs])));
-        if (payloadBytes.length === 1) {
-          const changed = { ...entries[2]!, model: "foreign metadata" };
-          const added = entry("added-after-snapshot");
-          saveSubagentRegistryChangesToSqlite(
-            new Map([
-              [changed.runId, changed],
-              [added.runId, added],
-            ]),
-            [changed.runId, added.runId],
-          );
-        }
-      }
-      return reply;
-    });
+    .mockImplementation((options, command, readOptions) =>
+      read(options, command, {
+        ...readOptions,
+        onChunkAsync: undefined,
+        onChunk(value) {
+          payloadBytes.push(Buffer.byteLength(JSON.stringify(value)));
+          readOptions?.onChunk?.(value);
+          if (payloadBytes.length === 1) {
+            const changed = { ...entries[2]!, model: "foreign metadata" };
+            const added = entry("added-after-snapshot");
+            saveSubagentRegistryChangesToSqlite(
+              new Map([
+                [changed.runId, changed],
+                [added.runId, added],
+              ]),
+              [changed.runId, added.runId],
+            );
+          }
+        },
+      }),
+    );
   try {
     await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    expect(observe).toHaveBeenCalledOnce();
     expect(payloadBytes.length).toBeGreaterThan(1);
     expect(Math.max(...payloadBytes)).toBeLessThanOrEqual(1024 * 1024);
     expect([...subagentRuns.keys()]).toEqual(["paged-1", "paged-2", "paged-0"]);
@@ -154,6 +184,13 @@ it("restores bounded payload pages from one snapshot and retains their physical 
   } finally {
     observe.mockRestore();
   }
+  const updateRestored = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => ({
+    value: undefined,
+    postimages: new Map([["paged-0", { ...rows.get("paged-0")!, label: "restored metadata" }]]),
+  }));
+  await mutateSubagentRuns(["paged-0"], updateRestored);
+  expect(updateRestored).toHaveBeenCalledOnce();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
   await change("paged-2", (row) => {
     row.label = "after snapshot";
   });
@@ -163,7 +200,40 @@ it("restores bounded payload pages from one snapshot and retains their physical 
   });
 });
 
-it("refuses quarantined registry pages in the worker without replacing resident publication", async () => {
+it("joins a cancelled stream without publishing partial restored rows", async () => {
+  const entries = Array.from({ length: 129 }, (_, index) => entry(`cancelled-${index}`));
+  saveSubagentRegistryChangesToSqlite(
+    new Map(entries.map((row) => [row.runId, row])),
+    entries.map((row) => row.runId),
+  );
+  const revision = getSubagentRegistryPublicationRevision();
+  const read = stateReads.executeExistingOpenClawStateRead;
+  const controller = new AbortController();
+  const failure = new Error("Synthetic restore cancellation");
+  const observe = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementation((options, command, readOptions) =>
+      read(options, command, {
+        ...readOptions,
+        signal: controller.signal,
+        onChunkAsync: undefined,
+        onChunk(value) {
+          readOptions?.onChunk?.(value);
+          controller.abort(failure);
+        },
+      }),
+    );
+  await expect(restoreSubagentRunsFromDisk({ runs: subagentRuns })).rejects.toThrow(
+    failure.message,
+  );
+  expect(subagentRuns.size).toBe(0);
+  expect(getSubagentRegistryPublicationRevision()).toBe(revision);
+  observe.mockRestore();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  expect(subagentRuns.size).toBe(entries.length);
+});
+
+it("refuses quarantined registry reads in the worker without replacing resident publication", async () => {
   const durable = entry("quarantined-durable");
   saveSubagentRegistryChangesToSqlite(new Map([[durable.runId, durable]]), [durable.runId]);
   const pathname = openOpenClawStateDatabase().path;
@@ -203,28 +273,16 @@ function change(runId: string, update: (row: SubagentRunRecord) => void) {
 }
 
 function interceptWrites(callback: (phase: "before" | "after") => void | Promise<void>) {
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  return vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, run, options) =>
-      execute(
-        context,
-        (scope) =>
-          run({
-            execute: async (command, executeOptions) => {
-              if (command.type === "subagents.persistChanges") {
-                await callback("before");
-              }
-              const receipt = await scope.execute(command, executeOptions);
-              if (command.type === "subagents.persistChanges") {
-                await callback("after");
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
-    );
+  return probe.command(stateWorker, async (command, executeOptions, scope) => {
+    if (command.type === "subagents.persistChanges") {
+      await callback("before");
+    }
+    const receipt = await scope.execute(command, executeOptions);
+    if (command.type === "subagents.persistChanges") {
+      await callback("after");
+    }
+    return receipt;
+  });
 }
 
 it("publishes overlapping same-row mutations in FIFO order after each real commit ACK", async () => {
@@ -274,67 +332,45 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
   }
 });
 
-it.each([false, true])(
-  "replans a foreign connection change and rejects only semantic ownership loss (%s)",
-  async (replaceOwner) => {
-    await register(entry("foreign"));
-    let injected = false;
-    interceptWrites((phase) => {
-      if (phase !== "before" || injected) {
-        return;
-      }
-      injected = true;
-      const foreign = loadSubagentRegistryFromSqlite().get("foreign")!;
-      foreign.model = "foreign metadata";
-      if (replaceOwner) {
-        foreign.requesterSessionKey = "agent:main:new-requester";
-      }
-      // This fixture's admitted native handle is a different SQLite connection from the worker.
-      saveSubagentRegistryChangesToSqlite(new Map([[foreign.runId, foreign]]), [foreign.runId]);
-    });
-    const plan = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
-      const current = rows.get("foreign")!;
-      if (current.requesterSessionKey !== "agent:main:requester") {
-        throw new SubagentRegistryMutationRejectedError("Requester ownership changed");
-      }
-      return {
-        value: true,
-        postimages: new Map([[current.runId, { ...current, label: "local metadata" }]]),
-      };
-    });
-    const mutation = mutateSubagentRuns(["foreign"], plan);
-    if (replaceOwner) {
-      await expect(mutation).rejects.toBeInstanceOf(SubagentRegistryMutationRejectedError);
-    } else {
-      await expect(mutation).resolves.toBe(true);
-    }
-    expect(plan).toHaveBeenCalledTimes(2);
-    const saved = loadSubagentRegistryFromSqlite().get("foreign");
-    expect(saved?.model).toBe("foreign metadata");
-    expect(saved?.label).toBe(replaceOwner ? undefined : "local metadata");
-    expect(subagentRuns.get("foreign")?.requesterSessionKey).toBe(saved?.requesterSessionKey);
-  },
-);
-
-it("bounds repeated foreign conflicts and leaves the latest authoritative row published", async () => {
-  await register(entry("contended"));
-  let conflicts = 0;
+it("rejects a foreign connection change without replaying until canonical restore", async () => {
+  await register(entry("foreign"));
+  let injected = false;
   interceptWrites((phase) => {
-    if (phase !== "before") {
+    if (phase !== "before" || injected) {
       return;
     }
-    const foreign = loadSubagentRegistryFromSqlite().get("contended")!;
-    foreign.label = `foreign-${++conflicts}`;
+    injected = true;
+    const foreign = loadSubagentRegistryFromSqlite().get("foreign")!;
+    foreign.model = "foreign metadata";
+    // This fixture's admitted native handle is a different SQLite connection from the worker.
     saveSubagentRegistryChangesToSqlite(new Map([[foreign.runId, foreign]]), [foreign.runId]);
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
+      .run(foreign.runId);
   });
-  await expect(
-    change("contended", (row) => {
-      row.cleanupCompletedAt = 5;
-    }),
-  ).rejects.toMatchObject({ name: "SubagentRegistryConflictError", attempts: 3 });
-  expect(conflicts).toBe(3);
-  expect(subagentRuns.get("contended")?.label).toBe("foreign-3");
-  expect(loadSubagentRegistryFromSqlite().get("contended")?.cleanupCompletedAt).toBeUndefined();
+  const plan = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
+    const current = rows.get("foreign")!;
+    if (current.requesterSessionKey !== "agent:main:requester") {
+      throw new SubagentRegistryMutationRejectedError("Requester ownership changed");
+    }
+    return {
+      value: true,
+      postimages: new Map([[current.runId, { ...current, label: "local metadata" }]]),
+    };
+  });
+  const mutation = mutateSubagentRuns(["foreign"], plan);
+  await expect(mutation).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
+  expect(plan).toHaveBeenCalledOnce();
+  const saved = loadSubagentRegistryFromSqlite().get("foreign");
+  expect(saved?.model).toBe("foreign metadata");
+  expect(saved?.label).toBeUndefined();
+  expect(subagentRuns.get("foreign")?.model).toBeUndefined();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  await expect(mutateSubagentRuns(["foreign"], plan)).resolves.toBe(true);
+  expect(loadSubagentRegistryFromSqlite().get("foreign")).toMatchObject({
+    model: "foreign metadata",
+    label: "local metadata",
+  });
 });
 
 it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"] as const)(
@@ -374,9 +410,6 @@ it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"]
       foreignRows = rows();
     });
     const plan = vi.fn(() => {
-      if (injected) {
-        throw new SubagentRegistryMutationRejectedError("Cohort changed after planning");
-      }
       return {
         value: undefined,
         postimages: new Map<string, SubagentRunRecord | null>([
@@ -403,8 +436,8 @@ it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"]
     try {
       await expect(
         mutateSubagentRuns([kept.runId, deleted.runId, guarded.runId], plan),
-      ).rejects.toBeInstanceOf(SubagentRegistryMutationRejectedError);
-      expect(plan).toHaveBeenCalledTimes(conflict === "undecodable" ? 1 : 2);
+      ).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
+      expect(plan).toHaveBeenCalledOnce();
       expect(rows()).toEqual(foreignRows);
       expect(
         db.prepare("SELECT * FROM session_state_events WHERE run_id = ?").all(kept.runId),
@@ -509,7 +542,7 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     }),
   );
   const wakes = children.map((child) =>
-    mutateRequesterSettleWakeBatch({
+    mutateRequesterCompletionBatch({
       entries: [child],
       context,
       assertCurrent: () => {},
@@ -522,17 +555,17 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     }),
   );
   const settlement = Promise.all(wakes).then(() =>
-    settleRequesterCompletionBatch({
+    mutateRequesterCompletionBatch({
       entries: children.map(({ runId }) => {
         const subagent = subagentRuns.get(runId);
         if (!subagent) {
           throw new Error("Requester wake lost its acknowledged child");
         }
-        return { subagent };
+        return subagent;
       }),
       context,
-      outcome: { delivered: true, path: "direct" },
-      isCurrent: () => true,
+      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+      assertCurrent: () => {},
     }),
   );
   const killed = manager.markSubagentRunTerminated({
@@ -624,16 +657,12 @@ it.each(["transaction", "commit"] as const)(
   async (stage) => {
     await register(entry("guarded"));
     let current = true;
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     const mutation = mutateSubagentRuns(
       ["guarded"],
       (rows) => ({
@@ -714,20 +743,13 @@ it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const original = captureOpenClawStateWorkerContext();
     const reached = createDeferredCore();
     const release = createDeferredCore();
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
-      vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockReturnValue({
-        ...original,
-        admission: {
-          ...original.admission,
-          identity: { ...original.admission.identity, key: "replacement" },
-        },
-      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state.stateDir, "replacement"));
     };
     interceptWrites(async (phase) => {
       if (phase === "after" && transition === "before ACK") {
@@ -763,6 +785,7 @@ it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
         outcome: "committed",
         publication: transition === "before ACK" ? "superseded" : "published",
       });
+      vi.unstubAllEnvs();
       // Callback retirement cannot undo old-source rows that were already installed.
       expect(subagentRuns.get("source")?.label).toBe(
         transition === "before ACK" ? undefined : "old database commit",
@@ -799,7 +822,7 @@ it("retains prepared announcement authority across bookkeeping and revokes it fo
   const prepared = await readSubagentRunAnnounceResultUsing(subagentRuns.get(child.runId)!, {
     readSubagentRun: (runId) => subagentRuns.get(runId),
     getRuntimeConfig: () => ({}),
-    readSubagentSessionEntry: () => undefined,
+    readSubagentSessionEntry: async () => undefined,
     resolveAgentIdFromSessionKey: () => "main",
     resolveSessionStorePathCore: () => "/synthetic/sessions",
     findTranscriptEvent: async () => ({

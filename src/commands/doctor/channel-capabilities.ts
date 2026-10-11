@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { findBundledChannelCatalogMetadata } from "../../channels/bundled-channel-catalog-read.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
@@ -21,19 +22,16 @@ const DEFAULT_DOCTOR_CHANNEL_CAPABILITIES: DoctorChannelCapabilities = {
 function mergeDoctorChannelCapabilities(
   capabilities?: PluginPackageChannelDoctorCapabilities,
 ): DoctorChannelCapabilities {
+  const valueFor = <K extends keyof DoctorChannelCapabilities>(key: K) =>
+    capabilities?.[key] ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES[key];
   return {
-    dmAllowFromMode:
-      capabilities?.dmAllowFromMode ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.dmAllowFromMode,
+    dmAllowFromMode: valueFor("dmAllowFromMode"),
     ...(typeof capabilities?.openDmRequiresAllowFromWildcard === "boolean"
       ? { openDmRequiresAllowFromWildcard: capabilities.openDmRequiresAllowFromWildcard }
       : {}),
-    groupModel: capabilities?.groupModel ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.groupModel,
-    groupAllowFromFallbackToAllowFrom:
-      capabilities?.groupAllowFromFallbackToAllowFrom ??
-      DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.groupAllowFromFallbackToAllowFrom,
-    warnOnEmptyGroupSenderAllowlist:
-      capabilities?.warnOnEmptyGroupSenderAllowlist ??
-      DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.warnOnEmptyGroupSenderAllowlist,
+    groupModel: valueFor("groupModel"),
+    groupAllowFromFallbackToAllowFrom: valueFor("groupAllowFromFallbackToAllowFrom"),
+    warnOnEmptyGroupSenderAllowlist: valueFor("warnOnEmptyGroupSenderAllowlist"),
   };
 }
 
@@ -53,11 +51,8 @@ export function getDoctorChannelCapabilities(channelName?: string): DoctorChanne
   }
   const pluginDoctor =
     getChannelPlugin(channelId)?.doctor ?? getBundledChannelPlugin(channelId)?.doctor;
-  if (pluginDoctor) {
-    return mergeDoctorChannelCapabilities(pluginDoctor);
-  }
   return mergeDoctorChannelCapabilities(
-    findBundledChannelCatalogMetadata(channelId)?.doctorCapabilities,
+    pluginDoctor || findBundledChannelCatalogMetadata(channelId)?.doctorCapabilities,
   );
 }
 
@@ -65,14 +60,6 @@ type DoctorChannelAccountIds = {
   configured: string[];
   runtime: string[];
 };
-
-function readResolvedAccountId(account: unknown): string | undefined {
-  if (!account || typeof account !== "object") {
-    return undefined;
-  }
-  const accountId = (account as { accountId?: unknown }).accountId;
-  return typeof accountId === "string" && accountId ? accountId : undefined;
-}
 
 /** Resolve configured and runtime account ids through the channel plugin's own semantics. */
 export async function resolveDoctorChannelAccountIds(
@@ -91,9 +78,11 @@ export async function resolveDoctorChannelAccountIds(
     }
     const resolveAccountIds = async (accountIds: string[]): Promise<string[] | undefined> => {
       const resolved = await Promise.all(
-        accountIds.map(async (accountId) =>
-          readResolvedAccountId(await resolveChannelAccount({ plugin, cfg, accountId })),
-        ),
+        accountIds.map(async (accountId) => {
+          const account = await resolveChannelAccount({ plugin, cfg, accountId });
+          const resolvedId = asOptionalObjectRecord(account)?.accountId;
+          return typeof resolvedId === "string" && resolvedId ? resolvedId : undefined;
+        }),
       );
       return resolved.every((accountId): accountId is string => accountId !== undefined)
         ? resolved

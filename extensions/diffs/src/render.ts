@@ -49,10 +49,7 @@ function buildDiffTitle(input: DiffInput): string {
   return "Patch diff";
 }
 
-function resolveDiffTypography(presentation: DiffRenderOptions["presentation"]): {
-  fontSize: number;
-  lineHeight: number;
-} {
+function resolveDiffTypography(presentation: DiffRenderOptions["presentation"]) {
   const fontSize = normalizeDiffFontSize(presentation.fontSize);
   const lineSpacing = normalizeDiffLineSpacing(presentation.lineSpacing);
   const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
@@ -180,10 +177,7 @@ function renderDiffCard(payload: DiffViewerPayload, anchorId?: string): string {
   </section>`;
 }
 
-type FileDiffStats = {
-  additions: number;
-  deletions: number;
-};
+type FileDiffStats = ReturnType<typeof computeFileDiffStats>;
 
 type FileNavEntry = {
   anchorId: string;
@@ -193,7 +187,7 @@ type FileNavEntry = {
 
 // Hunk.additionLines/deletionLines count only +/- lines (not context), so the
 // sums match the built-in per-file header counts rendered by @pierre/diffs.
-function computeFileDiffStats(fileDiff: FileDiffMetadata): FileDiffStats {
+function computeFileDiffStats(fileDiff: FileDiffMetadata) {
   let additions = 0;
   let deletions = 0;
   for (const hunk of fileDiff.hunks) {
@@ -255,10 +249,7 @@ function buildHtmlDocument(params: {
   bodyHtml: string;
   theme: DiffRenderOptions["presentation"]["theme"];
   imageMaxWidth: number;
-  imageTypography: {
-    fontSize: number;
-    lineHeight: number;
-  };
+  imageTypography: ReturnType<typeof resolveDiffTypography>;
   runtimeMode: "viewer" | "image";
   viewerRuntime: "base" | "language-pack";
 }): string {
@@ -585,34 +576,20 @@ export async function renderDiffDocument(
     ? "language-pack"
     : "base";
   const imageTypography = resolveDiffTypography(buildImageRenderOptions(options).presentation);
+  const document = (bodyHtml: string, runtimeMode: "viewer" | "image") =>
+    buildHtmlDocument({
+      title,
+      bodyHtml,
+      theme: options.presentation.theme,
+      imageMaxWidth: options.image.maxWidth,
+      imageTypography,
+      runtimeMode,
+      viewerRuntime,
+    });
 
   return {
-    ...(viewerBodyHtml
-      ? {
-          html: buildHtmlDocument({
-            title,
-            bodyHtml: viewerBodyHtml,
-            theme: options.presentation.theme,
-            imageMaxWidth: options.image.maxWidth,
-            imageTypography,
-            runtimeMode: "viewer",
-            viewerRuntime,
-          }),
-        }
-      : {}),
-    ...(imageBodyHtml
-      ? {
-          imageHtml: buildHtmlDocument({
-            title,
-            bodyHtml: imageBodyHtml,
-            theme: options.presentation.theme,
-            imageMaxWidth: options.image.maxWidth,
-            imageTypography,
-            runtimeMode: "image",
-            viewerRuntime,
-          }),
-        }
-      : {}),
+    ...(viewerBodyHtml ? { html: document(viewerBodyHtml, "viewer") } : {}),
+    ...(imageBodyHtml ? { imageHtml: document(imageBodyHtml, "image") } : {}),
     title,
     fileCount: sections.length,
     inputKind: input.kind,

@@ -370,24 +370,28 @@ function consumeChatOutboxRecovery(
           }
         },
       });
-    let store = readStoredOutboxStore(storage, target);
-    if (destination) {
-      const initialScope = resolveUiConversationIdentity(
+    const resolveDestination = (store: StoredComposerState) => {
+      if (!destination) {
+        return null;
+      }
+      const scope = resolveUiConversationIdentity(
         state,
         destination.scope.sessionKey,
         destination.scope.agentId,
       );
-      const initialKey = storedChatOutboxScopeKey(initialScope);
-      const initial = store.sessions[initialKey];
-      if (
-        initialKey !== storedChatOutboxScopeKey(destination.scope) ||
-        initial?.draft ||
-        initial?.goalMode ||
-        initial?.replyTarget ||
-        initial?.queue?.length
-      ) {
-        return "conflict";
-      }
+      const key = storedChatOutboxScopeKey(scope);
+      const session = store.sessions[key];
+      return key !== storedChatOutboxScopeKey(destination.scope) ||
+        session?.draft ||
+        session?.goalMode ||
+        session?.replyTarget ||
+        session?.queue?.length
+        ? null
+        : { scope, key };
+    };
+    let store = readStoredOutboxStore(storage, target);
+    if (destination && !resolveDestination(store)) {
+      return "conflict";
     }
     const { id, owner: _owner, ...expected } = entry;
     const legacyTarget = storageTargetForGateway(state.settings?.gatewayUrl);
@@ -511,24 +515,12 @@ function consumeChatOutboxRecovery(
     const before = JSON.stringify(store);
     let key: string | undefined;
     if (destination) {
-      const scope = resolveUiConversationIdentity(
-        state,
-        destination.scope.sessionKey,
-        destination.scope.agentId,
-      );
-      key = storedChatOutboxScopeKey(scope);
-      if (key !== storedChatOutboxScopeKey(destination.scope)) {
+      const resolved = resolveDestination(store);
+      if (!resolved) {
         return "conflict";
       }
-      const existing = store.sessions[key];
-      if (
-        existing?.draft ||
-        existing?.goalMode ||
-        existing?.replyTarget ||
-        existing?.queue?.length
-      ) {
-        return "conflict";
-      }
+      const { scope } = resolved;
+      key = resolved.key;
       const session = entry.session;
       store.sessions[key] = {
         ...session,

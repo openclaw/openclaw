@@ -33,6 +33,7 @@ import {
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
+import { GatewayRequestStartTimeoutError } from "./request-start.js";
 // Compile the real router before timed cases; family preparation remains controlled below.
 import "../../server-methods.js";
 
@@ -501,15 +502,17 @@ describe("authenticated Gateway RPC diagnostics", () => {
     },
   );
 
-  it.each(["authorization", "capacity"])(
+  it.each(["authorization", "capacity", "timeout"])(
     "records %s rejection without a handler sample",
     async (reason) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
       const fixture = createRequest(handler, "sessions.list");
       if (reason === "authorization") {
         fixture.client.connect.scopes = [];
-      } else {
+      } else if (reason === "capacity") {
         scheduling.start.mockReturnValue(null);
+      } else {
+        scheduling.start.mockRejectedValue(new GatewayRequestStartTimeoutError());
       }
       await fixture.dispatch();
       await fixture.finished;
@@ -523,6 +526,18 @@ describe("authenticated Gateway RPC diagnostics", () => {
       );
       if (reason === "capacity") {
         expect(fixture.events.at(-1)).not.toHaveProperty("queueWaitMs");
+      } else if (reason === "timeout") {
+        expect(fixture.events.at(-1)).toHaveProperty("queueWaitMs");
+        expect(fixture.send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({
+              code: "UNAVAILABLE",
+              retryable: true,
+              details: { reason: "request-start-timeout" },
+            }),
+          }),
+        );
       }
     },
   );

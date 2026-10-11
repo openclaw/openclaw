@@ -17,7 +17,7 @@ export async function listOwnedEntries(parent: string): Promise<fs.Dirent[]> {
 
 export async function listOwnedDirectories(parent: string): Promise<string[]> {
   return (await listOwnedEntries(parent))
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
 }
 

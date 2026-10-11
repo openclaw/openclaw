@@ -1,5 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import {
   capCompactionSummary,
   compactWithoutSummary,
@@ -70,11 +71,15 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
-  private onContextReplaced?: (tokensAfter: number, tokensBefore: number) => void;
+  private onContextReplaced?: (
+    tokensAfter: number,
+    tokensBefore: number,
+    details?: unknown,
+  ) => void;
   private assertContextReplacementActive?: () => void;
 
   [agentSessionSetContextReplacementHook](
-    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
+    callback: ((tokensAfter: number, tokensBefore: number, details?: unknown) => void) | undefined,
     assertActive?: () => void,
   ): void {
     this.onContextReplaced = callback;
@@ -84,7 +89,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   /**
    * Manually compact the session context.
    * Aborts current agent operation first.
-   * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
     return await this.runWithSessionWriteSettlement(async () => {
@@ -162,17 +166,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         throw new Error("Compaction cancelled");
       }
 
-      this.emit({
-        type: "compaction_end",
-        reason: "manual",
-        itemId,
-        outcome: {
-          status: "completed",
-          tokensBefore: outcome.result.tokensBefore,
-          tokensAfter: outcome.tokensAfter,
-          willRetry: false,
-        },
-      });
+      this.emitCompletedCompaction("manual", itemId, outcome, false);
       return outcome;
     } finally {
       if (this.compactionAbortController === abortController) {
@@ -182,13 +176,34 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
   }
 
+  private emitCompletedCompaction(
+    reason: CompactionReason,
+    itemId: string,
+    outcome: Extract<CompactionWorkOutcome, { status: "completed" }>,
+    willRetry: boolean,
+  ): void {
+    this.emit({
+      type: "compaction_end",
+      reason,
+      itemId,
+      outcome: {
+        status: "completed",
+        tokensBefore: outcome.result.tokensBefore,
+        tokensAfter: outcome.tokensAfter,
+        willRetry,
+        ...(parseCompactionDetails(outcome.result.details)?.qualityDegraded
+          ? { qualityDegraded: true }
+          : {}),
+      },
+    });
+  }
+
   /** Cancel in-progress compaction (manual or auto). */
   abortCompaction(): void {
     this.compactionAbortController?.abort();
     this.autoCompactionAbortController?.abort();
   }
 
-  /** Cancel in-progress branch summarization. */
   abortBranchSummary(): void {
     this.branchSummaryAbortController?.abort();
   }
@@ -427,16 +442,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       );
     }
 
+    const contextReplacementChanged = (controller: AbortController | undefined) =>
+      controller?.signal !== options.signal ||
+      this.assertContextReplacementActive !== assertContextReplacementActive ||
+      this.onContextReplaced !== onContextReplaced;
     const committed = await withSessionManagerWrite(this.sessionManager, async () => {
       const currentController = isManual
         ? this.compactionAbortController
         : this.autoCompactionAbortController;
-      if (
-        options.signal.aborted ||
-        currentController?.signal !== options.signal ||
-        this.assertContextReplacementActive !== assertContextReplacementActive ||
-        this.onContextReplaced !== onContextReplaced
-      ) {
+      if (options.signal.aborted || contextReplacementChanged(currentController)) {
         return undefined;
       }
       // Revalidate after admission too. In-memory transcripts have no SQLite
@@ -456,11 +470,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         const controller = isManual
           ? this.compactionAbortController
           : this.autoCompactionAbortController;
-        if (
-          controller?.signal !== options.signal ||
-          this.assertContextReplacementActive !== assertContextReplacementActive ||
-          this.onContextReplaced !== onContextReplaced
-        ) {
+        if (contextReplacementChanged(controller)) {
           throw new Error("Compaction context changed before transcript commit");
         }
         assertContextReplacementActive?.();
@@ -482,7 +492,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const sessionContext = this.sessionManager.buildSessionContext();
       // Publish the committed replacement and accounting together after its receipt.
       this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-      onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
+      onContextReplaced?.(
+        tokensAfter,
+        completedCompaction.tokensBefore,
+        completedCompaction.details,
+      );
       return { entryId, tokensAfter };
     });
     if (committed === undefined) {
@@ -580,7 +594,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return await this.runAutoCompaction("overflow", true, requestBudget);
     }
 
-    // Case 2: Threshold - context is getting large
     // For error messages (no usage data), estimate from last successful response.
     // This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
     let contextTokens: number;
@@ -589,7 +602,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const estimate = estimateContextTokens(messages);
       if (estimate.lastUsageIndex === null) {
         return false;
-      } // No usage data at all
+      }
       contextTokens = estimate.tokens;
     } else if (assistantMessage.usage.contextUsage?.state === "unavailable") {
       const estimatedContextTokens = this.getContextUsage()?.tokens;
@@ -642,17 +655,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
-      this.emit({
-        type: "compaction_end",
-        reason,
-        itemId,
-        outcome: {
-          status: "completed",
-          tokensBefore: outcome.result.tokensBefore,
-          tokensAfter: outcome.tokensAfter,
-          willRetry,
-        },
-      });
+      this.emitCompletedCompaction(reason, itemId, outcome, willRetry);
 
       if (willRetry) {
         const messages = this.agent.state.messages;
@@ -695,7 +698,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
   }
 
-  /** Whether auto-compaction is enabled */
   get autoCompactionEnabled(): boolean {
     return this.settingsManager.getCompactionEnabled();
   }

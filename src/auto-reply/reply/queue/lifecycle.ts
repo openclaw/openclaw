@@ -223,3 +223,20 @@ export function completeFollowupRunLifecycle(
     }
   }
 }
+
+export function completeFollowupRuns(
+  items: Iterable<FollowupLifecycleRun>,
+  onError?: (error: unknown) => void,
+  disposition?: "consumed" | "cancelled",
+): void {
+  for (const item of items) {
+    try {
+      completeFollowupRunLifecycle(item, disposition);
+    } catch (error) {
+      if (!onError) {
+        throw error;
+      }
+      onError(error);
+    }
+  }
+}

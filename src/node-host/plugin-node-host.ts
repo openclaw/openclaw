@@ -1,4 +1,3 @@
-/** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -21,6 +20,7 @@ import type {
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
@@ -149,12 +149,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node-host watcher cleanup failed");
-        }
+        throwNodeHostCleanupErrors(failures, "node-host watcher cleanup failed");
       })
       .catch((error: unknown) => {
         stopping = undefined;

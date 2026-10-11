@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,14 +16,10 @@ function descriptorNames(descriptors: ReadonlyArray<{ name: string }>): string[]
 }
 
 describe("sub-cli descriptors", () => {
-  const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalEnv = captureEnv(["OPENCLAW_ENABLE_PRIVATE_QA_CLI"]);
 
   afterEach(() => {
-    if (originalPrivateQaCli === undefined) {
-      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-    } else {
-      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
-    }
+    originalEnv.restore();
     vi.resetModules();
   });
 

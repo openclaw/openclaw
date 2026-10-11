@@ -29,13 +29,15 @@ function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdenti
     .where("status", "=", "running");
 }
 
-export function assertNoRunningWorkerSessionToolOperations(
+/** Removes idle authority and replay data in the transaction that revokes the turn claim. */
+export function clearWorkerTurnToolState(
   db: DatabaseSync,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   if (executeSqliteQuerySync(db, runningOperations(db, identity).limit(1)).rows.length) {
     throw new Error(`Session ${identity.sessionId} has a running worker session operation`);
   }
+  deleteWorkerTurnToolState(db, identity);
 }
 
 function closeWorkerTurnToolAdmission(
@@ -51,11 +53,7 @@ function closeWorkerTurnToolAdmission(
   );
 }
 
-/** Removes authority and replay data in the same transaction that revokes the turn claim. */
-export function clearWorkerTurnToolState(
-  db: DatabaseSync,
-  identity: WorkerTurnToolStateIdentity,
-): void {
+function deleteWorkerTurnToolState(db: DatabaseSync, identity: WorkerTurnToolStateIdentity): void {
   closeWorkerTurnToolAdmission(db, identity);
   publishPlacementTurnToolState(db, identity);
   executeSqliteQuerySync(
@@ -177,7 +175,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
       if (executeSqliteQuerySync(db, runningOperations(db, claim).limit(1)).rows.length) {
         return false;
       }
-      clearWorkerTurnToolState(db, claim);
+      deleteWorkerTurnToolState(db, claim);
       return true;
     },
 

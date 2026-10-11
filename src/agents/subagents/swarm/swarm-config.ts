@@ -18,10 +18,15 @@ function normalizeRawConfig(value: unknown): Record<string, unknown> | undefined
   return isRecord(value) ? value : undefined;
 }
 
-function readBoundedPositiveInteger(value: unknown, fallback: number, max: number): number {
+function readSwarmLimit(
+  raw: Record<string, unknown>,
+  key: Exclude<keyof typeof DEFAULT_SWARM_CONFIG, "enabled" | "defaultAgentId">,
+  max: number,
+): number {
+  const value = raw[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0
     ? Math.min(value, max)
-    : fallback;
+    : DEFAULT_SWARM_CONFIG[key];
 }
 
 /** Resolve global and per-agent Swarm configuration into bounded runtime values. */
@@ -37,26 +42,10 @@ export function resolveSwarmConfig(
   const raw = agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_SWARM_CONFIG.enabled,
-    maxConcurrent: readBoundedPositiveInteger(
-      raw.maxConcurrent,
-      DEFAULT_SWARM_CONFIG.maxConcurrent,
-      1_000,
-    ),
-    maxChildrenPerGroup: readBoundedPositiveInteger(
-      raw.maxChildrenPerGroup,
-      DEFAULT_SWARM_CONFIG.maxChildrenPerGroup,
-      10_000,
-    ),
-    maxTotalPerGroup: readBoundedPositiveInteger(
-      raw.maxTotalPerGroup,
-      DEFAULT_SWARM_CONFIG.maxTotalPerGroup,
-      100_000,
-    ),
-    waitTimeoutSecondsMax: readBoundedPositiveInteger(
-      raw.waitTimeoutSecondsMax,
-      DEFAULT_SWARM_CONFIG.waitTimeoutSecondsMax,
-      24 * 60 * 60,
-    ),
+    maxConcurrent: readSwarmLimit(raw, "maxConcurrent", 1_000),
+    maxChildrenPerGroup: readSwarmLimit(raw, "maxChildrenPerGroup", 10_000),
+    maxTotalPerGroup: readSwarmLimit(raw, "maxTotalPerGroup", 100_000),
+    waitTimeoutSecondsMax: readSwarmLimit(raw, "waitTimeoutSecondsMax", 24 * 60 * 60),
     defaultAgentId: typeof raw.defaultAgentId === "string" ? raw.defaultAgentId.trim() : "",
   };
 }

@@ -1,4 +1,3 @@
-// Stages inbound media into sandbox workspaces before agent execution.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -37,7 +36,6 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
-/** Maximum size of one file copied into an agent sandbox or staging workspace. */
 export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
@@ -175,18 +173,22 @@ export async function stageSandboxMedia(params: {
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
     let downloadedMediaUri: string | undefined;
     const stageSource = async (sourcePath: string) => {
-      if (remoteBridge) {
-        const { buffer } = await readLocalFileSafely({
-          filePath: sourcePath,
-          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
-        });
-        abortSignal?.throwIfAborted();
-        await prepareDestination();
-        abortSignal?.throwIfAborted();
-        if (!remoteBridge.createFileExclusive) {
+      const destination = remoteBridge
+        ? { bridge: remoteBridge }
+        : { root: await fsRoot(effectiveWorkspaceDir) };
+      const { buffer } = await readLocalFileSafely({
+        filePath: sourcePath,
+        maxBytes: SANDBOX_MEDIA_MAX_BYTES,
+      });
+      // A completed read must not start a new copy after cancellation.
+      abortSignal?.throwIfAborted();
+      await prepareDestination();
+      abortSignal?.throwIfAborted();
+      if (destination.bridge) {
+        if (!destination.bridge.createFileExclusive) {
           throw new Error("SSH sandbox filesystem does not support exclusive input staging");
         }
-        const created = await remoteBridge.createFileExclusive({
+        const created = await destination.bridge.createFileExclusive({
           filePath: relativeDest,
           data: buffer,
           signal: abortSignal,
@@ -209,16 +211,7 @@ export async function stageSandboxMedia(params: {
           downloadedMediaUri = buildInboundMediaUriFromPath(saved.path);
         }
       } else {
-        const root = await fsRoot(effectiveWorkspaceDir);
-        const { buffer } = await readLocalFileSafely({
-          filePath: sourcePath,
-          maxBytes: SANDBOX_MEDIA_MAX_BYTES,
-        });
-        // A completed read must not start a new copy after cancellation.
-        abortSignal?.throwIfAborted();
-        await prepareDestination();
-        abortSignal?.throwIfAborted();
-        await root.create(relativeDest, buffer);
+        await destination.root.create(relativeDest, buffer);
       }
     };
 
@@ -246,7 +239,6 @@ export async function stageSandboxMedia(params: {
       continue;
     }
 
-    // For sandbox use relative path, for remote cache use absolute path
     const stagedPath = sandbox ? relativeDest : dest;
     staged.set(entry.index, stagedPath);
     const originalUrl = media[entry.index]?.url;
@@ -327,15 +319,12 @@ async function isUrlAliasForStagedSource(params: {
   if (!urlSource) {
     return false;
   }
-  const [sourceIdentity, urlIdentity] = await Promise.all([
-    resolveLocalSourceIdentity(params.source),
-    resolveLocalSourceIdentity(urlSource),
-  ]);
+  const [sourceIdentity, urlIdentity] = await Promise.all(
+    [params.source, urlSource].map((source) =>
+      fs.realpath(source).catch(() => path.resolve(source)),
+    ),
+  );
   return sourceIdentity === urlIdentity;
-}
-
-async function resolveLocalSourceIdentity(sourcePath: string): Promise<string> {
-  return await fs.realpath(sourcePath).catch(() => path.resolve(sourcePath));
 }
 
 async function resolveStageableMediaSource(value: string): Promise<string | null> {

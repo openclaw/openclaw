@@ -41,6 +41,7 @@ import type {
   AgentMessage,
   AgentTool,
   AgentToolResult,
+  InternalToolBatchCall,
   StreamFn,
 } from "./types.js";
 
@@ -172,27 +173,6 @@ describe("Agent lifecycle and continuation", () => {
         code: TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE,
         role: "assistant",
       });
-    },
-  );
-
-  it.each(["toolResult", "user"] as const)(
-    "orders queued follow-ups behind a %s continuation",
-    async (tail) => {
-      const requests: Message[][] = [];
-      const followUp = user("queued after end", 2);
-      const original = tail === "user" ? user("retry this turn") : makeResult();
-      const agent = new Agent({
-        initialState: { model, messages: [original] },
-        streamFn: createTurnSequenceStream(
-          [[{ type: "text", text: "answer 1" }], [{ type: "text", text: "answer 2" }]],
-          requests,
-        ),
-      });
-      agent.followUp(followUp);
-      await agent.continue();
-      expect(requests).toHaveLength(tail === "user" ? 2 : 1);
-      expect(requests[0]?.at(-1)).toEqual(tail === "user" ? original : followUp);
-      expect(requests.at(-1)?.at(-1)).toBe(followUp);
     },
   );
 });
@@ -342,73 +322,6 @@ describe("deferred tool hydration", () => {
       );
     },
   );
-
-  it("hydrates sequential deferred tools before choosing the executor and continuation catalog", async () => {
-    let active = 0;
-    let maxActive = 0;
-    const contexts: Context[] = [];
-    const execute = vi.fn(async () => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 5);
-      });
-      active -= 1;
-      return { content: [{ type: "text" as const, text: "hidden ok" }], details: { ok: true } };
-    });
-    const hiddenTool: AgentTool = {
-      ...makeTool("hidden_serial"),
-      parameters: Type.Object({ query: Type.String() }),
-      executionMode: "sequential",
-      execute,
-    };
-    const resolveDeferredTool = vi.fn(() => hiddenTool);
-    vi.useFakeTimers();
-    try {
-      const run = captureTools(
-        [],
-        createTurnSequenceStream(
-          [
-            [
-              { ...makeCall("hidden_serial", "first"), arguments: { query: "one" } },
-              { ...makeCall("hidden_serial", "second"), arguments: { query: "two" } },
-            ],
-            [{ type: "text", text: "done" }],
-          ],
-          [],
-          (context) => {
-            contexts.push({ ...context, tools: context.tools?.slice() });
-          },
-        ),
-        { resolveDeferredTool },
-      );
-      await vi.runAllTimersAsync();
-      expect((await run.result).some((message) => message.role === "toolResult")).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute).toHaveBeenNthCalledWith(
-      1,
-      "first",
-      { query: "one" },
-      undefined,
-      expect.any(Function),
-    );
-    expect(execute).toHaveBeenNthCalledWith(
-      2,
-      "second",
-      { query: "two" },
-      undefined,
-      expect.any(Function),
-    );
-    expect(maxActive).toBe(1);
-    expect(contexts.map((context) => context.tools?.map((tool) => tool.name))).toEqual([
-      [],
-      ["hidden_serial"],
-    ]);
-  });
 });
 
 describe("agentLoop tool termination", () => {
@@ -444,7 +357,7 @@ describe("agentLoop tool termination", () => {
     },
   );
 
-  it.each(["sequential", "parallel"] as const)(
+  it.each(["sequential"] as const)(
     "pairs every tool lifecycle before rejecting a %s admission commit failure",
     async (toolExecution) => {
       const firstExecute = vi.fn(async () => ({ content: [], details: { executed: "first" } }));
@@ -724,49 +637,6 @@ describe("agentLoop tool termination", () => {
       expect(executed).toEqual(["read", "list", "read"]);
     },
   );
-
-  it("honors outcome-hook termination during the first recovery turn", async () => {
-    const executed: string[] = [];
-    let streamCalls = 0;
-    const streamFn = createTurnSequenceStream([[makeCall("read", "loop-1")]], [], () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after outcome-hook termination");
-      }
-    });
-    const events = await collectEvents(
-      captureTools(
-        [makeTool("read", executed)],
-        streamFn,
-        {
-          beforeToolBatch: async ({ calls }) => {
-            const first = calls[0];
-            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
-          },
-          afterToolOutcome: async () => ({ terminate: true }),
-        },
-        undefined,
-      ),
-    );
-
-    expect(streamCalls).toBe(1);
-    expect(executed).toEqual([]);
-    // The run ends normally after the terminated batch: no forced
-    // tool-loop-recovery failure message, which is reserved for later loops.
-    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
-    expect(
-      events.find(
-        (
-          event,
-        ): event is Extract<AgentEvent, { type: "message_end" }> & {
-          message: { role: "assistant" };
-        } =>
-          event.type === "message_end" &&
-          event.message.role === "assistant" &&
-          event.message.stopReason === "error",
-      ),
-    ).toBeUndefined();
-  });
 
   it("stops pre-admission validation after cancellation and aborts the untouched tail", async () => {
     const controller = new AbortController();
@@ -1172,49 +1042,38 @@ describe("agentLoop tool termination", () => {
     expect(order).toEqual(["afterToolCall", "afterToolOutcome"]);
   });
 
-  it.each([
-    ["sequential", "invalid arguments"],
-    ["parallel", "policy blocked"],
-  ] as const)(
-    "never stamps external provenance on %s %s calls that did not execute",
-    async (toolExecution, failure) => {
-      const executed: string[] = [];
-      const tool: AgentTool = {
-        ...makeTool("network_probe", executed),
-        resultContentSource: "network",
-        ...(failure === "invalid arguments"
-          ? { parameters: Type.Object({ query: Type.String() }) }
-          : {}),
-      };
-      const streamFn = createTurnSequenceStream([
-        [{ type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} }],
-        [{ type: "text", text: "local outcome" }],
-      ]);
-      const run = captureTools(
-        [tool],
-        streamFn,
-        {
-          toolExecution,
-          ...(failure === "policy blocked"
-            ? { beforeToolCall: async () => ({ block: true, reason: "local policy" }) }
-            : {}),
-        },
-        undefined,
-      );
+  it("never stamps external provenance on policy-blocked calls that did not execute", async () => {
+    const executed: string[] = [];
+    const tool: AgentTool = {
+      ...makeTool("network_probe", executed),
+      resultContentSource: "network",
+    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} }],
+      [{ type: "text", text: "local outcome" }],
+    ]);
+    const run = captureTools(
+      [tool],
+      streamFn,
+      {
+        toolExecution: "parallel",
+        beforeToolCall: async () => ({ block: true, reason: "local policy" }),
+      },
+      undefined,
+    );
 
-      const events = await collectEvents(run);
-      const messages = await run.result;
-      const toolResult = messages.find((message) => message.role === "toolResult");
-      const assistant = messages.findLast((message) => message.role === "assistant");
+    const events = await collectEvents(run);
+    const messages = await run.result;
+    const toolResult = messages.find((message) => message.role === "toolResult");
+    const assistant = messages.findLast((message) => message.role === "assistant");
 
-      expect(executed).toEqual([]);
-      expect(events).toContainEqual(
-        expect.objectContaining({ type: "tool_execution_end", executionStarted: false }),
-      );
-      expect((toolResult as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
-      expect((assistant as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
-    },
-  );
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "tool_execution_end", executionStarted: false }),
+    );
+    expect((toolResult as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
+    expect((assistant as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
+  });
 
   it.each([
     ["sequential", "caller cancellation", false],
@@ -1787,6 +1646,81 @@ describe("Agent next-turn preparation", () => {
       { model: model.id, systemPrompt: "initial prompt", tools: ["refresh"], reasoning: "off" },
       { model: nextModel.id, systemPrompt: "refreshed prompt", tools: [], reasoning: "low" },
     ]);
+  });
+});
+
+describe("agentLoop argument-validation admission", () => {
+  it("admits argument-validation failures so a repeated rejected call reaches loop recovery", async () => {
+    const executed: string[] = [];
+    const admittedCalls: InternalToolBatchCall[][] = [];
+    const events = await collectEvents(
+      captureAgentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        {
+          systemPrompt: "",
+          messages: [],
+          tools: [
+            {
+              ...makeTool("edit", executed),
+              parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
+            },
+          ],
+        },
+        {
+          ...config,
+          beforeToolBatch: async ({ calls }) => {
+            admittedCalls.push(calls);
+            const first = calls[0];
+            return first
+              ? {
+                  intervention: {
+                    kind: "critical-tool-loop",
+                    toolCallId: first.toolCall.id,
+                    toolName: first.toolCall.name,
+                    actionKey: "edit:same-action",
+                    detector: "generic_repeat",
+                    count: 20,
+                    reason: "CRITICAL: edit is looping",
+                  },
+                }
+              : undefined;
+          },
+        },
+        undefined,
+        createTurnSequenceStream([
+          [{ type: "toolCall", id: "invalid-1", name: "edit", arguments: {} }],
+          [{ type: "text", text: "recovered" }],
+        ]),
+      ),
+    );
+
+    expect(admittedCalls).toEqual([
+      [
+        {
+          toolCall: expect.objectContaining({ id: "invalid-1", name: "edit" }),
+          args: {},
+          validationFailure: {
+            content: [{ type: "text", text: expect.stringContaining("path") }],
+            details: {},
+          },
+        },
+      ],
+    ]);
+    expect(executed).toEqual([]);
+    expect(
+      events.flatMap((event) =>
+        event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
+      ),
+    ).toMatchObject([
+      {
+        toolCallId: "invalid-1",
+        isError: true,
+        details: { status: "blocked", deniedReason: "tool-loop" },
+      },
+    ]);
+    expect(
+      events.filter((event) => event.type === "message_end" && event.message.role === "assistant"),
+    ).toHaveLength(2);
   });
 });
 

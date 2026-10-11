@@ -45,6 +45,7 @@ const PUBLIC_CODES = new Set<string>([
   "global-install-failed",
   "unexpected-error",
   "update-failed",
+  "repair-failed",
   "update-recovery-pending",
   "update-executor-settlement-failed",
   "unsupported_git_channel",

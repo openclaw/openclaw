@@ -6,10 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { readSqliteDatabaseSiblingWriteRevision } from "../infra/sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { readSqliteDataVersion } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteNativeMutationRevision } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
@@ -28,8 +28,9 @@ const states = new WeakMap<OpenClawAgentDatabase, RetentionState>();
 type Sweep = {
   id: string;
   lease: Int32Array;
-  version: number;
-  changes: number;
+  version: number | undefined;
+  nativeChanges: boolean;
+  changes: number | undefined;
   plan?: TrajectoryRuntimeRetentionPlan;
   receipts: Map<string, Run[]>;
   sessions: Map<string, Map<string | null, Run>>;
@@ -104,19 +105,18 @@ export function prepareTrajectoryRuntimeRetention(
   input: TrajectoryRuntimeRetentionInput,
   now: number,
 ): TrajectoryRuntimeRetentionPlan {
-  return runSqliteDeferredTransactionSync(
-    database,
-    () => ({
-      sessionId: input.sessionId,
-      cutoff: now - RETENTION_MAX_AGE_MS,
-      maxBytes: Math.max(1, Math.floor(input.maxGlobalRuntimeBytes ?? GLOBAL_MAX_BYTES)),
-      runs: readRuns(database),
-    }),
-    { operationLabel: "trajectory.runtime.retention.select" },
-  );
+  return {
+    sessionId: input.sessionId,
+    cutoff: now - RETENTION_MAX_AGE_MS,
+    maxBytes: Math.max(1, Math.floor(input.maxGlobalRuntimeBytes ?? GLOBAL_MAX_BYTES)),
+    runs: readRuns(database),
+  };
 }
 
-function changes(database: DatabaseSync): number {
+function changes(database: DatabaseSync, native: boolean): number | undefined {
+  if (native) {
+    return readSqliteNativeMutationRevision(database);
+  }
   const row = executeSqliteQueryTakeFirstSync(
     database,
     getNodeSqliteKysely(database).selectNoFrom((eb) =>
@@ -138,11 +138,14 @@ export function beginTrajectoryRuntimeRetention(database: DatabaseSync, lease: I
       }
     });
   }
+  // Pin the counter kind so a later tracking change cannot compare unrelated revisions.
+  const nativeChanges = readSqliteNativeMutationRevision(database) !== undefined;
   const sweep: Sweep = {
     id: randomUUID(),
     lease,
-    version: readSqliteDataVersion(database),
-    changes: changes(database),
+    version: readSqliteDatabaseSiblingWriteRevision(database),
+    nativeChanges,
+    changes: changes(database, nativeChanges),
     receipts: new Map(),
     sessions: new Map(),
     queue: [],
@@ -162,13 +165,30 @@ function currentSweep(database: DatabaseSync): Sweep | undefined {
     sweep &&
     (Atomics.load(sweep.lease, 0) !== 1 ||
       !database.isOpen ||
-      readSqliteDataVersion(database) !== sweep.version ||
-      changes(database) !== sweep.changes)
+      sweep.version === undefined ||
+      readSqliteDatabaseSiblingWriteRevision(database) !== sweep.version ||
+      changes(database, sweep.nativeChanges) !== sweep.changes)
   ) {
     sweeps.delete(database);
     return undefined;
   }
   return sweep;
+}
+
+function stageRetentionMutation(
+  database: DatabaseSync,
+  sweep: Sweep,
+  receipt?: { sessionId: string; runs: Run[] },
+) {
+  const committedChanges = changes(database, sweep.nativeChanges);
+  deferSqlitePostCommitPublication(database, () => {
+    if (sweeps.get(database) === sweep && Atomics.load(sweep.lease, 0) === 1) {
+      if (receipt) {
+        sweep.receipts.set(receipt.sessionId, receipt.runs);
+      }
+      sweep.changes = committedChanges;
+    }
+  });
 }
 
 /** Capture before mutation; publish only after the enclosing transaction commits. */
@@ -179,15 +199,14 @@ export function captureTrajectoryRuntimeRetentionMutation(database: DatabaseSync
   }
   return (sessionId: string) => {
     // Session trimming has already bounded this summary to the retained session window.
-    const runs = readRuns(database, sessionId);
-    const committedChanges = changes(database);
-    deferSqlitePostCommitPublication(database, () => {
-      if (sweeps.get(database) === sweep && Atomics.load(sweep.lease, 0) === 1) {
-        sweep.receipts.set(sessionId, runs);
-        sweep.changes = committedChanges;
-      }
-    });
+    stageRetentionMutation(database, sweep, { sessionId, runs: readRuns(database, sessionId) });
   };
+}
+
+/** Session metadata upserts preserve trajectory rows and need only a committed mutation counter. */
+export function captureTrajectoryRuntimeRetentionMetadataMutation(database: DatabaseSync) {
+  const sweep = currentSweep(database);
+  return sweep ? () => stageRetentionMutation(database, sweep) : undefined;
 }
 
 function account(sweep: Sweep, run: Run, sign: number) {
@@ -231,7 +250,7 @@ export function selectTrajectoryRuntimeRetentionBatch(
   const sweep = currentSweep(database);
   const runs: Run[] = [];
   if (!sweep || sweep.id !== input.sweepId) {
-    return { sweepId: input.sweepId, runs };
+    return { sweepId: input.sweepId, runs, refresh: true as const };
   }
   if (input.snapshot && !sweep.plan) {
     sweep.plan = { ...input.snapshot, runs: [] };
@@ -294,7 +313,7 @@ export function deleteTrajectoryRuntimeRetention(
   database: OpenClawAgentDatabase,
   batch: ReturnType<typeof selectTrajectoryRuntimeRetentionBatch>,
 ) {
-  const sweep = currentSweep(database.db);
+  const sweep = batch.refresh ? undefined : currentSweep(database.db);
   if (!sweep?.plan || sweep.id !== batch.sweepId) {
     return { complete: false, refresh: true, deleted: 0, invalidated: 0, totalBytes: 0 };
   }
@@ -330,7 +349,7 @@ export function deleteTrajectoryRuntimeRetention(
     expiredRuns -= Number(run.newest < sweep.plan.cutoff);
     deleted.push(run);
   }
-  const committedChanges = changes(database.db);
+  const committedChanges = changes(database.db, sweep.nativeChanges);
   deferSqlitePostCommitPublication(database.db, () => {
     for (const run of deleted) {
       sweep.sessions.get(run.sessionId)?.delete(run.runId);

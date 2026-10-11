@@ -69,10 +69,6 @@ export function createInitialChatRealtimeState(): Pick<
   };
 }
 
-function resetChatRealtimeConversation(state: ChatRealtimeState) {
-  state.realtimeTalkConversationState = createRealtimeTalkConversationState();
-}
-
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
   options: { preserveConversation?: boolean } = {},
@@ -94,13 +90,9 @@ export function stopChatRealtimeTalk(
   state.realtimeTalkVideoCapable = false;
   state.realtimeTalkVideoPending = false;
   state.realtimeTalkCameraError = false;
-  if (options.preserveConversation) {
-    state.realtimeTalkConversationState = continueRealtimeTalkConversation(
-      state.realtimeTalkConversationState,
-    );
-  } else {
-    resetChatRealtimeConversation(state);
-  }
+  state.realtimeTalkConversationState = options.preserveConversation
+    ? continueRealtimeTalkConversation(state.realtimeTalkConversationState)
+    : createRealtimeTalkConversationState();
   void session?.stop();
 }
 
@@ -175,7 +167,7 @@ export function attachChatRealtimeActions(
     }
   };
   state.resetRealtimeTalkConversation = () => {
-    resetChatRealtimeConversation(state);
+    state.realtimeTalkConversationState = createRealtimeTalkConversationState();
   };
   const startRealtimeTalk = async (
     useSystemDefault = false,
@@ -419,10 +411,8 @@ export function attachChatRealtimeActions(
     }
     await startRealtimeTalk();
   };
-  state.toggleRealtimeTalkCamera = async () => {
-    const enabled = state.realtimeTalkVideoStream === null;
-    await setRealtimeTalkCameraEnabled(enabled);
-  };
+  state.toggleRealtimeTalkCamera = async () =>
+    setRealtimeTalkCameraEnabled(state.realtimeTalkVideoStream === null);
   state.switchRealtimeTalkCamera = async () => {
     const session = state.realtimeTalkSession;
     const stream = state.realtimeTalkVideoStream;

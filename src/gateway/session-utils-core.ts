@@ -153,7 +153,6 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   }
   // Store-only child links lack a live registry entry; retain recent unknown-state rows.
   return (
-    entry.status === "running" ||
     isFinitePositiveTimestamp(entry.startedAt) ||
     (isFinitePositiveTimestamp(entry.updatedAt) &&
       now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS)

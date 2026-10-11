@@ -96,13 +96,6 @@ function validateTerminalUpload(contentBase64: string): number {
   return terminalUploadDecodedSize(contentBase64);
 }
 
-function stagingLimitError(): Error {
-  return new Error(
-    "terminal upload staging limit reached (256 MiB or 64 files). " +
-      "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
-  );
-}
-
 function cleanupState(root: string, retentionMs?: number): CleanupState {
   let state = cleanupRoots.get(root);
   if (!state) {
@@ -415,7 +408,10 @@ export async function stageTerminalUpload(
           retained.directories >= MAX_RETAINED_DIRECTORIES ||
           retained.bytes + size > MAX_RETAINED_BYTES
         ) {
-          throw stagingLimitError();
+          throw new Error(
+            "terminal upload staging limit reached (256 MiB or 64 files). " +
+              "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
+          );
         }
         await assertHeld();
         assertCommitAllowed?.();

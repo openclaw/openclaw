@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -20,13 +19,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { loadSessionEntry } from "./session-accessor.js";
-import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
-import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
-import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   resolveMaintenanceConfigFromInput,
@@ -68,7 +65,7 @@ function createStore(pruneAfterMs = 1_000, key = sessionKey) {
   runOpenClawAgentWriteTransaction((owner) => {
     writeSessionEntry(owner, key, { sessionId: "age-kick", updatedAt });
   }, scope);
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(updatedAt);
   const maintenanceConfig: ResolvedSessionMaintenanceConfig = {
     ...resolveMaintenanceConfigFromInput(),
@@ -86,13 +83,13 @@ function createStore(pruneAfterMs = 1_000, key = sessionKey) {
   return { database, request, scope, storePath, updatedAt, archived: archived.promise };
 }
 
-function observeNextPeriodicMaintenance() {
+function observeNextPeriodicMaintenance(delayMs = ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS) {
   // Install after createStore opens the handles and registers their WAL timers.
   const scheduled = createDeferred();
   const setTimer = globalThis.setTimeout;
   const observer = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
     const timer = setTimer(...args);
-    if (args[1] === ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS) {
+    if (args[1] === delayMs) {
       scheduled.resolve();
     }
     return timer;
@@ -197,39 +194,6 @@ it.each(["immediate", "periodic"] as const)(
   },
 );
 
-it("stops input-change retries without automatic maintenance warnings during Gateway drain", async () => {
-  const { request } = createStore();
-  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
-  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
-  const warn = vi.spyOn(logger, "warn");
-  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-  const run = dispatch.getMockImplementation()!;
-  dispatch.mockImplementationOnce(async (params) => {
-    request.maintenanceConfig.maxEntries += 1;
-    try {
-      return await run(params);
-    } catch (error) {
-      expect(error).toBeInstanceOf(SqliteReclamationInputsChangedError);
-      markGatewayRestartDraining("stop (SIGTERM)");
-      throw error;
-    }
-  });
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
-  expect(dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan")).toHaveLength(
-    1,
-  );
-  expect(warn).not.toHaveBeenCalledWith(
-    "SQLite automatic session maintenance failed",
-    expect.anything(),
-  );
-  expect(warn).not.toHaveBeenCalledWith(
-    "SQLite automatic session maintenance paused after repeated input changes",
-    expect.anything(),
-  );
-});
-
 it.each([
   ["a drain-refused commit", false],
   ["an unrelated failure", true],
@@ -256,8 +220,8 @@ it.each([
   }
 });
 
-it("resumes automatic maintenance after Gateway work admission resets", async () => {
-  const { request, storePath } = createStore();
+it("resumes automatic maintenance after Gateway work admission resets", async ({ signal }) => {
+  const { request, storePath, archived } = createStore();
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   markGatewayRestartDraining("stop (SIGTERM)");
@@ -266,12 +230,14 @@ it("resumes automatic maintenance after Gateway work admission resets", async ()
   resetGatewayWorkAdmission();
   const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
   dispatch.mockClear();
+  const scheduled = observeNextPeriodicMaintenance(1_001);
   kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
+  await scheduled(signal);
   expect(dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan")).toHaveLength(
     1,
   );
   await vi.advanceTimersByTimeAsync(1_001);
+  await withinTest(archived, signal);
   expect(loadSessionEntry({ sessionKey, storePath })?.archiveReason).toBe("age-retention");
 });
 
@@ -283,6 +249,57 @@ it("does not dispatch maintenance in warn mode", async () => {
   expect(reclamationRun.runSqliteSessionReclamation).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
+});
+
+it("keeps ordinary acknowledged writes asleep until the age deadline", async ({ signal }) => {
+  const { request, scope, storePath, updatedAt, archived } = createStore(5_000);
+  const initialized = observeNextPeriodicMaintenance(5_001);
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await initialized(signal);
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  dispatch.mockClear();
+  for (let tick = 1; tick <= 4; tick += 1) {
+    await vi.advanceTimersByTimeAsync(100);
+    runOpenClawAgentWriteTransaction((owner) => {
+      writeSessionEntry(owner, sessionKey, {
+        sessionId: "age-kick",
+        updatedAt,
+        label: `write-${tick}`,
+      });
+    }, scope);
+    kickSessionEntryMaintenanceAfterWrite(request);
+  }
+  await vi.advanceTimersByTimeAsync(4_600);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(loadSessionEntry({ sessionKey, storePath })?.label).toBe("write-4");
+  await vi.advanceTimersByTimeAsync(1);
+  await withinTest(archived, signal);
+  expect(loadSessionEntry({ sessionKey, storePath })?.archiveReason).toBe("age-retention");
+});
+
+it("wakes on new-entry pressure after keeping acknowledged inserts asleep", async ({ signal }) => {
+  const { request, scope, updatedAt } = createStore(60_000);
+  request.maintenanceConfig.maxEntries = 2;
+  const initialized = observeNextPeriodicMaintenance(60_001);
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await initialized(signal);
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  dispatch.mockClear();
+  const insert = (index: number) => {
+    runOpenClawAgentWriteTransaction((owner) => {
+      writeSessionEntry(owner, `agent:main:insert-${index}`, {
+        sessionId: `insert-${index}`,
+        updatedAt,
+      });
+    }, scope);
+    kickSessionEntryMaintenanceAfterWrite(request);
+  };
+  insert(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(dispatch).not.toHaveBeenCalled();
+  insert(2);
+  await yieldToEventLoop();
+  expect(dispatch.mock.calls.some(([{ plan }]) => plan.kind === "maintenance-plan")).toBe(true);
 });
 
 it("commits an automatic plan while unrelated writes arrive every 100 ms", async () => {
@@ -327,73 +344,57 @@ it("commits an automatic plan while unrelated writes arrive every 100 ms", async
   );
 });
 
-it.for([1, 3])(
-  "replans policy conflicts without write quiet, bounded at three attempts (%s)",
-  async (conflicts, { signal }) => {
-    const { request, scope, storePath, updatedAt, archived } = createStore();
-    const foregroundTurn = new AsyncLocalStorage<string>();
-    const timerContexts = new Set<string | undefined>();
-    const setTimer = globalThis.setTimeout;
-    vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
-      timerContexts.add(foregroundTurn.getStore());
-      return setTimer(...args);
-    });
-    const victimKey = "agent:main:replan-victim";
-    runOpenClawAgentWriteTransaction((owner) => {
-      writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
-    }, scope);
-    const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
-    vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
-    const warn = vi.spyOn(logger, "warn");
-    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-    const run = dispatch.getMockImplementation()!;
-    let rejections = 0;
+it("finishes a running pass with its captured policy when configuration changes", async ({
+  signal,
+}) => {
+  const { request, scope, storePath, updatedAt, archived } = createStore();
+  const victimKey = "agent:main:replan-victim";
+  runOpenClawAgentWriteTransaction((owner) => {
+    writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
+  }, scope);
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  const warn = vi.spyOn(logger, "warn");
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  const run = dispatch.getMockImplementation()!;
+  let changed = false;
 
-    dispatch.mockImplementation((params) => {
-      if (
-        params.plan.kind === "maintenance-plan" &&
-        params.plan.input.preservation !== null &&
-        rejections < conflicts
-      ) {
-        rejections += 1;
-        request.maintenanceConfig.maxEntries += 1;
-      }
-      return run(params);
-    });
-    foregroundTurn.run("completed-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
-    await yieldToEventLoop();
-    expect(rejections).toBe(conflicts);
-    expect(countPlanningPasses()).toBe(conflicts === 1 ? 2 : 3);
-    if (conflicts === 3) {
-      expect(warn).toHaveBeenCalledWith(
-        "SQLite automatic session maintenance paused after repeated input changes",
-        expect.objectContaining({ rejections: 3, error: expect.any(Error) }),
-      );
-      expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
-      expect(countPlanningPasses()).toBe(3);
-      foregroundTurn.run("later-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
-      await vi.advanceTimersByTimeAsync(1_000);
+  dispatch.mockImplementation((params) => {
+    if (
+      params.plan.kind === "maintenance-plan" &&
+      params.plan.input.preservation !== null &&
+      !changed
+    ) {
+      changed = true;
+      request.maintenanceConfig.pruneAfterMs = 60_000;
     }
-    // Writer fairness can yield again after the retry timer fires.
-    await withinTest(archived, signal);
-    expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
-      "age-retention",
-    );
-    expect(timerContexts).toEqual(new Set([undefined]));
-  },
-);
-
-it("archives an entry at its age boundary without another write", async () => {
-  const { request, storePath } = createStore();
+    return run(params);
+  });
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
+  expect(changed).toBe(true);
+  expect(countPlanningPasses()).toBe(1);
+  await withinTest(archived, signal);
+  expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
+    "age-retention",
+  );
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it("bounds empty maintenance writes while retaining the next age deadline", async ({ signal }) => {
+  const { database, request, storePath, archived } = createStore();
+  const execute = vi.spyOn(database.db, "exec");
+  const scheduled = observeNextPeriodicMaintenance(1_001);
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await scheduled(signal);
+  const writerAdmissions = execute.mock.calls.filter(([sql]) => /^BEGIN IMMEDIATE;?$/i.test(sql));
+  expect.soft(writerAdmissions.length).toBeLessThanOrEqual(2);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
 
   await vi.advanceTimersByTimeAsync(1_000);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
   await vi.advanceTimersByTimeAsync(1);
-  await yieldToEventLoop();
+  await withinTest(archived, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
     archiveReason: "age-retention",
   });
@@ -439,34 +440,53 @@ it.each([
   expect(loadSessionEntry(target)).toMatchObject({ archiveReason: scenario.archiveReason });
 });
 
-it("cancels a pending age pass when its database closes without maintaining a reopened handle", async () => {
-  const { database, request, scope, storePath } = createStore();
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  await closeOpenClawAgentDatabaseByPathAsync(database.path);
-  const reopened = openOpenClawAgentDatabase(scope);
-  expect(reopened).not.toBe(database);
+it.each(["age", "acknowledged write"] as const)(
+  "cancels a pending %s pass when its database closes without maintaining a reopened handle",
+  async (pending) => {
+    const { database, request, scope, storePath, updatedAt } = createStore();
+    kickSessionEntryMaintenanceAfterWrite(request);
+    await yieldToEventLoop();
+    if (pending === "acknowledged write") {
+      runOpenClawAgentWriteTransaction((owner) => {
+        writeSessionEntry(owner, sessionKey, { sessionId: "age-kick", updatedAt, label: "batch" });
+      }, scope);
+      kickSessionEntryMaintenanceAfterWrite(request);
+    }
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const reopened = openOpenClawAgentDatabase(scope);
+    expect(reopened).not.toBe(database);
 
-  await vi.advanceTimersByTimeAsync(1_001);
-  await yieldToEventLoop();
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-});
+    await vi.advanceTimersByTimeAsync(1_001);
+    await yieldToEventLoop();
+    expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
+  },
+);
 
-it.each(["restore", "import", "insert"] as const)(
-  "honors the earlier due time of a historical %s after warming the age fact",
+it.each(["restore", "import", "insert", "policy"] as const)(
+  "honors an earlier due time after %s updates the retained maintenance deadline",
   async (operation) => {
     const { request, scope, storePath, updatedAt } = createStore();
     const oldKey = "agent:main:historical";
     const entry = { sessionId: "historical", updatedAt: updatedAt - 500 };
-    if (operation === "restore") {
+    if (operation === "restore" || operation === "policy") {
       runOpenClawAgentWriteTransaction((owner) => {
-        writeSessionEntry(owner, oldKey, { ...entry, archivedAt: updatedAt });
+        writeSessionEntry(
+          owner,
+          oldKey,
+          operation === "restore" ? { ...entry, archivedAt: updatedAt } : { ...entry, updatedAt },
+        );
       }, scope);
     }
     kickSessionEntryMaintenanceAfterWrite(request);
     await yieldToEventLoop();
 
-    if (operation === "import") {
+    runOpenClawAgentWriteTransaction((owner) => {
+      writeSessionEntry(owner, sessionKey, { sessionId: "age-kick", updatedAt, label: "batch" });
+    }, scope);
+    kickSessionEntryMaintenanceAfterWrite(request);
+    if (operation === "policy") {
+      request.maintenanceConfig.pruneAfterMs = 500;
+    } else if (operation === "import") {
       await importSqliteSessionRowsBatch([{ storePath, sessionKey: oldKey, entry }]);
     } else {
       runOpenClawAgentWriteTransaction((owner) => {
@@ -521,7 +541,11 @@ it("rechecks foreign backdates at 30 minutes even when ordinary writes keep kick
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   await vi.advanceTimersByTimeAsync(15 * 60 * 1_000 - 1);
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
+  expect(
+    database.db
+      .prepare("SELECT archived_at FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey),
+  ).toEqual({ archived_at: null });
   await vi.advanceTimersByTimeAsync(1);
   await withinTest(archived.promise, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
@@ -585,105 +609,4 @@ it("retries a transient maintenance failure on its next periodic pass", async ({
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
     archiveReason: "age-retention",
   });
-});
-
-it("backs off admission failures after the periodic deadline expires", async ({ signal }) => {
-  const { request } = createStore(60 * 60 * 1_000);
-  const initialized = observeNextPeriodicMaintenance();
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await initialized(signal);
-  const writes = vi
-    .spyOn(agentDatabase, "runOpenClawAgentWriteTransaction")
-    .mockImplementation(() => {
-      throw new Error("database admission unavailable");
-    });
-
-  const firstRetry = observeNextPeriodicMaintenance();
-  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
-  await firstRetry(signal);
-  expect(writes).toHaveBeenCalledTimes(1);
-  const nextRetry = observeNextPeriodicMaintenance();
-  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000 - 1);
-  expect(writes).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  await nextRetry(signal);
-  expect(writes).toHaveBeenCalledTimes(2);
-});
-
-it.each(
-  (["backdate", "insert"] as const).flatMap((mutation) =>
-    (["after preparation", "after no-op resolution"] as const).map((boundary) => ({
-      mutation,
-      boundary,
-    })),
-  ),
-)("replans a warm no-op after an owned $mutation $boundary", async ({ mutation, boundary }) => {
-  const { database, request, scope, storePath, updatedAt } = createStore();
-  request.maintenanceConfig.maxEntries = 2;
-  const victimKey = "agent:main:warm-no-op-victim";
-  const insertedKey = "agent:main:warm-no-op-inserted";
-  runOpenClawAgentWriteTransaction((owner) => {
-    writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt });
-  }, scope);
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  expect(
-    ageFacts.readSessionEntryMaintenanceAgeFact(database.db, request.maintenanceConfig)?.next.at,
-  ).toBeGreaterThan(Date.now());
-
-  let changed = false;
-  const mutate = () => {
-    // Neither synchronous writer kicks maintenance. A fresh insert must invalidate
-    // the count decision even when it cannot bring the next age boundary forward.
-    if (mutation === "insert") {
-      changed = ensureSessionEntrySync(
-        { sessionKey: insertedKey, storePath },
-        { sessionId: "inserted", updatedAt: updatedAt + 1 },
-      );
-    } else {
-      runOpenClawAgentWriteTransaction((owner) => {
-        writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
-      }, scope);
-      changed = true;
-    }
-  };
-  if (boundary === "after preparation") {
-    const capture = ageFacts.captureSessionEntryMaintenanceAgeFact;
-    vi.spyOn(ageFacts, "captureSessionEntryMaintenanceAgeFact").mockImplementationOnce(
-      (...args) => {
-        const result = capture(...args);
-        queueMicrotask(mutate);
-        return result;
-      },
-    );
-  } else {
-    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-    const run = dispatch.getMockImplementation()!;
-    dispatch.mockImplementationOnce(async (params) => {
-      const result = await run(params);
-      mutate();
-      return result;
-    });
-  }
-
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  expect(changed).toBe(true);
-  await vi.advanceTimersByTimeAsync(1_000);
-  await yieldToEventLoop();
-  expect(loadSessionEntry({ sessionKey: victimKey, storePath })).toMatchObject({
-    archivedAt: expect.any(Number),
-    archiveReason: mutation === "insert" ? "active-session-cap" : "age-retention",
-  });
-  expect(readSessionEntryCount(database, { includeArchived: false })).toBe(
-    mutation === "insert" ? 2 : 1,
-  );
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-  if (mutation === "insert") {
-    expect(loadSessionEntry({ sessionKey: insertedKey, storePath })).toMatchObject({
-      sessionId: "inserted",
-      updatedAt: updatedAt + 1,
-    });
-    expect(loadSessionEntry({ sessionKey: insertedKey, storePath })?.archivedAt).toBeUndefined();
-  }
 });

@@ -1,4 +1,4 @@
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, realpath, rm } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -18,7 +18,6 @@ import {
   lstatMigrationPathIfExists,
   packageIdentityDigest,
   removeGeneratedPackageIfUnchanged,
-  removePackagePreview,
 } from "./migrate-package.js";
 import {
   assertPackageDestinationOutsideWorkspaces,
@@ -37,7 +36,7 @@ import { readClawSecondaryReferenceTables } from "./provenance-secondary-referen
 import { persistClawMigrationOwnership, readClawInstallRecords } from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
-import type { ClawManifest, ClawOpenClawProfile } from "./types.js";
+import type { ClawManifest, ClawOpenClawProfile, ClawReadResult } from "./types.js";
 import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   type PersistedClawWorkspaceFile,
@@ -152,6 +151,16 @@ function sanitizeAgentPreview(agent: ClawManifest["agent"]): ClawManifest["agent
   };
 }
 
+function summarizePackageFiles(packageFiles: Map<string, Buffer>) {
+  return [...packageFiles.entries()]
+    .map(([path, content]) => ({
+      path,
+      byteLength: content.byteLength,
+      digest: digestClawBytes(content),
+    }))
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
 function buildPlanIntegrity(
   addPlan: Awaited<ReturnType<typeof buildClawAddPlan>>,
   packageFiles: Map<string, Buffer>,
@@ -159,13 +168,7 @@ function buildPlanIntegrity(
   return digestClawValue({
     schemaVersion: CLAW_MIGRATION_PLAN_SCHEMA_VERSION,
     addPlan,
-    packageFiles: [...packageFiles.entries()]
-      .map(([path, content]) => ({
-        path,
-        digest: digestClawBytes(content),
-        byteLength: content.byteLength,
-      }))
-      .toSorted((left, right) => left.path.localeCompare(right.path)),
+    packageFiles: summarizePackageFiles(packageFiles),
     retained: MIGRATION_RETAINED_PATHS,
   });
 }
@@ -183,6 +186,38 @@ function adoptMigrationActions(plan: BuiltMigration["addPlan"]): void {
         expectedState: action.kind === "workspaceFile" ? "present-matching" : "present",
       },
     };
+  });
+}
+
+function buildMigrationAddPlan(
+  read: Extract<ClawReadResult, { ok: true }>,
+  packageFiles: Map<string, Buffer>,
+  context: {
+    config: OpenClawConfig;
+    agentId: string;
+    workspace: string;
+    packageRoot: string;
+    configuredAgents: ReturnType<typeof listAgentEntries>;
+    env?: NodeJS.ProcessEnv;
+  },
+) {
+  const otherAgents = context.configuredAgents.filter((entry) => entry.id !== context.agentId);
+  return buildClawAddPlan({
+    manifest: read.manifest,
+    clawMarkdownBody: read.clawMarkdownBody,
+    openClawProfile: read.openClawProfile,
+    source: { ...read.source, ...packageIdentityDigest(packageFiles) },
+    context: {
+      config: context.config,
+      agentId: context.agentId,
+      workspace: context.workspace,
+      existingAgentIds: otherAgents.map((entry) => entry.id),
+      existingWorkspacePaths: otherAgents.map((entry) =>
+        resolveAgentWorkspaceDir(context.config, entry.id, context.env),
+      ),
+      resumableWorkspace: context.workspace,
+      sourceReferenceRoot: context.packageRoot,
+    },
   });
 }
 
@@ -317,42 +352,22 @@ export async function buildClawMigrationPlan(params: {
     );
   }
   const packagePreview = await createPackagePreview(projected.packageFiles);
-  let loaded: Extract<Awaited<ReturnType<typeof readClawManifestFile>>, { ok: true }>;
   try {
-    const read = await readClawManifestFile(packagePreview);
-    if (!read.ok) {
+    const loaded = await readClawManifestFile(packagePreview);
+    if (!loaded.ok) {
       throw new ClawMigrationError(
         "generated_package_invalid",
-        read.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
-        read.diagnostics[0]?.path,
+        loaded.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+        loaded.diagnostics[0]?.path,
       );
     }
-    loaded = read;
-    const existingWorkspacePaths = configuredAgents
-      .filter((entry) => entry.id !== agentId)
-      .map((entry) => resolveAgentWorkspaceDir(params.config, entry.id, options.env));
-    const packageIdentity = packageIdentityDigest(projected.packageFiles);
-    const source = {
-      ...loaded.source,
-      integrity: packageIdentity.integrity,
-      byteLength: packageIdentity.byteLength,
-    };
-    const addPlan = await buildClawAddPlan({
-      manifest: loaded.manifest,
-      clawMarkdownBody: loaded.clawMarkdownBody,
-      openClawProfile: loaded.openClawProfile,
-      source,
-      context: {
-        config: params.config,
-        agentId,
-        workspace,
-        existingAgentIds: configuredAgents
-          .filter((entry) => entry.id !== agentId)
-          .map((entry) => entry.id),
-        existingWorkspacePaths,
-        resumableWorkspace: workspace,
-        sourceReferenceRoot: packageRoot,
-      },
+    const addPlan = await buildMigrationAddPlan(loaded, projected.packageFiles, {
+      config: params.config,
+      agentId,
+      workspace,
+      packageRoot,
+      configuredAgents,
+      env: options.env,
     });
     if (addPlan.blockers.length > 0) {
       const first = addPlan.blockers[0]!;
@@ -388,16 +403,10 @@ export async function buildClawMigrationPlan(params: {
       agentId,
       workspace,
       packageRoot,
-      packageName: source.name,
+      packageName: loaded.source.name,
       agent: projected.manifest.agent,
       ...(projected.profile ? { openClawProfile: projected.profile } : {}),
-      generatedPackageFiles: [...projected.packageFiles.entries()]
-        .map(([path, content]) => ({
-          path,
-          byteLength: content.byteLength,
-          digest: digestClawBytes(content),
-        }))
-        .toSorted((left, right) => left.path.localeCompare(right.path)),
+      generatedPackageFiles: summarizePackageFiles(projected.packageFiles),
       workspaceFiles: selectedFiles.map(({ name, content, digest }) => ({
         path: resolve(workspace, name),
         byteLength: content.byteLength,
@@ -445,7 +454,7 @@ export async function buildClawMigrationPlan(params: {
       ownershipFiles,
     };
   } finally {
-    await removePackagePreview(packagePreview);
+    await rm(packagePreview, { recursive: true, force: true });
   }
 }
 
@@ -505,30 +514,13 @@ export async function applyClawMigrationPlan(params: {
         read.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
       );
     }
-    const identity = packageIdentityDigest(params.migration.packageFiles);
-    const source = {
-      ...read.source,
-      integrity: identity.integrity,
-      byteLength: identity.byteLength,
-    };
-    const finalPlan = await buildClawAddPlan({
-      manifest: read.manifest,
-      clawMarkdownBody: read.clawMarkdownBody,
-      openClawProfile: read.openClawProfile,
-      source,
-      context: {
-        config: params.config,
-        agentId: params.migration.plan.agentId,
-        workspace: params.migration.plan.workspace,
-        existingAgentIds: listAgentEntries(params.config)
-          .filter((entry) => entry.id !== params.migration.plan.agentId)
-          .map((entry) => entry.id),
-        existingWorkspacePaths: listAgentEntries(params.config)
-          .filter((entry) => entry.id !== params.migration.plan.agentId)
-          .map((entry) => resolveAgentWorkspaceDir(params.config, entry.id, options.env)),
-        resumableWorkspace: params.migration.plan.workspace,
-        sourceReferenceRoot: root,
-      },
+    const finalPlan = await buildMigrationAddPlan(read, params.migration.packageFiles, {
+      config: params.config,
+      agentId: params.migration.plan.agentId,
+      workspace: params.migration.plan.workspace,
+      packageRoot: root,
+      configuredAgents: listAgentEntries(params.config),
+      env: options.env,
     });
     for (const fileAction of finalPlan.actions.filter(
       (action) => action.kind === "workspaceFile",

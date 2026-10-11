@@ -1,14 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  persistRefreshedPluginIndex,
-  type ConfigPreflightSnapshotRead,
-} from "../commands/config-preflight-snapshot.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -22,6 +17,7 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import {
   cleanupTrackedTempDirs,
@@ -112,7 +108,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
       warnings: [],
       legacyIssues: [],
     });
-    const readSnapshot = async (): Promise<ConfigPreflightSnapshotRead> => {
+    const readSnapshot = async () => {
       clearPluginMetadataLifecycleCaches();
       const pluginMetadataSnapshot = resolveConfigWidePluginMetadataSnapshot({
         config,
@@ -133,35 +129,28 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     ]);
     expect(derived.pluginMetadataSnapshot?.diagnostics).toHaveLength(2);
 
-    const lease = await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 });
-    try {
-      const { snapshotRead: persisted } = await withPluginLifecycleLease(
-        { env },
-        async (pluginLease) =>
-          persistRefreshedPluginIndex({
-            env,
-            lease,
-            pluginLease,
-            measure: async (_name, run) => await run(),
-            snapshotRead: await readSnapshot(),
-            readPersistedSnapshot: readSnapshot,
-          }),
-      );
-      expect(persisted.pluginMetadataSnapshot?.registrySource).toBe("persisted");
-      expect(persisted.pluginMetadataSnapshot?.index.plugins).toEqual(
-        derived.pluginMetadataSnapshot?.index.plugins,
-      );
-      expect(persisted.pluginMetadataSnapshot?.diagnostics).toEqual(
-        derived.pluginMetadataSnapshot?.diagnostics,
-      );
-      const durable = readPersistedInstalledPluginIndexSync({ env });
-      expect(durable?.workspaceDir).toBe(primaryWorkspace);
-      expect(durable?.plugins.map((plugin) => plugin.pluginId)).toEqual(["shared-plugin"]);
-      expect(durable?.diagnostics).toHaveLength(1);
-      expect((await readSnapshot()).pluginMetadataSnapshot?.registrySource).toBe("persisted");
-    } finally {
-      lease.release();
-    }
+    await withPluginLifecycleLease({ env }, async (lease) =>
+      refreshPluginRegistry({
+        config,
+        workspaceDir: primaryWorkspace,
+        reason: "source-changed",
+        env,
+        lease,
+      }),
+    );
+    const persisted = await readSnapshot();
+    expect(persisted.pluginMetadataSnapshot?.registrySource).toBe("persisted");
+    expect(persisted.pluginMetadataSnapshot?.index.plugins).toEqual(
+      derived.pluginMetadataSnapshot?.index.plugins,
+    );
+    expect(persisted.pluginMetadataSnapshot?.diagnostics).toEqual(
+      derived.pluginMetadataSnapshot?.diagnostics,
+    );
+    const durable = readPersistedInstalledPluginIndexSync({ env });
+    expect(durable?.workspaceDir).toBe(primaryWorkspace);
+    expect(durable?.plugins.map((plugin) => plugin.pluginId)).toEqual(["shared-plugin"]);
+    expect(durable?.diagnostics).toHaveLength(1);
+    expect((await readSnapshot()).pluginMetadataSnapshot?.registrySource).toBe("persisted");
   });
 
   it("replays state migrations after a Doctor-only contract change", async () => {

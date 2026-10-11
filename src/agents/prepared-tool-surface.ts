@@ -95,5 +95,6 @@ export function projectAgentToolDefinition(tool: AnyAgentTool) {
     description: tool.description ?? "",
     parameters: tool.parameters,
     executionMode: tool.executionMode,
+    ...(tool.async === false ? { async: false as const } : {}),
   };
 }

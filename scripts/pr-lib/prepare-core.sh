@@ -128,7 +128,7 @@ prepare_baseline_refresh() (
   recover_review_transition "$pr" || return 1
   echo "Refreshed candidate $target; prior proof retained at $PREP_RETIRED_EVIDENCE."
   printf '%s' "$prepared" | jq -r '.resolutions[] | "Resolved \(.path): \(if .resolved == null then "deleted" else .resolved.mode + " " + .resolved.oid end)"' || return 1
-  echo "Fresh exact-candidate correction review and completed native gates are required."
+  echo "Fresh exact-candidate correction review and native gate qualification are required."
 )
 
 refresh_prep_branch_for_reviewed_head() {
@@ -754,6 +754,15 @@ prepare_sync_head() {
     :
   else
     coauthor_email=""
+  fi
+
+  if [ -n "$PREP_PUBLICATION_REVIEW_SNAPSHOT" ]; then
+    source .local/gates.env || return 1
+    if [ "${GATES_MODE:-}" = github_pending ]; then
+      # Sync uses the same verified local/hosted receipt as prepare-push.
+      write_gates_env_stamp "$pr" "${DOCS_ONLY:-false}" "${CHANGELOG_REQUIRED:-false}" \
+        github_pending "" "" "$prep_head_sha" "" "" "" "" || return 1
+    fi
   fi
 
   cat >> .local/prep.md <<EOF_PREP

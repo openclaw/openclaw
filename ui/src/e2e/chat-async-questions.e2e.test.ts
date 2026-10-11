@@ -572,7 +572,7 @@ suite.define(() => {
       await arrive(questionMessage, 2);
       const initialExpand = card.getByRole("button", { name: "Expand question", exact: true });
       await initialExpand.waitFor();
-      expect(await initialExpand.textContent()).toContain("Optional · work can continue");
+      expect(await initialExpand.textContent()).toContain("1 unanswered question");
       expect(await card.getByRole("textbox").count()).toBe(0);
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       await initialExpand.click();

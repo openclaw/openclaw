@@ -364,8 +364,7 @@ export async function createChildAdapter(
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let stdoutDrained = child.stdout == null;
-  let stderrDrained = child.stderr == null;
+  const pendingOutput = new Set([child.stdout, child.stderr].filter((stream) => stream != null));
   let workerIpcDisconnected = false;
   let openWorkerStdio = 0;
 
@@ -455,8 +454,7 @@ export async function createChildAdapter(
       (process.platform !== "win32" && (!workerIpcDisconnected || openWorkerStdio > 0)) ||
       isWindowsHardKillSettlementBlocked() ||
       childExitState == null ||
-      !stdoutDrained ||
-      !stderrDrained
+      pendingOutput.size > 0
     ) {
       return;
     }
@@ -482,18 +480,14 @@ export async function createChildAdapter(
     }
   }
 
-  const markStdoutDrained = () => {
-    stdoutDrained = true;
-    maybeSettleAfterExit();
-  };
-  const markStderrDrained = () => {
-    stderrDrained = true;
-    maybeSettleAfterExit();
-  };
-  child.stdout?.once("end", markStdoutDrained);
-  child.stdout?.once("close", markStdoutDrained);
-  child.stderr?.once("end", markStderrDrained);
-  child.stderr?.once("close", markStderrDrained);
+  for (const stream of pendingOutput) {
+    const markDrained = () => {
+      pendingOutput.delete(stream);
+      maybeSettleAfterExit();
+    };
+    stream.once("end", markDrained);
+    stream.once("close", markDrained);
+  }
 
   // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
   child.on("error", (error) => {
@@ -563,6 +557,13 @@ export async function createChildAdapter(
         },
       });
     });
+  const signalChild = (signal?: NodeJS.Signals) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // The native close observation still owns confirmation.
+    }
+  };
   const kill = (signal?: NodeJS.Signals) => {
     if (windowsJob) {
       try {
@@ -593,11 +594,7 @@ export async function createChildAdapter(
         treeSignaling = (async () => {
           try {
             await signalProcessTreeForChildAndWait(pid, "SIGKILL");
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              // The native close observation still owns confirmation.
-            }
+            signalChild("SIGKILL");
             windowsTreeKillCompleted = true;
             if (childCloseState) {
               settleObservedClose(childExitState ?? childCloseState);
@@ -614,11 +611,7 @@ export async function createChildAdapter(
         })();
       } else {
         windowsTreeKillCompleted = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore kill errors
-        }
+        signalChild("SIGKILL");
       }
       scheduleForceKillWaitFallback("SIGKILL");
       return;
@@ -627,11 +620,7 @@ export async function createChildAdapter(
       signalProcessTreeForChild(pid, "SIGTERM");
       return;
     }
-    try {
-      child.kill(signal);
-    } catch {
-      // ignore kill errors for non-kill signals
-    }
+    signalChild(signal);
   };
 
   const dispose = () => {

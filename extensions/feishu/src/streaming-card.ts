@@ -1,7 +1,3 @@
-/**
- * Feishu Streaming Card - Card Kit streaming API for real-time text output
- */
-
 import type { Client } from "@larksuiteoapi/node-sdk";
 import {
   asDateTimestampMs,
@@ -64,7 +60,6 @@ const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
-// Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {

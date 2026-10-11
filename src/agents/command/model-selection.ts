@@ -64,7 +64,6 @@ import { resolveOperatorModelDefault } from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
-  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -117,19 +116,10 @@ export async function resolveEmbeddedModelSelection(params: {
   let provider = defaultProvider;
   let model = defaultModel;
   let sessionEntry = params.sessionEntry;
-  const initialModelOverrideSource = sessionEntry?.modelOverrideSource;
-  const hasStoredOverride = Boolean(
-    initialModelOverrideSource !== "default" &&
+  let hasStoredOverride = Boolean(
+    sessionEntry?.modelOverrideSource !== "default" &&
     (sessionEntry?.modelOverride || sessionEntry?.providerOverride),
   );
-  let storedModelOverrideSource =
-    hasStoredOverride && initialModelOverrideSource !== "default"
-      ? initialModelOverrideSource
-      : undefined;
-  let hasStoredAutoFallbackProvenance =
-    hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
-  let hasLegacyAutoFallbackOverrideWithoutOrigin =
-    hasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   const explicitProviderOverride =
     typeof params.opts.provider === "string"
       ? normalizeExplicitOverrideInput(params.opts.provider, "provider")
@@ -174,17 +164,12 @@ export async function resolveEmbeddedModelSelection(params: {
     // Durable harness locks own their model metadata and bypass generic repair entirely.
     const initialEntry = sessionEntry;
     const entry = { ...sessionEntry };
-    let entryUpdated = false;
-    if (hasLegacyAutoFallbackOverrideWithoutOrigin) {
-      const { updated } = applyModelOverrideToSessionEntry({
+    const resetToDefaultModel = () =>
+      applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-      });
-      if (updated) {
-        storedModelOverrideSource = undefined;
-        entryUpdated = true;
-      }
-    }
+      }).updated;
+    let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
     const repaired = repairProviderWrappedModelOverride({ entry, defaultProvider, defaultModel });
     entryUpdated ||= repaired.updated;
     const directOverride = resolveDirectStoredModelOverride({
@@ -199,10 +184,7 @@ export async function resolveEmbeddedModelSelection(params: {
         model: directOverride.model,
       };
       if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
-        const { updated } = applyModelOverrideToSessionEntry({
-          entry,
-          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-        });
+        const updated = resetToDefaultModel();
         entryUpdated ||= updated;
       }
     }
@@ -216,21 +198,22 @@ export async function resolveEmbeddedModelSelection(params: {
         entry,
         assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
-      const adoptedModelOverrideSource = sessionEntry?.modelOverrideSource;
-      const adoptedHasStoredOverride =
-        adoptedModelOverrideSource !== "default" &&
+      hasStoredOverride =
+        sessionEntry?.modelOverrideSource !== "default" &&
         Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
-      storedModelOverrideSource = adoptedHasStoredOverride ? adoptedModelOverrideSource : undefined;
-      hasStoredAutoFallbackProvenance =
-        adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
-      hasLegacyAutoFallbackOverrideWithoutOrigin =
-        adoptedHasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     }
   }
 
-  if (isModelSelectionLocked(sessionEntry)) {
-    hasLegacyAutoFallbackOverrideWithoutOrigin = false;
-  }
+  let storedModelOverrideSource =
+    hasStoredOverride && sessionEntry?.modelOverrideSource !== "default"
+      ? sessionEntry?.modelOverrideSource
+      : undefined;
+  let hasStoredAutoFallbackProvenance =
+    hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+  const hasLegacyAutoFallbackOverrideWithoutOrigin =
+    hasStoredOverride &&
+    !isModelSelectionLocked(sessionEntry) &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
 
   const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? null
@@ -543,10 +526,9 @@ export async function resolveEmbeddedModelSelection(params: {
       : params.configuredThinkingCatalog;
   if (
     params.pluginsEnabled &&
-    (primaryConfiguredThinkLevel !== "off" || thinkingRuntime !== "openclaw") &&
-    needsThinkHydration(catalogForThinking, provider, model, thinkingRuntime)
+    (primaryConfiguredThinkLevel !== "off" || thinkingRuntime !== "openclaw")
   ) {
-    // Thinking capability is a per-model fact; never materialize the full live catalog here.
+    // Read the admitted observation even when static/configured reasoning is already known.
     const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
     const runtimeCatalog = normalizeThinkingCatalogProviders(
       await loadProviderScopedThinkingCatalog({

@@ -1,12 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
 import { captureMaintenanceConfigAsyncReader } from "../../config/sessions/store-maintenance-runtime.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -20,6 +21,7 @@ import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 import {
   prepareAcpSessionMutation,
   commitAcpSessionMutation,
+  upsertIncognitoAcpSessionMeta,
 } from "./session-meta-worker-mutation.js";
 import { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
 
@@ -28,14 +30,15 @@ type AcpSessionMutationParams = Parameters<typeof upsertAcpSessionMetaNative>[0]
 /** File-backed writes retain their read source through both canonical storage owners. */
 export async function upsertAcpSessionMeta(
   params: AcpSessionMutationParams,
-  incognito?: { actor: IncognitoAgentDatabaseExecution; authority: IncognitoSessionAuthority },
+  incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority },
 ): Promise<SessionEntry | null> {
+  const binding = incognito ?? captureIncognitoSessionOperation(params);
   const sessionKey = params.sessionKey.trim();
   // Empty keys keep the shared no-op result without entering either storage owner.
-  if (!incognito || !sessionKey) {
+  if (!binding || !sessionKey) {
     return mutateAcpSessionMeta(params);
   }
-  const { actor, authority } = incognito;
+  const { actor, authority } = binding;
   actor.assertCurrent();
   authority.assertCurrent();
   const input = {
@@ -48,13 +51,14 @@ export async function upsertAcpSessionMeta(
     ...input,
     assertCurrent: input.assertCommitAllowed,
   });
-  return actor.sessions.withSharedState(async () => {
+  const result = await actor.sessions.withSharedState(async () => {
     const captured = await context;
     const target = resolveSessionStorePathForAcp({ ...input, ...captured });
     if (target.agentId !== actor.agentId) {
       throw new Error("ACP mutation differs from its captured incognito actor");
     }
-    return actor.acp.upsertMeta({
+    const value = await upsertIncognitoAcpSessionMeta({
+      actor,
       ...input,
       ...captured,
       sessionKey: target.storeSessionKey,
@@ -66,7 +70,12 @@ export async function upsertAcpSessionMeta(
         authorize: (stage, facts) => authority.authorize?.(stage, facts),
       },
     });
+    return { value, assertCurrent: captured.assertCurrent };
   });
+  result.assertCurrent();
+  authority.assertCurrent();
+  actor.assertReadable();
+  return result.value;
 }
 
 /** Private control updates cannot recreate metadata that disappeared after preparation. */

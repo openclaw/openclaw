@@ -114,7 +114,7 @@ export function createGatewayAuxHandlers(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
     resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null,
-    retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
+    retainPlacementStandingGrantAsync?: PlacementStandingGrantRuntime["retainAsync"],
   ) =>
     new ExecApprovalManager<TPayload>({
       scheduler: params.scheduler,
@@ -123,7 +123,7 @@ export function createGatewayAuxHandlers(
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
-      ...(retainPlacementStandingGrant ? { retainPlacementStandingGrant } : {}),
+      ...(retainPlacementStandingGrantAsync ? { retainPlacementStandingGrantAsync } : {}),
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
@@ -228,7 +228,7 @@ export function createGatewayAuxHandlers(
       }
       return { kind: "placement", ...request.placementGrant };
     },
-    placementStandingGrants.retain,
+    placementStandingGrants.retainAsync,
   );
   const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
     "system-agent",
@@ -319,10 +319,6 @@ export function createGatewayAuxHandlers(
       questionManager.cancelClosedAuthorities({ runId: claim.runId });
     },
   );
-  const unregisterApprovalAuthorityObserver = () => {
-    unregisterWorkerTurnClaimClosedObserver?.();
-    unregisterApprovalAuthorityClosedObserver();
-  };
   const cancelRunBoundApprovals = (
     target: string | AgentRunDelegatedAuthority,
     context: GatewayRequestContext,
@@ -421,7 +417,8 @@ export function createGatewayAuxHandlers(
       stopPromise = (async () => {
         // Preserve the existing authority-observer stop boundary. Retirement is
         // local only; pending durable approvals belong to next-start epoch recovery.
-        unregisterApprovalAuthorityObserver();
+        unregisterWorkerTurnClaimClosedObserver?.();
+        unregisterApprovalAuthorityClosedObserver();
         beginCloseApprovalObservers();
         for (const manager of approvalManagers) {
           manager.retire();
@@ -446,6 +443,14 @@ export function createGatewayAuxHandlers(
     }),
   );
 
+  const bindLazyHandlers = (load: Parameters<typeof createLazyHandler>[1]) => (method: string) =>
+    createLazyHandler(method, load);
+  const execApprovalHandler = bindLazyHandlers(loadExecApprovalHandlers);
+  const pluginApprovalHandler = bindLazyHandlers(loadPluginApprovalHandlers);
+  const approvalHandler = bindLazyHandlers(loadApprovalHandlers);
+  const questionHandler = bindLazyHandlers(loadQuestionHandlers);
+  const secretsHandler = bindLazyHandlers(loadSecretsHandlers);
+
   return {
     execApprovalManager,
     cancelRunBoundApprovals,
@@ -464,48 +469,32 @@ export function createGatewayAuxHandlers(
     stopOperatorInteractions,
     questionManager,
     extraHandlers: {
-      "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),
-      "exec.approval.list": createLazyHandler("exec.approval.list", loadExecApprovalHandlers),
-      "exec.approval.request": createLazyHandler("exec.approval.request", loadExecApprovalHandlers),
-      "exec.approval.waitDecision": createLazyHandler(
-        "exec.approval.waitDecision",
-        loadExecApprovalHandlers,
-      ),
-      "exec.approval.resolve": createLazyHandler("exec.approval.resolve", loadExecApprovalHandlers),
-      "exec.approval.grants.list": createLazyHandler(
-        "exec.approval.grants.list",
-        loadExecApprovalHandlers,
-      ),
-      "exec.approval.grants.revoke": createLazyHandler(
-        "exec.approval.grants.revoke",
-        loadExecApprovalHandlers,
-      ),
-      "plugin.approval.list": createLazyHandler("plugin.approval.list", loadPluginApprovalHandlers),
-      "plugin.approval.request": createLazyHandler(
-        "plugin.approval.request",
-        loadPluginApprovalHandlers,
-      ),
-      "plugin.approval.waitDecision": createLazyHandler(
-        "plugin.approval.waitDecision",
-        loadPluginApprovalHandlers,
-      ),
-      "plugin.approval.resolve": createLazyHandler(
-        "plugin.approval.resolve",
-        loadPluginApprovalHandlers,
-      ),
-      "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
-      "approval.history": createLazyHandler("approval.history", loadApprovalHandlers),
-      "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
-      "question.request": createLazyHandler("question.request", loadQuestionHandlers),
-      "question.waitAnswer": createLazyHandler("question.waitAnswer", loadQuestionHandlers),
-      "question.resolve": createLazyHandler("question.resolve", loadQuestionHandlers),
-      "question.get": createLazyHandler("question.get", loadQuestionHandlers),
-      "question.list": createLazyHandler("question.list", loadQuestionHandlers),
-      "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
-      "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
-      "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
-      "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
-      "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
+      "exec.approval.get": execApprovalHandler("exec.approval.get"),
+      "exec.approval.list": execApprovalHandler("exec.approval.list"),
+      "exec.approval.request": execApprovalHandler("exec.approval.request"),
+      "exec.approval.waitDecision": execApprovalHandler("exec.approval.waitDecision"),
+      "exec.approval.resolve": execApprovalHandler("exec.approval.resolve"),
+      "exec.approval.grants.list": execApprovalHandler("exec.approval.grants.list"),
+      "exec.approval.grants.revoke": execApprovalHandler("exec.approval.grants.revoke"),
+      "plugin.approval.list": pluginApprovalHandler("plugin.approval.list"),
+      "plugin.approval.request": pluginApprovalHandler("plugin.approval.request"),
+      "plugin.approval.waitDecision": pluginApprovalHandler("plugin.approval.waitDecision"),
+      "plugin.approval.resolve": pluginApprovalHandler("plugin.approval.resolve"),
+      "approval.get": approvalHandler("approval.get"),
+      "approval.history": approvalHandler("approval.history"),
+      "approval.resolve": approvalHandler("approval.resolve"),
+      "question.request": questionHandler("question.request"),
+      "question.waitAnswer": questionHandler("question.waitAnswer"),
+      "question.resolve": questionHandler("question.resolve"),
+      "question.get": questionHandler("question.get"),
+      "question.list": questionHandler("question.list"),
+      "secrets.reload": secretsHandler("secrets.reload"),
+      "secrets.resolve": secretsHandler("secrets.resolve"),
+      "secrets.store.list": secretsHandler("secrets.store.list"),
+      "secrets.store.set": secretsHandler("secrets.store.set"),
+      "secrets.store.delete": secretsHandler("secrets.store.delete"),
+      "secrets.store.import": secretsHandler("secrets.store.import"),
+      "secrets.store.allowedHosts": secretsHandler("secrets.store.allowedHosts"),
     },
   };
 }

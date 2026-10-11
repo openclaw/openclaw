@@ -187,13 +187,6 @@ export function createSubagentRegistryContextCleanup(config: {
     return internalEffectsRemoved && attachmentsRemoved && contextEnded && isCurrent();
   }
 
-  function shouldEmitEndedHookForRun(params: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-  }) {
-    return params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session";
-  }
-
   async function emitSubagentEndedHookForRun(params: {
     entry: SubagentRunRecord;
     reason?: SubagentLifecycleEndedReason;
@@ -317,7 +310,10 @@ export function createSubagentRegistryContextCleanup(config: {
     cleanupCollectorLaunchResources,
     suppressAnnounceForSteerRestart: (entry?: SubagentRunRecord) =>
       entry?.suppressAnnounceReason === "steer-restart",
-    shouldEmitEndedHookForRun,
+    shouldEmitEndedHookForRun: (params: {
+      entry: SubagentRunRecord;
+      reason: SubagentLifecycleEndedReason;
+    }) => params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session",
     emitSubagentEndedHookForRun,
     reset: () => {
       endedHookInFlightOwners.clear();

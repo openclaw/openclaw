@@ -1,4 +1,4 @@
-import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import {
   isImageMediaFact,
   normalizeMediaFacts,
@@ -42,11 +42,7 @@ export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefi
   }
   let resolved = mediaUri;
   if (!resolved && /^file:/i.test(identity)) {
-    try {
-      resolved = safeFileURLToPath(identity);
-    } catch {
-      return undefined;
-    }
+    resolved = trySafeFileURLToPath(identity);
   } else if (
     !resolved &&
     (!URL_SCHEME_PATTERN.test(identity) || WINDOWS_DRIVE_PATH_PATTERN.test(identity))

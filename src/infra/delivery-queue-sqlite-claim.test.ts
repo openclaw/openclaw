@@ -10,7 +10,6 @@ import {
   promoteDeliveryQueueEntryPlatformSendInDatabase,
   transitionOwnedDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-claim.kernel.js";
-import { getDeliveryQueueEntryStatus, loadDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
   deleteDeliveryQueueEntryInDatabase,
@@ -18,7 +17,11 @@ import {
   reserveDeliveryQueueEntryAttemptInDatabase,
   updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
 import {
   claimDeliveryQueueEntryForTest,
   renewDeliveryQueueEntryLeaseForTest,

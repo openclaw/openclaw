@@ -46,8 +46,7 @@ const ConversationsSendSchema = Type.Object(
 
 const ConversationsTurnSchema = Type.Object(
   {
-    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN.source }),
-    message: Type.String({ minLength: 1 }),
+    ...ConversationsSendSchema.properties,
     timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
   },
   { additionalProperties: false },

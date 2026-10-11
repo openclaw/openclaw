@@ -207,6 +207,75 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("leaves ACP harness primaries to the harness and validates their native fallbacks", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          entries: {
+            main: {},
+            qursor: {
+              runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+              model: { primary: "composer-2.5", fallbacks: ["openai/gpt-5.4-mini"] },
+            },
+            opencode: { runtime: { type: "acp" }, model: "opencode/muse-spark-1.3" },
+          },
+        },
+      },
+      touchedPaths: [
+        ["agents", "entries", "qursor", "model"],
+        ["agents", "entries", "opencode", "model"],
+      ],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref)).toEqual([
+      {
+        path: "agents.entries.qursor.model.fallbacks.0",
+        value: "openai/gpt-5.4-mini",
+        agentId: "qursor",
+        fallback: true,
+      },
+    ]);
+  });
+
+  it("validates a harness primary as native when its agent leaves the ACP runtime", async () => {
+    const qursor = { model: { primary: "composer-2.5" } };
+    const result = await checkTouchedTextModelRefs({
+      previousConfig: {
+        agents: { entries: { main: {}, qursor: { ...qursor, runtime: { type: "acp" } } } },
+      },
+      config: { agents: { entries: { main: {}, qursor } } },
+      touchedPaths: [["agents", "entries", "qursor", "runtime"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref)).toEqual([
+      expect.objectContaining({
+        path: "agents.entries.qursor.model.primary",
+        value: "composer-2.5",
+        agentId: "qursor",
+      }),
+    ]);
+  });
+
+  it("validates a changed default primary for ACP agents that inherit it natively", async () => {
+    const entries = {
+      main: { model: "openai/gpt-5.4" },
+      qursor: { runtime: { type: "acp" }, model: "composer-2.5" },
+    };
+    const result = await checkTouchedTextModelRefs({
+      previousConfig: { agents: { defaults: { model: "anthropic/claude-sonnet-4-6" }, entries } },
+      config: { agents: { defaults: { model: "openai/gpt-5.4-mini" }, entries } },
+      touchedPaths: [["agents", "defaults", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.agentId)).toEqual(["qursor"]);
+  });
+
   it("uses list index paths for list-shaped agent model refs", async () => {
     const config: OpenClawConfigWithLegacyRoster = {
       agents: {
@@ -229,6 +298,37 @@ describe("config model validation", () => {
         fallback: false,
       },
     });
+  });
+
+  describe.each(["entries", "list"] as const)("new %s model refs", (source) => {
+    it.each([
+      { model: "ollama/qwen3:14b", suffix: "" },
+      { model: { primary: "ollama/qwen3:14b" }, suffix: ".primary" },
+      { model: { fallbacks: ["ollama/qwen3:14b"] }, suffix: ".fallbacks.0" },
+    ])(
+      "reports the authored value and resolver reason for model$suffix",
+      async ({ model, suffix }) => {
+        const agentPath = source === "entries" ? "agents.entries.ops" : "agents.list.0";
+        const result = await checkTouchedTextModelRefsRaw({
+          config: {
+            agents:
+              source === "entries"
+                ? { entries: { ops: { model } } }
+                : { list: [{ id: "ops", model }] },
+          },
+          previousConfig: {
+            agents: source === "entries" ? { entries: { ops: {} } } : { list: [{ id: "ops" }] },
+          },
+          touchedPaths: [`${agentPath}.model`.split(".")],
+          redactDependencyValues: true,
+          resolveModelRef: async () => "Unknown model: ollama/qwen3:14b",
+        });
+
+        expect(result.errors).toEqual([
+          `Cannot set model reference "ollama/qwen3:14b" at ${agentPath}.model${suffix}: Unknown model: ollama/qwen3:14b. Run openclaw models list to list available models.`,
+        ]);
+      },
+    );
   });
 
   it("does not validate unrelated or media model keys", async () => {
@@ -296,9 +396,23 @@ describe("config model validation", () => {
         value: "provider-a/model",
         agentId: "next",
         fallback: false,
-        dependency: true,
       },
     });
+  });
+
+  it("keeps model details redacted when an existing owner's casing changes", async () => {
+    const model = "private-provider/private-model";
+    const result = await checkTouchedTextModelRefsRaw({
+      config: { agents: { entries: { ops: { model } } } },
+      previousConfig: { agents: { entries: { OPS: { model } } } },
+      touchedPaths: [["agents", "entries"]],
+      redactDependencyValues: true,
+      resolveModelRef: async () => `Unknown model: ${model}`,
+    });
+
+    expect(result.errors).toEqual([
+      'Cannot set model reference "<configured model reference>" at agents.entries.ops.model: Unable to resolve authored model reference. Run openclaw models list to list available models.',
+    ]);
   });
 
   it("validates defaults newly inherited after removing an agent model override", async () => {
@@ -384,20 +498,32 @@ function modelConfig(model: { primary?: string; fallbacks?: string[] }): OpenCla
 }
 
 describe("config model validation env handling", () => {
-  it("reports an authored placeholder without exposing its expanded value", async () => {
-    const resolveModelRef = vi.fn(async () => "Unknown model: private-provider/private-model");
-    const result = await checkTouchedTextModelRefsRaw({
-      config: modelConfig({ primary: "${MODEL_REF}" }),
-      touchedPaths: [["agents", "defaults", "model", "primary"]],
-      env: { MODEL_REF: "private-provider/private-model@work" },
-      resolveModelRef,
-    });
-    expect(result.errors).toEqual([expect.stringContaining('model reference "${MODEL_REF}"')]);
-    expect(result.errors).toEqual([
-      expect.stringContaining("Unable to resolve authored model reference"),
-    ]);
-    expect(result.errors.join("\n")).not.toContain("private-provider");
-  });
+  it.each(["defaults", "entries"] as const)(
+    "reports a new %s placeholder without exposing its expanded value",
+    async (source) => {
+      const resolveModelRef = vi.fn(async () => "Unknown model: private-provider/private-model");
+      const result = await checkTouchedTextModelRefsRaw({
+        config:
+          source === "defaults"
+            ? modelConfig({ primary: "${MODEL_REF}" })
+            : { agents: { entries: { ops: { model: "${MODEL_REF}" } } } },
+        previousConfig: { agents: { entries: { ops: {} } } },
+        touchedPaths: [
+          source === "defaults"
+            ? ["agents", "defaults", "model", "primary"]
+            : ["agents", "entries", "ops", "model"],
+        ],
+        env: { MODEL_REF: "private-provider/private-model@work" },
+        redactDependencyValues: true,
+        resolveModelRef,
+      });
+      expect(result.errors).toEqual([expect.stringContaining('model reference "${MODEL_REF}"')]);
+      expect(result.errors).toEqual([
+        expect.stringContaining("Unable to resolve authored model reference"),
+      ]);
+      expect(result.errors.join("\n")).not.toContain("private-provider");
+    },
+  );
 
   it("redacts provider details inherited indirectly from an expanded primary", async () => {
     const resolveModelRef = vi.fn(async ({ ref }: ResolverInput) =>

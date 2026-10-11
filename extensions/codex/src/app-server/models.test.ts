@@ -51,7 +51,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal)
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let listAllCodexAppServerModels: typeof import("./models.js").listAllCodexAppServerModels;
 let readModelListResult: typeof import("./models.js").readModelListResult;
-let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
+let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.test-support.js").resetSharedCodexAppServerClientForTests;
 
 const validModelListEntry = {
   id: "gpt-test",
@@ -88,7 +88,7 @@ describe("listCodexAppServerModels", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels, listAllCodexAppServerModels, readModelListResult } =
       await import("./models.js"));
-    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.js"));
+    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.test-support.js"));
   });
 
   afterEach(() => {

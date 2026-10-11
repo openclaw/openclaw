@@ -4,7 +4,7 @@ import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../../llm/types.js";
@@ -193,15 +193,28 @@ export type ReplyBackendMessageInjectionV2 = {
     preparation: ReplyToolAuthorityPreparation,
     authorityKind: "run" | "source-bound",
   ): Promise<void | ReplyBackendQueueMessageResult>;
+  /** @deprecated Use claimPendingUserInputAnswerAsync with fresh policy preparation. */
   claimPendingUserInputAnswer?(
     text: string,
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
+  claimPendingUserInputAnswerAsync?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    preparation: ReplyToolAuthorityPreparation,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  /** @deprecated Use cancelPendingUserInputAsync with fresh policy preparation. */
   cancelPendingUserInput?(
     resolvedBy: string,
     assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  cancelPendingUserInputAsync?(
+    resolvedBy: string,
+    preparation: ReplyToolAuthorityPreparation,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
 };
@@ -298,7 +311,7 @@ export type ReplyMessageInjectionRejectionReason =
 
 export type ReplyMessageInjectionOutcome =
   | { status: "indeterminate"; errorMessage: string }
-  | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
+  | { status: "accepted" }
   /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
   | { status: "failed"; error: Error }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
@@ -414,6 +427,7 @@ export type ReplyOperation = {
   /** @deprecated Use projectToolAuthorityFingerprintAsync. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   projectToolAuthorityFingerprintAsync(
+    this: void,
     overlay: ReplyToolAuthorityOverlay,
   ): Promise<string | undefined>;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */

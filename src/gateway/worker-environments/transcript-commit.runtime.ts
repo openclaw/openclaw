@@ -5,6 +5,7 @@ import {
   publishTranscriptUpdate,
   withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptWriteScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishSessionEntryWorkerMetadataInvalidation } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   resolveSqliteTranscriptScope,
@@ -12,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -33,6 +35,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { prepareWorkerTurnTranscriptMessage } from "./placement-turn-claim-events.js";
 import type {
@@ -48,10 +51,12 @@ import {
   applyPreparedTranscriptCommit,
   isCommittedAgentMessage,
   prepareTranscriptCommit,
-  type ApplyTranscriptCommitResult,
-  type CommittedAgentMessage,
-  type TranscriptCommitInput,
 } from "./transcript-commit.kernel.js";
+import type {
+  ApplyTranscriptCommitResult,
+  CommittedAgentMessage,
+  TranscriptCommitInput,
+} from "./transcript-commit.types.js";
 import type { WorkerTranscriptOperations } from "./transcript-commit.worker.js";
 
 const log = createSubsystemLogger("gateway/worker-transcript");
@@ -62,17 +67,21 @@ async function applyWorkerTranscriptCommit(params: {
   config: OpenClawConfig;
   identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
+  assistantItemIds: ReadonlyMap<string, string>;
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
   runId: string | null;
   target: BoundAgentRunSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
-  const target = withOwnedSessionTranscriptWriterFence({
+  const target = withOwnedSessionTranscriptWriterFence<
+    BoundAgentRunSessionTarget & SessionTranscriptWriteScope
+  >({
     ...captureSessionTranscriptTargetBinding(params.target),
     expectedLifecycleRevision: params.target.expectedLifecycleRevision,
     expectedWriterRunId: params.target.expectedWriterRunId,
   });
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
+  const incognito = captureIncognitoSessionOperation(target);
   const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const assertCurrent = () => {
     params.assertCurrent();
@@ -105,7 +114,46 @@ async function applyWorkerTranscriptCommit(params: {
     });
   };
   let applied: ApplyTranscriptCommitResult;
-  if (isIncognitoSessionKey(target.sessionKey)) {
+  if (incognito) {
+    const preparedMessages = prepareFresh(0);
+    if (!preparedMessages) {
+      return { ok: false, reason: "invalid-batch" };
+    }
+    const { scope: _scope, ...batch } = input;
+    const committed = await incognito.actor.sessions.transcript(
+      {
+        assertCurrent: () => {
+          incognito.authority.assertCurrent();
+          assertCurrent();
+        },
+      },
+      {
+        type: "session.workerTranscript.commit",
+        input: {
+          sessionKey: target.sessionKey,
+          sessionId: target.sessionId,
+          fence: {
+            expectedLifecycleRevision: target.expectedLifecycleRevision,
+            expectedWriterRunId: target.expectedWriterRunId,
+            expectedOwner: target.expectedOwner,
+          },
+          batch,
+          preparedMessages,
+        },
+      },
+      incognito.admissionSignal,
+      undefined,
+      ({ projectionNeedsReconcile }) => {
+        if (projectionNeedsReconcile) {
+          startSessionTranscriptIndexReconcile({
+            ...options,
+            preferredSessionId: target.sessionId,
+          });
+        }
+      },
+    );
+    applied = committed.result;
+  } else if (isIncognitoSessionKey(target.sessionKey)) {
     // Incognito retains its process-held database until the worker-owned cutover.
     let projectionNeedsReconcile = false;
     applied = await withTranscriptWriteTransaction(target, (): ApplyTranscriptCommitResult => {
@@ -182,15 +230,12 @@ async function applyWorkerTranscriptCommit(params: {
       outcome = { ok: false, error };
     }
     const cleanupFailures: unknown[] = [];
-    try {
-      await worker?.close();
-    } catch (error) {
-      cleanupFailures.push(error);
-    }
-    try {
-      await execution.release();
-    } catch (error) {
-      cleanupFailures.push(error);
+    for (const close of [() => worker?.close(), () => execution.release()]) {
+      try {
+        await close();
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
     }
     if (cleanupFailures.length > 0) {
       const cleanupError = createSqliteLifecycleAggregateError(
@@ -219,7 +264,13 @@ async function applyWorkerTranscriptCommit(params: {
   }
 
   for (const message of applied.messages) {
-    if (!message.appended) {
+    const itemId =
+      message.message.role === "assistant"
+        ? params.assistantItemIds.get(readTranscriptMessageIdempotencyKey(message.message) ?? "")
+        : undefined;
+    // Pending recovery can find a committed row whose original publication was lost.
+    // A recovered sequence certifies active-branch membership; abandoned rows stay silent.
+    if (!message.appended && (!itemId || message.messageSeq === undefined)) {
       continue;
     }
     const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
@@ -228,6 +279,7 @@ async function applyWorkerTranscriptCommit(params: {
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
+      ...(itemId ? { assistantItemIds: [itemId] } : {}),
       ...(runId ? { runId } : {}),
     });
   }
@@ -257,13 +309,21 @@ export async function commitWorkerTranscript(
     expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision,
     expectedWriterRunId: params.sessionTarget.expectedWriterRunId,
   });
-  // Ingress validated the closed schema; clone every admitted field before transcript redaction.
-  const messages = params.request.messages.map((message, index) => ({
-    ...structuredClone(message),
-    idempotencyKey: `worker-commit-${sha256Base64Url(
+  const assistantItemIds = new Map<string, string>();
+  // Correlation belongs to the commit receipt, never stored or provider-visible content.
+  const messages = params.request.messages.map((message, index) => {
+    const idempotencyKey = `worker-commit-${sha256Base64Url(
       [sessionId, params.request.runEpoch, params.request.seq, index].join("\0"),
-    )}`,
-  }));
+    )}`;
+    if (message.role === "assistant") {
+      const { itemId, ...assistant } = structuredClone(message);
+      if (itemId) {
+        assistantItemIds.set(idempotencyKey, itemId);
+      }
+      return { ...assistant, idempotencyKey };
+    }
+    return { ...structuredClone(message), idempotencyKey };
+  });
   const requestedBaseLeafId = params.request.baseLeafId;
   params.assertCurrent();
   const started = await store.begin(input, params.assertCurrent);
@@ -291,6 +351,7 @@ export async function commitWorkerTranscript(
       config,
       identity: params.identity,
       messages,
+      assistantItemIds,
       recoverPersistedBatch: started.kind === "recover",
       requestedBaseLeafId,
       runId: params.identity.runId,

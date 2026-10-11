@@ -1,4 +1,3 @@
-// Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";

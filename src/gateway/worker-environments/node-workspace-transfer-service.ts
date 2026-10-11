@@ -6,7 +6,6 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
-  createNodeWorkspaceSyncAuthorization,
   isNodeWorkspaceTransferOwnerCurrent,
   type NodeWorkspaceTransferOwner,
 } from "./node-workspace-transfer-owner.js";
@@ -33,7 +32,6 @@ type TransferBinding = {
   environmentId: string;
   ownerEpoch: number;
   sessionId: string;
-  generation: number;
 };
 
 type DownloadCapability = {
@@ -80,10 +78,19 @@ type TransferAuthorization = {
 
 type TransferPreparation = Pick<
   TransferContext,
-  "environmentId" | "ownerEpoch" | "sessionId" | "generation" | "isAuthorized"
+  "environmentId" | "ownerEpoch" | "sessionId" | "isAuthorized"
 > & { signal?: AbortSignal; authorize?: () => void };
 type RepositoryPreparation = TransferPreparation & { baseCommit: string; baseManifestRef: string };
 type SyncPreparation = TransferPreparation & { localPath: string };
+
+function isOperationAuthorized(authorize: (() => void) | undefined): boolean {
+  try {
+    authorize?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function createNodeWorkspaceTransferService(options: {
   getOwner: (environmentId: string) => NodeWorkspaceTransferOwner | undefined;
@@ -251,11 +258,17 @@ export function createNodeWorkspaceTransferService(options: {
     params: (RepositoryPreparation & { kind: "repository" }) | (SyncPreparation & { kind: "sync" }),
   ): Promise<void | { snapshot: NodeWorkspaceTransferSnapshot; token: string }> {
     const { authorize, ...owner } = params;
-    const { assertCurrent, isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
-      owner,
-      authorize,
-      options.getOwner,
-    );
+    const getOwner = options.getOwner;
+    const assertCurrent = () => {
+      owner.signal?.throwIfAborted();
+      authorize?.();
+      if (
+        !owner.isAuthorized() ||
+        !isNodeWorkspaceTransferOwnerCurrent(owner, getOwner(owner.environmentId))
+      ) {
+        throw new Error("Node workspace transfer owner is no longer current");
+      }
+    };
     return await contextOperations.enqueue(params.environmentId, async () => {
       assertCurrent();
       const previous = contexts.get(params.environmentId);
@@ -297,7 +310,12 @@ export function createNodeWorkspaceTransferService(options: {
         // Only this download retains initiating-turn authority; future workspace
         // operations keep their independent placement owner.
         return snapshot
-          ? { snapshot, token: mintDownload(context, snapshot.manifestRef, isOperationAuthorized) }
+          ? {
+              snapshot,
+              token: mintDownload(context, snapshot.manifestRef, () =>
+                isOperationAuthorized(authorize),
+              ),
+            }
           : undefined;
       } catch (error) {
         await closeContext(context);
@@ -358,18 +376,13 @@ export function createNodeWorkspaceTransferService(options: {
         throw new Error("Node workspace transfer upload is already active");
       }
       const token = generateSecureToken({ bytes: 32, redact: true });
-      const { isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
-        context,
-        authorize,
-        options.getOwner,
-      );
       context.upload = {
         direction: "upload",
         token,
         baseManifestRef,
         expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
-        isAuthorized: isOperationAuthorized,
+        isAuthorized: () => isOperationAuthorized(authorize),
         abortController: new AbortController(),
       };
       return token;
@@ -422,12 +435,7 @@ export function createNodeWorkspaceTransferService(options: {
       context.snapshots.set(snapshot.manifestRef, snapshot);
       context.currentManifestRef = snapshot.manifestRef;
       pruneSnapshots(context);
-      const { isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
-        context,
-        authorize,
-        options.getOwner,
-      );
-      return mintDownload(context, snapshot.manifestRef, isOperationAuthorized);
+      return mintDownload(context, snapshot.manifestRef, () => isOperationAuthorized(authorize));
     },
 
     async revoke(environmentId: string, token: string): Promise<void> {

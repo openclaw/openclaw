@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -396,4 +397,38 @@ export function createCronTestInvoker(
     });
     return { context, respond };
   };
+}
+
+export function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
+}
+
+export const requireRecord = createRequireRecord("record", "expected-label-object");
+
+export function requireCronAddPayload(
+  context: ReturnType<typeof createCronTestContext>,
+): Record<string, unknown> {
+  return requireRecord(context.cron.add.mock.calls[0]?.[0], "cron.add payload");
+}
+
+export function expectResponseError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
+) {
+  const call = respond.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected response call");
+  }
+  expect(call[0]).toBe(false);
+  expect(call[1]).toBeUndefined();
+  const error = requireRecord(call[2], "response error");
+  if (expected.code) {
+    expect(error.code).toBe(expected.code);
+  }
+  if (expected.messageIncludes) {
+    expect(String(error.message)).toContain(expected.messageIncludes);
+  }
+  if (expected.details) {
+    expect(error.details).toEqual(expected.details);
+  }
 }

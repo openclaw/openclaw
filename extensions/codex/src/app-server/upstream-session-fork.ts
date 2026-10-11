@@ -28,6 +28,9 @@ import {
   resolveCodexUpstreamForkBoundary,
 } from "./upstream-fork-boundary.js";
 
+const UNAVAILABLE_CONNECTION_MESSAGE =
+  "This Codex thread is not available on the current connection. Reconnect to its host and try again.";
+
 function unavailable(message: string): AgentHarnessSessionForkResult {
   return { status: "failed", code: "upstream-unavailable", message };
 }
@@ -51,12 +54,10 @@ export async function forkCodexUpstreamSession(
       ? await options.controlFactory.forUpstream(params.source.agentId, sourceFingerprint)
       : undefined;
     if (!sourceFingerprint || !requestControl) {
-      return unavailable(
-        "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
-      );
+      return unavailable(UNAVAILABLE_CONNECTION_MESSAGE);
     }
     return await requestControl.withPinnedConnection(async (control) => {
-      const sourceBinding = options.bindingStore.read(
+      const sourceBinding = await options.bindingStore.readAsync(
         sessionBindingIdentity({ ...params.source, config: options.resolveConfig?.() }),
       );
       // Imported identities remain rooted at S; new canonical turns belong to C.
@@ -88,9 +89,7 @@ export async function forkCodexUpstreamSession(
             (sourceBinding.pendingSupervisionBranch?.connectionFingerprint ??
               sourceBinding.appServerRuntimeFingerprint) !== sourceFingerprint))
       ) {
-        return unavailable(
-          "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
-        );
+        return unavailable(UNAVAILABLE_CONNECTION_MESSAGE);
       }
       const resolved = await resolveCodexUpstreamForkBoundary({
         ...params.source,

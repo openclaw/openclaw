@@ -121,22 +121,20 @@ export function nativeHookRelayEventToolMatcher(
   return undefined;
 }
 
+const nativeHookRelayHandlers = {
+  pre_tool_use: runNativeHookRelayPreToolUse,
+  post_tool_use: runNativeHookRelayPostToolUse,
+  before_agent_finalize: runNativeHookRelayBeforeAgentFinalize,
+  permission_request: runNativeHookRelayPermissionRequest,
+};
+
 export async function processNativeHookRelayInvocation(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   executionAdmission?: NativeHookRelayExecutionAdmission;
   assertExecutionAdmissionCurrent: () => void;
 }): Promise<NativeHookRelayProcessResponse> {
-  if (params.invocation.event === "pre_tool_use") {
-    return runNativeHookRelayPreToolUse(params);
-  }
-  if (params.invocation.event === "post_tool_use") {
-    return runNativeHookRelayPostToolUse(params);
-  }
-  if (params.invocation.event === "before_agent_finalize") {
-    return runNativeHookRelayBeforeAgentFinalize(params);
-  }
-  return runNativeHookRelayPermissionRequest(params);
+  return nativeHookRelayHandlers[params.invocation.event](params);
 }
 
 async function runNativeHookRelayPreToolUse(

@@ -129,7 +129,7 @@ export async function inspectWithContext(
 }
 
 export function remainingProvisionTimeout(deadline: number, maximum: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = deadline - performance.now();
   if (remaining <= 0) {
     throw new Error("Crabbox provision exceeded its provider deadline");
   }

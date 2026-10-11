@@ -3,10 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Compilable } from "kysely";
 import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
-import {
-  attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumns,
-} from "../config/sessions/session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "../config/sessions/session-entry-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -22,7 +20,7 @@ import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
   type OpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -138,7 +136,7 @@ export async function repairReservedIncognitoSessionKeys(params: {
       });
     } finally {
       if (!wasOpen) {
-        closeOpenClawAgentDatabaseByPath(target.sqlitePath);
+        await closeOpenClawAgentDatabaseByPathAsync(target.sqlitePath);
       }
     }
   }

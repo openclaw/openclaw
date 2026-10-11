@@ -10,8 +10,9 @@ import { readIncognitoSessionSteeringEntry } from "../../config/sessions/session
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionEntriesFromStoresInWorker,
-} from "../../config/sessions/session-entry-read-runtime.js";
+} from "../../config/sessions/session-entry-read-request.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -28,6 +29,21 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
+
+function prepareCurrentSteeringRead(assertCurrent: () => void) {
+  return {
+    prepareCurrent: async () => {
+      assertCurrent();
+      if (isToolAuthorityReadCaptureActive()) {
+        recordPreparedToolAuthorityRead({
+          reads: [],
+          assertPrepared: assertCurrent,
+          assertLegacyCurrent: assertCurrent,
+        });
+      }
+    },
+  };
+}
 
 /** Carry terminal-delivery eligibility into the target's final prepared admission. */
 export function prepareSteeringDelivery(params: {
@@ -68,6 +84,18 @@ export function prepareSteeringDelivery(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    const claim = binding.actor.sessions.captureCurrent(scope.sessionKey);
+    const assertActorCurrent = () => {
+      params.assertCurrent();
+      binding.admissionSignal?.throwIfAborted();
+      binding.actor.assertReadable();
+      claim.assertCurrent();
+      assertEntry(binding.actor.sessions.readSteering(scope.sessionKey));
+    };
+    return prepareCurrentSteeringRead(assertActorCurrent);
+  }
   if (isNativeSessionEntryRead(scope, agentId)) {
     const storePath = isIncognitoSessionKey(scope.sessionKey)
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.agentId, env: scope.env })
@@ -82,22 +110,18 @@ export function prepareSteeringDelivery(params: {
         owner ? readIncognitoSessionSteeringEntry(owner.db, scope.sessionKey) : undefined,
       );
     };
-    return {
-      prepareCurrent: async () => {
-        assertNativeCurrent();
-        if (isToolAuthorityReadCaptureActive()) {
-          recordPreparedToolAuthorityRead({
-            reads: [],
-            assertPrepared: assertNativeCurrent,
-            assertLegacyCurrent: assertNativeCurrent,
-          });
-        }
-      },
-    };
+    return prepareCurrentSteeringRead(assertNativeCurrent);
   }
   const candidates = captureSessionStoreReadCandidates(scope.storePath!);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   let selectedPath: string | undefined;
+  const bindSelectedPath = (path: string) => {
+    const physicalPath = assertSessionStoreReadCandidate(path, candidates);
+    if (selectedPath !== undefined && selectedPath !== physicalPath) {
+      throw new Error("Steering delivery selected store changed");
+    }
+    selectedPath = physicalPath;
+  };
   const assertSources = () => {
     params.assertCurrent();
     for (const candidate of candidates) {
@@ -139,11 +163,7 @@ export function prepareSteeringDelivery(params: {
       assertSources();
       const read = reads[0]!;
       read.assertCurrent();
-      const physicalPath = assertSessionStoreReadCandidate(read.database.path, candidates);
-      if (selectedPath !== undefined && selectedPath !== physicalPath) {
-        throw new Error("Steering delivery selected store changed");
-      }
-      selectedPath = physicalPath;
+      bindSelectedPath(read.database.path);
       assertEntry(
         resolveSessionEntryCandidates({
           entries: read.result.entries,
@@ -165,11 +185,7 @@ export function prepareSteeringDelivery(params: {
         await withSessionEntriesFromStoresInWorker(descriptor.reads, descriptor.assertPrepared, {
           prepareSource: (_input, database, identity) => {
             assertSources();
-            const physicalPath = assertSessionStoreReadCandidate(database.path, candidates);
-            if (selectedPath !== undefined && selectedPath !== physicalPath) {
-              throw new Error("Steering delivery selected store changed");
-            }
-            selectedPath = physicalPath;
+            bindSelectedPath(database.path);
             if (!identities.has(identity.canonicalPath)) {
               identities.set(identity.canonicalPath, identity);
             }

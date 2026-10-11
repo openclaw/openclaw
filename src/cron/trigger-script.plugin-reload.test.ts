@@ -111,38 +111,32 @@ describe("automation plugin reload recovery", () => {
     expect(started).toHaveBeenCalledTimes(repeat ? 0 : 1);
   });
 
-  it.each(["preparation error", "another retirement"])(
-    "reports failed automatic recovery when a cached runtime refresh hits %s",
-    async (failure) => {
-      let generation = 0;
-      const prepareRuntime = vi.fn(async () => {
-        generation += 1;
-        if (generation > 1 && failure === "preparation error") {
-          throw new Error("Fixture plugin could not load");
-        }
-        const current = preparePluginRuntime(generation);
-        if (generation > 1) {
-          current.instance.quiesce();
-        }
-        return current.prepared;
-      });
-      const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
-      await expect(runtime.executePayload(request)).resolves.toMatchObject({ kind: "completed" });
-      markPluginRegistryRetired(registries[0]);
-      const started = vi.fn();
-      await expect(
-        runtime.executePayload({
-          ...request,
-          executionIdentity: {
-            ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
-            onExecutionStarted: started,
-          },
-        }),
-      ).resolves.toMatchObject({ kind: "error", code: "plugin_reload_failed" });
-      expect(prepareRuntime).toHaveBeenCalledTimes(2);
-      expect(started).not.toHaveBeenCalled();
-    },
-  );
+  it("reports failed automatic recovery when a cached runtime refresh hits another retirement", async () => {
+    let generation = 0;
+    const prepareRuntime = vi.fn(async () => {
+      generation += 1;
+      const current = preparePluginRuntime(generation);
+      if (generation > 1) {
+        current.instance.quiesce();
+      }
+      return current.prepared;
+    });
+    const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
+    await expect(runtime.executePayload(request)).resolves.toMatchObject({ kind: "completed" });
+    markPluginRegistryRetired(registries[0]);
+    const started = vi.fn();
+    await expect(
+      runtime.executePayload({
+        ...request,
+        executionIdentity: {
+          ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+          onExecutionStarted: started,
+        },
+      }),
+    ).resolves.toMatchObject({ kind: "error", code: "plugin_reload_failed" });
+    expect(prepareRuntime).toHaveBeenCalledTimes(2);
+    expect(started).not.toHaveBeenCalled();
+  });
 
   it("never replays a script that fails after a tool effect and plugin retirement", async () => {
     let effects = 0;

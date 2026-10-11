@@ -80,14 +80,6 @@ function isExecutionAliasCandidateForProvider(
   );
 }
 
-/**
- * Resolve the effective image model config for the `view_image` tool.
- *
- * - Prefer explicit config (`agents.defaults.imageModel`).
- * - Otherwise, try to "pair" the primary model with an image-capable model:
- *   - same provider (best effort)
- *   - fall back to OpenAI/Anthropic when available
- */
 function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -235,12 +227,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
-  const limit =
-    asPositiveFiniteNumber(maxBytesMb) ?? asPositiveFiniteNumber(cfg?.agents?.defaults?.mediaMaxMb);
-  return limit === undefined ? undefined : Math.floor(limit * 1024 * 1024);
-}
-
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -281,15 +267,17 @@ export function createImageTool(options?: {
       : null;
   const shouldResolveAutoImageModel =
     !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
+  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
+    resolveImageModelConfigForTool({
+      cfg: options?.config,
+      agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      authProfileStoreSource,
+      preparedModelRuntime: options?.preparedModelRuntime,
+    });
   const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveImageModelConfigForTool({
-        cfg: options?.config,
-        agentDir,
-        workspaceDir: options?.workspaceDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
-        preparedModelRuntime: options?.preparedModelRuntime,
-      })
+    ? resolveInitialModelConfig(options?.authProfileStoreSource)
     : explicitImageModelConfig;
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
@@ -365,12 +353,14 @@ export function createImageTool(options?: {
           record,
           DEFAULT_PROMPT,
         );
-        const maxBytesMb = readFiniteNumberParam(record, "maxBytesMb", {
-          min: 0,
-          minExclusive: true,
-          message: "maxBytesMb must be greater than 0",
-        });
-        const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
+        const maxBytesMb =
+          readFiniteNumberParam(record, "maxBytesMb", {
+            min: 0,
+            minExclusive: true,
+            message: "maxBytesMb must be greater than 0",
+          }) ?? asPositiveFiniteNumber(options?.config?.agents?.defaults?.mediaMaxMb);
+        const maxBytes =
+          maxBytesMb === undefined ? undefined : Math.floor(maxBytesMb * 1024 * 1024);
         let imageRoute:
           | { kind: "native" }
           | {
@@ -390,14 +380,7 @@ export function createImageTool(options?: {
           if (!imageModelConfig) {
             const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
             assertCurrent();
-            imageModelConfig = resolveImageModelConfigForTool({
-              cfg: options?.config,
-              agentDir,
-              workspaceDir: options?.workspaceDir,
-              authStore: options?.authProfileStore,
-              authProfileStoreSource,
-              preparedModelRuntime: options?.preparedModelRuntime,
-            });
+            imageModelConfig = resolveInitialModelConfig(authProfileStoreSource);
           }
           if (!imageModelConfig) {
             throw new Error(

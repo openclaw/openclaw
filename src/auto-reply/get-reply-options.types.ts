@@ -16,7 +16,12 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 /** An accepted visible work session and its canonical Control UI link. */
-export type VisibleWorkSession = { sessionKey: string; url: string; label?: string };
+export type VisibleWorkSession = {
+  sessionKey: string;
+  url: string;
+  label?: string;
+  publicRead?: boolean;
+};
 
 /** A successful runtime append, independent of optional active-path projection anchors. */
 export type ReplyDispatchAssistantTranscript = Pick<
@@ -245,6 +250,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Keep automatic progress private for turns whose canonical reply expectation is optional. */
+  progressRequiresReply?: boolean;
   /** Suppress standalone tool/progress text even when verbose progress is enabled. */
   suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */

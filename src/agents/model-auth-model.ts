@@ -1,6 +1,3 @@
-/**
- * Model-level auth diagnostics and request-header preparation.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -101,7 +98,6 @@ export function resolveModelAuthMode(
   return "unknown";
 }
 
-/** Checks provider auth availability, including profile fallback order. */
 export async function hasAvailableAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -220,7 +216,6 @@ export async function hasAvailableAuthForProvider(params: {
   return false;
 }
 
-/** Resolves request credentials from the provider attached to a model descriptor. */
 export async function getApiKeyForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;
@@ -307,11 +302,12 @@ export function applySecretRefHeaderSentinels<T extends Model>(
   const isManagedSecret = (value: unknown) =>
     parseSecretRef(value) !== null ||
     (typeof value === "string" && isSecretRefHeaderValueMarker(value));
+  const sentinelize = (value: string) =>
+    mintSecretSentinel(value, { label: `model-auth:${model.provider}` });
   const addReplacement = (name: string, value: string, replacement?: string) => {
     replacements.set(name.trim().toLowerCase(), {
       value,
-      replacement:
-        replacement ?? mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
+      replacement: replacement ?? sentinelize(value),
     });
   };
   for (const [sourceHeaders, runtimeHeaders] of [
@@ -342,9 +338,7 @@ export function applySecretRefHeaderSentinels<T extends Model>(
       continue;
     }
     protectedRequestHeaders ??= { ...attachedRequest.headers };
-    protectedRequestHeaders[name] = mintSecretSentinel(value, {
-      label: `model-auth:${model.provider}`,
-    });
+    protectedRequestHeaders[name] = sentinelize(value);
   }
   if (protectedRequestHeaders && attachedRequest) {
     protectedRequest = { ...attachedRequest, headers: protectedRequestHeaders };
@@ -361,15 +355,11 @@ export function applySecretRefHeaderSentinels<T extends Model>(
           ...protectedRequest,
           auth: {
             ...attachedRequest.auth,
-            token: mintSecretSentinel(token, { label: `model-auth:${model.provider}` }),
+            token: sentinelize(token),
           },
         };
       }
-      addReplacement(
-        "Authorization",
-        `Bearer ${token}`,
-        `Bearer ${mintSecretSentinel(token, { label: `model-auth:${model.provider}` })}`,
-      );
+      addReplacement("Authorization", `Bearer ${token}`, `Bearer ${sentinelize(token)}`);
     }
   } else if (
     sourceAuth?.mode === "header" &&
@@ -385,15 +375,11 @@ export function applySecretRefHeaderSentinels<T extends Model>(
           ...protectedRequest,
           auth: {
             ...attachedRequest.auth,
-            value: mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
+            value: sentinelize(value),
           },
         };
       }
-      addReplacement(
-        headerName,
-        `${prefix}${value}`,
-        `${prefix}${mintSecretSentinel(value, { label: `model-auth:${model.provider}` })}`,
-      );
+      addReplacement(headerName, `${prefix}${value}`, `${prefix}${sentinelize(value)}`);
     }
   }
   let headers: Record<string, string> | undefined;

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -55,6 +56,7 @@ describe("Memory observation lifecycle", () => {
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
     const watcher = new MemoryFileWatcher({
+      runInBackgroundContext: AsyncLocalStorage.snapshot(),
       workspaceDir: state.workspaceDir,
       agentId: "main",
       settings: {

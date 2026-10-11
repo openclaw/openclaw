@@ -7,6 +7,7 @@ import type {
 import {
   clearNodePairingGenerationState,
   listApprovedPairedDeviceRoles,
+  resolveApprovedDeviceScopeBaseline,
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
@@ -43,14 +44,6 @@ function deviceTokenIssuerMatches(
     return !entry.issuer;
   }
   return entry.issuer?.kind === issuer.kind && entry.issuer.generation === issuer.generation;
-}
-
-function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
-  const baseline = device.approvedScopes ?? device.scopes;
-  if (!Array.isArray(baseline)) {
-    return null;
-  }
-  return normalizeDeviceAuthScopes(baseline);
 }
 
 function scopesWithinApprovedDeviceBaseline(params: {

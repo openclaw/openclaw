@@ -16,7 +16,7 @@ import {
 } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import {
   enqueueFollowupRun,
@@ -219,33 +219,6 @@ describe("runReplyAgent stalled turn continuation", () => {
     replyRunTesting.resetReplyRunRegistry();
   });
 
-  it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
-    const stalled = createStalledRun();
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    expect(getFollowupQueueDepth(queueKey)).toBe(1);
-    // The lane stays dormant until the stalled owner releases the session.
-    expect(drainedRuns).not.toHaveBeenCalled();
-
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.stalledTurnRecovery).toBe(true);
-    expect(recovery?.prompt).toContain("previous turn stopped making progress");
-    // Replay safety: the inbound request is not re-sent or re-persisted.
-    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(recovery?.transcriptPrompt).toBeUndefined();
-    expect(recovery?.images).toBeUndefined();
-    expect(recovery?.abortSignal).toBeUndefined();
-    expect(recovery?.run.sessionKey).toBe(queueKey);
-    expect(stalled.recorder.hasPersisted()).toBe(true);
-    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
-      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
-    ]);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
-  });
-
   it.each(["followup", "collect"] as const)(
     "sends one last-resort notice when the claimed %s request also stalls",
     async (mode) => {
@@ -312,6 +285,16 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingTo: "12345",
       run: { senderId: "traveler" },
     });
+    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
+    expect(recovery?.transcriptPrompt).toBeUndefined();
+    expect(recovery?.images).toBeUndefined();
+    expect(recovery?.abortSignal).toBeUndefined();
+    expect(recovery?.run.sessionKey).toBe(queueKey);
+    expect(stalled.recorder.hasPersisted()).toBe(true);
+    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
+      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
+    ]);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
     expect(next).toBe(queued);
     expect(last).toBe(sameSenderLater);
   });
@@ -363,41 +346,6 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(drainedRuns).not.toHaveBeenCalled();
   });
 
-  it("delivers a Web UI chat.send recovery through the turn's queued reply owner", async () => {
-    const gatewayDeliver = vi.fn(async () => ({ kind: "delivered" as const }));
-    const chatSendOwner = createChatSendLateFollowupDisposition({
-      runId: "chat-send-run",
-      originatingChannel: "webchat",
-      logGateway: { info: vi.fn() } as never,
-      deliver: gatewayDeliver,
-    });
-    const stalled = createStalledRun({
-      queuedFollowupReplyDisposition: { kind: "deliver", deliver: chatSendOwner.deliver },
-    });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    const recovery = drainedRuns.mock.calls[0]?.[0];
-    if (recovery?.queuedFollowupReplyDisposition?.kind !== "deliver") {
-      throw new Error("Recovery lost its chat.send reply owner");
-    }
-    await recovery.queuedFollowupReplyDisposition.deliver({
-      kind: "queued-followup",
-      runId: "recovery-run",
-      originatingChannel: "webchat",
-      payloads: [{ text: "recovered answer" }],
-      completion: { kind: "completed" },
-    });
-    expect(gatewayDeliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId: "recovery-run",
-        payloads: [{ text: "recovered answer" }],
-      }),
-    );
-  });
-
   it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {
     mocks.executeFollowups = true;
     const settled = createDeferred();
@@ -408,6 +356,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingChannel: "webchat",
       logGateway: context.logGateway,
       deliver: createChatSendLateReplyFinalizer({
+        terminalEntry: undefined,
         accountId: undefined,
         context,
         session: {
@@ -450,36 +399,33 @@ describe("runReplyAgent stalled turn continuation", () => {
     ]);
   });
 
-  it.each(["personal", "workspace"] as const)(
-    "never lets a %s-target recovery author skills while keeping its other tools",
-    async (defaultTarget) => {
-      const stalled = createStalledRun({
-        skillLibraryAuthoring: {
-          target: "personal",
-          defaultTarget,
-          multipleProfiles: true,
-          bind: () => {
-            throw new Error("Personal authoring cannot move to a replacement run.");
-          },
-          invoke: vi.fn(),
+  it("never lets a workspace-target recovery author skills while keeping its other tools", async () => {
+    const stalled = createStalledRun({
+      skillLibraryAuthoring: {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: () => {
+          throw new Error("Personal authoring cannot move to a replacement run.");
         },
-      });
-      await stallBeforeOutput(stalled);
+        invoke: vi.fn(),
+      },
+    });
+    await stallBeforeOutput(stalled);
 
-      expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-      await settleStalledOwner(stalled);
-      await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-      const recovery = drainedRuns.mock.calls[0]?.[0];
-      expect(recovery?.disableTools).toBeUndefined();
-      const authoring = recovery?.run.skillLibraryAuthoring;
-      // Personal-only means the Workshop cannot fall back to the workspace tool.
-      expect(authoring?.defaultTarget).toBe("personal");
-      expect(() => authoring?.bind({} as never)).not.toThrow();
-      await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
-        code: "AUTHORITY_EXPIRED",
-      });
-    },
-  );
+    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+    await settleStalledOwner(stalled);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
+    const recovery = drainedRuns.mock.calls[0]?.[0];
+    expect(recovery?.disableTools).toBeUndefined();
+    const authoring = recovery?.run.skillLibraryAuthoring;
+    // Personal-only means the Workshop cannot fall back to the workspace tool.
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  });
 
   it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {
     const stalled = createStalledRun({

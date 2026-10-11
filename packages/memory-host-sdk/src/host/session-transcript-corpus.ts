@@ -20,6 +20,7 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
+  readBoundIncognitoMemoryCorpus,
   readSessionTranscriptCorpusInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
@@ -487,28 +488,10 @@ function readCorpusSessionEntries(
     : listSessionEntriesCore(input);
 }
 
-/**
- * Lists transcript corpus entries for memory indexing.
- *
- * Active sessions come from the session accessor seam; retained reset/delete
- * transcript artifacts remain explicit file artifacts until core owns archive
- * artifact enumeration.
- */
-export async function listSessionTranscriptCorpusEntriesForAgent(
-  agentId: string,
-  options: SessionTranscriptCorpusOptions = {},
-  source?: {
-    memoryCorpus(
-      scope: SessionTranscriptCorpusScope,
-      options: SessionTranscriptCorpusOptions,
-    ): Promise<SessionTranscriptCorpusEntry[]>;
-  },
-): Promise<SessionTranscriptCorpusEntry[]> {
-  const scope = resolveSessionTranscriptCorpusScope(agentId);
-  const capturedOptions = { ...options };
-  if (source) {
-    return source.memoryCorpus(scope, capturedOptions);
-  }
+async function readSessionTranscriptCorpusArtifacts(
+  scope: SessionTranscriptCorpusScope,
+  options: SessionTranscriptCorpusOptions,
+): Promise<SessionTranscriptCorpusArtifact[]> {
   const artifactDirs = new Map<string, string>();
   for (const dir of scope.artifactDirs) {
     artifactDirs.set(await normalizeRealComparablePathAsync(dir), dir);
@@ -533,7 +516,7 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
       }
       seen.add(comparablePath);
       let contentRevision: string | undefined;
-      if (capturedOptions.includeContentRevision !== false) {
+      if (options.includeContentRevision !== false) {
         try {
           contentRevision = fileContentRevisionFromStat(
             await fs.stat(artifactPath, { bigint: true }),
@@ -545,6 +528,36 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
       artifacts.push({ path: artifactPath, contentRevision });
     }
   }
+  return artifacts;
+}
+
+/**
+ * Lists transcript corpus entries for memory indexing.
+ *
+ * Active sessions come from the session accessor seam; retained reset/delete
+ * transcript artifacts remain explicit file artifacts until core owns archive
+ * artifact enumeration.
+ */
+export async function listSessionTranscriptCorpusEntriesForAgent(
+  agentId: string,
+  options: SessionTranscriptCorpusOptions = {},
+  source?: {
+    memoryCorpus(
+      scope: SessionTranscriptCorpusScope,
+      options: SessionTranscriptCorpusOptions,
+    ): Promise<SessionTranscriptCorpusEntry[]>;
+  },
+): Promise<SessionTranscriptCorpusEntry[]> {
+  const scope = resolveSessionTranscriptCorpusScope(agentId);
+  const capturedOptions = { ...options };
+  if (source) {
+    return source.memoryCorpus(scope, capturedOptions);
+  }
+  const incognito = readBoundIncognitoMemoryCorpus(scope, capturedOptions);
+  if (incognito) {
+    return incognito;
+  }
+  const prepareArtifacts = () => readSessionTranscriptCorpusArtifacts(scope, capturedOptions);
   if (
     isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
       agentId: scope.normalizedAgentId,
@@ -554,11 +567,11 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
     return projectSessionTranscriptCorpusEntries(
       scope,
       capturedOptions,
-      artifacts,
+      await prepareArtifacts(),
       readCorpusSessionEntries(scope, capturedOptions),
     );
   }
-  return readSessionTranscriptCorpusInWorker(scope, capturedOptions, artifacts);
+  return readSessionTranscriptCorpusInWorker(scope, capturedOptions, prepareArtifacts);
 }
 
 /** Project inventory in the admitted reader; only corpus metadata crosses the worker boundary. */

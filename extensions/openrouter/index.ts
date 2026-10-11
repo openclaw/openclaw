@@ -14,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getLoadedOpenRouterModelCapabilities,
-  getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -239,7 +238,7 @@ export default defineSingleProviderPluginEntry({
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
       const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-      const capabilities = getOpenRouterModelCapabilities(apiModelId);
+      const capabilities = getLoadedOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
@@ -302,9 +301,15 @@ export default defineSingleProviderPluginEntry({
             }),
           });
         },
-        staticRun: async () => ({
-          provider: buildOpenrouterProvider(),
-        }),
+        staticRun: async (ctx) => {
+          // Configured OpenRouter models complete from this catalog through synchronous
+          // capability reads, and thinking levels are chosen from that row. Load capabilities
+          // first (persisted catalog, or one fetch) only when a caller selected OpenRouter.
+          if (ctx.providerIds?.includes(PROVIDER_ID)) {
+            await loadOpenRouterModelCapabilities(OPENROUTER_DEFAULT_MODEL_REF);
+          }
+          return { provider: buildOpenrouterProvider() };
+        },
       },
       resolveDynamicModel: buildDynamicOpenRouterModel,
       // Resolve the catalog model even when a configured row already exists.

@@ -224,46 +224,39 @@ describe("bounded Startup runtime observations", () => {
 
 describe("Scheduled Task runtime inspection budget", () => {
   it.each([
-    { queryMs: 40, revalidationMs: 40, expired: false, calls: 2 },
-    { queryMs: 100, revalidationMs: 0, expired: true, calls: 1 },
-    { queryMs: 40, revalidationMs: 60, expired: true, calls: 2 },
-  ])(
-    "charges registered query $queryMs ms and revalidation $revalidationMs ms to one deadline",
-    async ({ queryMs, revalidationMs, expired, calls }) => {
-      const { readScheduledTaskCommand } =
-        await vi.importActual<typeof import("./schtasks-layout.js")>("./schtasks-layout.js");
-      const taskName = "\\Custom\\Gateway";
-      const action = {
-        type: 0,
-        path: "C:\\node.exe",
-        arguments: '"C:\\openclaw\\entry.js" gateway',
-        workingDirectory: "",
-      };
-      let queries = 0;
-      native.mockImplementation(() => {
-        now += queries++ === 0 ? queryMs : revalidationMs;
-        return result(JSON.stringify({ taskPath: taskName, state: 4, actions: [action] }));
+    { queryMs: 40, expired: false },
+    { queryMs: 100, expired: true },
+  ])("charges registered query $queryMs ms to its deadline", async ({ queryMs, expired }) => {
+    const { readScheduledTaskCommand } =
+      await vi.importActual<typeof import("./schtasks-layout.js")>("./schtasks-layout.js");
+    const taskName = "\\Custom\\Gateway";
+    const action = {
+      type: 0,
+      path: "C:\\node.exe",
+      arguments: '"C:\\openclaw\\entry.js" gateway',
+      workingDirectory: "",
+    };
+    native.mockImplementation(() => {
+      now += queryMs;
+      return result(JSON.stringify({ taskPath: taskName, state: 4, actions: [action] }));
+    });
+    const inspection = readScheduledTaskCommand(
+      { OPENCLAW_WINDOWS_TASK_NAME: taskName },
+      { requireLoaded: true, timeoutMs: 100 },
+    );
+    if (expired) {
+      await expect(inspection).rejects.toMatchObject({
+        reason: "windows-task-inspection-failed",
+        timeoutMs: 0,
       });
-      const inspection = readScheduledTaskCommand(
-        { OPENCLAW_WINDOWS_TASK_NAME: taskName },
-        { requireLoaded: true, timeoutMs: 100 },
-      );
-      if (expired) {
-        await expect(inspection).rejects.toMatchObject({
-          reason: "windows-task-inspection-failed",
-          timeoutMs: 0,
-        });
-      } else {
-        await expect(inspection).resolves.toMatchObject({
-          programArguments: [action.path, "C:\\openclaw\\entry.js", "gateway"],
-        });
-      }
-      expect(native).toHaveBeenCalledTimes(calls);
-      expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual(
-        calls === 1 ? [100] : [100, 60],
-      );
-    },
-  );
+    } else {
+      await expect(inspection).resolves.toMatchObject({
+        programArguments: [action.path, "C:\\openclaw\\entry.js", "gateway"],
+      });
+    }
+    expect(native).toHaveBeenCalledOnce();
+    expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual([100]);
+  });
 
   it.each([
     { queryMs: 40, processMs: 30, missing: true },

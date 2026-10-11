@@ -5,10 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as yieldTurn } from "node:timers/promises";
-import { readMainSessionRecoveryCheckpoint } from "../src/agents/main-session-recovery/main-session-restart-recovery-replay-safety.js";
+import { readMainSessionRecoveryCheckpoint } from "../src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
 import {
-  replaceTranscriptEvents,
   replaceSessionEntry,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
@@ -16,6 +15,7 @@ import {
 import type { TranscriptEvent } from "../src/config/sessions/session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { recoverSessionEntryFromRestartTombstone } from "../src/config/sessions/session-accessor.sqlite-recovery.js";
+import { replaceTranscriptEvents } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../src/config/sessions/session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "../src/config/sessions/types.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../src/gateway/session-transcript-usage.js";

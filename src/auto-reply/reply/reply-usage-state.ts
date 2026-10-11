@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -66,18 +67,14 @@ export function buildReplyUsageState(
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),
     compactionCount: params.compactionCount,
-    contextTokenBudget:
-      typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-        ? params.contextTokenBudget
-        : undefined,
+    contextTokenBudget: asFiniteNumber(params.contextTokenBudget),
     contextUsedTokens:
-      typeof params.contextUsedTokens === "number" && Number.isFinite(params.contextUsedTokens)
-        ? params.contextUsedTokens
-        : deriveContextPromptTokens({
-            lastCallUsage: params.lastCallUsage,
-            promptTokens: params.promptTokens,
-            usage: params.usage,
-          }),
+      asFiniteNumber(params.contextUsedTokens) ??
+      deriveContextPromptTokens({
+        lastCallUsage: params.lastCallUsage,
+        promptTokens: params.promptTokens,
+        usage: params.usage,
+      }),
     usage: projectHookUsage(params.usage),
     lastUsage: projectHookUsage(params.lastCallUsage),
   };

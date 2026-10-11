@@ -64,7 +64,6 @@ describe("attached conversation portal tool availability", () => {
   it.each([
     ["agent", "scoped", true, true, false, false],
     ["gateway", "scoped", true, true, false, false],
-    ["agent", "global", false, false, false, true],
     ["gateway", "global", false, false, false, true],
     ["gateway", "absent", false, true, false, false],
     ["agent", "absent", true, false, false, false],

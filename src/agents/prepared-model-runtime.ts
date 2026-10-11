@@ -54,8 +54,7 @@ import {
 } from "./prepared-model-runtime.published-owner.js";
 import {
   refreshCommittedProviderCatalogs,
-  createPreparedModelRuntimeCatalogRecovery,
-  createPreparedModelRuntimePluginRecovery,
+  createPreparedModelRuntimeRecovery,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -112,11 +111,31 @@ const modelRuntimeDrain = createPreparedModelRuntimePluginDrain(
   () => pendingModelRuntimeReplacement !== undefined || authPublication.hasPendingPublication,
 );
 const authPublication = new PreparedModelRuntimeAuthPublicationOwner();
-const getBlockingReplacement = () =>
-  pendingModelRuntimeReplacement?.degraded ? undefined : pendingModelRuntimeReplacement;
-const getAdmissionReplacement = () => modelRuntimeDrain.pending ?? getBlockingReplacement();
+const getBlockingReplacement = (input?: PreparedModelRuntimeInput) => {
+  const replacement = pendingModelRuntimeReplacement;
+  if (replacement?.degraded) {
+    return undefined;
+  }
+  const agentIds = replacement?.agentIds;
+  const owner =
+    agentIds && input && !input.readOnly ? resolveConfiguredOwner(owners, input) : undefined;
+  if (
+    agentIds &&
+    owner?.input.agentId &&
+    !agentIds.has(owner.input.agentId) &&
+    owner.snapshot &&
+    !owner.needsRefresh &&
+    !owner.pending
+  ) {
+    return undefined;
+  }
+  return replacement;
+};
+const getAdmissionReplacement = (input?: PreparedModelRuntimeInput) =>
+  modelRuntimeDrain.pending ?? getBlockingReplacement(input);
 
 const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
+  retainOwner: retainPublishedModelRuntimeOwner,
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getConfiguredOwner: (agentId) =>
     resolveConfiguredOwner(owners, {
@@ -124,7 +143,10 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
       agentDir: ".",
       config: {},
     }),
-  getPendingReplacement: () => getAdmissionReplacement()?.promise,
+  getPendingReplacement: (agentId) =>
+    getAdmissionReplacement({ agentId, agentDir: ".", config: {} })?.promise,
+  isStartupPending: () => pendingModelRuntimeReplacement?.degraded === true,
+  ensureReady: (params) => ensureGatewayPreparedModelRuntimeReady(params),
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
 
@@ -226,7 +248,9 @@ export async function acquireAgentRuntimeCleanupRegistries(agentDir: string) {
 export function getPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
-  return getBlockingReplacement() ? undefined : readPublishedModelRuntimeSnapshot(owners, rawInput);
+  return getBlockingReplacement(rawInput)
+    ? undefined
+    : readPublishedModelRuntimeSnapshot(owners, rawInput);
 }
 
 /** Reads the owner-held publication barrier without starting catalog acquisition. */
@@ -266,21 +290,30 @@ export async function publishPreparedModelRuntimeSnapshot(
       return existing.snapshot;
     }
   }
+  // Explicit discovery gets its full deadline in addition to normal generation preparation.
   return await publishModelRuntimeSnapshot(
     input,
     owners,
     agentBuildCompletions,
-    modelRuntimeBuildTimeoutMs,
+    options.providerDiscoveryTimeoutMs === undefined
+      ? modelRuntimeBuildTimeoutMs
+      : modelRuntimeBuildTimeoutMs + options.providerDiscoveryTimeoutMs,
     existing,
     options.provenance,
     options.catalogMode,
+    undefined,
+    undefined,
+    options.providerDiscoveryTimeoutMs,
   );
 }
 
 /** Activates lifecycle publication for direct embedded runtimes without a gateway startup. */
 export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode"> = {},
+  options: Pick<
+    PreparedModelRuntimePublicationOptions,
+    "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
+  > = {},
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   const assertLifetime = captureModelRuntimeLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
@@ -308,7 +341,10 @@ export async function activateStandalonePreparedModelRuntime(
 async function activateStandalonePreparedModelRuntimeNow(
   input: PreparedModelRuntimeInput,
   assertLifetime: () => void,
-  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode">,
+  options: Pick<
+    PreparedModelRuntimePublicationOptions,
+    "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
+  >,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
     assertLifetime();
@@ -413,10 +449,14 @@ export function markPreparedModelRuntimeSnapshotsStale(
   const previousCancellation = refreshCancellation;
   refreshCancellation = new AbortController();
   setPreparedModelRuntimeStartupStatus(undefined);
-  replyDispatchPublication.clear();
+  if (options.agentIds) {
+    replyDispatchPublication.remove(options.agentIds);
+  } else {
+    replyDispatchPublication.clear();
+  }
   if (options.waitForReplacement) {
     const superseded = pendingModelRuntimeReplacement;
-    pendingModelRuntimeReplacement = createPreparedModelRuntimeReplacement();
+    pendingModelRuntimeReplacement = createPreparedModelRuntimeReplacement(options.agentIds);
     authPublication.adopt(pendingModelRuntimeReplacement.gateId);
     // Superseded readers retry against the newer replacement gate.
     superseded?.resolve();
@@ -460,29 +500,25 @@ export function rejectPendingPreparedModelRuntimeReplacement(
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
-export const recoverPreparedModelRuntimeCatalogWorker = createPreparedModelRuntimeCatalogRecovery(
+const modelRuntimeRecovery = createPreparedModelRuntimeRecovery({
   owners,
-  refreshPreparedModelRuntimeSnapshots,
-);
-
-const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePluginRecovery(
-  owners,
-  () =>
-    gatewayLifecycleActive &&
-    !refreshCancellation.signal.aborted &&
-    !pendingModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
-);
+  canRecover: () => gatewayLifecycleActive && !refreshCancellation.signal.aborted,
+  getReplacement: () => pendingModelRuntimeReplacement,
+  getAdmissionReplacement: () => modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement,
+  captureLifetime: captureModelRuntimeLifetime,
+  publish: refreshPreparedModelRuntimeSnapshots,
+});
+export const recoverPreparedModelRuntimeCatalogWorker = modelRuntimeRecovery.recoverCatalog;
+export const ensureGatewayPreparedModelRuntimeReady = modelRuntimeRecovery.ensureReady;
 const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublication({
   ...preparedModelRuntimeLeaseContext,
   publicationQueue,
   replyDispatchPublication,
-  getEpoch: () => refreshRequestEpoch,
   getCancellationSignal: () => refreshCancellation.signal,
   // Catalog adoption also waits for a degraded startup's final publication.
   getPendingReplacement: () =>
     (modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement)?.promise,
-  onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+  onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
 });
 export const { applyRemoteModelCatalogUpdate, advancePreparedModelRuntimeConfig } =
   remoteCatalogPublication;
@@ -594,7 +630,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
           acquisitionSignal,
-          onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+          onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
         },
       );
       if (!isPublicationCurrent()) {

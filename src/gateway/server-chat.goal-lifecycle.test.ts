@@ -3,7 +3,10 @@ import {
   loadSessionEntry as loadStoredSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitAgentEvents } from "./server-chat.agent-events.test-helpers.js";
@@ -94,7 +97,6 @@ describe("agent event goal lifecycle", () => {
       await replaceSessionEntry(target, {
         sessionId: "session-terminal",
         updatedAt: 1_000,
-        status: "running",
         startedAt: 1_000,
         goal: {
           schemaVersion: 1,
@@ -168,9 +170,14 @@ describe("agent event goal lifecycle", () => {
         ).toMatchObject({ status, lastRunError: terminal.error, session: { goal: stoppedGoal } });
 
         vi.setSystemTime(3_000);
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
         await emitAgentEvents(handler, "run-recovered", [
-          ["lifecycle", { phase: "start", startedAt: 3_000 }],
-          ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }],
+          ["lifecycle", { phase: "start", startedAt: 3_000 }, { lifecycleGeneration }],
+          [
+            "lifecycle",
+            { phase: "end", startedAt: 3_000, endedAt: 4_000 },
+            { lifecycleGeneration },
+          ],
         ]);
         await Promise.all(
           persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),

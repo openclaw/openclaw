@@ -1,6 +1,10 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import {
   getAgentRunLifecycleGeneration,
@@ -15,7 +19,10 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import type { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
+import {
+  captureGatewayToolReceiptAssertion,
+  type getGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 /** Keep the original run and caller predicates attached to every host capability. */
@@ -57,25 +64,29 @@ export function bindHarnessHostSourceAuthority(params: {
     }
   });
   const receipt = sourceCaller?.receiptAuthority;
-  const assertReceipt = Object.assign(() => {
-    if (receipt?.() === false) {
-      throw new Error("agent harness host capability lost its source execution claim");
-    }
-  }, receipt);
-  const assertCaller = composeSessionSourceAssertion([assertReceipt], (assertSource) => {
-    if (
-      (sourceCaller &&
-        (sourceCaller.agentId !== attempt.agentId ||
-          sourceCaller.sessionKey !== attempt.sessionKey)) ||
-      (sourceCaller?.workerTurnClaim &&
-        (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
-          sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
-      (sourceCaller?.workerTurnClaim && !receipt)
-    ) {
-      throw new Error("agent harness host capability lost its source execution claim");
-    }
-    assertSource();
-  });
+  const assertReceipt =
+    receipt &&
+    captureGatewayToolReceiptAssertion(
+      receipt,
+      "agent harness host capability lost its source execution claim",
+    );
+  const assertCaller = composeSessionSourceAssertion(
+    [captureExternalSessionCommitGuard(assertReceipt)],
+    (assertSource) => {
+      if (
+        (sourceCaller &&
+          (sourceCaller.agentId !== attempt.agentId ||
+            sourceCaller.sessionKey !== attempt.sessionKey)) ||
+        (sourceCaller?.workerTurnClaim &&
+          (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
+            sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
+        (sourceCaller?.workerTurnClaim && !receipt)
+      ) {
+        throw new Error("agent harness host capability lost its source execution claim");
+      }
+      assertSource();
+    },
+  );
   return composeSessionSourceAssertion([assertAdmitted, assertCaller]);
 }
 
@@ -215,7 +226,7 @@ export function retainHarnessSource(
 
 /** Host-only original source; an explicit undefined operator identifies System work. */
 export type AgentHarnessCompactionSourceAuthority = Readonly<{
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
 }>;
 

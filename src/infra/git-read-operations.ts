@@ -75,4 +75,3 @@ export type GitReadOperations = {
 export type GitReadOperation = {
   [K in keyof GitReadOperations]: { type: K; input: GitReadOperations[K]["input"] };
 }[keyof GitReadOperations];
-export type GitReadOperationResult = GitReadOperations[keyof GitReadOperations]["output"];

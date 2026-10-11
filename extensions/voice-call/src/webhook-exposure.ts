@@ -14,13 +14,6 @@ type VoiceCallWebhookExposureConfig = {
   };
 };
 
-/** Result of checking whether webhooks are reachable for the selected provider. */
-type VoiceCallWebhookExposureStatus = {
-  ok: boolean;
-  configured: boolean;
-  message: string;
-};
-
 /** Return true when a provider requires a public webhook URL or tunnel. */
 export function providerRequiresPublicWebhook(providerName: string | undefined): boolean {
   return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
@@ -33,9 +26,7 @@ export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
 }
 
 /** Resolve a human-readable webhook exposure status for doctor/setup surfaces. */
-export function resolveWebhookExposureStatus(
-  config: VoiceCallWebhookExposureConfig,
-): VoiceCallWebhookExposureStatus {
+export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureConfig) {
   if (config.provider === "mock") {
     return {
       ok: true,

@@ -151,6 +151,22 @@ export function refreshSerializedOAuthCredential<TData>(
 async function runSerializedOAuthRefresh<TData>(
   params: SerializedOAuthRefreshParams<TData>,
 ): Promise<SerializedOAuthRefreshResult | null> {
+  const selectCandidate = (
+    data: TData,
+    credential: OAuthCredential | undefined,
+  ): SerializedOAuthRefreshCandidate<TData> => {
+    if (!credential || credential.provider !== params.provider) {
+      return { kind: "unavailable" };
+    }
+    if (isOAuthRefreshFence(credential)) {
+      return isPendingOAuthRefreshFence(credential)
+        ? { kind: "observe", generation: credential }
+        : { kind: "unavailable" };
+    }
+    return hasUnexpiredOAuthCredential(credential)
+      ? { kind: "use", credential, data }
+      : { kind: "claimable", credential };
+  };
   const observeFence = async (generation: OAuthCredential) =>
     await observeOAuthRefreshFenceSettlement({
       label: params.label,
@@ -174,20 +190,7 @@ async function runSerializedOAuthRefresh<TData>(
   const candidate = await params.backend.withLock<SerializedOAuthRefreshCandidate<TData>>(
     (current) => {
       const data = params.parse(current);
-      const credential = params.readCredential(data);
-      if (!credential || credential.provider !== params.provider) {
-        return { result: { kind: "unavailable" } };
-      }
-      if (isPendingOAuthRefreshFence(credential)) {
-        return { result: { kind: "observe", generation: credential } };
-      }
-      if (isOAuthRefreshFence(credential)) {
-        return { result: { kind: "unavailable" } };
-      }
-      if (hasUnexpiredOAuthCredential(credential)) {
-        return { result: { kind: "use", credential, data } };
-      }
-      return { result: { kind: "claimable", credential } };
+      return { result: selectCandidate(data, params.readCredential(data)) };
     },
   );
   if (candidate.kind === "unavailable") {
@@ -214,15 +217,11 @@ async function runSerializedOAuthRefresh<TData>(
         return { result: { kind: "unavailable" } };
       }
       if (!isExactOAuthCredential(credential, candidate.credential)) {
-        if (isPendingOAuthRefreshFence(credential)) {
-          return { result: { kind: "observe", generation: credential } };
-        }
-        if (isOAuthRefreshFence(credential)) {
-          return { result: { kind: "unavailable" } };
-        }
-        return hasUnexpiredOAuthCredential(credential)
-          ? { result: { kind: "use", credential, data } }
-          : { result: { kind: "unavailable" } };
+        const currentCandidate = selectCandidate(data, credential);
+        return {
+          result:
+            currentCandidate.kind === "claimable" ? { kind: "unavailable" } : currentCandidate,
+        };
       }
       const fence = createOAuthRefreshFence({ profileId: params.profileId, credential });
       // Acquire before returning a write: cancellation closes native admission atomically.

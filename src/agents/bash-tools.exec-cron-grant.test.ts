@@ -32,7 +32,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { updateExecApprovals } from "../infra/exec-approvals-store.js";
+import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -490,27 +490,29 @@ describe("cron standing grants", () => {
           throw new Error("synthetic native launch failure");
         }
       });
-      let revoke: Promise<unknown> | undefined;
       if (intervention === "revoke") {
-        revoke = revokeCronStandingGrant({ grantId: grant!.grantId, revokedBy: "operator" }).then(
-          () => order.push("revoked"),
-        );
+        await revokeCronStandingGrant({ grantId: grant!.grantId, revokedBy: "operator" });
+        order.push("revoked");
       } else if (intervention === "cancel") {
         controller.abort();
       } else if (intervention === "policy deny" || intervention === "policy ask") {
+        const file = readExecApprovalsSnapshot().file;
         await updateExecApprovals({
-          update: (file) => ({
-            ...file,
-            defaults: {
-              ...file.defaults,
-              ...(intervention === "policy deny"
-                ? { security: "deny" as const }
-                : { ask: "always" as const }),
+          update: {
+            kind: "replace",
+            file: {
+              ...file,
+              defaults: {
+                ...file.defaults,
+                ...(intervention === "policy deny"
+                  ? { security: "deny" as const }
+                  : { ask: "always" as const }),
+              },
             },
-          }),
+          },
         });
       } else if (intervention === "fallback") {
-        // A proven no-initiation retry reacquires its interval without another consume.
+        // A proven no-initiation retry revalidates without another consume.
         result.releaseSpawn?.("retry");
         await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
       }
@@ -536,9 +538,9 @@ describe("cron standing grants", () => {
         result.initiateSpawn?.(launch);
         expect(launch).toHaveBeenCalledOnce();
       }
-      await revoke;
       if (intervention === "revoke") {
-        expect(order).toEqual(["launch", "revoked"]);
+        // Revocation after committed consumption does not fence a checked native launch.
+        expect(order).toEqual(["revoked", "launch"]);
       }
       expect(readGrantUseCounts()).toEqual([1]);
     },
@@ -619,7 +621,12 @@ describe("cron standing grants", () => {
     await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
     const acknowledgement = createDeferredCore();
     const deny = () =>
-      updateExecApprovals({ update: (file) => ({ ...file, defaults: { security: "deny" } }) });
+      updateExecApprovals({
+        update: {
+          kind: "replace",
+          file: { ...readExecApprovalsSnapshot().file, defaults: { security: "deny" } },
+        },
+      });
     try {
       const launch = vi.fn();
       result.initiateSpawn?.(launch, acknowledgement.promise);

@@ -13,7 +13,7 @@ RPC method families for gateway status and identity, models and usage, channels 
 
 ## System and identity
 
-- `health` returns the cached or freshly probed gateway health snapshot.
+- `health` returns the cached or freshly checked gateway health snapshot.
 - `diagnostics.stability` returns the recent bounded diagnostic stability recorder: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, session ids. No chat text, webhook bodies, tool outputs, raw request/response bodies, tokens, cookies, or secrets. Requires `operator.read`.
 - `status` returns the `/status`-style gateway summary; sensitive fields only for admin-scoped operator clients.
 - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
@@ -134,7 +134,7 @@ its read-only detail and artifact resolver do not check stored artifact bytes.
 A permitted security verdict, download URL, listing, or local install action
 therefore produces `unknown`, never `downloadable`. A side-effect-free per-release
 availability fact requires a ClawHub contract extension. Gateway inspection does
-not download packages to probe them; registry download routes record telemetry.
+not download packages to check them; registry download routes record telemetry.
 
 A native client can fetch `plugins.catalog.get`, inspect the same `catalogId`,
 display the returned facts, and collect confirmation itself. After approval,

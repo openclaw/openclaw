@@ -1,6 +1,6 @@
 import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
-import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import { completeFollowupRuns } from "./lifecycle.js";
 import type { FOLLOWUP_QUEUES } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import { isFollowupRunAborted, type FollowupRun } from "./types.js";
@@ -42,13 +42,13 @@ export async function dropAbortedFollowups(
     { sources: summaries, droppedCount: summaries.length },
     "retained",
   );
-  for (const item of [...pending, ...summaries]) {
-    try {
-      completeFollowupRunLifecycle(item, "cancelled");
-    } catch (error) {
+  completeFollowupRuns(
+    [...pending, ...summaries],
+    (error) => {
       defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-    }
-  }
+    },
+    "cancelled",
+  );
   await Promise.all(
     pending.map(async (item) => {
       try {

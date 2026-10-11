@@ -108,7 +108,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
+  return Object.keys(schema).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {
@@ -301,6 +301,56 @@ export function renderFieldRow(params: {
       }
     </div>
   `;
+}
+
+export function renderCollectionRemoveButton(
+  label: string,
+  disabled: boolean,
+  remove: () => boolean,
+): TemplateResult {
+  return html`<openclaw-tooltip .content=${label}>
+    <button
+      type="button"
+      class="btn btn--icon"
+      style="width:28px;height:28px;padding:0;"
+      aria-label=${label}
+      ?disabled=${disabled}
+      @click=${(event: Event) => removeCollectionRow(event, remove)}
+    >
+      ${icons.trash}
+    </button>
+  </openclaw-tooltip>`;
+}
+
+/**
+ * Removes a collection row and keeps keyboard focus in its collection when the
+ * focused Remove control is retired: next surviving row, previous row, then Add.
+ */
+function removeCollectionRow(event: Event, remove: () => boolean) {
+  const control = event.currentTarget;
+  if (!(control instanceof HTMLButtonElement) || control !== document.activeElement) {
+    remove();
+    return;
+  }
+  const collection = control.closest(".cfg-array, .cfg-map");
+  const own = (selector: string) =>
+    Array.from(collection?.querySelectorAll<HTMLButtonElement>(selector) ?? []).filter(
+      (button) => button.closest(".cfg-array, .cfg-map") === collection,
+    );
+  const label = control.getAttribute("aria-label");
+  const rows = own("button").filter((button) => button.getAttribute("aria-label") === label);
+  const index = rows.indexOf(control);
+  const destinations = [rows[index + 1], rows[index - 1], own("button[aria-controls]")[0]];
+  if (!remove()) {
+    return;
+  }
+  // The owner rerenders before this microtask. Positional rows can keep the
+  // focused control for the next entry, so only a lost focus moves.
+  queueMicrotask(() => {
+    if (document.activeElement === document.body) {
+      destinations.find((button) => button?.isConnected && !button.disabled)?.focus();
+    }
+  });
 }
 
 export function renderSchemaDefaultDescription(

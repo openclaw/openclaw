@@ -7,6 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { showToast } from "../toast.ts";
+import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import {
   adoptConfigWriteAck,
   isConfigWriteAck,
@@ -17,6 +18,7 @@ import {
   applyConfigSnapshot,
   serializeFormForSubmit,
   type ConfigWriteAck,
+  type ConfigPatchAck,
 } from "./config-draft-model.ts";
 import {
   configMutationFailure,
@@ -76,11 +78,6 @@ export type ConfigPatchOptions = {
 
 export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
 type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
-// Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
-export type ConfigPatchAck =
-  | { noop: true; config: Record<string, unknown> }
-  | (ConfigWriteAck & { noop?: false });
-
 export type RuntimeConfigExternalMutationResult<T> =
   | {
       ok: true;
@@ -151,9 +148,7 @@ export type ConfigWriteCoordinatorContext = {
     preservePendingChanges?: boolean,
   ) => Promise<boolean>;
   canCallConfigMethod: (method: ConfigMethod) => boolean;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
-  disposeAppliedRefresh: () => void;
+  appliedRefresh: AppliedConfigRefresh;
   isDisposed: () => boolean;
 };
 
@@ -402,10 +397,7 @@ async function readConfig(
 
 export async function loadConfigSchema(state: RuntimeConfigState) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.configSchemaLoading) {
+  if (!client || !state.connected || state.configSchemaLoading) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);

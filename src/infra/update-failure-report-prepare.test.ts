@@ -49,6 +49,21 @@ type Diagnostic = {
   title?: string;
 };
 const diagnostics: Diagnostic[] = [
+  {
+    name: "managed handoff filesystem identities",
+    phase: "requested",
+    reason: "managed-service-handoff-failed",
+    fact: {
+      check: "managed-service",
+      code: "managed-service-handoff-failed",
+      message:
+        "managed handoff lease database identity changed at /home/Private Operator/tmp/managed-update-handoffs.sqlite: " +
+        "path (recorded /Users/Private Operator/tmp/managed-update-handoffs.sqlite; current /home/Private Operator/tmp/managed-update-handoffs.sqlite); " +
+        "file identity (recorded 2096:3530466; current 2096:3530467). Run openclaw update repair.",
+    },
+    includes: ["managed-service-handoff-failed"],
+    excludes: ["Private Operator", "/home/", "/Users/"],
+  },
   ...["GLIBC_2.33", "GLIBC_2.2.5", "GLIBC_2.33-private", "GLIBC_PRIVATE"].map((version) => ({
     name: `snapshot loader ${version}`,
     phase: "candidate snapshot",
@@ -557,14 +572,19 @@ const recoveryCases: RecoveryCase[] = [
     {
       healthy: false,
       code: "private-probe-identifier",
-      expected: "recovery probe failed (gateway-probe-failed)",
+      expected: "recovery check failed (gateway-probe-failed)",
     },
   ].map(({ healthy, code, expected }): RecoveryCase => ({
     name: `observed ${expected}`,
     recordedRun: {
       runId: attemptId,
       steps: [],
-      verification: { runningVersion: "2026.9.4", versionMatch: true, readyz: true, settled: true },
+      verification: {
+        runningVersion: "2026.9.4",
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+      },
     },
     result: {
       reason: "post-update-plugins",

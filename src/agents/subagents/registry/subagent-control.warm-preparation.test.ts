@@ -18,7 +18,7 @@ import type {
   OpenClawAgentDatabaseExecution,
 } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,

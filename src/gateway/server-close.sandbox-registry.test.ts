@@ -10,6 +10,7 @@ import {
 import { registerSandboxBackend } from "../agents/sandbox/backend.js";
 import { removeSandboxContainer } from "../agents/sandbox/manage.js";
 import { updateRegistry } from "../agents/sandbox/registry.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -65,27 +66,15 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     let acceptedSignal: AbortSignal | undefined;
     let paused = false;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "sandboxRegistry.beginRemoval" && !paused) {
-                  paused = true;
-                  acceptedSignal = getAsyncWorkSignal();
-                  entered.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "sandboxRegistry.beginRemoval" && !paused) {
+        paused = true;
+        acceptedSignal = getAsyncWorkSignal();
+        entered.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restoreWorker = () => worker.mockRestore();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.scheduler.schedule({

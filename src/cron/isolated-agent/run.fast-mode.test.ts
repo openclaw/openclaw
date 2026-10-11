@@ -409,4 +409,53 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
       }),
     );
   });
+
+  it("keeps an isolated run detached and delivers against its creation-bound generation", async () => {
+    mockRunCronFallbackPassthrough();
+    const sourceConversation = {
+      sessionKey: "agent:default:webchat:direct:creator",
+      sessionId: "original-source-session",
+      lifecycleRevision: "original-source-revision",
+    };
+    const replacementSource = makeCronSessionEntry({
+      sessionId: "replacement-source-session",
+      lifecycleRevision: "replacement-source-revision",
+      thinkingLevel: "high",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({ store: { [sourceConversation.sessionKey]: replacementSource } }),
+    );
+    readSessionMessagesAsyncMock.mockResolvedValue([
+      { role: "user", content: "This conversation is private to its own turns." },
+    ]);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          sessionKey: sourceConversation.sessionKey,
+          sourceConversation,
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "Reply tick in your own session." },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).not.toBe(sourceConversation.sessionKey);
+    expect(readSessionMessagesAsyncMock).not.toHaveBeenCalled();
+    expect(embeddedPrompt()).toContain("Reply tick in your own session.");
+    expect(embeddedPrompt()).not.toContain("This conversation is private");
+    expect(resolveCronSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSessionKey: undefined, forceNew: true }),
+    );
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionKey: sourceConversation.sessionKey,
+        sourceSessionGeneration: {
+          sessionId: "original-source-session",
+          lifecycleRevision: "original-source-revision",
+        },
+      }),
+    );
+  });
 });

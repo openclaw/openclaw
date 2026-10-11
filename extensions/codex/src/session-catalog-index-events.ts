@@ -39,7 +39,7 @@ type PendingRefresh = {
   promise: Promise<void>;
 };
 
-/** Event scheduling only; the index owns row publication and stale-read fencing. */
+/** Coalesces metadata refreshes while the index owns row publication. */
 export class CodexCatalogIndexEvents {
   private closed = false;
   private readonly pending = new Map<string, PendingRefresh>();

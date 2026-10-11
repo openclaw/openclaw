@@ -20,7 +20,7 @@ import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
+import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
@@ -381,6 +381,7 @@ export function createSessionActivitySummaries(deps: {
             assertRequestCurrent();
             const result = await (deps.completeModel ?? defaultCompleteModel)({
               ...prepared,
+              purpose: "session-activity-summary",
               config: deps.getConfig(),
               systemPrompt: SYSTEM_PROMPT,
               prompt: JSON.stringify({
@@ -391,7 +392,8 @@ export function createSessionActivitySummaries(deps: {
               timeoutMs: MODEL_TIMEOUT_MS,
               abortSignal: controller.signal,
               assertCurrent: assertRequestCurrent,
-              streamParams: { maxTokens: 240, temperature: 0.2 },
+              answerTokenBudget: 240,
+              streamParams: { temperature: 0.2 },
             });
             return result.text;
           };
@@ -431,6 +433,7 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
+      let committedTranscript: SessionEntryPatchCommitted["transcriptPredicate"];
       const committed = await patchSessionEntryCore(
         scope(state),
         (fresh) => {
@@ -439,6 +442,9 @@ export function createSessionActivitySummaries(deps: {
         },
         {
           preserveActivity: true,
+          onCommitted: (_entry, transcriptPredicate) => {
+            committedTranscript = transcriptPredicate;
+          },
           workerGuard: {
             assertCurrent: () => assertCurrentOwner(state, ref),
             shouldCommitIf: {
@@ -454,8 +460,12 @@ export function createSessionActivitySummaries(deps: {
         state.dirty = true;
         return;
       }
-      const latest = await readSessionTranscriptWatermarkAsync(transcriptScope);
       assertCurrentOwner(state, ref);
+      if (committedTranscript?.sessionId !== state.sessionId) {
+        throw new Error("Activity recap patch omitted its transcript predicate receipt");
+      }
+      // This source-free field patch cannot change the transcript after its transaction guard.
+      const latest = committedTranscript.watermark;
       state.failures = 0;
       if (modelBackoffs.get(ref) === priorBackoff) {
         modelBackoffs.delete(ref);

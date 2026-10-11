@@ -19,7 +19,6 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   hasRegisteredSessionPendingInputOwner,
-  projectSessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
@@ -28,6 +27,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
 import type {
@@ -37,6 +37,7 @@ import type {
   PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -354,6 +355,18 @@ export async function listSessionPendingInputs(
   scope: Scope,
   options: { limit?: number; before?: number } = {},
 ): Promise<SessionPendingInputPage> {
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).list(options);
+  }
   const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
@@ -366,6 +379,18 @@ export async function readSessionPendingInput(
   scope: Scope,
   id: string,
 ): Promise<SessionPendingInput | undefined> {
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).read(id);
+  }
   const row = (await readPendingInputRows(scope, { id, limit: 1 })).rows[0];
   return row ? projectSessionPendingInput(row) : undefined;
 }

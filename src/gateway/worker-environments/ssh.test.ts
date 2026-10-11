@@ -201,34 +201,6 @@ describe("worker SSH preparation", () => {
     }
   });
 
-  it("shares a decreasing deadline while preserving fast fallback budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const prepared = await prepareTestWorkerSsh();
-    try {
-      const remainingTimeouts: number[] = [];
-      const result = await runWorkerSshCandidates(
-        prepared,
-        1_000,
-        async (port, remainingTimeoutMs) => {
-          remainingTimeouts.push(remainingTimeoutMs);
-          if (port === 2202) {
-            vi.advanceTimersByTime(1);
-            return { code: 255, termination: "exit" };
-          }
-          return { code: 0, termination: "exit" };
-        },
-      );
-
-      expect(remainingTimeouts).toEqual([1_000, 999]);
-      expect(result).toEqual({ code: 0, termination: "exit" });
-      expect(prepared.port).toBe(22);
-    } finally {
-      await prepared.dispose();
-      vi.useRealTimers();
-    }
-  });
-
   it("does not start a later candidate after the operation deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

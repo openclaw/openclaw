@@ -6,7 +6,7 @@ import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "./avatar-image.ts";
-import type { AgentIdentityDraft } from "./panels-overview.ts";
+import type { AgentIdentityDraft } from "./panels-overview.tsx";
 
 const AVATAR_REJECTION_MESSAGE_KEYS = {
   unusable: "agents.identity.imageUnusable",
@@ -19,16 +19,10 @@ type AgentIdentityEditorHost = {
   identityError: string | null;
 };
 
-const avatarSelectionEpochs = new WeakMap<AgentIdentityEditorHost, number>();
-
-function advanceAvatarSelectionEpoch(host: AgentIdentityEditorHost): number {
-  const epoch = (avatarSelectionEpochs.get(host) ?? 0) + 1;
-  avatarSelectionEpochs.set(host, epoch);
-  return epoch;
-}
+const avatarSelections = new WeakMap<AgentIdentityEditorHost, symbol>();
 
 export function resetIdentityDraft(host: AgentIdentityEditorHost) {
-  advanceAvatarSelectionEpoch(host);
+  avatarSelections.delete(host);
   host.identityDraft = { name: null, emoji: null, avatar: null };
   host.identitySaving = false;
   host.identityError = null;
@@ -48,14 +42,15 @@ export function selectIdentityAvatar(
   file: File,
   config?: ApplicationConfigCapability,
 ) {
-  const epoch = advanceAvatarSelectionEpoch(host);
+  const selection = Symbol("avatar-selection");
+  avatarSelections.set(host, selection);
   if (!uploadsEnabled(config)) {
     host.identityError = uploadsDisabledMessage();
     return;
   }
   void fileToAvatarDataUrl(file, config)
     .then((result) => {
-      if (avatarSelectionEpochs.get(host) !== epoch) {
+      if (avatarSelections.get(host) !== selection) {
         return;
       }
       if (!uploadsEnabled(config)) {
@@ -70,7 +65,7 @@ export function selectIdentityAvatar(
       }
     })
     .catch((error: unknown) => {
-      if (avatarSelectionEpochs.get(host) === epoch) {
+      if (avatarSelections.get(host) === selection) {
         host.identityError = formatUiError(error);
       }
     });
@@ -130,19 +125,17 @@ export async function saveIdentityDraft(params: {
     }
     const refreshErrors = mutation.refresh.ok ? [] : [mutation.refresh.error];
     agentIdentity.invalidate([agentId]);
-    try {
-      await agents.refreshList();
-    } catch (error) {
-      refreshErrors.push(
-        `Agent identity was saved, but the agent list refresh failed: ${formatUiError(error)}`,
-      );
-    }
-    try {
-      await agentIdentity.ensure([agentId]);
-    } catch (error) {
-      refreshErrors.push(
-        `Agent identity was saved, but the identity refresh failed: ${formatUiError(error)}`,
-      );
+    for (const [refresh, subject] of [
+      [() => agents.refreshList(), "agent list"],
+      [() => agentIdentity.ensure([agentId]), "identity"],
+    ] as const) {
+      try {
+        await refresh();
+      } catch (error) {
+        refreshErrors.push(
+          `Agent identity was saved, but the ${subject} refresh failed: ${formatUiError(error)}`,
+        );
+      }
     }
     if (params.isCurrent()) {
       resetIdentityDraft(host);

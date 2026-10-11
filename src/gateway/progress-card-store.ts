@@ -3,6 +3,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -24,7 +28,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 import {
   isIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
@@ -116,7 +120,23 @@ export function createIncognitoProgressCardStore(
 }
 
 export const progressCardStore = {
-  async get(sessionKey: string, agentId?: string) {
+  async get(
+    sessionKey: string,
+    agentId?: string,
+  ): Promise<ReturnType<typeof readSessionProgressCard>> {
+    const source = captureIncognitoSessionSource({ sessionKey, agentId });
+    if (source && "kind" in source) {
+      return null;
+    }
+    const incognito = captureIncognitoSessionOperation({ sessionKey, agentId });
+    if (incognito) {
+      return createIncognitoProgressCardStore(() => ({
+        sessionKey,
+        agentId: incognito.actor.agentId,
+        storePath: incognito.actor.path,
+        incognito,
+      })).get(sessionKey, agentId);
+    }
     const env = captureSessionTranscriptStorageEnvironment(process.env);
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
     const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath);
@@ -143,7 +163,16 @@ export const progressCardStore = {
       assertCurrent?: () => void;
     },
     agentId?: string,
-  ) {
+  ): Promise<{ card: ReturnType<typeof readSessionProgressCard> }> {
+    const incognito = captureIncognitoSessionOperation({ sessionKey, agentId });
+    if (incognito) {
+      return createIncognitoProgressCardStore(() => ({
+        sessionKey,
+        agentId: incognito.actor.agentId,
+        storePath: incognito.actor.path,
+        incognito,
+      })).put(sessionKey, input, agentId);
+    }
     const resolved = captureGatewaySessionStoreScope(sessionKey, agentId);
     const env = captureSessionTranscriptStorageEnvironment(process.env);
     const capturedInput = structuredClone({
@@ -151,17 +180,7 @@ export const progressCardStore = {
       steps: input.steps,
       expectedRevision: input.expectedRevision,
     });
-    const assertCurrent = () => {
-      input.assertCurrent?.();
-      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
-      if (
-        current.agentId !== resolved.agentId ||
-        current.storePath !== resolved.storePath ||
-        current.sessionKey !== resolved.sessionKey
-      ) {
-        throw new Error("progress-card session changed; retry");
-      }
-    };
+    const assertCurrent = () => input.assertCurrent?.();
     assertCurrent();
     const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(resolved.storePath);
     if (isIncognitoOpenClawAgentSqlitePath(unsuffixed.path, { agentId: resolved.agentId, env })) {
@@ -170,7 +189,7 @@ export const progressCardStore = {
       const result = await runOpenClawAgentWriteAdmission(
         databaseOptions,
         () =>
-          withOpenClawAgentDatabaseAsync(
+          withOpenClawAgentDatabaseRuntime(
             databaseOptions,
             () =>
               runOpenClawAgentWriteTransaction(

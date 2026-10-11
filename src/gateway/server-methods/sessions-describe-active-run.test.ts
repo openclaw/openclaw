@@ -112,10 +112,10 @@ it.each(["chat", "projected"] as const)(
         await assertActivity("done", false);
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: key },
-          { status: "running", endedAt: Date.now() },
+          { status: "done", endedAt: Date.now() },
         );
         // A yielded task may retain an active goal without owning a live turn.
-        await assertActivity("running", false);
+        await assertActivity("done", false);
       } finally {
         releaseCapacityWait?.();
         chat?.cleanup();

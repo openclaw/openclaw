@@ -211,9 +211,7 @@ export function buildFeishuFlushIngressLifecycle(
     return { lifecycle: undefined, settle: async () => {} };
   }
   let handedOff = false;
-  let terminal: "adopted" | "abandoned" | undefined;
-  let adopting: Promise<void> | undefined;
-  let abandoning: Promise<void> | undefined;
+  let settled = false;
   const releaseReplayClaims = () => {
     for (const claim of replayClaims) {
       claim.release({ error: new Error("feishu-ingress-not-adopted") });
@@ -226,83 +224,33 @@ export function buildFeishuFlushIngressLifecycle(
     await (transportLifecycle.onCancelled
       ? transportLifecycle.onCancelled()
       : transportLifecycle.onAbandoned());
-  const runAbandon = async (settleTransport: () => Promise<void>) => {
-    if (terminal) {
+  const abandonAll = async (settleTransport = abandonTransport) => {
+    if (settled) {
       return;
     }
+    settled = true;
     releaseReplayClaims();
     await settleTransport();
-    terminal = "abandoned";
-  };
-  const ensureAbandoned = async (settleTransport = abandonTransport) => {
-    if (terminal) {
-      return;
-    }
-    const activeAbandonment = abandoning ?? runAbandon(settleTransport);
-    abandoning = activeAbandonment;
-    try {
-      await activeAbandonment;
-    } finally {
-      if (abandoning === activeAbandonment && terminal !== "abandoned") {
-        abandoning = undefined;
-      }
-    }
-  };
-  const abandonAll = async (settleTransport = abandonTransport) => {
-    if (terminal) {
-      return;
-    }
-    if (adopting) {
-      await adopting.catch(() => undefined);
-      if (terminal) {
-        return;
-      }
-    }
-    await ensureAbandoned(settleTransport);
   };
   const adoptAll = async () => {
-    if (terminal) {
+    if (settled) {
       return;
     }
-    if (abandoning) {
-      await abandoning.catch(() => undefined);
-      if (terminal) {
-        return;
-      }
-    }
-    const activeAdoption =
-      adopting ??
-      (async () => {
-        try {
-          await transportLifecycle.onAdopted();
-          terminal = "adopted";
-          // Queue adoption is authoritative. Logical twin guards commit only
-          // afterward: partial best-effort guard writes may admit a duplicate,
-          // but can never split or suppress recovery of an unadopted turn.
-          const results = await Promise.allSettled(
-            replayClaims.map(async (claim) => claim.commit()),
-          );
-          for (const result of results) {
-            if (result.status === "rejected") {
-              try {
-                options?.onReplayCommitError?.(result.reason);
-              } catch {
-                // Reporting cannot undo an already adopted durable turn.
-              }
-            }
-          }
-        } catch (error) {
-          await ensureAbandoned().catch(() => undefined);
-          throw error;
-        }
-      })();
-    adopting = activeAdoption;
-    options?.trackTask?.(activeAdoption);
+    // A flush chooses adoption or abandonment once. Overlapping callbacks are
+    // best effort; the durable queue remains the recovery owner.
+    settled = true;
     try {
-      await activeAdoption;
-    } finally {
-      if (adopting === activeAdoption && terminal !== "adopted") {
-        adopting = undefined;
+      await transportLifecycle.onAdopted();
+    } catch (error) {
+      releaseReplayClaims();
+      await Promise.resolve(transportLifecycle.onAbandoned()).catch(() => undefined);
+      throw error;
+    }
+    // Commit twin suppression only after the durable turn is adopted.
+    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
+    for (const result of results) {
+      if (result.status === "rejected") {
+        options?.onReplayCommitError?.(result.reason);
       }
     }
   };
@@ -311,7 +259,9 @@ export function buildFeishuFlushIngressLifecycle(
       abortSignal: transportLifecycle.abortSignal,
       onAdopted: async () => {
         handedOff = true;
-        await adoptAll();
+        const adoption = adoptAll();
+        options?.trackTask?.(adoption);
+        await adoption;
       },
       onDeferred: () => {
         handedOff = true;
@@ -322,13 +272,13 @@ export function buildFeishuFlushIngressLifecycle(
       onAdoptionFinalizing: () => {
         transportLifecycle.onAdoptionFinalizing();
       },
-      onCancelled: async () => {
-        handedOff = true;
-        await abandonAll(cancelTransport);
-      },
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
+      },
+      onCancelled: async () => {
+        handedOff = true;
+        await abandonAll(cancelTransport);
       },
     },
     // A gated/no-turn envelope is terminal for transport replay, but its
@@ -342,9 +292,9 @@ export function buildFeishuFlushIngressLifecycle(
       try {
         transportLifecycle.onAdoptionFinalizing();
         await transportLifecycle.onAdopted();
-        terminal = "adopted";
+        settled = true;
       } catch (error) {
-        await ensureAbandoned().catch(() => undefined);
+        await abandonAll().catch(() => undefined);
         throw error;
       }
     },

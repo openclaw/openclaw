@@ -3,6 +3,7 @@ import type {
   AgentHarnessAttemptParamsV2,
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
+  runAgentHarnessGatewayQuestion,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   NativeSessionBindingAuthority,
@@ -93,6 +94,12 @@ it("accepts released V2 injection implementations alongside the prepared queue c
   expectTypeOf<NonNullable<Injection["queueMessageAsync"]>>().toEqualTypeOf<
     (text: string, options: Options, preparation: Preparation, kind: Kind) => Promise<QueueResult>
   >();
+  expectTypeOf<NonNullable<Injection["claimPendingUserInputAnswerAsync"]>>().toEqualTypeOf<
+    (text: string, options: Options, preparation: Preparation, kind: Kind) => Promise<boolean>
+  >();
+  expectTypeOf<NonNullable<Injection["cancelPendingUserInputAsync"]>>().toEqualTypeOf<
+    (resolvedBy: string, preparation: Preparation, kind: Kind) => Promise<boolean>
+  >();
 });
 
 it("keeps native withCurrent implementations valid alongside optional policy composition", () => {
@@ -106,6 +113,21 @@ it("keeps native withCurrent implementations valid alongside optional policy com
       consume: () => T,
       preparations: readonly (Preparation & { onRefused?: (error: unknown) => "discarded" })[],
     ) => Promise<T>
+  >();
+});
+
+it("keeps the released custom question dispatcher assertion synchronous", () => {
+  type Dispatcher = Exclude<
+    NonNullable<Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"]>,
+    (...args: never[]) => unknown
+  >;
+  type Request = Parameters<Dispatcher["call"]>[0];
+  type Authority = Extract<Request["authority"], { kind: "source-bound" }>;
+  type ReleasedAuthority = { kind: "source-bound"; assertCurrent: () => void };
+  expectTypeOf<ReleasedAuthority>().toExtend<Authority>();
+  expectTypeOf<Authority["assertCurrent"]>().returns.toEqualTypeOf<void>();
+  expectTypeOf<NonNullable<Authority["assertCurrentAsync"]>>().returns.toEqualTypeOf<
+    Promise<void>
   >();
 });
 

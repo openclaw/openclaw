@@ -8,6 +8,7 @@ import {
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { ExitError } from "../runtime.js";
 import type { SkillStatusReport } from "../skills/discovery/status.js";
 import type * as SourceInstall from "../skills/lifecycle/source-install.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -195,6 +196,41 @@ async function runCommand(argv: string[]) {
 }
 
 describe("skills cli commands", () => {
+  it.each([
+    {
+      argv: ["install", "skills-sh/invalid"],
+      message: "Invalid skills.sh skill reference: skills-sh/invalid",
+      json: false,
+    },
+    { argv: ["update"], message: "Provide a skill slug or use --all.", json: false },
+    {
+      argv: ["verify", "weather", "--global", "--agent", "main"],
+      message: "Use either --global or --agent, not both.",
+      json: true,
+    },
+  ])(
+    "preserves the reported failure for $argv with an exiting runtime",
+    async ({ argv, message, json }) => {
+      const exit = new ExitError(1);
+      await mocks.runtime.exit.withImplementation(
+        () => {
+          throw exit;
+        },
+        async () => {
+          await expect(runCommand(argv)).rejects.toBe(exit);
+        },
+      );
+      expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(mocks.errors).toEqual(json ? [] : [message]);
+      expect(mocks.stdout).toEqual(
+        json ? [JSON.stringify({ ok: false, error: { type: "cli_error", message } }, null, 2)] : [],
+      );
+      expect(mocks.install).not.toHaveBeenCalled();
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.verify).not.toHaveBeenCalled();
+    },
+  );
+
   beforeEach(() => {
     mocks.stdout.length = 0;
     mocks.errors.length = 0;

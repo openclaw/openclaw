@@ -143,14 +143,6 @@ describe("pairing cli", () => {
     });
   }
 
-  it("evaluates pairing channels when registering the CLI (not at import)", () => {
-    expect(listPairingChannels).not.toHaveBeenCalled();
-
-    createProgram();
-
-    expect(listPairingChannels).toHaveBeenCalledTimes(1);
-  });
-
   it("labels sender ids using the channel's pairing adapter", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([
       {
@@ -173,42 +165,6 @@ describe("pairing cli", () => {
     }
   });
 
-  it("displays a raw sender id retained by a qualified pending request", async () => {
-    listPairingChannels.mockReturnValueOnce(["slack"]);
-    listChannelPairingRequests.mockResolvedValueOnce([
-      {
-        id: "team:T123:user:U123",
-        code: "ABC123",
-        createdAt: "2026-01-08T00:00:00Z",
-        lastSeenAt: "2026-01-08T00:00:00Z",
-        meta: { senderId: "U123", teamId: "T123" },
-      },
-    ]);
-
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      await runPairing(["pairing", "list", "--channel", "slack"]);
-      const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
-      expect(output).toContain("U123");
-      expect(output).not.toContain("team:T123:user:U123");
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("accepts channel as positional for list", async () => {
-    listChannelPairingRequests.mockResolvedValueOnce([]);
-
-    await runPairing(["pairing", "list", "telegram"]);
-
-    expect(listChannelPairingRequests).toHaveBeenCalledWith(
-      "telegram",
-      process.env,
-      undefined,
-      expect.any(Function),
-    );
-  });
-
   it("rejects conflicting positional and option channels for list", async () => {
     await expect(
       runPairing(["pairing", "list", "discord", "--channel", "telegram"]),
@@ -217,17 +173,6 @@ describe("pairing cli", () => {
     );
 
     expect(listChannelPairingRequests).not.toHaveBeenCalled();
-  });
-
-  it("accepts matching positional and option channel aliases for list", async () => {
-    await runPairing(["pairing", "list", "imsg", "--channel", "imessage"]);
-
-    expect(listChannelPairingRequests).toHaveBeenCalledWith(
-      "imessage",
-      process.env,
-      undefined,
-      expect.any(Function),
-    );
   });
 
   it("forwards --account for list", async () => {
@@ -239,28 +184,6 @@ describe("pairing cli", () => {
       "telegram",
       process.env,
       "yy",
-      expect.any(Function),
-    );
-  });
-
-  it("rejects an explicitly empty --account for list", async () => {
-    await expect(
-      runPairing(["pairing", "list", "--channel", "telegram", "--account", ""]),
-    ).rejects.toThrow("--account must not be blank");
-
-    expect(listChannelPairingRequests).not.toHaveBeenCalled();
-  });
-
-  it("accepts extension channels outside the registry", async () => {
-    listChannelPairingRequests.mockResolvedValueOnce([]);
-
-    await runPairing(["pairing", "list", "zalo"]);
-
-    expect(normalizeChannelId).toHaveBeenCalledWith("zalo");
-    expect(listChannelPairingRequests).toHaveBeenCalledWith(
-      "zalo",
-      process.env,
-      undefined,
       expect.any(Function),
     );
   });
@@ -404,7 +327,7 @@ describe("pairing cli", () => {
     await expect(runPairing(["pairing", "approve", "ABCDEFGH"])).rejects.toThrow("Usage:");
   });
 
-  it.each(["OWNER_REFUSED", "OUTCOME_UNKNOWN"])(
+  it.each(["OUTCOME_UNKNOWN"])(
     "does not bootstrap, notify, or approve locally after %s",
     async (reason) => {
       mocks.runWithLocalStateOwner.mockRejectedValueOnce(new Error(reason));

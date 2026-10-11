@@ -164,7 +164,6 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       }
     }
 
-    // Complex union (e.g. array | object) — render as JSON textarea
     return renderJsonTextarea(params);
   }
 

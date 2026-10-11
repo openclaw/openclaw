@@ -9,7 +9,6 @@ import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/sessio
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
-import { drainCronReceiptAuthority } from "../cron/store/receipt-authority-owner.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -25,7 +24,6 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { withAgentDatabaseCloseFence } from "../state/openclaw-agent-db-resources.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -53,10 +51,7 @@ const ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS = 2_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
-const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
-const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
-const EMBEDDING_PROVIDER_CLOSE_GRACE_MS = 5_000;
-const AGENT_HARNESS_CLOSE_GRACE_MS = 5_000;
+const RUNTIME_CLOSE_GRACE_MS = 5_000;
 type ShutdownResult = {
   durationMs: number;
   warnings: string[];
@@ -80,76 +75,17 @@ function createCloseSteps(reason: string, warnings: string[]) {
   return { measureCloseStep, shutdownStep };
 }
 
-async function triggerGatewayLifecycleHookWithTimeout(params: {
-  cleanupWork: AsyncWorkScope;
-  event: ReturnType<typeof createInternalHookEvent>;
-  hookName: "gateway:shutdown" | "gateway:pre-restart";
-  reason: string;
-  timeoutMs: number;
-}): Promise<"completed" | "timeout"> {
-  const hookPromise = params.cleanupWork.track(() =>
-    measureGatewayCloseStep(
-      `restart.close.${params.hookName.replace(":", "-")}-hook`,
-      () => triggerInternalHook(params.event),
-      [["reason", params.reason]],
-    ),
-  );
-  void hookPromise.catch(() => undefined);
-  if (await settlesWithin(hookPromise, params.timeoutMs)) {
-    return "completed";
-  }
-  shutdownLog.warn(
-    `${params.hookName} hook timed out after ${params.timeoutMs}ms; continuing shutdown`,
-  );
-  return "timeout";
-}
-
-async function disposeRuntimeWithShutdownGrace(params: {
-  cleanupWork: AsyncWorkScope;
-  label:
-    | "plugin-services"
-    | "agent-harnesses"
-    | "bundle-mcp"
-    | "bundle-lsp"
-    | "embedding-providers";
-  dispose: () => Promise<void>;
-  reason: string;
-  graceMs: number;
-  warnings: string[];
-}): Promise<void> {
-  const disposePromise = params.cleanupWork
-    .track(() =>
-      measureGatewayCloseStep(
-        `restart.close.${params.label}`,
-        () => Promise.resolve().then(params.dispose),
-        [["reason", params.reason]],
-      ),
-    )
-    .catch((err: unknown) => {
-      shutdownLog.warn(`${params.label} runtime disposal failed during shutdown: ${String(err)}`);
-      recordShutdownWarning(params.warnings, params.label);
-    });
-  if (!(await settlesWithin(disposePromise, params.graceMs))) {
-    shutdownLog.warn(
-      `${params.label} runtime disposal exceeded ${params.graceMs}ms; continuing shutdown`,
-    );
-    recordShutdownWarning(params.warnings, params.label);
-  }
-}
-
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   skillsChangeUnsub?: () => void | Promise<void>;
-  disposeAuthRateLimiter?: () => void;
-  disposeBrowserAuthRateLimiter: () => void;
+  disposeNodeReapproval: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
   await measureGatewayCloseStep("restart.close.skills-watcher", () => params.skillsChangeUnsub?.());
-  params.disposeAuthRateLimiter?.();
-  params.disposeBrowserAuthRateLimiter();
+  params.disposeNodeReapproval();
   await measureGatewayCloseStep("restart.close.channel-health-monitor", () =>
     params.stopChannelHealthMonitor?.(),
   );
@@ -261,7 +197,6 @@ export type GatewayCloseParams = {
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
-  agentUnsub?: GatewayCloseParams["agentUnsub"];
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
   getPendingReplyCount: () => number;
@@ -298,17 +233,16 @@ export async function prepareGatewayClose(
     return shutdownStep(
       hookName,
       async () => {
-        const result = await triggerGatewayLifecycleHookWithTimeout({
-          cleanupWork,
-          event: createInternalHookEvent("gateway", action, hookName, {
-            reason,
-            restartExpectedMs,
-          }),
-          hookName,
+        const event = createInternalHookEvent("gateway", action, hookName, {
           reason,
-          timeoutMs,
+          restartExpectedMs,
         });
-        if (result === "timeout") {
+        const hookPromise = cleanupWork.track(() =>
+          measureCloseStep(`gateway-${action}-hook`, () => triggerInternalHook(event)),
+        );
+        void hookPromise.catch(() => undefined);
+        if (!(await settlesWithin(hookPromise, timeoutMs))) {
+          shutdownLog.warn(`${hookName} hook timed out after ${timeoutMs}ms; continuing shutdown`);
           recordShutdownWarning(warnings, hookName);
         }
       },
@@ -319,11 +253,9 @@ export async function prepareGatewayClose(
   try {
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
-    if (!opts?.onProcessExitReady) {
-      await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
-      if (restart) {
-        await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
-      }
+    await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+    if (restart) {
+      await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
     const drainTimeoutMs =
       typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
@@ -348,16 +280,6 @@ export async function prepareGatewayClose(
       shutdownLog.warn(`memory preparation failed during shutdown: ${formatErrorMessage(error)}`);
       recordShutdownWarning(warnings, "memory-managers");
     });
-    if (opts?.onProcessExitReady) {
-      await measureCloseStep("terminal-persistence", () => params.agentUnsub?.());
-      await memoryPreparation;
-      // Keep every path fenced through host lock release and exit: a per-path
-      // idle receipt alone does not prevent accepted cleanup from reopening it.
-      await withAgentDatabaseCloseFence({}, async () => {
-        await measureCloseStep("agent-databases", () => closeOpenClawAgentDatabasesAsync());
-        await measureCloseStep("process-exit", opts.onProcessExitReady!);
-      });
-    }
     return { start, notice, restart, warnings, cleanupWork };
   } catch (error) {
     await measureCloseStep("preparation-cleanup", () => cleanupWork.drain());
@@ -400,6 +322,28 @@ async function closeGatewayResources(
   };
   let closeFailure: { error: unknown } | undefined;
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
+  const disposeRuntime = async (
+    label:
+      | "plugin-services"
+      | "agent-harnesses"
+      | "bundle-mcp"
+      | "bundle-lsp"
+      | "embedding-providers",
+    dispose: () => Promise<void>,
+  ) => {
+    const disposePromise = cleanupWork
+      .track(() => measureCloseStep(label, () => Promise.resolve().then(dispose)))
+      .catch((err: unknown) => {
+        shutdownLog.warn(`${label} runtime disposal failed during shutdown: ${String(err)}`);
+        recordShutdownWarning(warnings, label);
+      });
+    if (!(await settlesWithin(disposePromise, RUNTIME_CLOSE_GRACE_MS))) {
+      shutdownLog.warn(
+        `${label} runtime disposal exceeded ${RUNTIME_CLOSE_GRACE_MS}ms; continuing shutdown`,
+      );
+      recordShutdownWarning(warnings, label);
+    }
+  };
   try {
     if (params.drainActiveSessionsForShutdown) {
       await shutdownStep("session-end-drain", async () => {
@@ -430,14 +374,7 @@ async function closeGatewayResources(
       );
       pluginServicesCleanup = cleanup;
       // A stalled plugin must not prevent later runtime and child-process cleanup.
-      await disposeRuntimeWithShutdownGrace({
-        cleanupWork,
-        label: "plugin-services",
-        reason,
-        dispose: () => cleanup,
-        graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
-        warnings,
-      });
+      await disposeRuntime("plugin-services", () => cleanup);
     }
     await measureCloseStep("channels", async () => {
       const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
@@ -446,36 +383,15 @@ async function closeGatewayResources(
       }
     });
     await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
-    await disposeRuntimeWithShutdownGrace({
-      cleanupWork,
-      label: "agent-harnesses",
-      reason,
-      dispose: disposeRegisteredAgentHarnesses,
-      graceMs: AGENT_HARNESS_CLOSE_GRACE_MS,
-      warnings,
-    });
+    await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
       params.closeProviderTransportDispatcherPool(),
     );
     await measureCloseStep("bundle-runtimes", async () => {
       await Promise.all([
-        disposeRuntimeWithShutdownGrace({
-          cleanupWork,
-          label: "bundle-mcp",
-          reason,
-          dispose: disposeAllSessionMcpRuntimes,
-          graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
-          warnings,
-        }),
-        disposeRuntimeWithShutdownGrace({
-          cleanupWork,
-          label: "bundle-lsp",
-          reason,
-          dispose: params.disposeAllBundleLspRuntimes,
-          graceMs: LSP_RUNTIME_CLOSE_GRACE_MS,
-          warnings,
-        }),
+        disposeRuntime("bundle-mcp", disposeAllSessionMcpRuntimes),
+        disposeRuntime("bundle-lsp", params.disposeAllBundleLspRuntimes),
       ]);
     });
     await shutdownStep("periodic-maintenance", () => params.maintenance?.stopPeriodicTasks());
@@ -501,7 +417,6 @@ async function closeGatewayResources(
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),
     );
     await shutdownStep("cron-maintenance", () => params.stopCronMaintenance?.());
-    await shutdownStep("cron-receipt-authority", () => drainCronReceiptAuthority());
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
@@ -595,14 +510,7 @@ async function closeGatewayResources(
         await shutdownStep("tailscale", () => params.tailscaleCleanup!());
       }
     }
-    await disposeRuntimeWithShutdownGrace({
-      cleanupWork,
-      label: "embedding-providers",
-      reason,
-      dispose: params.drainRetainedOpenAiEmbeddingProviders,
-      graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
-      warnings,
-    });
+    await disposeRuntime("embedding-providers", params.drainRetainedOpenAiEmbeddingProviders);
   } catch (error) {
     closeFailure = { error };
   } finally {

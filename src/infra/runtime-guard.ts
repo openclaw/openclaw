@@ -1,4 +1,3 @@
-// Validates the current runtime before OpenClaw startup.
 import process from "node:process";
 import { format } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -16,7 +15,7 @@ import {
   parseNodeReleaseVersion,
   type NodeReleaseVersion,
 } from "../../node-version.mjs";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
@@ -28,7 +27,6 @@ const MINIMUM_BUN_VERSION: NodeReleaseVersion = { major: 1, minor: 4, patch: 0 }
 
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
-/** Runtime facts included in startup/runtime-version diagnostics. */
 type RuntimeDetails = {
   kind: RuntimeKind;
   version: string | null;
@@ -60,7 +58,6 @@ export function parseSemver(version: string | null): NodeReleaseVersion | null {
   };
 }
 
-/** Reads current process runtime metadata for startup support checks. */
 export async function detectRuntime(): Promise<RuntimeDetails> {
   const bunVersion = process.versions?.bun;
   const details: RuntimeDetails = {
@@ -90,7 +87,6 @@ export async function detectRuntime(): Promise<RuntimeDetails> {
   return details;
 }
 
-/** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
 function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.sqliteSelectionError) {
     return false;
@@ -111,12 +107,10 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
   return false;
 }
 
-/** Returns whether the current process runtime satisfies OpenClaw's engine contract. */
 export async function isCurrentRuntimeSupported(): Promise<boolean> {
   return runtimeSatisfies(await detectRuntime());
 }
 
-/** Checks a Bun version label against OpenClaw's minimum supported release. */
 export function isSupportedBunVersion(version: string | null): boolean {
   return isNodeVersionAtLeast(parseSemver(version), MINIMUM_BUN_VERSION);
 }
@@ -159,7 +153,6 @@ export function nodeVersionSatisfiesEngine(
   return satisfied;
 }
 
-/** Exits through the provided runtime when the current Node runtime is unsupported. */
 export async function assertSupportedRuntime(
   providedRuntime?: RuntimeEnv,
   providedDetails?: RuntimeDetails,
@@ -168,24 +161,25 @@ export async function assertSupportedRuntime(
   recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
   const details = providedDetails ?? (await detectRuntime());
+  const writeNotice = (message: string) =>
+    providedRuntime ? providedRuntime.error(message) : process.stderr.write(`${message}\n`);
   if (runtimeSatisfies(details)) {
     const note =
       details.kind === "node" && details.sqliteProbe
         ? nodeRuntimeNote(details.version, details.sqliteProbe)
         : null;
     if (note) {
-      if (providedRuntime) {
-        providedRuntime.error(note);
-      } else {
-        process.stderr.write(`${note}\n`);
-      }
+      writeNotice(note);
     }
     return;
   }
   // Only startup callers with a pre-dotenv snapshot may select another runtime.
   if (details.kind === "node" && argv && recoveryEnv) {
     const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
-    await recoverNodeRuntime({ env: recoveryEnv });
+    if (await recoverNodeRuntime({ env: recoveryEnv })) {
+      // The replacement finished; this unsupported parent must not continue startup.
+      throw new ExitError(Number(process.exitCode ?? 0));
+    }
   }
   if (
     details.kind === "node" &&
@@ -195,11 +189,7 @@ export async function assertSupportedRuntime(
   ) {
     if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
       const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
-      if (providedRuntime) {
-        providedRuntime.error(warning);
-      } else {
-        process.stderr.write(`${warning}\n`);
-      }
+      writeNotice(warning);
       diagnosticWarningPrinted = true;
     }
     return;
@@ -216,7 +206,9 @@ export async function assertSupportedRuntime(
           formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
         );
       },
-      exit: (code) => process.exit(code),
+      exit: (code) => {
+        throw new ExitError(code);
+      },
     };
   }
 

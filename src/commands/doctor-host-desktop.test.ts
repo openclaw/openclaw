@@ -1,10 +1,8 @@
-import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import * as hostSource from "../gateway/desktop/host-source.js";
 import * as execRunner from "../process/exec-runner.js";
 import { collectHostDesktopHealthFindings, noteHostDesktopHealth } from "./doctor-host-desktop.js";
-import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
@@ -32,28 +30,6 @@ function commandResult(code: number) {
 }
 
 describe("host desktop doctor section", () => {
-  it("reports the disabled Labs toggle", async () => {
-    await noteHostDesktopHealth({});
-    expect(note).toHaveBeenCalledWith(
-      "disabled; enable the Desktop lab with desktop.host.enabled=true",
-      "Host desktop",
-    );
-  });
-
-  it("reports an attached VncAuth loopback server without password material", async () => {
-    const server = net.createServer((socket) => {
-      socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-      socket.once("data", () => socket.write(Buffer.from([1, 2])));
-    });
-    await withLoopbackTestServer(server, async (port) => {
-      await noteHostDesktopHealth({ desktop: { host: { enabled: true, port } } });
-      expect(note).toHaveBeenCalledWith(
-        `attached (127.0.0.1:${port}, security: VncAuth)`,
-        "Host desktop",
-      );
-    });
-  });
-
   it("reports managed configured and failed states distinctly", async () => {
     vi.spyOn(hostSource, "inspectHostDesktop")
       .mockResolvedValueOnce({

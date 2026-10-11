@@ -7,16 +7,18 @@ import type {
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "getMany"> &
   Partial<
     Pick<
       WorkerSessionPlacementStore,
+      | "getManyAsync"
       | "prepareRuntimeRefresh"
       | "getWorkspaceResultReconcilingSessionIds"
       | "getWorkspaceResultReconcilingSessionIdsAsync"
@@ -100,6 +102,7 @@ type WorkerPlacementIdentity = {
   providerId: string;
   profileId: string;
   machine?: SessionPlacementMachine;
+  inference?: "worker";
 };
 
 export function readWorkerPlacementIdentity(
@@ -135,6 +138,17 @@ export function readWorkerPlacementIdentity(
   return {
     providerId: environment.providerId,
     profileId: environment.profileId,
+    ...(record.state === "active" &&
+    record.executionMode === "worker-turn" &&
+    environment.environmentId === record.environmentId &&
+    environment.state === "attached" &&
+    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+    environment.nodeDeviceId &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === record.sessionId &&
+    environment.inference === "worker"
+      ? { inference: "worker" as const }
+      : {}),
     ...(machine && Object.keys(machine).length ? { machine } : {}),
   };
 }
@@ -154,10 +168,7 @@ export function createWorkerPlacementRunnerAvailabilityReader(params: {
         : preparedEnvironment;
     if (
       environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
-      environment.state !== "attached" ||
-      environment.ownerEpoch !== record.activeOwnerEpoch ||
-      environment.attachedSessionIds.length !== 1 ||
-      environment.attachedSessionIds[0] !== record.sessionId ||
+      !isWorkerEnvironmentAttachedTo(environment, record) ||
       !environment.nodeDeviceId
     ) {
       return undefined;
@@ -198,6 +209,7 @@ export function projectWorkerSessionPlacement(
   retryOnSend = false,
   options: { workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall } = {},
 ): SessionPlacement {
+  const { inference, ...provenance } = identity ?? {};
   const timing = {
     generation: record.generation,
     createdAtMs: record.createdAtMs,
@@ -207,7 +219,7 @@ export function projectWorkerSessionPlacement(
   if (record.state === "local" || record.state === "requested") {
     return { state: record.state, ...timing };
   }
-  const worker = { ...timing, ...identity };
+  const worker = { ...timing, ...provenance };
   const workerRuntimeInstall = options.workerRuntimeInstall
     ? { workerRuntimeInstall: options.workerRuntimeInstall }
     : {};
@@ -283,6 +295,7 @@ export function projectWorkerSessionPlacement(
     workspaceBaseManifestRef: record.workspaceBaseManifestRef,
     remoteWorkspaceDir: record.remoteWorkspaceDir,
     ...progress,
+    ...(record.state === "active" && inference ? { inference } : {}),
     ...(record.state === "active" && diskSpace ? { diskSpace } : {}),
     ...(record.state === "active" && runner ? { runner } : {}),
     ...(record.state === "active" ? workerRuntimeInstall : {}),

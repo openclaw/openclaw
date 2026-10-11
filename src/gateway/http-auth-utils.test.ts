@@ -15,6 +15,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -22,7 +23,6 @@ import {
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -183,8 +183,9 @@ describe("HTTP gateway owner profiles", () => {
           schemaReads: observation.queries.filter((sql) =>
             /sqlite_schema|sqlite_master|pragma_table_info|PRAGMA user_version/iu.test(sql),
           ).length,
-          dataVersionReads: observation.queries.filter((sql) => /PRAGMA data_version/iu.test(sql))
-            .length,
+          dataVersionReads: observation.queries.filter((sql) =>
+            /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
+          ).length,
         };
         expect(counts).toMatchObject({
           profileSchemaWrites: 0,

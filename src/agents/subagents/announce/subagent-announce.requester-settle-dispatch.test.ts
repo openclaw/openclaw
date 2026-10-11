@@ -43,6 +43,7 @@ import {
   deliver,
   registryRead,
   startTurn,
+  loadRequester,
   REQUESTER_KEY,
   settledChild,
   publishWakeTransition,
@@ -89,6 +90,85 @@ function createContext(): GatewayRequestContext {
 
 describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
+
+  it.each([
+    { name: "WebChat settle", channel: "webchat", pause: false, external: false },
+    { name: "WebChat pause", channel: "webchat", pause: true, external: false },
+    { name: "explicit external completion", channel: "telegram", pause: false, external: true },
+    { name: "saved-route completion", channel: undefined, pause: false, external: true },
+  ])("keeps $name on its owning route despite external session history", async (testCase) => {
+    const requesterSessionKey = "agent:main:dashboard:completion-route";
+    const child = settledChild();
+    child.requesterSessionKey = requesterSessionKey;
+    child.requesterOrigin = testCase.channel ? { channel: testCase.channel } : undefined;
+    if (testCase.pause) {
+      child.pauseReason = "sessions_yield";
+      child.execution.outcome = undefined;
+      child.requesterSettleWake!.pauseNotice = { acknowledgment: "Need direction." };
+    }
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    loadRequester.mockReturnValue({
+      cfg: {},
+      canonicalKey: requesterSessionKey,
+      agentId: "main",
+      entry: {
+        sessionId: "requester-session",
+        updatedAt: 1,
+        delivery: {
+          kind: "external",
+          route: { channel: "telegram", target: { to: "12345" } },
+          context: { channel: "telegram", to: "12345", accountId: "bot-1", threadId: 42 },
+          origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
+        },
+      },
+    });
+    setSubagentAnnounceDeliveryDepsForTest({
+      getRuntimeConfig: () => ({}),
+      loadRequesterSessionEntry: loadRequester,
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+    });
+    deliver.mockImplementation(sendSubagentAnnounceDirectly);
+    startTurn.mockImplementation(async ({ preflight, io }) => {
+      io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
+      io.emitFinal([
+        true,
+        {
+          status: "ok",
+          result: {
+            payloads: [{ text: "Completed." }],
+            ...(testCase.external
+              ? { deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 } }
+              : {}),
+          },
+        },
+      ]);
+    });
+    const context = createContext();
+    const completeBatch = vi.fn();
+    const delivered = await withPluginRuntimeGatewayRequestScope(
+      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
+      () =>
+        maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey,
+          requesterOrigin: child.requesterOrigin,
+          isSourceCurrent: () => true,
+          settledEntry: child,
+          transitionBatch: publishWakeTransition,
+          completeBatch,
+        }),
+    );
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(startTurn.mock.calls[0]![0].preflight.request).toMatchObject({
+      sessionKey: requesterSessionKey,
+      deliver: testCase.external,
+      channel: testCase.external ? "telegram" : "webchat",
+      to: testCase.external ? "12345" : undefined,
+      accountId: testCase.external ? "bot-1" : undefined,
+      threadId: testCase.external ? "42" : undefined,
+    });
+    expect(delivered).toBe(true);
+    expect(completeBatch).toHaveBeenCalledOnce();
+  });
 
   it.each([false, true])(
     "wakes a nested yielded requester once (child completed before yield=%s)",
@@ -505,7 +585,7 @@ describe("requester settle dispatch deadline", () => {
     await replaceSessionEntry(target, {
       sessionId: "requester-session",
       updatedAt: 100,
-      status: "running",
+      status: undefined,
       abortedLastRun: false,
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
       mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },

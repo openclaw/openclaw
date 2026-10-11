@@ -67,31 +67,29 @@ function createCurrentEntryRead(
           : lookup === "logical"
             ? readSessionEntryRow(database, sessionKey, "list")?.entry
             : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
-      if (options.projection === "capability") {
+      if (!current || options.projection === "capability") {
         entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;
         return true;
       }
-      entry = current
-        ? {
-            sessionId: current.sessionId,
-            previousSessionId: current.previousSessionId,
-            ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
-            ...(current.repositoryWorkspaceId === undefined
-              ? {}
-              : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
-            lifecycleRevision: current.lifecycleRevision,
-            lifecycleRunId: current.lifecycleRunId,
-            activeWriterRunId: current.activeWriterRunId,
-            ...(current.subagentRecovery
-              ? {
-                  subagentRecovery: {
-                    lastRunId: current.subagentRecovery.lastRunId,
-                    sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
-                  },
-                }
-              : {}),
-          }
-        : undefined;
+      entry = {
+        sessionId: current.sessionId,
+        previousSessionId: current.previousSessionId,
+        ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
+        ...(current.repositoryWorkspaceId === undefined
+          ? {}
+          : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
+        lifecycleRevision: current.lifecycleRevision,
+        lifecycleRunId: current.lifecycleRunId,
+        activeWriterRunId: current.activeWriterRunId,
+        ...(current.subagentRecovery
+          ? {
+              subagentRecovery: {
+                lastRunId: current.subagentRecovery.lastRunId,
+                sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
+              },
+            }
+          : {}),
+      };
       return true;
     },
   );
@@ -177,7 +175,7 @@ export function requestSessionEntryCurrentAdmission(
     };
     requestAdmission({ ...request, facts });
     assertSessionEntryCurrentNativeSource(source, database);
-    // A foreign commit invalidates cached facts, not necessarily this session's ownership.
+    // A writer receipt invalidates cached facts, not necessarily this session's ownership.
     if (
       !isDeepStrictEqual(
         entry,

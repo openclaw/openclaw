@@ -57,7 +57,6 @@ async function makePendingFinalFixture() {
     { sessionKey, storePath },
     {
       sessionId: "session-1",
-      status: "running",
       updatedAt: Date.now(),
       pendingFinalDelivery: {
         kind: "replayable",
@@ -84,6 +83,31 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it.each(["unchanged", "replacement", "in-place"] as const)(
+    "retains delta mode only when a hook keeps the chunk text (%s)",
+    async (rewrite) => {
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => {
+          if (rewrite === "in-place") {
+            payload.text = "Replacement snapshot";
+          }
+          return rewrite === "replacement" ? { ...payload, text: "Replacement snapshot" } : payload;
+        },
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      dispatcher.sendBlockReply({ text: "Answer chunk", textMode: "delta" });
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        rewrite !== "unchanged"
+          ? { text: "Replacement snapshot" }
+          : { text: "Answer chunk", textMode: "delta" },
+      ]);
+    },
+  );
+
   it.each(["raw", "prepared"] as const)(
     "retains an in-place media selection through %s dispatch recovery",
     async (operation) => {
@@ -621,6 +645,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         ).toEqual([{ id: "delivery-1", state: suppressed ? "suppressed" : "delivered" }]);
       } finally {
         release.resolve();
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },
@@ -734,6 +760,8 @@ describe("beforeDeliver in reply dispatcher", () => {
           (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
         ).toEqual([{ id: "delivery-1", state: expected }]);
       } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },
@@ -779,6 +807,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         expect(deliver).toHaveBeenCalledTimes(replaced ? 0 : 1);
         expect(receipt?.counts.final.cancelled).toBe(1);
       } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },

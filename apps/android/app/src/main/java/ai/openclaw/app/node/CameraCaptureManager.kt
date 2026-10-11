@@ -152,16 +152,6 @@ class CameraCaptureManager(
         .sortedBy { it.id }
     }
 
-  private fun ensureCameraPermission() {
-    if (context.hasPermission(Manifest.permission.CAMERA)) return
-    throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
-  }
-
-  private fun ensureMicPermission() {
-    if (context.hasPermission(Manifest.permission.RECORD_AUDIO)) return
-    throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-  }
-
   /** Snap and clip share one foreground lease; never queue a stale camera command. */
   internal suspend fun <T> withCapture(
     includeAudio: Boolean = false,
@@ -173,8 +163,8 @@ class CameraCaptureManager(
         check(captureMutex.tryLock()) { "CAMERA_BUSY: another camera capture is active" }
         try {
           fun checkAccess() {
-            ensureCameraPermission()
-            if (includeAudio) ensureMicPermission()
+            check(context.hasPermission(Manifest.permission.CAMERA)) { "CAMERA_PERMISSION_REQUIRED: grant Camera permission" }
+            if (includeAudio) check(context.hasPermission(Manifest.permission.RECORD_AUDIO)) { "MIC_PERMISSION_REQUIRED: grant Microphone permission" }
             check(cameraEnabled()) { "CAMERA_DISABLED: enable Camera in Settings" }
             check(isForeground()) { "NODE_BACKGROUND_UNAVAILABLE: command requires foreground" }
           }
@@ -399,10 +389,7 @@ class CameraCaptureManager(
 
   private fun parseFacing(params: JsonObject?): String? {
     val value = parseJsonString(params, "facing")?.trim()?.lowercase() ?: return null
-    return when (value) {
-      "front", "back" -> value
-      else -> null
-    }
+    return value.takeIf { it == "front" || it == "back" }
   }
 
   private fun parseDeviceId(params: JsonObject?): String? =
@@ -436,28 +423,12 @@ class CameraCaptureManager(
       runCatching {
         Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
       }.getOrNull()
-    val position =
-      when (lensFacing) {
-        CameraCharacteristics.LENS_FACING_FRONT -> "front"
-        CameraCharacteristics.LENS_FACING_BACK -> "back"
-        CameraCharacteristics.LENS_FACING_EXTERNAL -> "external"
-        else -> "unspecified"
-      }
-    val deviceType =
-      if (lensFacing == CameraCharacteristics.LENS_FACING_EXTERNAL) "external" else "builtIn"
-    val name =
-      when (position) {
-        "front" -> "Front Camera"
-        "back" -> "Back Camera"
-        "external" -> "External Camera"
-        else -> "Camera $cameraId"
-      }
-    return CameraDeviceInfo(
-      id = cameraId,
-      name = name,
-      position = position,
-      deviceType = deviceType,
-    )
+    return when (lensFacing) {
+      CameraCharacteristics.LENS_FACING_FRONT -> CameraDeviceInfo(cameraId, "Front Camera", "front", "builtIn")
+      CameraCharacteristics.LENS_FACING_BACK -> CameraDeviceInfo(cameraId, "Back Camera", "back", "builtIn")
+      CameraCharacteristics.LENS_FACING_EXTERNAL -> CameraDeviceInfo(cameraId, "External Camera", "external", "external")
+      else -> CameraDeviceInfo(cameraId, "Camera $cameraId", "unspecified", "builtIn")
+    }
   }
 
   @SuppressLint("UnsafeOptInUsageError")

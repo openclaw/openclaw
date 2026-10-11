@@ -15,6 +15,7 @@ import {
 } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -36,7 +37,6 @@ import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import type { SessionEntryLifecycleMutationResult } from "./session-accessor.sqlite-contract.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
@@ -62,6 +62,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 
 const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));
@@ -203,7 +204,7 @@ async function closeForIntegrityAdmission(f: Fixture) {
 }
 
 async function closeWorkerForIntegrityAdmission(f: Fixture) {
-  await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath));
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
@@ -333,8 +334,8 @@ it.each(cases)(
     expect(order).toEqual(["update", "later"]);
     if (workerProbe) {
       await workerProbe.expectHealthy({
-        executor: mode === "cold-preparation" ? 1 : 0,
-        reclamation: mode === "cold-commit" ? 1 : 0,
+        executor: mode === "warm" ? 0 : 1,
+        reclamation: 0,
         other: 0,
       });
     } else {
@@ -347,7 +348,9 @@ it("does not reopen a disposed handle for a missing replacement's result-only co
   const f = fixture();
   const probe = observeAdmission(f.databasePath);
   const update = vi.fn(async () => {
-    expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+    expect(
+      await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath)),
+    ).toBe(true);
     return {
       result: "no-op",
       replacements: [
@@ -416,7 +419,7 @@ it("checks replacement commit authority before stale rows or worker admission", 
 
 it("keeps lifecycle commit denial before its stale-row check after admission", async () => {
   const f = fixture();
-  const probe = observeAdmission(f.databasePath);
+  const probe = observeWorkerAdmission(f.databasePath, "warm");
   const denied = new Error("synthetic lifecycle denied");
   const guard = vi.fn(() => {
     throw denied;
@@ -446,7 +449,7 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
   expect(buildEntry).toHaveBeenCalledOnce();
   expect(guard).toHaveBeenCalledOnce();
   expect(committed).not.toHaveBeenCalled();
-  probe.expectHealthy(1);
+  await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
   expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
 });
 
@@ -602,7 +605,7 @@ it.each([false, true])(
     registry.plugins.push(record);
     registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
     markPluginRegistryActive(registry);
-    const probe = observeAdmission(f.databasePath, true);
+    const probe = observeWorkerAdmission(f.databasePath, "cold");
     const work = own(
       withPluginRuntimeRegistryScope(registry, () =>
         applySessionEntryLifecycleMutation({
@@ -640,7 +643,7 @@ it.each([false, true])(
     expect(prepare).toHaveBeenCalledOnce();
     expect(commit).toHaveBeenCalledTimes(revoked ? 0 : 1);
     expect(rollback).not.toHaveBeenCalled();
-    probe.expectHealthy(1);
+    await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
     expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe(revoked ? "original" : undefined);
   },
 );
@@ -877,7 +880,7 @@ it.each([false, true])(
     registry.plugins.push(record);
     registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
     markPluginRegistryActive(registry);
-    const probe = observeAdmission(f.databasePath, true);
+    const probe = observeWorkerAdmission(f.databasePath, "cold");
     const work = own(
       withPluginRuntimeRegistryScope(registry, () =>
         finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(f.scope, [plan]),
@@ -892,7 +895,7 @@ it.each([false, true])(
     await expect(work).resolves.toMatchObject({ capped: revoked ? 0 : 1 });
     expect(commit).toHaveBeenCalledTimes(revoked ? 0 : 1);
     expect(rollback).not.toHaveBeenCalled();
-    probe.expectHealthy(1);
+    await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
     if (revoked) {
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);

@@ -1,9 +1,12 @@
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeQaProviderMode,
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   remapModelRefForForcedRuntime,
   splitQaModelRef,
   type QaProviderMode,
@@ -38,13 +41,6 @@ export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
 
-function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
-  const normalizedExtra = (extraOrigins ?? [])
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-  return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
-
 function buildQaModelSelection(primaryModel: string, alternateModel: string) {
   const fallbacks = alternateModel !== primaryModel ? [alternateModel] : undefined;
   return fallbacks ? { primary: primaryModel, fallbacks } : { primary: primaryModel };
@@ -78,8 +74,8 @@ export function buildQaGatewayConfig(params: {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockSessionObserverUrl =
     params.mockSessionObserverUrl ?? resolveQaSessionObserverUrl(providerBaseUrl);
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
-  const provider = getQaProvider(providerMode);
+  const provider = getQaProvider(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
+  const providerMode = provider.mode;
   const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
   const { primaryModel: normalizedPrimaryModel, alternateModel: normalizedAlternateModel } =
     resolveQaRuntimeModelPair({
@@ -112,11 +108,7 @@ export function buildQaGatewayConfig(params: {
           ),
         ]
       : [];
-  const configuredPluginIds = uniqueStrings(
-    (params.enabledPluginIds ?? [])
-      .map((pluginId) => pluginId.trim())
-      .filter((pluginId) => pluginId.length > 0),
-  );
+  const configuredPluginIds = normalizeUniqueStringEntries(params.enabledPluginIds);
   // Only canonical frontier provider ids are also plugin ids. Provider aliases
   // and custom providers rely on the explicit owner mapping supplied above.
   const inferredProviderPluginIds = selectedProviderIds.filter((providerId) =>
@@ -133,9 +125,7 @@ export function buildQaGatewayConfig(params: {
     params.forcedRuntime === "codex"
       ? uniqueStrings([...providerSelectedPluginIds, "codex"])
       : providerSelectedPluginIds;
-  const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
-    .map((pluginId) => pluginId.trim())
-    .filter((pluginId) => pluginId.length > 0);
+  const transportPluginIds = normalizeStringEntries(uniqueStrings(params.transportPluginIds ?? []));
   const pluginEntries = Object.fromEntries(
     selectedPluginIds.map((pluginId) => [
       pluginId,
@@ -185,7 +175,10 @@ export function buildQaGatewayConfig(params: {
       }),
     };
   };
-  const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
+  const allowedOrigins = uniqueStrings([
+    ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+    ...normalizeStringEntries(params.controlUiAllowedOrigins),
+  ]);
   const providerGatewayModels = provider.buildGatewayModels({
     providerBaseUrl,
     primaryModel,

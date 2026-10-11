@@ -80,24 +80,16 @@ export function readTranscriptStatsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): SessionTranscriptStats {
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const row = transcriptStatsQuery(database.db)(sessionId).rows[0];
-      return {
-        eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
-        ...(row?.transcript_updated_at != null
-          ? { lastMutationAtMs: row.transcript_updated_at }
-          : {}),
-        ...(row?.transcript_observed_at != null
-          ? { lastObservedMutationAtMs: row.transcript_observed_at }
-          : {}),
-        maxSeq: row?.cold_last_seq ?? row?.max_seq ?? 0,
-        sizeBytes: row?.cold_raw_bytes ?? row?.size_bytes ?? 0,
-      };
-    },
-    { operationLabel: "session transcript stats" },
-  );
+  const row = transcriptStatsQuery(database.db)(sessionId).rows[0];
+  return {
+    eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
+    ...(row?.transcript_updated_at != null ? { lastMutationAtMs: row.transcript_updated_at } : {}),
+    ...(row?.transcript_observed_at != null
+      ? { lastObservedMutationAtMs: row.transcript_observed_at }
+      : {}),
+    maxSeq: row?.cold_last_seq ?? row?.max_seq ?? 0,
+    sizeBytes: row?.cold_raw_bytes ?? row?.size_bytes ?? 0,
+  };
 }
 
 function readTranscriptStatsChunkFromDatabase(

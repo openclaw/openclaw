@@ -1,4 +1,3 @@
-/* Split View Layout */
 .chat-workbench {
   position: relative;
   display: grid;
@@ -9,7 +8,6 @@
   overflow: hidden;
 }
 
-/* Compact icon button shared by the pane header actions. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
@@ -37,26 +35,24 @@
   min-width: 0;
 }
 
-.chat-main {
+.chat-main,
+.chat-main__conversation-column {
   /* Positioning context for floating overlays and the optional session rail. */
   position: relative;
-  min-width: 312px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Smooth transition when sidebar opens/closes */
-  transition: flex 250ms ease-out;
   flex: 1 1 0;
 }
 
+.chat-main {
+  min-width: 312px;
+  transition: flex 250ms ease-out;
+}
+
 .chat-main__conversation-column {
-  position: relative;
-  display: flex;
   min-width: 0;
   min-height: 0;
-  flex: 1 1 0;
-  flex-direction: column;
-  overflow: hidden;
 }
 
 /* Header-to-transcript blend. It stops one thread gutter short of both pane
@@ -165,7 +161,14 @@
   display: inline-flex;
 }
 
-.chat-workspace-rail__group-chevron svg {
+.chat-workspace-rail__group-chevron svg,
+.sidebar-file-view__action svg,
+.session-diff__toolbar-button svg,
+.session-diff__toolbar-icon svg,
+.session-diff__refresh svg,
+.session-diff__chevron svg,
+.session-diff__file-menu svg,
+.session-diff__footer svg {
   width: 14px;
   height: 14px;
 }
@@ -264,7 +267,8 @@
 }
 
 .chat-workspace-rail__file-name,
-.chat-workspace-rail__file-meta {
+.chat-workspace-rail__file-meta,
+.session-diff-menu__subject {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -391,7 +395,6 @@
   line-height: 1.2;
 }
 
-/* Sidebar Panel */
 .sidebar-panel {
   display: flex;
   flex-direction: column;
@@ -412,7 +415,6 @@
   background: var(--panel);
 }
 
-/* Smaller close button for sidebar */
 .sidebar-header .btn {
   padding: 4px 8px;
   font-size: var(--control-ui-text-md);
@@ -450,7 +452,9 @@
 
 /* Full-height panel kinds need a bounded wrapper so their inner content can
    shrink and scroll instead of expanding past the rail. */
-.sidebar-panel-host--fill {
+.sidebar-panel-host--fill,
+.session-discussion__open,
+.sidebar-pdf-preview {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -466,22 +470,18 @@ openclaw-session-discussion {
 }
 
 .session-discussion__empty {
-  display: flex;
   flex: 1;
+  padding: 24px;
+}
+
+.session-discussion__empty,
+.sidebar-attachment-preview__unavailable {
+  display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 24px;
   color: var(--muted);
-}
-
-.session-discussion__open {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
 }
 
 .session-discussion__frame {
@@ -541,13 +541,17 @@ openclaw-session-discussion {
   gap: 2px;
 }
 
-.sidebar-file-view__action {
+.sidebar-file-view__action,
+.file-view__search-action {
   display: inline-grid;
   width: 26px;
   height: 26px;
   place-items: center;
-  flex: 0 0 auto;
   padding: 0;
+}
+
+.sidebar-file-view__action {
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
@@ -555,11 +559,6 @@ openclaw-session-discussion {
 .sidebar-file-view__action:focus-visible,
 .sidebar-file-view__action.copied {
   color: var(--accent);
-}
-
-.sidebar-file-view__action svg {
-  width: 14px;
-  height: 14px;
 }
 
 .sidebar-file-view__editor {
@@ -625,14 +624,6 @@ openclaw-session-discussion {
   text-align: right;
 }
 
-.file-view__search-action {
-  display: inline-grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  padding: 0;
-}
-
 .file-view__search-action svg {
   width: 13px;
   height: 13px;
@@ -655,6 +646,10 @@ openclaw-session-discussion {
   display: none;
 }
 
+openclaw-chat-html-preview {
+  display: contents;
+}
+
 .chat-html-preview {
   display: flex;
   flex: 1 1 auto;
@@ -664,7 +659,8 @@ openclaw-session-discussion {
   overflow: auto;
 }
 
-.chat-html-preview__frame {
+.chat-html-preview__frame,
+.sidebar-pdf-preview__frame {
   display: block;
   flex: 1 1 auto;
   width: 100%;
@@ -707,7 +703,6 @@ openclaw-session-discussion {
   caret-color: var(--text);
 }
 
-/* Word wrap: the editor wraps long lines at the panel width instead of scrolling. */
 .sidebar-file-view--wrap .cm-content {
   min-width: 0;
 }
@@ -846,12 +841,7 @@ openclaw-session-discussion {
 }
 
 .sidebar-pdf-preview {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
   width: 100%;
-  min-width: 0;
-  min-height: 0;
 }
 
 .sidebar-pdf-preview__surface {
@@ -873,13 +863,7 @@ openclaw-session-discussion {
 }
 
 .sidebar-pdf-preview__frame {
-  display: block;
-  flex: 1 1 auto;
-  width: 100%;
   min-width: 0;
-  min-height: 0;
-  border: 0;
-  background: var(--bg);
 }
 
 .sidebar-attachment-preview__markdown {
@@ -914,13 +898,7 @@ openclaw-session-discussion {
 }
 
 .sidebar-attachment-preview__unavailable {
-  display: flex;
   min-height: 180px;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--muted);
 }
 
 .sidebar-attachment-preview__state-card .chat-assistant-attachment-card__actions {
@@ -1184,9 +1162,6 @@ openclaw-session-discussion {
   overflow-wrap: anywhere;
 }
 
-/* Mobile: Full-screen modal */
-/* ── Session diff panel (sessions.diff sidebar content) ── */
-
 .session-diff {
   display: flex;
   min-height: 100%;
@@ -1247,7 +1222,8 @@ openclaw-session-discussion {
 
 .session-diff__toolbar-button,
 .session-diff__toolbar-icon,
-.session-diff__refresh {
+.session-diff__refresh,
+.session-diff__file-menu {
   min-width: 26px;
   height: 26px;
   min-height: 26px;
@@ -1259,13 +1235,6 @@ openclaw-session-discussion {
   align-items: center;
   gap: 2px;
   padding-inline: 7px;
-}
-
-.session-diff__toolbar-button svg,
-.session-diff__toolbar-icon svg,
-.session-diff__refresh svg {
-  width: 14px;
-  height: 14px;
 }
 
 .session-diff__section-title {
@@ -1290,7 +1259,8 @@ openclaw-session-discussion {
   color: var(--text);
 }
 
-.session-diff__section-title svg {
+.session-diff__section-title svg,
+.session-diff__gap-controls button svg {
   width: 12px;
   height: 12px;
 }
@@ -1346,11 +1316,6 @@ openclaw-session-discussion {
   flex-shrink: 0;
   color: var(--muted);
   transition: transform 120ms ease;
-}
-
-.session-diff__chevron svg {
-  width: 14px;
-  height: 14px;
 }
 
 .session-diff__chevron--open {
@@ -1445,22 +1410,13 @@ openclaw-session-discussion {
 
 .session-diff__file-menu {
   width: 26px;
-  min-width: 26px;
-  height: 26px;
-  min-height: 26px;
   margin-right: 4px;
-  padding: 4px;
   opacity: 0;
 }
 
 .session-diff__file:focus-within .session-diff__file-menu,
 .session-diff__file:hover .session-diff__file-menu {
   opacity: 1;
-}
-
-.session-diff__file-menu svg {
-  width: 14px;
-  height: 14px;
 }
 
 .session-diff__file-body {
@@ -1520,11 +1476,6 @@ openclaw-session-discussion {
   color: var(--text);
 }
 
-.session-diff__gap-controls button svg {
-  width: 12px;
-  height: 12px;
-}
-
 .session-diff__gap-controls .session-diff__gap-count {
   padding-inline: 5px;
 }
@@ -1571,11 +1522,6 @@ openclaw-session-discussion {
 .session-diff__footer:focus-visible {
   background: color-mix(in srgb, var(--secondary) 62%, var(--panel));
   color: var(--text);
-}
-
-.session-diff__footer svg {
-  width: 14px;
-  height: 14px;
 }
 
 .session-diff-split {
@@ -1681,13 +1627,6 @@ wa-dropdown.session-diff-menu::part(menu) {
   color: var(--muted);
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-}
-
-.session-diff-menu__subject {
-  overflow: hidden;
-  min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-diff-menu__head {

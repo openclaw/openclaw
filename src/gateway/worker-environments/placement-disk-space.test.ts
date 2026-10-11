@@ -288,7 +288,7 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.monitor.version()).toBe(1);
     expect(harness.warn).toHaveBeenCalledTimes(2);
     expect(harness.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Worker disk-space probe command failed"),
+      expect.stringContaining("Worker disk-space check command failed"),
     );
   });
 });

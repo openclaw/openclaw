@@ -1,4 +1,7 @@
-import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressContextBinding,
+  ResolveStableChannelMessageIngressParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveXAccount } from "./accounts.js";
 import { normalizeXUserId, openXAllowlist } from "./allowlist.js";
@@ -13,10 +16,14 @@ export async function resolveXIngress(
   post: XPost,
   cfg: OpenClawConfig,
   contextBinding?: ChannelIngressContextBinding,
+  childSessionPublication?: ResolveStableChannelMessageIngressParams["childSessionPublication"],
 ) {
   const core = getXRuntime();
   const account = resolveXAccount(cfg, accountId);
-  const snapshot = await openXAllowlist(core).readSnapshot(accountId);
+  const snapshot = await openXAllowlist(core).readSnapshot(
+    accountId,
+    account.config.verifiedFromGitHub,
+  );
   // 2026.9.8 only invokes readStoreAllowFrom for DMs. This admin-owned store
   // supplies raw group entries; the host still owns all matching and policy.
   const groupAllowFrom = [...(account.config.allowFrom ?? []), ...snapshot.allowFrom];
@@ -35,6 +42,7 @@ export async function resolveXIngress(
     subject: { stableId: post.author_id },
     conversation: { kind: "group", id: post.conversation_id },
     contextBinding,
+    childSessionPublication,
     event: { kind: "message", authMode: "inbound", mayPair: false },
     dmPolicy: "disabled",
     groupPolicy:
@@ -54,5 +62,14 @@ export async function resolveXIngress(
     }
   };
   assertCurrent();
-  return { ingress, assertCurrent, tier };
+  const githubEntry = snapshot.github?.entries.find((entry) => entry.xUserId === post.author_id);
+  return {
+    ingress,
+    assertCurrent,
+    tier,
+    github:
+      githubEntry && snapshot.github
+        ? { repo: snapshot.github.repo, entry: githubEntry }
+        : undefined,
+  };
 }

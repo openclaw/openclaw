@@ -5,7 +5,6 @@ import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
-import * as healthState from "../config/io.health-state.js";
 import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
@@ -27,7 +26,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each(["current", "backup", "webhook-repair"] as const)(
+it.each(["current", "webhook-repair"] as const)(
   "preserves authored config during startup from %s",
   async (source) => {
     await withDoctorConfigPreflightHome(async (home) => {
@@ -54,10 +53,6 @@ it.each(["current", "backup", "webhook-repair"] as const)(
         recordGatewayBootStart(process.env, 1_800_000_000_000);
       }
       await fs.writeFile(configPath, original);
-      if (source === "backup") {
-        await fs.writeFile(`${configPath}.bak`, original);
-        await fs.writeFile(configPath, '{"update":{"channel":"stable"}}');
-      }
       const runtime = {
         log() {},
         error() {},
@@ -86,11 +81,7 @@ it.each(["current", "backup", "webhook-repair"] as const)(
         const ready = await runStartupConfigPreflight(options);
         expect(ready.snapshot.valid).toBe(true);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        if (source === "backup") {
-          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-        } else {
-          await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
-        }
+        await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await fs.writeFile(configPath, replacement);
@@ -144,57 +135,6 @@ it.each([
     });
   },
 );
-
-it("skips recovery health reads without a backup and admits a later backup", async () => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    const stateDir = path.join(home, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const raw = JSON.stringify({
-      gateway: { mode: "local" },
-      plugins: { enabled: false },
-      meta: { migrations: { webhookListeners: true } },
-    });
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(configPath, raw);
-    openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
-    closeOpenClawStateDatabaseForTest();
-    const healthRead = vi.fn();
-    const capture = healthState.captureConfigHealthStateStore;
-    vi.spyOn(healthState, "captureConfigHealthStateStore").mockImplementation((...args) => {
-      const store = capture(...args);
-      return {
-        ...store,
-        read() {
-          healthRead();
-          return store.read();
-        },
-      };
-    });
-    const readiness = await import("../state/openclaw-database-preflight.js");
-    const assertReady = vi.spyOn(readiness, "assertOpenClawDatabasesReady");
-    const options = {
-      gateway: true,
-      observe: false,
-    };
-
-    const first = await runStartupConfigPreflight(options);
-
-    expect(first.snapshot.valid).toBe(true);
-    expect(assertReady).toHaveBeenCalled();
-    expect(healthRead).not.toHaveBeenCalled();
-    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-    await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
-
-    await fs.writeFile(`${configPath}.bak`, raw);
-    await fs.writeFile(configPath, '{"update":{"channel":"stable"}}');
-    const recovered = await runStartupConfigPreflight(options);
-
-    expect(healthRead).toHaveBeenCalled();
-    expect(recovered.snapshot.valid).toBe(true);
-    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-    expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
-  });
-});
 
 it("restores the admitted backup after database readiness exceeds the lease TTL", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
@@ -267,8 +207,7 @@ it.each(["backup", "active config"] as const)(
         plugins: { enabled: false },
         meta: { migrations: { webhookListeners: true } },
       };
-      const original =
-        kind === "backup" ? '{"update":{"channel":"stable"}}\n' : JSON.stringify(backup);
+      const original = '{"update":{"channel":"stable"}}\n';
       const replacement = JSON.stringify(
         kind === "backup"
           ? {
@@ -284,9 +223,7 @@ it.each(["backup", "active config"] as const)(
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       await fs.writeFile(configPath, original);
-      if (kind === "backup") {
-        await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
-      }
+      await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
       const runtime = {
         log() {},
         error() {},

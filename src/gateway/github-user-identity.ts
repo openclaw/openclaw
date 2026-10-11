@@ -13,6 +13,7 @@ import {
   syncCanonicalGitHubIdentity,
 } from "../state/user-profile-writes.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
+import type { CachedGitHubIdentityBinding } from "../state/user-profiles.types.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
@@ -307,13 +308,32 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   assertCurrent?: () => void;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const options = { assertCurrent: params.assertCurrent };
+  // A retryable GitHub outage may reuse only an exact binding verified earlier.
+  const reuseVerifiedBinding = async (error: unknown, binding: CachedGitHubIdentityBinding) => {
+    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable)) {
+      return undefined;
+    }
+    params.assertCurrent?.();
+    const cached = await resolveCanonicalCachedGitHubIdentity(binding);
+    params.assertCurrent?.();
+    return cached;
+  };
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
     : undefined;
   if (tailscaleLogin?.kind === "provider" && tailscaleLogin.provider === "github") {
     return createLazyPromise(async () => {
       params.assertCurrent?.();
-      const identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
+      let identity: ResolvedGitHubUserIdentity;
+      try {
+        identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
+      } catch (error) {
+        const cached = await reuseVerifiedBinding(error, { login: tailscaleLogin.subject });
+        if (cached) {
+          return cached;
+        }
+        throw error;
+      }
       params.assertCurrent?.();
       const profile = await syncCanonicalGitHubIdentity(
         {
@@ -355,14 +375,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         resolveGitHubUserIdentityById(accountId, requestToken, fetch),
       );
     } catch (error) {
-      if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable) {
-        // Retry failures may reuse only the exact verified email + immutable-account binding.
-        params.assertCurrent?.();
-        const cached = await resolveCanonicalCachedGitHubIdentity(identityBinding);
-        params.assertCurrent?.();
-        if (cached) {
-          return cached;
-        }
+      const cached = await reuseVerifiedBinding(error, identityBinding);
+      if (cached) {
+        return cached;
       }
       if (accessIdentity.provider === "oidc") {
         params.assertCurrent?.();

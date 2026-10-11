@@ -8,6 +8,8 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as fileDescriptor from "./file-descriptor.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
@@ -81,6 +83,7 @@ it.each([
               name: "Fixture",
               description: "Fixture palette",
               source: "theme.json",
+              icons: { rocket: "assets/rocket.svg" },
               hats: { beret: "assets/beret.svg" },
               critters: { ferris: { source: "assets/ferris.svg" } },
             },
@@ -115,6 +118,7 @@ it.each([
       ["assets/activity.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/activity/tool.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["theme.json", "{}"],
+      ["assets/rocket.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/beret.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/ferris.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["dist/control-ui/index.js", "export {};\n"],
@@ -354,6 +358,19 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
   },
 );
 
+it("retains unchanged files without rehashing the ctime change caused by its own link", async () => {
+  const content = "export const retained = true;\n";
+  const f = await fixture(async (source) => {
+    await fs.writeFile(path.join(source, "dist", "unique.js"), content);
+  });
+  const original = path.join(f.source, "dist", "unique.js");
+  const hash = vi.spyOn(fileDescriptor, "hashFileMutationSnapshotSync");
+  await f.link();
+  expect(hash.mock.calls.filter(([file]) => file === original)).toHaveLength(0);
+  await fs.rm(f.source, { recursive: true });
+  expect(await fs.readFile(path.join(f.destination, "dist", "unique.js"), "utf8")).toBe(content);
+});
+
 it("refuses entries that changed after the inventory and never links a replacement", async () => {
   const f = await fixture();
   const link = fs.link;
@@ -370,24 +387,48 @@ it("refuses entries that changed after the inventory and never links a replaceme
 });
 
 it.each(["next-entry", "copy-publication"] as const)(
-  "refuses unexpected ctime changes after a prior hard link (%s)",
+  "refuses same-size rewrites with restored mtime after a prior hard link (%s)",
   async (stage) => {
-    const f = await fixture();
+    const f = await fixture(async (source) => {
+      await fs.utimes(
+        path.join(source, "dist", "state", "worker.js"),
+        1_700_000_000,
+        1_700_000_000,
+      );
+    });
     const before = await fs.stat(f.worker, { bigint: true });
     const sharedEntries = f.plan.entries.filter(
       (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
     );
     const later = sharedEntries[1]!.path;
-    if (stage === "next-entry") {
-      const lstat = fs.lstat;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (args[0] === later && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
+    let mutated = false;
+    const mutate = () => {
+      if (mutated) {
+        return;
+      }
+      mutated = true;
+      const content = fsSync.readFileSync(later);
+      content[0] = content[0]! ^ 1;
+      fsSync.chmodSync(later, 0o600);
+      fsSync.writeFileSync(later, content);
+      fsSync.chmodSync(later, 0o444);
+      fsSync.utimesSync(later, before.atime, before.mtime);
+      advanceCtime(before);
+      expect(fsSync.lstatSync(later, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
+    };
+    const advanceCtime = createFileMutationClock({
+      beforeLstat: (pathname) => {
+        if (stage === "next-entry" && pathname === later) {
+          mutate();
         }
-        return stat;
-      });
-    } else {
+      },
+      beforeLstatSync: (pathname) => {
+        if (stage === "copy-publication" && pathname === later) {
+          mutate();
+        }
+      },
+    });
+    if (stage === "copy-publication") {
       const link = fs.link;
       vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
         if (existing === later) {
@@ -395,16 +436,9 @@ it.each(["next-entry", "copy-publication"] as const)(
         }
         return await link(existing, target);
       });
-      const lstatSync = fsSync.lstatSync;
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        const stat = lstatSync(...args);
-        if (args[0] === later && stat && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
-        }
-        return stat;
-      });
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
+    expect(mutated).toBe(true);
     expect(fsSync.existsSync(path.join(f.destination, path.relative(f.source, later)))).toBe(false);
   },
 );

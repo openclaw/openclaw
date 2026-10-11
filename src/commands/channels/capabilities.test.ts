@@ -378,7 +378,7 @@ describe("channelsCapabilitiesCommand", () => {
     expect(payload.channels?.[0]?.probe).toStrictEqual({
       ok: false,
       timedOut: true,
-      error: "probe timed out after 1ms",
+      error: "check timed out after 1ms",
     });
   });
 
@@ -406,7 +406,7 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "telegram", timeout: "1" }, runtime);
 
-    expect(logs[0]?.split("\n")).toContain("Probe: failed (probe timed out after 1ms)");
+    expect(logs[0]?.split("\n")).toContain("Check: failed (check timed out after 1ms)");
   });
 
   it("serializes diagnostics when capability diagnostics exceed their timeout", async () => {

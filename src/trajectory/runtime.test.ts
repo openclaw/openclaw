@@ -8,6 +8,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -37,6 +38,15 @@ type TrajectoryRuntimeRecorder = NonNullable<
 >;
 
 const tempDirs = createTempDirTracker();
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "reject_trajectory_append",
+    match: /^insert into trajectory_runtime_events\b/u,
+    sql: `CREATE TEMP TRIGGER reject_trajectory_append BEFORE INSERT ON main.trajectory_runtime_events
+      BEGIN SELECT RAISE(ABORT, 'synthetic SQLite persistence failure'); END;`,
+  },
+]);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -185,16 +195,12 @@ describe("trajectory runtime", () => {
     recorder.recordEvent("already-persisted");
     await recorder.flush();
     recorder.recordEvent("before-failure");
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(target)));
-    database.db.exec(`
-      CREATE TRIGGER reject_trajectory_append BEFORE INSERT ON trajectory_runtime_events
-      BEGIN SELECT RAISE(ABORT, 'synthetic SQLite persistence failure'); END
-    `);
+    fault.enable();
     try {
       await expect(recorder.flush()).rejects.toThrow("synthetic SQLite persistence failure");
       expect(recorder.describeFlushState()).toContain("pendingRows=1");
     } finally {
-      database.db.exec("DROP TRIGGER reject_trajectory_append");
+      fault.disable();
     }
     recorder.recordEvent("after-failure");
     await recorder.flush();

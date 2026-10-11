@@ -231,8 +231,6 @@ describe("gateway chat metadata lifecycle composition", () => {
         entries: rows,
         routeVariants: rows,
       });
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
       let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
@@ -258,10 +256,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         const evaluateEntry = projector.evaluateEntry;
         const evaluations = vi
           .spyOn(projector, "evaluateEntry")
-          .mockImplementation(async (entry, variants) => {
+          .mockImplementation((entry, variants) => {
             if (entry.id === "gpt-5.6-luna") {
-              entered.resolve();
-              await resume.promise;
+              ready = !initialReady;
             }
             return evaluateEntry(entry, variants);
           });
@@ -282,9 +279,6 @@ describe("gateway chat metadata lifecycle composition", () => {
           catalogProjector: projector,
         };
         result = buildModelsListResult(request);
-        await entered.promise;
-        ready = !initialReady;
-        resume.resolve();
         const models = (await result).models;
         expect(models.map(({ id }) => id).toSorted()).toEqual(
           ready ? ["codex-latest", "gpt-5.6-luna"] : ["gpt-5.6-luna"],
@@ -313,7 +307,6 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(evaluations).toHaveBeenCalledTimes(hostCalls);
         expect(loadModelCatalog).not.toHaveBeenCalled();
       } finally {
-        resume.resolve();
         await Promise.allSettled([result]);
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
@@ -397,17 +390,17 @@ describe("gateway chat metadata lifecycle composition", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
-      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
-        entries: [nativeModel],
-        routeVariants: [nativeModel],
-        authoritative,
-      });
+      const catalog = { entries: [nativeModel], routeVariants: [nativeModel], authoritative };
+      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue(catalog);
+      // Startup discovery builds the same catalog in the worker.
+      mocks.runPreparedModelCatalogWorker.mockImplementation(async () => structuredClone(catalog));
       const nativeContext = createCatalogContext(() => currentConfig);
       const loader = nativeContext.loadGatewayModelCatalogSnapshot;
       try {
         await publishOwner(nativeConfig);
+        // This fixture tests retained discovery; startup now acquires provider inventory only.
+        await readOwner()?.loadNativeModelCatalog?.();
         expect(loadModelCatalog).toHaveBeenCalled();
-        const preparationCalls = loadModelCatalog.mock.calls.length;
         loadModelCatalog.mockClear();
         revision += 1;
         const lifecycle = await createLifecycle(() => currentConfig);
@@ -597,14 +590,26 @@ describe("gateway chat metadata lifecycle composition", () => {
             await published.promise;
             expect(events).toContain("published");
             expect(events).not.toContain("failed");
-            await expect(nextRead).resolves.toMatchObject({ models: expectedModels(true) });
+            await expect(nextRead).resolves.toMatchObject({
+              models: [
+                expect.objectContaining({
+                  id: "codex-latest",
+                  name: "codex-latest",
+                  available: true,
+                }),
+              ],
+            });
             const replacement = readOwner();
             expect(replacement).toBeDefined();
             expect(replacement).not.toBe(owner);
             expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
+            await replacement?.loadNativeModelCatalog?.();
+            const nativeCalls = loadModelCatalog.mock.calls.length;
+            await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
+              models: expectedModels(true),
+            });
             await lifecycle.read({ agentId: "main" });
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(nativeCalls);
             expect({ current: staleCurrent, models: staleModels }).toMatchObject({
               current: false,
               models: expectedModels(false),
@@ -617,13 +622,16 @@ describe("gateway chat metadata lifecycle composition", () => {
           return;
         }
 
+        const retainedStartup = await lifecycle.readStartup({
+          agentId: "main",
+          readPolicy: "ready",
+        });
+        expect(retainedStartup).toBeDefined();
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();
-        // Equivalent lifecycle facts can retain a generation, but its prepared wrappers
-        // still belong to the previous config object until a canonical read refreshes them.
-        await expect(
-          lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
-        ).resolves.toBeUndefined();
+        const copiedStartup = await lifecycle.readStartup({ agentId: "main", readPolicy: "ready" });
+        expect(copiedStartup?.sessionModelCatalog).toBe(retainedStartup?.sessionModelCatalog);
+        expect(copiedStartup?.defaultModelCatalog).toBe(retainedStartup?.defaultModelCatalog);
         await lifecycle.read({ agentId: "main" });
         await expectNativeAvailable(true);
 

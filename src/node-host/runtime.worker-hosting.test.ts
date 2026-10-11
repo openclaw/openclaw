@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -87,7 +88,83 @@ function prepareWorkerRuntime(
   });
 }
 
+function configThatRejectsModelAccess(workerRuns: {
+  enabled: boolean;
+  isolation?: "container";
+}): OpenClawConfig {
+  const config: OpenClawConfig = {
+    nodeHost: { skills: { enabled: false }, workerRuns },
+  };
+  Object.defineProperty(config, "models", {
+    get() {
+      throw new Error("native inference inspected models outside its launch boundary");
+    },
+  });
+  return config;
+}
+
 describe("node-host worker manifest", () => {
+  it.each([
+    { name: "disabled worker hosting", enabled: false },
+    { name: "rejected worker hosting", enabled: true, admissionFailure: true },
+    { name: "container-isolated worker hosting", enabled: true, isolation: "container" as const },
+  ])(
+    "does not inspect models or advertise native inference for $name",
+    async ({ enabled, isolation, admissionFailure }) => {
+      if (admissionFailure) {
+        mocks.checkWorkspaceAdmission.mockRejectedValueOnce(
+          new Error("workspace admission failed"),
+        );
+      }
+      const prepared = await prepareNodeHostRuntime({
+        config: configThatRejectsModelAccess({ enabled, isolation }),
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+      });
+      expect(prepared.nativeInferenceEnabled).toBe(false);
+
+      const runtime = prepared.start({ client });
+      await runtime.close();
+    },
+  );
+
+  it("advertises native inference after unisolated worker hosting is admitted", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: {
+        nodeHost: {
+          skills: { enabled: false },
+          workerRuns: { enabled: true, isolation: "none" },
+        },
+        models: {
+          providers: {
+            local: {
+              apiKey: "synthetic-native-key",
+              api: "openai-completions",
+              baseUrl: "https://model.example.test/v1",
+              models: [
+                {
+                  id: "model-1",
+                  name: "Model 1",
+                  contextWindow: 8192,
+                  maxTokens: 1024,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+    });
+    expect(prepared.nativeInferenceEnabled).toBe(true);
+
+    const runtime = prepared.start({ client });
+    await runtime.close();
+  });
+
   it("keeps container hosting opted out without probing an engine or reporting a failure", async () => {
     const prepared = await prepareWorkerRuntime("container", { enabled: false });
     const onWorkerHostingDisabled = vi.fn();

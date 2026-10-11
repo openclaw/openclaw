@@ -72,24 +72,7 @@ type SecretsAuditFinding = {
 type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 /** Structured report returned by the secrets audit command. */
-type SecretsAuditReport = {
-  version: 1;
-  status: SecretsAuditStatus;
-  resolution: {
-    refsChecked: number;
-    skippedExecRefs: number;
-    resolvabilityComplete: boolean;
-  };
-  filesScanned: string[];
-  summary: {
-    plaintextCount: number;
-    unresolvedRefCount: number;
-    shadowedRefCount: number;
-    storeResidueCount: number;
-    legacyResidueCount: number;
-  };
-  findings: SecretsAuditFinding[];
-};
+type SecretsAuditReport = Awaited<ReturnType<typeof runSecretsAudit>>;
 
 type RefAssignment = {
   file: string;
@@ -99,7 +82,7 @@ type RefAssignment = {
   provider?: string;
 };
 
-type SecretDefaults = { env?: string; file?: string; exec?: string };
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
 
 type AuditCollector = {
   findings: SecretsAuditFinding[];
@@ -288,62 +271,40 @@ function collectModelsJsonSecrets(params: {
     if (!isRecord(providerValue)) {
       continue;
     }
-    const apiKey = providerValue.apiKey;
-    if (coerceSecretRef(apiKey)) {
+    const collectValue = (value: unknown, headerKey?: string) => {
+      const isHeader = headerKey !== undefined;
+      const ref = coerceSecretRef(value);
+      if (
+        !ref &&
+        (!isNonEmptyString(value) ||
+          (isHeader ? isSecretRefHeaderValueMarker(value) : isNonSecretApiKeyMarker(value)) ||
+          (isHeader && !isLikelySensitiveModelProviderHeaderName(headerKey)))
+      ) {
+        return;
+      }
       params.collector.findings.push({
-        code: "REF_UNRESOLVED",
-        severity: "error",
+        code: ref ? "REF_UNRESOLVED" : "PLAINTEXT_FOUND",
+        severity: ref ? "error" : "warn",
         file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+        jsonPath: `providers.${providerId}.${isHeader ? `headers.${headerKey}` : "apiKey"}`,
+        message: ref
+          ? isHeader
+            ? "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json."
+            : "models.json contains an unresolved SecretRef object; regenerate models.json."
+          : isHeader
+            ? "models.json provider header value is stored as plaintext."
+            : "models.json provider apiKey is stored as plaintext.",
         provider: providerId,
       });
-    } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
-      params.collector.findings.push({
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json provider apiKey is stored as plaintext.",
-        provider: providerId,
-      });
-    }
+    };
+    collectValue(providerValue.apiKey);
 
     const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
     if (!headers) {
       continue;
     }
     for (const [headerKey, headerValue] of Object.entries(headers)) {
-      const headerPath = `providers.${providerId}.headers.${headerKey}`;
-      if (coerceSecretRef(headerValue)) {
-        params.collector.findings.push({
-          code: "REF_UNRESOLVED",
-          severity: "error",
-          file: params.modelsJsonPath,
-          jsonPath: headerPath,
-          message:
-            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
-          provider: providerId,
-        });
-        continue;
-      }
-      if (!isNonEmptyString(headerValue)) {
-        continue;
-      }
-      if (isSecretRefHeaderValueMarker(headerValue)) {
-        continue;
-      }
-      if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
-        continue;
-      }
-      params.collector.findings.push({
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.modelsJsonPath,
-        jsonPath: headerPath,
-        message: "models.json provider header value is stored as plaintext.",
-        provider: providerId,
-      });
+      collectValue(headerValue, headerKey);
     }
   }
 }
@@ -355,21 +316,26 @@ function collectLegacyAuthSourceFindings(params: {
   collector: AuditCollector;
 }): void {
   const seen = new Set<string>();
+  const report = (source: { path: string; kind: string }, archived: boolean) => {
+    if (seen.has(source.path)) {
+      return;
+    }
+    seen.add(source.path);
+    params.collector.findings.push({
+      code: "LEGACY_RESIDUE",
+      severity: !archived && source.kind === "auth-state" ? "info" : "warn",
+      file: source.path,
+      jsonPath: "<root>",
+      message: archived
+        ? `Archived auth source ${source.kind} may contain plaintext credentials; retain it only as long as recovery requires.`
+        : `Retired auth source ${source.kind} is present; run openclaw doctor --fix to migrate and archive it.`,
+    });
+  };
   const targets = listAuthProfileStoreTargets(params.config, params.stateDir, params.env);
   for (const target of targets) {
     const agentDir = target.kind === "agent" ? target.agentDir : undefined;
     for (const source of listLegacyAuthProfileSources({ agentDir, env: params.env })) {
-      if (seen.has(source.path)) {
-        continue;
-      }
-      seen.add(source.path);
-      params.collector.findings.push({
-        code: "LEGACY_RESIDUE",
-        severity: source.kind === "auth-state" ? "info" : "warn",
-        file: source.path,
-        jsonPath: "<root>",
-        message: `Retired auth source ${source.kind} is present; run openclaw doctor --fix to migrate and archive it.`,
-      });
+      report(source, false);
     }
   }
   const sharedMainDir = resolveSharedMainAuthAgentDir(params.env);
@@ -379,17 +345,7 @@ function collectLegacyAuthSourceFindings(params: {
       .concat(sharedMainDir),
     env: params.env,
   })) {
-    if (seen.has(archive.path)) {
-      continue;
-    }
-    seen.add(archive.path);
-    params.collector.findings.push({
-      code: "LEGACY_RESIDUE",
-      severity: "warn",
-      file: archive.path,
-      jsonPath: "<root>",
-      message: `Archived auth source ${archive.kind} may contain plaintext credentials; retain it only as long as recovery requires.`,
-    });
+    report(archive, true);
   }
 }
 
@@ -551,7 +507,7 @@ function collectShadowingFindings(collector: AuditCollector): void {
   }
 }
 
-function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport["summary"] {
+function summarizeFindings(findings: SecretsAuditFinding[]) {
   return {
     plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
     unresolvedRefCount: findings.filter(
@@ -569,7 +525,7 @@ export async function runSecretsAudit(
     env?: NodeJS.ProcessEnv;
     allowExec?: boolean;
   } = {},
-): Promise<SecretsAuditReport> {
+) {
   const env = params.env ?? process.env;
   const snapshot = await createSecretsConfigIO({ env }).readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
@@ -664,7 +620,7 @@ export async function runSecretsAudit(
         : "clean";
 
   return {
-    version: 1,
+    version: 1 as const,
     status,
     resolution,
     filesScanned: [...collector.filesScanned].toSorted(),

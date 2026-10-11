@@ -21,6 +21,7 @@ import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type { LaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import type {
   DraftLaneState,
@@ -79,13 +80,9 @@ type TelegramAnswerBlockDelivery = {
   buttons: import("./button-types.js").TelegramInlineButtons | undefined;
 };
 
-export type TelegramDispatchTurnConfig = Omit<
-  DispatchTelegramMessageParams,
-  "context" | "telegramDeps"
-> & {
+export type TelegramDispatchTurnConfig = Omit<DispatchTelegramMessageParams, "telegramDeps"> & {
   allowProviderPreview: boolean;
   chunkMode: TextChunkMode;
-  context: TelegramMessageContext;
   dispatchStartedAt: number;
   draftReplyToMessageId?: number;
   isSuperseded: () => boolean;
@@ -104,14 +101,8 @@ export type TelegramDispatchTurnConfig = Omit<
   telegramDeps: TelegramBotDeps;
 };
 
-export type TelegramDraftPartialTextUpdate = {
-  text: string;
-  delta?: string;
-  replace?: true;
-  isReasoningSnapshot?: boolean;
-};
 export type TelegramSplitLaneSegmentsResult = {
-  segments: Array<{ lane: LaneName; update: TelegramDraftPartialTextUpdate }>;
+  segment: { lane: LaneName; text: string } | undefined;
   suppressedReasoningOnly: boolean;
 };
 export type TelegramQueuedAnswerBlockRotation = {
@@ -136,6 +127,7 @@ export type TelegramDraftStateSlice = {
   answerLane: DraftLaneState;
   reasoningLane: DraftLaneState;
   lanes: Record<LaneName, DraftLaneState>;
+  createAnswerStream: () => TelegramDraftStream;
   streamDeliveryEnabled: boolean;
   streamReasoningInProgressDraft: boolean;
   disableBlockStreaming: boolean | undefined;
@@ -145,7 +137,6 @@ export type TelegramDraftStateSlice = {
   activeAnswerBlockAssistantMessageIndex: number | undefined;
   activeAnswerBlockDelivery: TelegramAnswerBlockDelivery | undefined;
   queuedAnswerBlockRotations: TelegramQueuedAnswerBlockRotation[];
-  queuedAnswerBlockAssistantMessageIndex: number | undefined;
   pendingAnswerBlockAssistantMessageIndex: number | undefined;
   rotateAnswerLaneWhenQueuedBlocksSettle: boolean;
   draftEventQueue: Promise<void>;
@@ -166,6 +157,7 @@ export type TelegramDeliveryStateSlice = {
   resolveCurrentTurnTranscriptFinal: () => Promise<CurrentTurnTranscriptFinal | undefined>;
   transcriptMirrorSequence: number;
   transcriptMirrorTurnId: string;
+  transcriptMirrorRunId?: string;
   implicitQuoteReplyTargetId: string | undefined;
   currentMessageIdForQuoteReply: string | undefined;
 };
@@ -183,6 +175,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
     finalDispatchClaimed: boolean;
+    finalDeliveryError?: unknown;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;

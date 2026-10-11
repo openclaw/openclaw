@@ -14,6 +14,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+Doctor keeps plugin repair and diagnostic contracts available through later health
+checks and service finalization. It releases its private plugin resources when
+the flow ends, including failed runs.
+
 ## Runtime config migration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot
@@ -27,6 +31,71 @@ Run `openclaw doctor --fix` before starting with these retired keys. Updates app
 the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
+
+## Direct Ollama Cloud routing
+
+Older Cloud-only setup stored hosted Ollama models under `models.providers.ollama`.
+When that provider points to `https://ollama.com`, Doctor moves it to
+`ollama-cloud` and rewrites its model references in agent defaults, model
+allowlists, per-agent settings, heartbeat, utility, subagent and compaction
+models, cron jobs, and session overrides. URL paths and trailing slashes do not
+change the hosted classification. An existing `ollama-cloud` catalog keeps its
+models and gains missing migrated models without duplicates.
+Role model-policy allow and deny rules move together, preserving restrictions.
+
+Localhost, LAN, and custom endpoints stay unchanged, including cloud models
+served through a signed-in local Ollama daemon. Other provider keys also stay
+unchanged. Doctor does not infer hosted routing from a model name.
+
+Both providers use `OLLAMA_API_KEY`, so environment-backed URLs, credentials, and
+SecretRefs keep their authored references without a credential-store migration.
+Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in
+that saved profile, run `openclaw onboard --auth-choice ollama-cloud` to configure
+Cloud authentication.
+
+Migrated model references drop their `@profile` suffix rather than moving an
+account pin across providers. Doctor emits one reminder to re-pin with
+`/model <provider/model>@<profile>` if needed. Saved credentials are not modified.
+
+Run `openclaw doctor --fix` to apply the migration. Updates use the same repair.
+Doctor repairs cron and session
+references through their existing state owners, then backs up and publishes the
+config last. The Cloud provider is already available through the Ollama plugin.
+If interrupted before config publication, the hosted `ollama` entry remains and
+the next Doctor run finishes the idempotent repair. Once config publication
+completes, new local Ollama selections are left alone; Doctor never replays old
+config backups to infer a provider rename.
+
+## Claude CLI model routing
+
+Claude CLI sign-in now writes `agents.defaults.models["anthropic/*"]` with the
+`claude-cli` runtime. Configs from earlier sign-ins pinned only the Claude models
+that sign-in added, so other Claude models fell back to the API route and failed
+without an Anthropic credential. The Anthropic plugin's Doctor repair adds the
+wildcard when the default model is an Anthropic model whose entry pins
+`claude-cli`, no `anthropic/*` entry exists, no provider-level Anthropic runtime
+is set, and no Anthropic credential is configured (auth profile, provider API
+key, `ANTHROPIC_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`). An API default model with
+a Claude CLI fallback is left unchanged, and an existing `anthropic/*` entry is
+never replaced. Updates run the same repair through the backed-up Doctor config
+write; `openclaw doctor` without `--fix` reports it.
+
+## Command-owner target kinds
+
+Doctor preserves `commands.ownerAllowFrom` target kinds declared by channel plugins.
+For example, `discord:user:123456789012345678` stays a direct-user target;
+rewriting it to `discord:123456789012345678` would leave heartbeat delivery unable
+to prove a direct route. Command authorization still compares the channel's native
+sender identity.
+
+For an active owner-targeted heartbeat, Doctor checks ambiguous owners against the
+existing `.bak` through `.bak.4` config history. It restores a recorded `user:` kind
+only while the entire owner list still matches the old migration's output. It
+does not search past changed owners, unreadable history, or historical includes.
+Without that evidence, Doctor leaves the entry unchanged and reports the exact
+replacement to use after confirming the ID belongs to the intended user. This
+warning does not block updates. Repairs use Doctor's normal config backup and
+write path, so update rollback can restore the previous config.
 
 ## Retention policy
 
@@ -471,7 +540,10 @@ Keep this marker when removing a pin. Subsequent Doctor runs, restarts, and
 updates will not recreate it. Account pins cover only accounts present during
 migration. For trusted official plugins with older Doctor contracts, Doctor uses
 historical listener facts shipped with the Gateway. The installed plugin retains
-ownership of its other config migrations. Other plugins can remain pending while
+ownership of its other config migrations. During an update, these listener repairs
+also run when an installed official plugin is deferred until package convergence;
+its deferred code is not loaded, and replacement plugins retain their ownership.
+Other plugins can remain pending while
 other channels finish. Replacing a pending plugin runs the same migration through
 the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
@@ -567,8 +639,11 @@ decoder's last-value semantics for duplicate properties. Ambiguous ownership and
 payloads remain intact with a warning naming the affected session.
 
 Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
-ACP state with offline repair instructions before handing session stores to
-runtime. Run `openclaw doctor --fix` after restoring older state; the update-time
+ACP state with a current session binding before handing session stores to
+runtime, with offline repair instructions. Historical shared rows whose binding
+is absent or stale remain intact and do not block startup; runtime does not serve
+their metadata. Unreadable candidate stores and unresolved recorded owners still
+block admission. Run `openclaw doctor --fix` after restoring older state; the update-time
 Doctor pass runs the same repair.
 Embedded metadata imports record durable receipts before removing the source
 field, so retrying interrupted cleanup cannot reopen a session after its canonical
@@ -611,9 +686,41 @@ protection.
 Session edits and deletions made after the core import remain authoritative when
 the plugin migration resumes.
 
+Doctor settles an unavailable plugin's old obligation when its protected config
+is empty or absent and it carries no outstanding state-migration or inspection
+requirement. The existing migration receipt records that there was nothing to
+migrate. A known official replacement can supersede the old obligation after
+its migration completes and no old plugin settings remain to transfer. Stored
+plugin data is kept; these outcomes do not enable plugins or widen allowlists.
+Legacy fields excluded from validation remain protected even when their value is
+an empty object or array; their owner must interpret or remove them.
+An explicitly enabled plugin that passes activation policy keeps its package
+obligation until it becomes available, even when it has no custom settings.
+Update rehearsals leave unavailable-owner settlement to live update finalization.
+
+If retained settings or an explicit state/inspection requirement remain, Doctor
+keeps the obligation pending and names the plugin to install or enable. A retired
+plugin may need its maintainer's supported recovery path. Disabling or uninstalling
+the plugin does not by itself complete its migration. Update status and startup
+read the same settled receipts after Doctor finishes; an updating parent that
+still owns plugin installation continues to defer the work.
+
 While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
+
+## Blocked local plugins
+
+Doctor preserves the complete configuration entry and plugin policy for a local
+plugin rejected by discovery, including ownership and writable-path safety
+checks. A blocked plugin is not an uninstalled plugin. Its runtime remains
+blocked, and Doctor reports the path problem instead of removing its enablement
+or suggesting a registry reinstall for a local path. Fix the path and rerun
+`openclaw doctor --fix` as the account that runs the Gateway.
+
+This preservation also applies when an update invokes the candidate Doctor. It
+does not change the update execution account or repair files already made owned
+by another user.
 
 ## Retired TaskFlow Webhooks plugin
 
@@ -697,8 +804,17 @@ their exact child and turn locators. A persisted terminal summary, status, and
 completion time remain available when native history no longer contains the
 result.
 
-Terminal deliveries marked `failed` after exhausting their retry budget remain
-historical and are not automatically restarted.
+Terminal deliveries marked `failed` remain historical and are not automatically
+restarted. Doctor also settles a pending delivery as `failed` when its task has
+finished (`succeeded`, `failed`, or `cancelled`) and its original requester binding
+is missing, cleared, or no longer matches the recorded session, lifecycle, or
+connection. It appends an `Undeliverable historical delivery` reason to the task's
+existing `error` field and preserves any previous error, execution status, result,
+native locator, and ownership facts. This does not claim successful delivery or
+import the result into a replacement parent. The row remains available for
+inspection, and subsequent migration passes leave it historical. If no other
+Codex migration is pending, the normal plugin lifecycle confirms data readiness
+and resumes full settings validation.
 
 The migration writes `nativeSubagentAssignments` and the per-source Task ID
 marker `nativeSubagentTaskImport` together in one compare-and-apply operation on
@@ -706,14 +822,17 @@ the existing `app-server-thread-bindings` plugin state. A changed binding is
 preserved and reported for retry. Acknowledgement can consume the assignment,
 while the import marker survives acknowledgement, native rotation, clear, and
 reset so unchanged legacy rows cannot resurrect completed work. The shared
-database is declared in the migration's backup inventory; every source Task row
-remains byte-identical. There is no new SQL table, schema-version bump, Tasks
+database is declared in the migration's backup inventory, so the pre-migration
+backup also restores delivery settlement on rollback. Imported source Task rows
+remain byte-identical; historical settlement changes only delivery status and
+the recorded error. There is no new SQL table, schema-version bump, Tasks
 runtime reader, or replacement Task ledger. Native execution and completion
 delivery continue to require current requester authority.
 
 Unstamped records, including 2026.9.2-era rows, cannot establish the missing
 physical requester and connection history. Doctor also preserves ambiguous
-duplicate run IDs and records whose ownership no longer matches. It emits a
+duplicate run IDs, malformed records, and unfinished work whose ownership no
+longer matches. It emits a
 recoverable warning identifying the Task and native run, without disabling the
 Gateway or unrelated sessions. Inspect the child in its original native Codex
 account, or restore the pre-update backup with its matching OpenClaw version to
@@ -923,6 +1042,7 @@ against the current SQLite owners before the import can rename profiles.
     | `session.maintenance.rotateBytes`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
+    | `skills.workshop.autonomous.mode: "propose"`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `"off"`; proposal settings removed (Skill Workshop proposals were retired) |
 
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 

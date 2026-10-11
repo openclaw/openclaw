@@ -21,7 +21,8 @@ import {
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
-import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mode.js";
 
@@ -168,21 +169,15 @@ export function prepareExecDefaults(
   const resolve = (
     approvalDefaults: ReturnType<typeof resolveExecApprovalsFromFile>["agent"] | undefined,
   ): ResolvedExecDefaults => {
-    const layeredPolicy =
-      sessionPermissionPolicy ??
-      applyExecPolicyLayer(
-        applyExecPolicyLayer(
-          applyExecPolicyLayer(
-            {
-              security: approvalDefaults?.security ?? defaultSecurity,
-              ask: approvalDefaults?.ask ?? "off",
-            },
-            globalExec,
-          ),
-          agentExec,
-        ),
-        params.execOverrides,
-      );
+    let layeredPolicy = sessionPermissionPolicy ?? {
+      security: approvalDefaults?.security ?? defaultSecurity,
+      ask: approvalDefaults?.ask ?? "off",
+    };
+    if (!sessionPermissionPolicy) {
+      for (const layer of [globalExec, agentExec, params.execOverrides]) {
+        layeredPolicy = applyExecPolicyLayer(layeredPolicy, layer);
+      }
+    }
     const modePolicy = resolveExecModePolicy(layeredPolicy);
     // Approval files bound every policy source except explicit admin-only full sessions.
     const security =

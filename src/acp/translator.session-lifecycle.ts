@@ -131,10 +131,27 @@ export class AcpTranslatorSessionLifecycle {
             return [];
           }),
     ]);
+    const replaySessionId = session.sessionId;
     if (ledgerReplay.complete) {
-      await this.replayLedgerSession(session.sessionId, ledgerReplay);
+      for (const event of ledgerReplay.events) {
+        await this.sessionUpdates.emit({
+          sessionId: replaySessionId,
+          update: event.update,
+          record: false,
+        });
+      }
     } else {
-      await this.replaySessionTranscript(session.sessionId, transcript);
+      for (const message of transcript) {
+        for (const chunk of extractReplayChunks(message)) {
+          await this.sessionUpdates.emit({
+            sessionId: replaySessionId,
+            update: {
+              sessionUpdate: chunk.sessionUpdate,
+              content: { type: "text", text: chunk.text },
+            },
+          });
+        }
+      }
     }
     return await this.publishSessionSnapshot(session, sessionSnapshot, false);
   }
@@ -345,37 +362,6 @@ export class AcpTranslatorSessionLifecycle {
       return [];
     }
     return result.messages as GatewayTranscriptMessage[];
-  }
-
-  private async replaySessionTranscript(
-    sessionId: string,
-    transcript: ReadonlyArray<GatewayTranscriptMessage>,
-  ): Promise<void> {
-    for (const message of transcript) {
-      const replayChunks = extractReplayChunks(message);
-      for (const chunk of replayChunks) {
-        await this.sessionUpdates.emit({
-          sessionId,
-          update: {
-            sessionUpdate: chunk.sessionUpdate,
-            content: { type: "text", text: chunk.text },
-          },
-        });
-      }
-    }
-  }
-
-  private async replayLedgerSession(
-    sessionId: string,
-    ledgerReplay: AcpEventLedgerReplay,
-  ): Promise<void> {
-    for (const event of ledgerReplay.events) {
-      await this.sessionUpdates.emit({
-        sessionId,
-        update: event.update,
-        record: false,
-      });
-    }
   }
 
   private assertSupportedSessionSetup(mcpServers: ReadonlyArray<unknown>): void {

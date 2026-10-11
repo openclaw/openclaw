@@ -41,6 +41,13 @@ export async function closeAcpRuntimeForSession(params: {
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
+  const readMeta = (sessionKey: string) =>
+    readAcpSessionMetaAsync({
+      sessionKey,
+      agentId: params.agentId,
+      cfg: params.cfg,
+      assertCurrent: params.assertCurrent,
+    });
   const sessionKeys = Array.from(
     new Set(
       [params.sessionKey, ...(params.fallbackSessionKeys ?? [])]
@@ -51,12 +58,7 @@ export async function closeAcpRuntimeForSession(params: {
   let acpMeta: SessionAcpMeta | undefined;
   let acpSessionKey = params.sessionKey;
   for (const sessionKey of sessionKeys) {
-    acpMeta = await readAcpSessionMetaAsync({
-      sessionKey,
-      agentId: params.agentId,
-      cfg: params.cfg,
-      assertCurrent: params.assertCurrent,
-    });
+    acpMeta = await readMeta(sessionKey);
     params.assertCurrent?.();
     if (acpMeta) {
       acpSessionKey = sessionKey;
@@ -130,14 +132,42 @@ export async function closeAcpRuntimeForSession(params: {
         meta: acpMeta,
       });
     } else {
-      await ensureFreshAcpResetState({
+      const latestMeta = (await readMeta(acpSessionKey)) ?? acpMeta;
+      params.assertCurrent?.();
+      if (
+        !latestMeta.identity ||
+        latestMeta.identity.state !== "resolved" ||
+        (!latestMeta.identity.acpxSessionId && !latestMeta.identity.agentSessionId)
+      ) {
+        return undefined;
+      }
+
+      // Ownership repair failures must reach the caller before metadata is cleared.
+      await tryPrepareFreshManagerRuntimeSession({
+        deps: { getRuntimeBackend: getAcpRuntimeBackend },
+        cfg: params.cfg,
+        meta: latestMeta,
+        ...resolveAcpSessionTarget({
+          cfg: params.cfg,
+          sessionKey: acpSessionKey,
+          agentId: params.agentId,
+        }),
+        logPrefix: "sessions.session-reset",
+      });
+      params.assertCurrent?.();
+
+      const now = Date.now();
+      await upsertAcpSessionMeta({
         cfg: params.cfg,
         sessionKey: acpSessionKey,
         agentId: params.agentId,
-        reason: params.reason,
-        acpMeta,
-        assertCurrent: params.assertCurrent,
+        assertCommitAllowed: params.assertCurrent,
+        mutate: (current) => {
+          params.assertCurrent?.();
+          return buildPendingAcpMeta(current ?? latestMeta, now);
+        },
       });
+      params.assertCurrent?.();
     }
     return undefined;
   } finally {
@@ -236,52 +266,4 @@ export function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionA
     state: "idle",
     lastActivityAt: now,
   };
-}
-
-async function ensureFreshAcpResetState(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-  reason: "session-reset";
-  acpMeta: SessionAcpMeta;
-  assertCurrent?: () => void;
-}): Promise<void> {
-  const latestMeta =
-    (await readAcpSessionMetaAsync({
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      cfg: params.cfg,
-      assertCurrent: params.assertCurrent,
-    })) ?? params.acpMeta;
-  params.assertCurrent?.();
-  if (
-    !latestMeta?.identity ||
-    latestMeta.identity.state !== "resolved" ||
-    (!latestMeta.identity.acpxSessionId && !latestMeta.identity.agentSessionId)
-  ) {
-    return;
-  }
-
-  // Ownership repair failures must reach the caller before metadata is cleared.
-  await tryPrepareFreshManagerRuntimeSession({
-    deps: { getRuntimeBackend: getAcpRuntimeBackend },
-    cfg: params.cfg,
-    meta: latestMeta,
-    ...resolveAcpSessionTarget(params),
-    logPrefix: `sessions.${params.reason}`,
-  });
-  params.assertCurrent?.();
-
-  const now = Date.now();
-  await upsertAcpSessionMeta({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    assertCommitAllowed: params.assertCurrent,
-    mutate: (current) => {
-      params.assertCurrent?.();
-      return buildPendingAcpMeta(current ?? latestMeta, now);
-    },
-  });
-  params.assertCurrent?.();
 }

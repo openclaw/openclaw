@@ -1,14 +1,14 @@
+import { streamSimpleAnthropic } from "@openclaw/ai/internal/anthropic";
 import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 // Github Copilot tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
+import { makeResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { resolveCopilotStarterModel } from "./starter-model.js";
-import { fetchCopilotUsage } from "./usage.js";
 
 const catalogTransport = vi.hoisted(() => ({
   lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
@@ -124,6 +124,8 @@ describe("resolveCopilotForwardCompatModel", () => {
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("future-model");
     expect(result.name).toBe("future-model");
+    expect(result.contextWindow).toBe(128_000);
+    expect(result.contextWindowSource).toBe("synthetic");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
@@ -171,142 +173,6 @@ describe("resolveCopilotForwardCompatModel", () => {
       const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
     }
-  });
-});
-
-describe("fetchCopilotUsage", () => {
-  it("cancels failed response bodies", async () => {
-    let canceled = false;
-    const body = new ReadableStream({
-      cancel() {
-        canceled = true;
-        throw new Error("stream already closed");
-      },
-    });
-    const mockFetch = createProviderUsageFetch(async () => new Response(body, { status: 500 }));
-
-    const result = await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(result.error).toBe("HTTP 500");
-    expect(result.windows).toHaveLength(0);
-    expect(canceled).toBe(true);
-  });
-
-  it("parses premium/chat usage from remaining percentages", async () => {
-    const mockFetch = createProviderUsageFetch(async (_url, init) => {
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
-      expect(headers.Authorization).toBe("token token");
-      expect(headers["X-Github-Api-Version"]).toBe("2025-04-01");
-
-      return makeResponse(200, {
-        quota_snapshots: {
-          premium_interactions: { percent_remaining: 20 },
-          chat: { percent_remaining: 75 },
-        },
-        copilot_plan: "pro",
-      });
-    });
-
-    const result = await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(result.plan).toBe("pro");
-    expect(result.windows).toEqual([
-      { label: "Premium", usedPercent: 80 },
-      { label: "Chat", usedPercent: 25 },
-    ]);
-  });
-
-  it("defaults missing snapshot values and clamps invalid remaining percentages", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        quota_snapshots: {
-          premium_interactions: { percent_remaining: null },
-          chat: { percent_remaining: 140 },
-        },
-      }),
-    );
-
-    const result = await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(result.windows).toEqual([
-      { label: "Premium", usedPercent: 100 },
-      { label: "Chat", usedPercent: 0 },
-    ]);
-    expect(result.plan).toBeUndefined();
-  });
-
-  it("returns an empty window list when quota snapshots are missing", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        copilot_plan: "free",
-      }),
-    );
-
-    const result = await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(result).toEqual({
-      provider: "github-copilot",
-      displayName: "Copilot",
-      windows: [],
-      plan: "free",
-    });
-  });
-
-  it.each([
-    ["null", null],
-    ["an array", []],
-  ])("returns an empty window list for a non-object %s payload", async (_label, payload) => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
-
-    const result = await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(result).toEqual({
-      provider: "github-copilot",
-      displayName: "Copilot",
-      windows: [],
-      plan: undefined,
-    });
-  });
-
-  it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
-    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels the
-    // stream mid-flight; if the cap were removed the unbounded res.json() would buffer the whole body.
-    const ONE_MIB = 1024 * 1024;
-    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
-    const chunk = new Uint8Array(ONE_MIB);
-
-    let bytesPulled = 0;
-    let canceled = false;
-    const makeOversizedJsonResponse = (): Response => {
-      let pulled = 0;
-      const body = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (pulled >= TOTAL_CHUNKS) {
-            controller.close();
-            return;
-          }
-          pulled += 1;
-          bytesPulled += chunk.length;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      });
-      return new Response(body, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-
-    const mockFetch = createProviderUsageFetch(async () => makeOversizedJsonResponse());
-
-    await expect(fetchCopilotUsage("token", 5000, mockFetch)).rejects.toThrow(
-      /github-copilot-usage: JSON response exceeds/,
-    );
-    // The bounded reader cancels the body and never pulls the full advertised 32 MiB stream.
-    expect(canceled).toBe(true);
-    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });
 
@@ -887,6 +753,84 @@ describe("fetchCopilotModelCatalog", () => {
     });
   });
 
+  it("routes each listed model through an endpoint the account lists", async () => {
+    const models = await fetchSelectionFixture([
+      {
+        id: "kimi-k3",
+        vendor: "Moonshot AI",
+        supported_endpoints: ["/chat/completions"],
+        capabilities: { type: "chat", supports: { reasoning_effort: ["low", "high", "max"] } },
+      },
+      {
+        id: "gpt-5-mini",
+        vendor: "Azure OpenAI",
+        supported_endpoints: ["/chat/completions", "/responses", "ws:/responses"],
+        capabilities: { type: "chat" },
+      },
+      {
+        id: "claude-haiku-4.5",
+        vendor: "Anthropic",
+        supported_endpoints: ["/chat/completions", "/v1/messages"],
+        capabilities: { type: "chat" },
+      },
+    ]);
+
+    expect(models.map(({ id, api }) => [id, api])).toEqual([
+      ["kimi-k3", "openai-completions"],
+      ["gpt-5-mini", "openai-responses"],
+      ["claude-haiku-4.5", "anthropic-messages"],
+    ]);
+    expect(models[0]?.compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      maxTokensField: "max_tokens",
+      supportedReasoningEfforts: ["low", "high", "max"],
+    });
+  });
+
+  it("sends adaptive thinking for a listed Claude id OpenClaw does not know", async () => {
+    const [listed] = await fetchSelectionFixture([
+      {
+        id: "claude-novel-9",
+        vendor: "Anthropic",
+        supported_endpoints: ["/v1/messages"],
+        capabilities: {
+          type: "chat",
+          supports: { reasoning_effort: ["low", "medium", "high", "xhigh", "max"] },
+        },
+      },
+    ]);
+    const model = {
+      ...expectDefined(listed, "listed Claude model"),
+      provider: "github-copilot",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.githubcopilot.com",
+    };
+    expect(model.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+    let payload: unknown;
+
+    const result = await streamSimpleAnthropic(
+      model,
+      { messages: [{ role: "user", content: "Reply OK", timestamp: 1 }] },
+      {
+        apiKey: "test-token",
+        reasoning: "high",
+        onPayload: (value) => {
+          payload = value;
+          throw new Error("captured before sending");
+        },
+      },
+    ).result();
+
+    expect(result.errorMessage).toBe("captured before sending");
+    expect(payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    });
+    expect(payload).not.toHaveProperty("thinking.budget_tokens");
+  });
+
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, { data: [] }));
 
@@ -935,7 +879,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
-  it("falls back from malformed live token limits", async () => {
+  it("omits malformed native limits while retaining the output fallback", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       makeResponse(200, {
         data: [
@@ -978,16 +922,16 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toMatchObject({
       id: "gpt-bad-window",
-      contextWindow: 128000,
       maxTokens: 8192,
     });
     expect(out[0]).not.toHaveProperty("contextTokens");
+    expect(out[0]).not.toHaveProperty("contextWindow");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
-      contextWindow: 128000,
       maxTokens: 8192,
     });
     expect(out[1]).not.toHaveProperty("contextTokens");
+    expect(out[1]).not.toHaveProperty("contextWindow");
   });
 
   it.each(["redirect", "metadata DNS"] as const)(

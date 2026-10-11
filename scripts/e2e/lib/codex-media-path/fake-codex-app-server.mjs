@@ -1,4 +1,3 @@
-// Fake Codex app server used by media-path E2E scenarios.
 import {
   createFakeInitializeResponse,
   createFakeThreadStartResponse,

@@ -51,6 +51,8 @@ type Selection = {
   context: ReturnType<typeof captureOpenClawStateReadWorkerContext>;
   preserveArtifacts: boolean;
   preferIndependentWarmRead?: true;
+  onChunk?: OpenClawStateReadOptions["onChunk"];
+  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"];
   controller: AbortController;
   signal: AbortSignal;
   receipt: OpenClawStateReadReceipt;
@@ -101,7 +103,6 @@ export function startOpenClawStateReadOperation(
   let cleanupAttempt: ReturnType<typeof createDeferredCore<void>> | undefined;
   let transportStopped = false;
   let cleaned = false;
-  let validated = false;
   let servicing = false;
 
   const assertReadLifetime = () => {
@@ -174,14 +175,7 @@ export function startOpenClawStateReadOperation(
   }
 
   function release() {
-    if (!validated) {
-      validated = true;
-      try {
-        authority.assertCurrent();
-      } catch (error) {
-        acceptanceErrors.push(error);
-      }
-    }
+    // Query completion checked authority; cleanup does not re-admit the completed read.
     borrowed?.release();
     borrowed = undefined;
     snapshot?.release?.();
@@ -449,7 +443,7 @@ export function startOpenClawStateReadOperation(
 
   try {
     source = captureOpenClawStateReadSource();
-    transport = source.createTransport(command);
+    transport = source.createTransport(command, selection.onChunk, selection.onChunkAsync);
     unregister = registerOpenClawStateDatabaseAsyncResource({
       async close(identity) {
         if (

@@ -221,7 +221,7 @@ describe("Feishu webhook route configuration", () => {
   });
 
   it.each([
-    { path: "/health", reason: "is reserved for Gateway probes" },
+    { path: "/health", reason: "is reserved for Gateway checks" },
     { path: "/%61pi/channels/feishu?tenant=test", reason: "requires Gateway authentication" },
   ])(
     "keeps an explicit legacy listener for restricted path $path and rejects an omitted listener",

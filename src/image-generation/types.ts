@@ -47,12 +47,7 @@ export type ImageGenerationIgnoredOverride = {
   value: string;
 };
 
-export type ImageGenerationSourceImage = {
-  buffer: Buffer;
-  mimeType: string;
-  fileName?: string;
-  metadata?: Record<string, unknown>;
-};
+export type ImageGenerationSourceImage = Omit<GeneratedImageAsset, "revisedPrompt">;
 
 export type ImageGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;

@@ -583,21 +583,13 @@ export function consumeChannelAdmissionEvidence(
   const allUnsupported =
     contributions.length > 0 &&
     contributions.every(({ participant }) => participant.state === "unsupported");
-  if (allUnsupported) {
-    return freezeConsumed({
-      ingressState: "unsupported",
-      invoker: { state: "unknown" },
-      decisionCoverage: "unsupported",
-      identifierAuthentication: "unknown",
-    });
-  }
-
-  const rawPrincipalRef = sharedParticipantRef(contributions);
+  const rawPrincipalRef = allUnsupported ? undefined : sharedParticipantRef(contributions);
   if (rawPrincipalRef === undefined) {
+    const ingressState = allUnsupported ? "unsupported" : "unknown";
     return freezeConsumed({
-      ingressState: "unknown",
+      ingressState,
       invoker: { state: "unknown" },
-      decisionCoverage: "unknown",
+      decisionCoverage: ingressState,
       identifierAuthentication: "unknown",
     });
   }

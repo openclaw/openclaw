@@ -12,7 +12,6 @@ import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js
 export type ClientConfig = {
   shipUrl: string;
   shipName: string;
-  verbose: boolean;
   getCode: () => Promise<string>;
   dangerouslyAllowPrivateNetwork?: boolean;
   assertDirectAdapterHandoff?: () => void;

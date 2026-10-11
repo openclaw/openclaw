@@ -12,7 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -25,13 +25,11 @@ type SessionRegistryMaintenanceStoreIdentity = {
 
 type SessionRegistryMaintenanceStoreSummary =
   | (SessionRegistryMaintenanceStoreIdentity & {
-      beforeCount: number;
-      afterCount: number;
       pruned: number;
       preservedRunning: number;
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
-      skippedReason: "agent-deletion-complete";
+      skippedReason: "agent-deletion-pending" | "agent-deletion-complete";
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
       skippedReason: "agent-store-held";
@@ -59,8 +57,7 @@ type RunningCronJobIds =
 
 async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
+    const runningJobs = (await loadCronJobsStore()).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its
@@ -142,17 +139,14 @@ export async function runSessionRegistryMaintenance(params: {
               }).path;
         const retained =
           deletion === "absent" ? isRetained(databasePath, target.agentId) : undefined;
-        if (deletion === "complete" || typeof retained === "object") {
-          // Completed tombstones intentionally keep retired stores unavailable.
-          // Record that lifecycle outcome instead of reopening the fenced database.
-          stores.push({ ...target, skippedReason: "agent-deletion-complete" });
+        if (deletion !== "absent" || typeof retained === "object") {
+          // Deletion owns these stores until cleanup settles and retains its tombstone afterward.
+          stores.push({
+            ...target,
+            skippedReason:
+              deletion === "pending" ? "agent-deletion-pending" : "agent-deletion-complete",
+          });
           continue;
-        }
-        if (deletion === "pending") {
-          // The former writable listing refused incomplete deletion; read-only workers must too.
-          throw new Error(
-            `OpenClaw agent database is unavailable while agent ${target.agentId} is deleted.`,
-          );
         }
         if (retained) {
           const reason =
@@ -175,8 +169,6 @@ export async function runSessionRegistryMaintenance(params: {
         stores.push({
           agentId: target.agentId,
           storePath: target.storePath,
-          beforeCount: result.beforeCount,
-          afterCount: result.afterCount,
           pruned: result.pruned,
           preservedRunning: result.preservedRunning,
         });

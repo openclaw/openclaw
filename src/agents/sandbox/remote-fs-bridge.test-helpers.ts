@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "@openclaw/fs-safe/guest";
 import type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
-export type LocalRemoteShellSpawnResult = {
+type LocalRemoteShellSpawnResult = {
   stdout: string | Buffer | null;
   stderr: string | Buffer | null;
   status: number | null;

@@ -1,5 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { wrapKimiProviderStream } from "./stream.js";
@@ -28,6 +33,7 @@ const KIMI_MODEL = {
   api: "anthropic-messages",
   provider: "kimi",
   id: "k2p5",
+  reasoning: true,
 } as Model<"anthropic-messages">;
 const KIMI_CONTEXT = { messages: [] } as Context;
 
@@ -112,27 +118,46 @@ function captureKimiPayload(
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
-    const partial = createAssistantTextMessage(KIMI_TOOL_TEXT);
-    const message = createAssistantTextMessage(KIMI_TOOL_TEXT);
-    const finalMessage = {
+    const partial: AssistantMessage = {
       role: "assistant",
+      api: KIMI_MODEL.api,
+      provider: KIMI_MODEL.provider,
+      model: KIMI_MODEL.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 1,
+      content: [{ type: "text", text: KIMI_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const message = structuredClone(partial);
+    const finalMessage: AssistantMessage = {
+      ...structuredClone(partial),
       content: [
         { type: "thinking", thinking: "Need to read the file first." },
         { type: "text", text: KIMI_TOOL_TEXT },
       ],
-      stopReason: "stop",
     };
 
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({
-        events: [{ type: "message_end", partial, message }],
-        resultMessage: finalMessage,
-      }) as ReturnType<StreamFn>;
+    const baseStreamFn: StreamFn = () => ({
+      async result() {
+        return finalMessage;
+      },
+      async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+        yield { type: "start", partial };
+        yield { type: "done", reason: "stop", message };
+      },
+    });
 
     const wrapped = wrapKimiStream(baseStreamFn);
-    const stream = await callKimiStream(wrapped);
+    const stream = await wrapped(KIMI_MODEL, KIMI_CONTEXT, {});
 
-    const events: unknown[] = [];
+    const events: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       events.push(event);
     }
@@ -143,14 +168,18 @@ describe("kimi tool-call markup wrapper", () => {
       stopReason: "toolUse",
     };
 
-    expect(events).toEqual([
+    expect(events).toMatchObject([
       {
-        type: "message_end",
+        type: "start",
         partial: toolMessage,
+      },
+      {
+        type: "done",
+        reason: "stop",
         message: toolMessage,
       },
     ]);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       role: "assistant",
       content: [
         { type: "thinking", thinking: "Need to read the file first." },
@@ -288,6 +317,57 @@ describe("kimi tool-call markup wrapper", () => {
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "high" },
     });
+  });
+
+  it.each([
+    ["off", undefined],
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "high"],
+    ["high", "high"],
+    ["adaptive", "high"],
+    ["xhigh", "max"],
+    ["max", "max"],
+  ] as const)("sends OpenAI-compatible K3 %s as %s effort", (thinkingLevel, effort) => {
+    const { getCapturedPayload } = captureKimiPayload(
+      { modelId: "Kimi-K3", api: "openai-completions", thinkingLevel },
+      { reasoning_effort: "medium", reasoningEffort: "medium", reasoning: { effort: "medium" } },
+    );
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: thinkingLevel === "off" ? "disabled" : "enabled" },
+      ...(effort ? { reasoning_effort: effort } : {}),
+    });
+  });
+
+  it.each([
+    { thinkingLevel: "max", thinking: "off", expected: { thinking: { type: "disabled" } } },
+    {
+      thinkingLevel: "off",
+      thinking: "enabled",
+      expected: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+    },
+  ] as const)("honors explicit OpenAI-compatible K3 thinking $thinking", (row) => {
+    const { getCapturedPayload } = captureKimiPayload({
+      modelId: "kimi-k3",
+      api: "openai-completions",
+      thinkingLevel: row.thinkingLevel,
+      extraParams: { thinking: row.thinking },
+    });
+    expect(getCapturedPayload()).toEqual(row.expected);
+  });
+
+  it.each([
+    { chat_template_kwargs: { reasoning_effort: "low" } },
+    { chatTemplateKwargs: { reasoning_effort: "low" } },
+    { extra_body: { chat_template_kwargs: { reasoning_effort: "low" } } },
+  ])("does not shadow explicit K3 template effort with a generated root effort", (extraParams) => {
+    const { getCapturedPayload } = captureKimiPayload({
+      modelId: "kimi-k3",
+      api: "openai-completions",
+      thinkingLevel: "max",
+      extraParams,
+    });
+    expect(getCapturedPayload()).toEqual({ thinking: { type: "enabled" } });
   });
 
   it("strips Anthropic cache_control markers before Kimi requests are sent", () => {

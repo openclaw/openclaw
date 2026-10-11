@@ -1,67 +1,56 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import {
-  executeExistingOpenClawStateRead,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../../../state/openclaw-state-db-readonly.js";
+import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { immutableSubagentRun } from "./subagent-registry-memory.js";
-import { rememberSubagentRunVersion } from "./subagent-registry.store.codec.js";
+import {
+  isCanonicalSubagentRunRecord,
+  rememberSubagentRunVersion,
+} from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/** Canonical restoration keeps one snapshot while bounding each worker-to-host transfer. */
-export function readAllSubagentRunsInWorker(
+/** Restore publishes only after the streamed snapshot and its reader have settled. */
+export async function readAllSubagentRunsInWorker(
   context: OpenClawStateWorkerContext,
 ): Promise<Map<string, SubagentRunRecord>> {
-  const options = { path: context.admission.databasePath, env: context.environment };
-  return withOpenClawStateDatabaseReadSnapshot(
-    async () => {
-      const runs = new Map<string, SubagentRunRecord>();
-      const order: Array<readonly [string, number]> = [];
-      let after: string | undefined;
-      do {
-        getAsyncWorkSignal()?.throwIfAborted();
-        context.maintenanceScope?.assertAdmission();
-        context.admission.assertCurrent();
-        const reply = await executeExistingOpenClawStateRead(
-          options,
-          { type: "subagents.runs", scope: { kind: "page", after } },
-          { context },
-        );
-        if (!reply) {
-          return runs;
+  const runs = new Map<string, SubagentRunRecord>();
+  const order: Array<readonly [string, number]> = [];
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "subagents.restore" },
+    {
+      context,
+      current: true,
+      signal: getAsyncWorkSignal(),
+      onChunk(value) {
+        if (!Array.isArray(value)) {
+          throw new Error("Subagent restore omitted its registry batch");
         }
-        if (
-          !reply.ok ||
-          reply.type !== "subagents.runs" ||
-          reply.projection ||
-          !reply.page ||
-          !reply.versions
-        ) {
-          throw new Error("Subagent restore omitted its registry page");
-        }
-        for (const [runId, version] of reply.versions) {
-          const entry = reply.runs.get(runId);
-          if (version !== null && !entry) {
-            throw new Error("Canonical subagent restore found an unreadable durable row");
+        for (const item of value) {
+          if (
+            !isRecord(item) ||
+            !isCanonicalSubagentRunRecord(item.entry) ||
+            typeof item.version !== "string" ||
+            typeof item.createdAt !== "number"
+          ) {
+            throw new Error("Subagent restore returned an invalid registry row");
           }
-          if (entry && version) {
-            rememberSubagentRunVersion(entry, version);
-            runs.set(runId, immutableSubagentRun(entry));
-          }
+          const entry = item.entry;
+          rememberSubagentRunVersion(entry, item.version);
+          runs.set(entry.runId, immutableSubagentRun(entry));
+          order.push([entry.runId, item.createdAt]);
         }
-        order.push(...reply.page.order);
-        after = reply.page.nextRunId ?? undefined;
-      } while (after !== undefined);
-      // Preserve SQLite's created_at/run_id order without repeatedly sorting the table.
-      order.sort((a, b) => a[1] - b[1] || Buffer.compare(Buffer.from(a[0]), Buffer.from(b[0])));
-      return new Map(
-        order.flatMap(([runId]) => {
-          const entry = runs.get(runId);
-          return entry ? [[runId, entry] as const] : [];
-        }),
-      );
+      },
     },
-    options,
-    { fresh: true },
   );
+  if (reply && (!reply.ok || reply.type !== "subagents.restore" || reply.count !== runs.size)) {
+    throw new Error("Subagent restore did not settle its complete registry snapshot");
+  }
+  // Preserve SQLite's created_at/run_id order without sorting retained bodies in SQLite.
+  order.sort((a, b) => a[1] - b[1] || Buffer.compare(Buffer.from(a[0]), Buffer.from(b[0])));
+  const restored = new Map(order.map(([runId]) => [runId, runs.get(runId)!]));
+  // Publication rechecks its revision after this preparation and installs rows atomically.
+  await yieldToEventLoop();
+  return restored;
 }

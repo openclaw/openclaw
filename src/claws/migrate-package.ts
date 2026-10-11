@@ -58,7 +58,6 @@ export function generatedPackage(
   packageFiles: Map<string, Buffer>;
 } {
   const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
-  const workspaceFiles: ClawManifest["workspace"]["files"] = [];
   const packageFiles = new Map<string, Buffer>();
   let body: Buffer | undefined;
   for (const file of params.files) {
@@ -76,7 +75,7 @@ export function generatedPackage(
   const manifest: ClawManifest = {
     schemaVersion: 1,
     agent,
-    workspace: { bootstrapFiles, files: workspaceFiles },
+    workspace: { bootstrapFiles, files: [] },
     packages: [],
     mcpServers: {},
     cronJobs: [],
@@ -216,8 +215,4 @@ export async function createPackagePreview(packageFiles: Map<string, Buffer>): P
     await rm(root, { recursive: true, force: true });
     throw error;
   }
-}
-
-export async function removePackagePreview(root: string): Promise<void> {
-  await rm(root, { recursive: true, force: true });
 }

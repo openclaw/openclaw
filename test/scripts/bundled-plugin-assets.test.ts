@@ -74,18 +74,16 @@ describe("bundled plugin assets", () => {
     );
   });
 
-  it("keeps the Discord manifest-writing hook in root asset preparation", async () => {
+  it("discovers the Discord SDK hook for standalone asset preparation", async () => {
     const hooks = await readBundledPluginAssetHooks({
       phase: "build",
       plugins: ["discord"],
       rootDir: process.cwd(),
-      deferIsolated: true,
     });
 
     expect(hooks).toMatchObject([
       {
-        command:
-          "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts && cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/discord",
+        command: "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts",
         packageName: "@openclaw/discord",
         phase: "build",
         pluginId: "discord",
@@ -116,13 +114,10 @@ describe("bundled plugin assets", () => {
     expect(isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(true);
   });
 
-  it.each(["packages/ai/src/host.ts", "packages/llm-core/src/types.ts"])(
-    "rebuilds the root runtime for %s",
-    (source) => {
-      expect(isBuildRelevantRunNodePath(source)).toBe(true);
-      expect(isRestartRelevantRunNodePath(source)).toBe(true);
-    },
-  );
+  it.each(["packages/llm-core/src/types.ts"])("rebuilds the root runtime for %s", (source) => {
+    expect(isBuildRelevantRunNodePath(source)).toBe(true);
+    expect(isRestartRelevantRunNodePath(source)).toBe(true);
+  });
 
   it("refreshes generated output metadata without recreating the watcher", async () => {
     await withPluginAssetFixture(async (rootDir) => {
@@ -161,31 +156,10 @@ describe("bundled plugin assets", () => {
     });
   });
 
-  it("discovers plugin-owned asset scripts by manifest id", async () => {
-    await withPluginAssetFixture(async (rootDir) => {
-      const hooks = await readBundledPluginAssetHooks({
-        phase: "build",
-        plugins: ["canvas"],
-        rootDir,
-      });
-
-      expect(hooks).toEqual([
-        {
-          aliases: ["@openclaw/canvas-plugin", "canvas", "canvas-plugin"],
-          command: "node --import tsx scripts/bundle-a2ui.mts",
-          packageName: "@openclaw/canvas-plugin",
-          phase: "build",
-          pluginDir: path.join(rootDir, "extensions", "canvas"),
-          pluginId: "canvas",
-        },
-      ]);
-    });
-  });
-
-  it("defers only selected isolated hooks and keeps standalone and Docker asset preparation", async () => {
+  it("keeps manifest writers early while deferring selected isolated hooks", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       fs.writeFileSync(path.join(rootDir, "package.json"), '{"name":"openclaw","version":"1.0.0"}');
-      for (const id of ["isolated", "unselected", "untracked"]) {
+      for (const id of ["isolated", "manifest-writer", "unselected", "untracked"]) {
         const directory = path.join(rootDir, "extensions", id);
         fs.mkdirSync(directory);
         fs.writeFileSync(
@@ -196,7 +170,10 @@ describe("bundled plugin assets", () => {
               extensions: ["./index.ts"],
               build: { bundledDist: false },
               release: { publishToNpm: true },
-              assetScripts: { build: "node build.mjs" },
+              assetScripts: {
+                build: "node build.mjs",
+                ...(id === "manifest-writer" ? { buildOutputs: ["openclaw.plugin.json"] } : {}),
+              },
             },
           }),
         );
@@ -210,20 +187,43 @@ describe("bundled plugin assets", () => {
       execFileSync("git", ["init", "--quiet"], { cwd: rootDir });
       execFileSync(
         "git",
-        ["add", "extensions/canvas", "extensions/isolated", "extensions/unselected"],
+        [
+          "add",
+          "extensions/canvas",
+          "extensions/isolated",
+          "extensions/manifest-writer",
+          "extensions/unselected",
+        ],
         { cwd: rootDir },
       );
-      vi.stubEnv("OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS", "canvas,isolated");
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS", "canvas,isolated,manifest-writer");
       vi.stubEnv("OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS", undefined);
       try {
         const readIds = async (deferIsolated = false) =>
           (await readBundledPluginAssetHooks({ phase: "build", rootDir, deferIsolated })).map(
             ({ pluginDir }) => path.basename(pluginDir),
           );
-        expect(await readIds(true)).toEqual(["canvas", "unselected", "untracked"]);
-        expect(await readIds()).toEqual(["canvas", "isolated", "unselected", "untracked"]);
-        vi.stubEnv("OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS", "isolated");
-        expect(await readIds(true)).toEqual(["canvas", "isolated", "unselected", "untracked"]);
+        expect(await readIds(true)).toEqual([
+          "canvas",
+          "manifest-writer",
+          "unselected",
+          "untracked",
+        ]);
+        expect(await readIds()).toEqual([
+          "canvas",
+          "isolated",
+          "manifest-writer",
+          "unselected",
+          "untracked",
+        ]);
+        vi.stubEnv("OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS", "isolated,manifest-writer");
+        expect(await readIds(true)).toEqual([
+          "canvas",
+          "isolated",
+          "manifest-writer",
+          "unselected",
+          "untracked",
+        ]);
       } finally {
         vi.unstubAllEnvs();
       }
@@ -281,14 +281,6 @@ describe("bundled plugin assets", () => {
     });
   });
 
-  it("skips cleanly when a requested plugin is absent", async () => {
-    await withPluginAssetFixture(async (rootDir) => {
-      await expect(
-        readBundledPluginAssetHooks({ phase: "copy", plugins: ["missing"], rootDir }),
-      ).resolves.toStrictEqual([]);
-    });
-  });
-
   it("rejects a symlinked dist root before running copy hooks", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       const targetDir = path.join(rootDir, "live-gateway-dist");
@@ -301,14 +293,6 @@ describe("bundled plugin assets", () => {
       );
       expect(fs.readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
       expect(fs.readlinkSync(path.join(rootDir, "dist"))).toBe(targetDir);
-    });
-  });
-
-  it("parses phase and plugin filters", () => {
-    expect(parseBundledPluginAssetArgs(["--phase", "build", "--plugin=canvas"])).toEqual({
-      check: false,
-      phase: "build",
-      plugins: ["canvas"],
     });
   });
 

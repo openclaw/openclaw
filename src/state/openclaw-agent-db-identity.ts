@@ -89,24 +89,18 @@ export function assertOpenClawAgentDatabaseIdentity(
   }
 }
 
-export type OpenClawAgentDatabaseClaim = {
-  identity: OpenClawAgentDatabaseIdentity;
-  /** Changes on reopen even when the underlying file is unchanged. */
-  incarnation: string;
-  isCurrent: () => boolean;
-  assertCurrent: () => void;
-  release: () => void;
-};
+export type OpenClawAgentDatabaseClaim = ReturnType<typeof createOpenClawAgentDatabaseClaim>;
 
 export function createOpenClawAgentDatabaseClaim(
   database: AgentDatabaseOwner,
   release: () => void,
-): OpenClawAgentDatabaseClaim {
+) {
   let released = false;
   const isCurrent = () => !released && database.db.isOpen;
   const { identity, incarnation } = readOpenClawAgentDatabaseIdentity(database);
   return {
     identity,
+    // Changes on reopen even when the underlying file is unchanged.
     incarnation,
     isCurrent,
     assertCurrent: () => {

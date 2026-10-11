@@ -1,9 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
-/**
- * Chat message types for the UI layer.
- */
 import type {
   AgentActivityItem,
   ChatSendIntent,
@@ -12,6 +9,7 @@ import type {
 import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
@@ -207,7 +205,6 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
-/** Union type for items in the chat thread */
 export type ChatItem =
   | {
       kind: "message";
@@ -231,6 +228,8 @@ export type ChatItem =
       collapsedBody?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
+      /** A background skill review's changes; rendered as a native row instead of `text`. */
+      skillChanges?: SkillWorkshopChangeNotice;
     }
   | {
       kind: "divider";
@@ -247,6 +246,7 @@ export type ChatItem =
       kind: "stream";
       key: string;
       text: string;
+      thinking?: string;
       startedAt: number;
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
@@ -272,21 +272,13 @@ export type ChatItem =
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
+  /** Input observed when live commentary first arrived; omitted for history replay. */
+  afterUserSendId?: string;
   text: string;
   ts: number;
   runId?: string;
-  /** Persisted user send that causally precedes this transient output. */
-  afterBoundaryRunId?: string;
-  /** Persisted user send that causally follows this transient output. */
-  boundaryRunId?: string;
-  /** Ordering-only boundary with no renderable assistant text. */
-  boundaryMarker?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
-  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
-  retiredItemId?: string;
-  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
-  pendingCommentary?: { text: string; prefixLength: number };
   toolCallId?: string;
   itemId?: string;
 };
@@ -295,11 +287,8 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
-export function streamSegmentUsesAccumulatedText(segment: {
-  itemId?: unknown;
-  boundaryMarker?: unknown;
-}): boolean {
-  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
+export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+  return !streamSegmentHasItemId(segment);
 }
 
 /** Advance the accumulated-text tracker only when the segment genuinely
@@ -382,7 +371,6 @@ export type MessageImageSource = {
   height?: number;
 };
 
-/** Content item types in a normalized message */
 export type MessageContentItem =
   | ClawHubRecommendation
   | {
@@ -441,7 +429,6 @@ export type MessageContentItem =
       rawText?: string | null;
     };
 
-/** Normalized message structure for rendering */
 export type NormalizedMessage = {
   role: string;
   content: MessageContentItem[];
@@ -471,7 +458,6 @@ export type ToolOutputMetadata = {
   captureTruncated?: true;
 };
 
-/** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
   callId?: string;

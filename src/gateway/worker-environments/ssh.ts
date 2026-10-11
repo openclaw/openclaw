@@ -295,6 +295,34 @@ export function workerSshOptions(
   ];
 }
 
+export function workerSshCommandPrefix(
+  prepared: PreparedWorkerSsh,
+  port = prepared.port,
+): string[] {
+  return [
+    "ssh",
+    ...workerSshOptions(prepared, { forwarding: "disabled" }),
+    "-a",
+    "-x",
+    "-T",
+    "-p",
+    String(port),
+  ];
+}
+
+export function workerSshCommand(
+  prepared: PreparedWorkerSsh,
+  argv: readonly string[],
+  port = prepared.port,
+): string[] {
+  return [
+    ...workerSshCommandPrefix(prepared, port),
+    "--",
+    prepared.sshTarget,
+    workerSshRemoteCommand(argv),
+  ];
+}
+
 export function workerSshCommandOptions(params: {
   input?: string;
   timeoutMs: number;

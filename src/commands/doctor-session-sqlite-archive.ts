@@ -55,13 +55,11 @@ export function planImportedTranscriptArtifactsToArchive(
     moves.push(move);
   };
   addMove(transcriptPath, "transcript");
-  const trajectoryPath = resolveTrajectoryPath(transcriptPath);
-  if (trajectoryPath && fs.existsSync(trajectoryPath)) {
-    addMove(trajectoryPath, "trajectory");
-  }
-  const trajectoryPointerPath = resolveTrajectoryPointerPath(transcriptPath);
-  if (trajectoryPointerPath && fs.existsSync(trajectoryPointerPath)) {
-    addMove(trajectoryPointerPath, "trajectory");
+  for (const resolvePath of [resolveTrajectoryPath, resolveTrajectoryPointerPath]) {
+    const artifactPath = resolvePath(transcriptPath);
+    if (artifactPath && fs.existsSync(artifactPath)) {
+      addMove(artifactPath, "trajectory");
+    }
   }
   return moves;
 }
@@ -75,8 +73,7 @@ export function planSessionJsonlArchiveMove(params: {
   target: SessionStoreTarget;
 }): SessionSqliteMigrationMove {
   const sourcePathRaw = path.resolve(params.sourcePathRaw);
-  const stat = fs.lstatSync(sourcePathRaw);
-  if (!stat.isFile()) {
+  if (!fs.lstatSync(sourcePathRaw).isFile()) {
     throw new Error("source is not a regular file");
   }
   const sourcePath = path.join(
@@ -91,12 +88,10 @@ export function planSessionJsonlArchiveMove(params: {
   assertSafeSessionSqliteMigrationDirectory(archiveDir);
   fs.mkdirSync(archiveDir, { recursive: true });
   assertSafeSessionSqliteMigrationDirectory(archiveDir);
-  const baseName =
-    path
-      .basename(params.sourcePathRaw)
-      .replace(/[^A-Za-z0-9_.-]+/g, "_")
-      .slice(0, 160) || "artifact";
-  const keySlug = params.archiveKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
+  const slug = (value: string, limit: number, fallback: string) =>
+    value.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, limit) || fallback;
+  const baseName = slug(path.basename(params.sourcePathRaw), 160, "artifact");
+  const keySlug = slug(params.archiveKey, 120, "session");
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = attempt === 0 ? "" : `.${attempt}`;
     const archivePath = path.join(
@@ -144,7 +139,6 @@ export async function archiveImportedLegacySessionStores(
     ) {
       continue;
     }
-    const first = entries[0]!;
     let publicationPlanned = false;
     try {
       const expected = coverage.indexIdentities.get(storePath);
@@ -155,7 +149,7 @@ export async function archiveImportedLegacySessionStores(
         archiveKey: "legacy-store",
         kind: "legacy-store",
         sourcePathRaw: storePath,
-        target: first.target,
+        target: entries[0]!.target,
       });
       const manifestTargets = activeRun.manifest.targets.filter(
         (target) => target.storePath === storePath,

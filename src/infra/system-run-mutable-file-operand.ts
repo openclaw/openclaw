@@ -1,4 +1,3 @@
-/** Detects mutable file operands in approved commands. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -81,28 +80,26 @@ function unwrapArgvForMutableOperand(argv: string[]): {
   let baseIndex = 0;
   let opaqueMultiplexerSeen = false;
   while (true) {
+    let next: string[] | null;
     const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (dispatchUnwrap.kind === "unwrapped") {
-      baseIndex += current.length - dispatchUnwrap.argv.length;
-      current = dispatchUnwrap.argv;
-      continue;
-    }
-    const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
-    if (shellMultiplexerUnwrap.kind === "unwrapped") {
-      if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
-        opaqueMultiplexerSeen = true;
+      next = dispatchUnwrap.argv;
+    } else {
+      const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
+      if (shellMultiplexerUnwrap.kind === "unwrapped") {
+        if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
+          opaqueMultiplexerSeen = true;
+        }
+        next = shellMultiplexerUnwrap.argv;
+      } else {
+        next = unwrapKnownPackageManagerExecInvocation(current);
       }
-      baseIndex += current.length - shellMultiplexerUnwrap.argv.length;
-      current = shellMultiplexerUnwrap.argv;
-      continue;
     }
-    const packageManagerUnwrap = unwrapKnownPackageManagerExecInvocation(current);
-    if (packageManagerUnwrap) {
-      baseIndex += current.length - packageManagerUnwrap.length;
-      current = packageManagerUnwrap;
-      continue;
+    if (!next) {
+      return { argv: current, baseIndex, opaqueMultiplexerSeen };
     }
-    return { argv: current, baseIndex, opaqueMultiplexerSeen };
+    baseIndex += current.length - next.length;
+    current = next;
   }
 }
 
@@ -188,20 +185,14 @@ function resolveGenericInterpreterScriptOperandIndex(params: {
     if (!token) {
       continue;
     }
-    if (afterDoubleDash) {
-      if (resolvesToExistingFileSync(token, params.cwd)) {
-        hits.push(i);
-      }
-      continue;
-    }
-    if (token === "--") {
+    if (!afterDoubleDash && token === "--") {
       afterDoubleDash = true;
       continue;
     }
-    if (token === "-") {
+    if (!afterDoubleDash && token === "-") {
       return null;
     }
-    if (token.startsWith("-")) {
+    if (!afterDoubleDash && token.startsWith("-")) {
       const option = parseInlineOptionToken(token);
       const flag = option.name;
       const inlineValue = option.hasInlineValue ? option.inlineValue : undefined;

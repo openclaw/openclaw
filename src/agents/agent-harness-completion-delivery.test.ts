@@ -68,7 +68,6 @@ async function admit(
     sessionId: "physical-1",
     lifecycleRevision: "revision-1",
     updatedAt: Date.now(),
-    status: "running",
   };
   const claim = await captureAdmittedHarnessCompletionForTest({
     agentId: "main",
@@ -481,6 +480,7 @@ describe("host-owned harness completion recovery", () => {
       expect(joined).toMatchObject({ delivered: false, recoveryPending: true });
       const reserved = {
         ...entry,
+        status: "interrupted" as const,
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-R",
       };
@@ -692,7 +692,11 @@ describe("review3 custody ownership", () => {
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { entry, target, request } = await admit(state);
-        await replaceSessionEntry(target, { ...entry, abortedLastRun: true });
+        await replaceSessionEntry(target, {
+          ...entry,
+          status: "interrupted",
+          abortedLastRun: true,
+        });
         if (kind !== "missing-source") {
           await appendCompletionSource({ target, entry });
         }

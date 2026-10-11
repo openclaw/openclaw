@@ -87,10 +87,7 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.updateConfigChannel,
-    update: params.update,
-  });
+  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
     channelInfo,
     channelLabel: channelInfo.label,
@@ -116,21 +113,15 @@ function formatStatusTailscaleValue(params: {
     const suffix = params.includeDnsNameWhenOff ? params.dnsName : null;
     return decorateOff(suffix ? `off · ${suffix}` : "off");
   }
-  if (params.dnsName && params.httpsUrl) {
-    const parts = [
-      params.tailscaleMode,
-      params.includeBackendStateWhenOn ? "unknown" : null,
-      params.dnsName,
-      params.httpsUrl,
-    ].filter(Boolean);
-    return parts.join(" · ");
-  }
-  const parts = [
+  const hasAddress = params.dnsName && params.httpsUrl;
+  const value = [
     params.tailscaleMode,
     params.includeBackendStateWhenOn ? "unknown" : null,
-    "magicdns unknown",
-  ].filter(Boolean);
-  return decorateWarn(parts.join(" · "));
+    ...(hasAddress ? [params.dnsName, params.httpsUrl] : ["magicdns unknown"]),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return hasAddress ? value : decorateWarn(value);
 }
 
 function formatStatusServiceValue(params: StatusManagedService): string {

@@ -268,7 +268,6 @@ export class ShellNavigationOwner {
     }
   }
 
-  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
   newSessionRouteAgentId(): string {
     if (this.host.routeState.routeId !== "new-session") {
       return "";

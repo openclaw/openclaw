@@ -22,6 +22,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
+import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
 } from "./session-incognito-history-read.js";
@@ -30,16 +34,29 @@ import {
   captureSessionStoreCandidateIdentities,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  targetDiscoveryLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
+import {
+  withSessionHistoryWorkerDatabase,
+  type SessionHistoryWorkerDatabase,
+} from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 /** Load durable raw events through the existing full-transcript hydration owner. */
 export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<TranscriptEvent[]> {
+  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(scope);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return [];
+  }
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
       type: "session.history.hydrate",
@@ -120,7 +137,7 @@ export async function loadTranscriptEvents(
     target.path = databasePath;
     const receipt = resolveSessionTranscriptReadFence(target);
     const admission = receipt ? { ...receipt } : undefined;
-    return withSessionHistoryWorkerDatabase(options, async (owner) => {
+    const read = async (owner: SessionHistoryWorkerDatabase) => {
       const assertCurrent = () => {
         assertSourceCurrent();
         owner.assertCurrent();
@@ -159,6 +176,11 @@ export async function loadTranscriptEvents(
       } finally {
         assertCurrent();
       }
-    });
+    };
+    return (
+      runLockedSessionTranscriptRead(options, () =>
+        withSessionHistoryWorkerDatabase(options, read, targetDiscoveryLane),
+      ) ?? withSessionHistoryWorkerDatabase(options, read)
+    );
   });
 }

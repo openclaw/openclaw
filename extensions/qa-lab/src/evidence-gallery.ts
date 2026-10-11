@@ -894,6 +894,8 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
   });
   const hrefEvidencePath = toRepoRelativePath(repoRoot, evidencePath);
+  const viewContext = { extraRoots: [requestedRepoRoot], hrefEvidencePath, repoRoot };
+  const sanitizeEntryText = (value: string) => sanitizeGalleryText(value, viewContext);
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
@@ -923,9 +925,7 @@ export async function buildQaEvidenceGalleryModel(params: {
           artifactIndex,
           evidenceDir,
           entryIndex,
-          extraRoots: [requestedRepoRoot],
-          hrefEvidencePath,
-          repoRoot,
+          ...viewContext,
         }),
     ),
   );
@@ -944,11 +944,6 @@ export async function buildQaEvidenceGalleryModel(params: {
     const artifactCount = projectedArtifacts[entryIndex]!.length;
     const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
     artifactOffset += artifactCount;
-    const sanitizeEntryText = (value: string) =>
-      sanitizeGalleryText(value, {
-        extraRoots: [requestedRepoRoot],
-        repoRoot,
-      });
     return {
       artifacts,
       key: String(entryIndex),
@@ -963,10 +958,7 @@ export async function buildQaEvidenceGalleryModel(params: {
       id: sanitizeEntryText(entry.test.id),
       kind: sanitizeEntryText(entry.test.kind),
       sourcePath: entry.test.source?.path
-        ? displayGalleryPath(entry.test.source.path, {
-            extraRoots: [requestedRepoRoot],
-            repoRoot,
-          })
+        ? displayGalleryPath(entry.test.source.path, viewContext)
         : null,
       status: entry.result.status,
       title: sanitizeEntryText(entry.test.title),
@@ -978,14 +970,10 @@ export async function buildQaEvidenceGalleryModel(params: {
     evidenceMode: summary.evidenceMode,
     evidencePath: hrefEvidencePath,
     generatedAt: summary.generatedAt,
-    profile: summary.profile
-      ? sanitizeGalleryText(summary.profile, { extraRoots: [requestedRepoRoot], repoRoot })
-      : null,
+    profile: summary.profile ? sanitizeEntryText(summary.profile) : null,
     producerContext: await buildProducerContext({
       evidencePath,
-      extraRoots: [requestedRepoRoot],
-      hrefEvidencePath,
-      repoRoot,
+      ...viewContext,
       summaryEntries: summary.entries,
       effectiveEntries,
     }),

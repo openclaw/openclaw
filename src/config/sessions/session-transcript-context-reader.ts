@@ -19,9 +19,19 @@ export function createSessionTranscriptContextReader(owner: {
       owner.assertCurrent(target);
       const snapshot = await owner.read();
       owner.assertCurrent(target);
-      const result = await read(snapshot.messages, snapshot.header);
-      await owner.validate(snapshot);
-      owner.assertCurrent(target);
-      return result;
+      const messages = (function* () {
+        for (const message of snapshot.messages) {
+          owner.assertCurrent(target);
+          yield message;
+        }
+      })();
+      try {
+        const result = await read(messages, snapshot.header);
+        await owner.validate(snapshot);
+        owner.assertCurrent(target);
+        return result;
+      } finally {
+        messages.return(undefined);
+      }
     });
 }

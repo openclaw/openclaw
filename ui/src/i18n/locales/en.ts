@@ -7,6 +7,9 @@ export const en: TranslationMap & {
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
   agentTools: TranslationMap;
+  githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
+  githubConnections: TranslationMap &
+    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
   board: TranslationMap & { widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   shortcutsOverlay: TranslationMap & { title: string };
@@ -29,7 +32,7 @@ export const en: TranslationMap & {
         | "errorSender",
         string
       >;
-    pullRequests: TranslationMap;
+    pullRequests: TranslationMap & Record<"open" | "draft" | "merged" | "closed", string>;
     processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
@@ -75,6 +78,23 @@ export const en: TranslationMap & {
   devices: TranslationMap & { pairing: TranslationMap };
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
+  sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap } & Record<
+      | "ariaLabel"
+      | "linkedChannel"
+      | "moreParticipants"
+      | "moreParticipantsLabel"
+      | "projectLabel"
+      | "workspaceLabel"
+      | "branchLabel"
+      | "runsOn"
+      | "machineLabel"
+      | "machineCpu"
+      | "machineMemory"
+      | "more"
+      | "changedFile"
+      | "changedFiles",
+      string
+    >;
   filePreview: TranslationMap;
   updates: TranslationMap;
   login: TranslationMap;
@@ -145,7 +165,7 @@ export const en: TranslationMap & {
     restore: "Restore",
     unarchive: "Unarchive",
     undo: "Undo",
-    probe: "Probe",
+    probe: "Check connection",
     call: "Call",
     confirm: "Confirm",
     dontAskAgain: "Don't ask me again",
@@ -191,15 +211,15 @@ export const en: TranslationMap & {
     dark: "Dark",
     baseUrl: "Base URL",
     lastStart: "Last start",
-    lastProbe: "Last probe",
+    lastProbe: "Last connection check",
     lastConnect: "Last connect",
     lastMessage: "Last message",
     authAge: "Auth age",
     credential: "Credential",
     audience: "Audience",
     publicKey: "Public Key",
-    probeOk: "Probe ok",
-    probeFailed: "Probe failed",
+    probeOk: "Connection check passed",
+    probeFailed: "Connection check failed",
     reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
@@ -258,20 +278,7 @@ export const en: TranslationMap & {
   mcpApp: {},
   sessionHovercard: {
     ariaLabel: "Session information",
-    agentNotepad: "Agent Notepad",
     linkedChannel: "Linked to {channel}",
-    viaAccount: "Via {account}",
-    topicNumber: "Topic {id}",
-    sessionParticipants: "In this session",
-    chatKinds: {
-      direct: "Direct chat",
-      group: "Group chat",
-      channel: "Channel",
-      thread: "Thread",
-      topic: "Topic",
-    },
-    attributionOther: "& {count} other",
-    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
@@ -284,19 +291,8 @@ export const en: TranslationMap & {
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
-    pullRequestLabel: "Pull request #{number}, {state}",
-    pullRequestAuthorLabel: "Opened by {login}",
-    states: {
-      open: "Open",
-      draft: "Draft",
-      merged: "Merged",
-      closed: "Closed",
-    },
-    checks: {
-      passing: "CI checks passing",
-      failing: "CI checks failing",
-      pending: "CI checks running",
-    },
+    states: {},
+    checks: {},
   },
   sessionProgressCard: {
     title: "Progress",
@@ -785,6 +781,23 @@ export const en: TranslationMap & {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
+    advanced: "Advanced",
+    copyDetails: "Copy details",
+    copyLink: "Copy link",
+    archiveSessionOnly: "Session only",
+    communication: {
+      send: "Send messages",
+      receive: "Receive messages",
+      always: "Always",
+      ask: "Ask",
+      never: "Never",
+      default: "default",
+      sendDescription:
+        "Allow this session to initiate messages to other sessions. Ask requires human approval; Never blocks them.",
+      receiveDescription:
+        "Allow other sessions to initiate messages to this session. Ask requires human approval; Never blocks them.",
+      resetDescription: "Use the configured defaults for sending and receiving messages.",
+    },
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
@@ -844,11 +857,9 @@ export const en: TranslationMap & {
     snoozeNextWeek: "Next week",
     snoozed: "Snoozed",
     snoozeWakes: "Wakes {time}",
-    sessionSnoozed: "Snoozed until {time}",
     snoozeTomorrowTime: "tomorrow {time}",
     sessionArchived: "Session archived",
     archiving: "Archiving…",
-    sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
     deleteAllArchivedConfirm:
       "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
@@ -859,6 +870,7 @@ export const en: TranslationMap & {
     archivedOnlyTooltip: "Show only archived sessions.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
+    clearSearch: "Clear search",
     user: "User",
     assistant: "Assistant",
     selected: "{count} selected",
@@ -931,6 +943,7 @@ export const en: TranslationMap & {
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
     openSession: "Open session",
+    openFailed: "Could not open this session. Try again.",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
@@ -960,7 +973,6 @@ export const en: TranslationMap & {
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
     cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
     renameSession: "Rename session",
-    renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
     setIconMenu: "Set icon",
     setColorMenu: "Color",
@@ -1032,25 +1044,13 @@ export const en: TranslationMap & {
     movingSession: "Moving to {target}…",
     movingSessionGeneric: "Moving session…",
     stopCloudWorker: "Stop cloud worker…",
-    stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
-    stopCloudWorkerConfirmAction: "Stop worker",
     initialTurnPausedByWorkerStop:
       "Worker stop requested. Review the initial message before retrying.",
-    stopCloudWorkerStale:
-      'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm:
-      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm:
-      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
-    deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
-    deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -1075,8 +1075,6 @@ export const en: TranslationMap & {
     newGroupCreate: "Create group",
     newGroupFailed: "Could not create the group.",
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
-    newGroupMoveSkipped:
-      "Group created, but the move was skipped because the list changed. Move from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -1085,18 +1083,7 @@ export const en: TranslationMap & {
     groupMenu: "Group options for {group}",
     newSessionInGroup: "New session in {group}",
     groupDefaultsMenu: "New session defaults",
-    groupDefaultsTitle: 'New session defaults for "{group}"',
-    groupDefaultsDescription: "Choose where new sessions in this group start.",
-    groupDefaultsCwd: "Working directory",
-    groupDefaultsCwdPlaceholder: "Use the agent workspace",
-    groupDefaultsCwdHint: "Leave empty to use the selected agent's workspace.",
-    groupDefaultsMode: "Environment",
-    groupDefaultsLocal: "Current checkout",
-    groupDefaultsWorktree: "New worktree",
-    groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
-    groupDefaultsRequiresAdmin:
-      "This folder is outside agent workspaces. Saving defaults for it requires operator.admin. Open Inbox, select Limited access, request admin, then approve in Devices.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
@@ -1226,6 +1213,7 @@ export const en: TranslationMap & {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      learnedAlwaysOn: "Learned skill — archive in Workshop to hide",
       updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
@@ -1397,6 +1385,8 @@ export const en: TranslationMap & {
       lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
       lobsterdexCardCopyLink: "Copy link",
       lobsterdexOpen: "Open Lobsterdex",
+      lobsterdexThemeHidden:
+        "This theme hides Lobsterdex. Your collection and preferences are preserved.",
     },
     security: {
       intro: "Review gateway access, tool policy, device authentication, and approvals.",
@@ -1592,6 +1582,7 @@ export const en: TranslationMap & {
   agentTools: {},
   skillGroups: {
     workspace: "Workspace Skills",
+    learned: "Learned Skills",
     builtIn: "Built-in Skills",
     installed: "Installed Skills",
     extra: "Extra Skills",
@@ -1622,6 +1613,7 @@ export const en: TranslationMap & {
     forward: "Forward",
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
+    askBrand: "Ask {brand}",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
     settingsGroupThisIPhone: "This iPhone",
@@ -1643,12 +1635,15 @@ export const en: TranslationMap & {
     more: "More",
     home: "Home",
     pages: "Pages",
+    pin: "Pin",
+    unpin: "Unpin",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",
     workboardGroup: "WorkBoard",
   },
   terminal: {
     title: "Terminal",
+    copiedToClipboard: "Copied to clipboard",
     toggle: "Toggle terminal",
     open: "Open terminal",
     openWindow: "Open terminal in new window",
@@ -1712,6 +1707,8 @@ export const en: TranslationMap & {
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: "New tab",
+    tweetPost: "Post on X",
+    openPost: "Open post",
     back: "Back",
     forward: "Forward",
     reload: "Reload",
@@ -1817,8 +1814,7 @@ export const en: TranslationMap & {
     cron: "Scheduled tasks and recurring agent runs.",
     skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
-    skillWorkshop:
-      "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+    skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
     cloudWorkers: "Profiles and machine sizes for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
@@ -1970,8 +1966,6 @@ export const en: TranslationMap & {
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
       connected: "Account connected. Choose a model when you want to test a reply.",
-      failed: "Could not finish. Open Details to see what to do next.",
-      details: "Details",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
@@ -2223,7 +2217,7 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      web: "Web",
+      web: "Web app",
       cli: "Command line",
       terminal: "Terminal",
       app: "App",
@@ -2266,7 +2260,10 @@ export const en: TranslationMap & {
     online: "Online",
     idle: "Idle",
     offline: "Offline",
-    unknownDevice: "Unknown device",
+    unknownConnection: "Unknown client",
+    connectionDetails: "Connection details · {count}",
+    connectionOne: "1 connection",
+    connectionMany: "{count} connections",
     lastInput: "Last input {time} ago",
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
@@ -2274,85 +2271,16 @@ export const en: TranslationMap & {
     notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   githubPublication: {
-    personal: "My GitHub",
-    system: "System",
-    agent: "Agent override",
-    publishAs: "Publish as @{account}",
-    account: "Publication account",
     newAction: "Choose a new publication",
-    failedAttempt: "Publication attempt failed",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
-    confirm: "Confirm original publication",
-    check: "Check publication",
-    refresh: "Refresh publication",
-    statusFailed: "Publication failed",
-    statusConfirm: "Confirmation needed",
-    statusRequested: "Publication queued",
-    statusPublishing: "Publication in progress",
-    statusUnavailable: "Publication status unavailable",
-    statusUnknown: "Outcome unknown",
-    unknown:
-      "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
-    target: "Pull request: {repository} \u2192 {base}",
-    pushTarget: "Push: {repository} \u00b7 {branch}",
-    snapshot: "Original accepted snapshot",
-    head: "HEAD",
-    index: "Index tree",
-    workspace: "Workspace tree",
-    dispatched: "GitHub {kind} was dispatched; its remote outcome may still be unknown.",
-    observed: "GitHub {kind} was observed. Disconnecting does not undo this effect.",
-    effectLink: "View GitHub effect",
-    effectPush: "push",
-    effectPullRequest: "pull request",
-    personalWorkspace:
-      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
-    unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
   },
   githubConnections: {
     title: "GitHub connections",
-    description:
-      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
     mine: "My GitHub",
     system: "System GitHub",
-    personalDescription: "Your account for explicitly selected Publish PR actions.",
-    systemDescription:
-      "Default account for agent commands, authenticated dashboards, and publishing.",
-    unboundDescription:
-      "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
-    signInRequired: "Personal sign-in required",
-    connected: "Connected",
-    disconnected: "Not connected",
-    notLoaded: "Status not loaded",
-    checking: "Checking connection…",
-    statusUnavailable: "Connection status unavailable",
-    manage: "Manage connections",
-    reconnectRequired: "Reconnect required",
-    connectMine: "Connect My GitHub",
-    changeMine: "Change My GitHub",
-    changeSystem: "Change System GitHub",
-    disconnectMine: "Disconnect My GitHub",
-    disconnectDescription:
-      "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
-    adminManaged: "Admin managed",
-    purpose: "Connect GitHub",
     forMe: "For me",
     forSystem: "For the system",
-    purposeHint: "Only the selected connection changes.",
-    continue: "Continue with GitHub",
-    usage: "Where these accounts are used",
-    usageDescription:
-      "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
-    details: "Connection details",
-    agentTitle: "GitHub account",
-    agentFor: "GitHub for {agent}",
-    agentDescription:
-      "Used for this agent's commands and authenticated dashboard data. Verified confirms the account; repository access is checked when data is requested.",
-    viewAgent: "View agent account",
-    agentOverride: "Agent override",
-    advancedOverride: "Advanced: agent GitHub override",
-    manageCommon: "Manage connections in Profile",
   },
   profilePage: {
     personalInstructions: {
@@ -2782,6 +2710,34 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    sessionDetails: {
+      title: "Details",
+      close: "Close details",
+      session: "Session details",
+      createdBy: "Created by",
+      owner: "Owner",
+      participants: "{count} participants",
+      moreParticipants: "{count} more participants",
+      workspaceUnavailable: "Workspace unavailable",
+      allChanges: "All changes",
+      pullRequests: "Pull requests",
+      noPullRequests: "No pull requests",
+      automations: "Automations",
+      progressOptions: "Task progress options",
+      hideProgress: "Don't show task progress again",
+      collapseDefault: "Collapse task progress by default",
+      settings: "Task progress settings",
+      progressHidden: "Task progress hidden in this browser.",
+      automationError: "Couldn't load automations.",
+      automationUnavailable: "Automations unavailable for this session.",
+      automationOffline: "Offline · last-known automations",
+      automationLoading: "Loading automations…",
+      automationEmpty: "No automations for this session",
+      automationMore: "Load more automations",
+      automationAttention: "Needs attention",
+      automationPaused: "Paused",
+      automationEnabled: "Enabled",
+    },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
@@ -2894,7 +2850,6 @@ export const en: TranslationMap & {
       empty: "No subagents in this conversation.",
       noRunning: "No running subagents",
       refresh: "Refresh subagents",
-      loadMore: "Show more subagents",
       stop: "Stop {name}",
       stopping: "Stopping…",
       elapsed: "Elapsed time",
@@ -3111,12 +3066,15 @@ export const en: TranslationMap & {
       copyBranch: "Copy branch name",
       copied: "Copied",
       incognito: "Incognito session",
-      branches: "Session branches",
-      branchSwitchUnavailable: "Branch switch is unavailable while the agent is working.",
-      untitledBranch: "Untitled branch",
+      branches: "Versions",
+      versionsHelpLabel: "About versions",
+      versionsHelp:
+        "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
+      branchSwitchUnavailable: "Versions cannot be switched while the agent is working.",
+      untitledBranch: "Untitled version",
       oneMessage: "{count} message",
       messages: "{count} messages",
-      activeBranch: "Active branch",
+      activeBranch: "Current version",
     },
     board: {
       faceLabel: "Session face",
@@ -3179,39 +3137,17 @@ export const en: TranslationMap & {
       adminRequired: "Administrator access is required to start suggested tasks.",
     },
     pullRequests: {
-      linkLabel: "Pull request #{number}: {title}",
-      createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
-      publishPr: "Publish PR",
-      publishing: "Publishing…",
-      publicationRequested: "Requested",
-      retryPublication: "Retry publication",
-      openPublishedPr: "Open PR",
-      cloudPublicationGuidance:
-        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
-      dismiss: "Dismiss pull request #{number}",
       open: "Open",
       draft: "Draft",
       merged: "Merged",
       closed: "Closed",
-      checks: "CI",
-      checksPassing: "CI checks passing",
-      checksFailing: "CI checks failing",
-      checksPending: "CI checks running",
-      ciMonitoring: "CI monitoring",
-      openChecks: "Open checks on GitHub",
-      checksPassed: "Passed",
-      checksFailed: "Failed",
-      checksRunning: "Running",
-      checksSkipped: "Skipped",
-      rateLimited:
-        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
-      unavailable:
-        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
     },
     usageRemaining: "Usage Remaining",
     view: {
       menu: "View",
+      speechBubbles: "Speech bubbles",
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
       commentary: "Keep commentary",
@@ -3381,6 +3317,18 @@ export const en: TranslationMap & {
       },
       showContent: "Show content",
     },
+    skillLearned: {
+      label: "Learned",
+      created: "Created",
+      updated: "Updated",
+      archived: "Archived",
+      restored: "Restored",
+      open: "Open {name} in Skill Workshop",
+      undo: "Undo",
+      undoing: "Undoing…",
+      undone: "Undone",
+      undoError: "Could not undo: {error}",
+    },
     progressLabels: {
       shelling: "Shelling",
       scuttling: "Scuttling",
@@ -3426,6 +3374,7 @@ export const en: TranslationMap & {
       dropOpenHere: "Open here",
     },
     sidebar: {
+      mySessions: "My sessions",
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       serverUpdatedTitle: "Server updated",
@@ -3574,8 +3523,10 @@ export const en: TranslationMap & {
       unavailable: "Unavailable",
       expired: "Expired",
       disconnected: "Not connected. Try again after reconnecting.",
+      loadFailed: "Could not load this question. Try again.",
     },
     imageLightbox: {
+      actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
       position: "{current} / {total}",

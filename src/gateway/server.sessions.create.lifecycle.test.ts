@@ -1,6 +1,10 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -9,6 +13,7 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -19,7 +24,7 @@ import {
   chatSendOwner,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   directSessionReq,
@@ -28,7 +33,103 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-const { createSessionStoreDir } = setupPersistentSessionCreateTestHarness();
+const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
+
+test.for([
+  { model: "openai/gpt-5.6-sol" },
+  {
+    nativeRuntimeConsent: "native-fixture",
+    permissionMode: "full",
+    sandboxMode: "off",
+    expectedPermissionMode: null,
+    expectedSandboxMode: null,
+    expectedNativeRuntimeConsent: null,
+  },
+])(
+  "sessions.create stays available while runtime selection waits for %j",
+  async (patch, { signal }) => {
+    const { storePath } = await createSessionStoreDir();
+    const blockedKey = "agent:main:dashboard:pending-runtime";
+    const createdKey = "agent:main:dashboard:independent-runtime";
+    const original = sessionStoreEntry("pending-runtime", {
+      lifecycleRevision: "runtime-generation",
+    });
+    await writeSessionStore({ entries: { [blockedKey]: original } });
+    const { ws } = await openClient();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const preparation = vi
+      .spyOn(modelRuntime, "prepareModelSelectionRuntime")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { status: "rejected", reason: "invalid-runtime", message: "Runtime unavailable" };
+      });
+    const context = {
+      loadGatewayModelCatalog: async () => [
+        { id: "gpt-5.6-sol", provider: "openai", name: "GPT 5.6 Sol" },
+      ],
+    };
+    const changing = directSessionReq(
+      "sessions.patch",
+      {
+        key: blockedKey,
+        expectedSessionId: original.sessionId,
+        expectedLifecycleRevision: original.lifecycleRevision,
+        ...patch,
+      },
+      { context },
+    );
+    let creating: ReturnType<typeof rpcReq> | undefined;
+    let successor: ReturnType<typeof directSessionReq> | undefined;
+    let successorFinished = false;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          changing.then((result) => {
+            throw new Error(
+              `Runtime selection finished without preparation: ${JSON.stringify(result)}`,
+            );
+          }),
+          "Runtime selection was not reached",
+        ),
+        signal,
+      );
+      expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(1);
+      successor = directSessionReq(
+        "sessions.patch",
+        { key: blockedKey, pinned: true },
+        { context },
+      );
+      void successor.then(() => {
+        successorFinished = true;
+      });
+      creating = rpcReq(ws, "sessions.create", { key: createdKey, agentId: "main" });
+      expect(await withinTest(creating, signal)).toMatchObject({ ok: true });
+      expect(successorFinished).toBe(false);
+      const created = loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath });
+      expect(created?.sessionId).toBeTruthy();
+      expect(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true })).toMatchObject({
+        ok: true,
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath })?.pinnedAt,
+      ).toEqual(expect.any(Number));
+    } finally {
+      release.resolve();
+      await Promise.allSettled([changing, creating, successor]);
+      preparation.mockRestore();
+      await closeGatewayTestWebSocket(ws);
+    }
+    expect(await changing).toMatchObject({
+      ok: false,
+      error: { message: "Runtime unavailable" },
+    });
+    expect(await successor).toMatchObject({ ok: true });
+    expect(createGatewayActiveWorkSnapshot()).toMatchObject({ idle: true, blockers: [] });
+  },
+);
 
 // The adoption assertion below flaked once on CI (run 31609081812) with the persisted
 // row missing while all 16 creates succeeded; exhaustive owner-path analysis found no
@@ -105,14 +206,21 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:concurrent-keyed-session";
 
-  const created = await Promise.all(
-    Array.from({ length: 4 }, () =>
-      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-        agentId: "main",
-        key,
-      }),
-    ),
-  );
+  const sql = observeHostDataSql();
+  let created: Awaited<ReturnType<typeof directSessionReq<{ key: string; sessionId: string }>>>[];
+  try {
+    created = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+          agentId: "main",
+          key,
+        }),
+      ),
+    );
+    expect(sql.queries.filter((query) => /\bfrom\s+"?session_nodes\b/i.test(query))).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));

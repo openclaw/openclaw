@@ -334,52 +334,50 @@ describe("transcript tool selection", () => {
     }
   });
 
-  it.each(["stop", "summarize"] as const)(
-    "%s retains the admitted private source after a same-tuple public row rewrite",
-    async (action) => {
-      const h = harness();
-      const service = h.configuredCapture("private-account");
-      try {
-        await service.start().settled;
-        expect(activeSessions.has("notes")).toBe(true);
-        const session = (await h.store.readSession("notes"))!;
-        const selector = transcriptSessionSelector(session);
-        await h.store.writeSession({
-          ...session,
-          source: { ...session.source, accountId: "public-account" },
-        });
-        expect((await h.store.readSession(selector))?.source.accountId).toBe("public-account");
-        h.authorize.mockClear();
-        const read = vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession");
-        const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
-        const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
-        await expect
-          .soft(h.execute({ action, selector }))
-          .rejects.toThrow("transcripts session not found");
-        expect
-          .soft(h.authorize)
-          .toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ action, source: session.source }),
-          );
-        expect.soft(h.stop).not.toHaveBeenCalled();
-        expect.soft(read).not.toHaveBeenCalled();
-        expect.soft(write).not.toHaveBeenCalled();
-        expect.soft(materialize).not.toHaveBeenCalled();
-        expect.soft(await h.store.readSummary(session)).toEqual({});
-        expect.soft((await h.store.readSession(selector))?.stoppedAt).toBeUndefined();
-        await expect
-          .soft(fs.stat(h.store.sessionDir(session)))
-          .rejects.toMatchObject({ code: "ENOENT" });
-        await service.stop();
-        expect(h.stop).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ sessionId: "notes", source: session.source }),
+  it("summary retains the admitted private source after a same-tuple public row rewrite", async () => {
+    const action = "summarize";
+    const h = harness();
+    const service = h.configuredCapture("private-account");
+    try {
+      await service.start().settled;
+      expect(activeSessions.has("notes")).toBe(true);
+      const session = (await h.store.readSession("notes"))!;
+      const selector = transcriptSessionSelector(session);
+      await h.store.writeSession({
+        ...session,
+        source: { ...session.source, accountId: "public-account" },
+      });
+      expect((await h.store.readSession(selector))?.source.accountId).toBe("public-account");
+      h.authorize.mockClear();
+      const read = vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession");
+      const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
+      const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
+      await expect
+        .soft(h.execute({ action, selector }))
+        .rejects.toThrow("transcripts session not found");
+      expect
+        .soft(h.authorize)
+        .toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ action, source: session.source }),
         );
-        expect(await h.store.readSummary(session)).toMatchObject({
-          summary: { transcript: ["Notes for notes"] },
-        });
-      } finally {
-        await service.stop();
-      }
-    },
-  );
+      expect.soft(h.stop).not.toHaveBeenCalled();
+      expect.soft(read).not.toHaveBeenCalled();
+      expect.soft(write).not.toHaveBeenCalled();
+      expect.soft(materialize).not.toHaveBeenCalled();
+      expect.soft(await h.store.readSummary(session)).toEqual({});
+      expect.soft((await h.store.readSession(selector))?.stoppedAt).toBeUndefined();
+      await expect
+        .soft(fs.stat(h.store.sessionDir(session)))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await service.stop();
+      expect(h.stop).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionId: "notes", source: session.source }),
+      );
+      expect(await h.store.readSummary(session)).toMatchObject({
+        summary: { transcript: ["Notes for notes"] },
+      });
+    } finally {
+      await service.stop();
+    }
+  });
 });

@@ -19,6 +19,7 @@ import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { listDevicePairing } from "./device-pairing.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const payload = { url: "wss://join.example.invalid", bootstrapToken: "synthetic-join-bootstrap" };
 let baseDir: string;
@@ -85,15 +86,10 @@ test.each([
     class JoinAuthorityError extends Error {}
     const refused = new JoinAuthorityError("Synthetic join authority revoked");
     let currentStage: workerAdmission.SqliteWorkerAdmissionRequest["stage"] | undefined;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observer = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          currentStage = request.stage;
-          admit(request, grant);
-        }, attachment),
-      );
+    const observer = probe.admission(workerAdmission, (request, grant, admit) => {
+      currentStage = request.stage;
+      admit(request, grant);
+    });
     const assertCurrent = () => {
       if (currentStage === refusedStage) {
         throw refused;
@@ -180,25 +176,14 @@ test("never replays a burned code or recovers its payload after an unknown resul
   const shortcode = await mint(context);
   const unknown = new SqliteWorkerError("Synthetic lost burn result", "outcome-unknown");
   let burns = 0;
-  const original = stateWorker.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    (captured, operation, options) =>
-      original(
-        captured,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "devicePairing.redeemJoinCode") {
-                burns++;
-                throw unknown;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  );
+  probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "devicePairing.redeemJoinCode") {
+      burns++;
+      throw unknown;
+    }
+    return result;
+  });
   await expect(redeemDevicePairingJoinCode({ shortcode, context })).rejects.toBe(unknown);
   expect(burns).toBe(1);
   expect(storedCodes()).not.toContainEqual({ shortcode });
@@ -213,21 +198,14 @@ test.each(["register", "redeem"] as const)(
       operation === "redeem"
         ? await registerDevicePairingJoinCode({ payload, expiresAtMs, context })
         : undefined;
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
-      (captured, run, options) =>
-        original(
-          captured,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                vi.spyOn(Date, "now").mockReturnValue(expiresAtMs);
-                return result;
-              },
-            }),
-          options,
-        ),
+    probe.command(
+      stateWorker,
+      async (command, executeOptions, scope) => {
+        const result = await scope.execute(command, executeOptions);
+        vi.spyOn(Date, "now").mockReturnValue(expiresAtMs);
+        return result;
+      },
+      { once: true },
     );
     if (shortcode) {
       await expect(redeemDevicePairingJoinCode({ shortcode, context })).resolves.toBeNull();
@@ -251,23 +229,16 @@ test("database close joins accepted burn delivery and refuses its retired contex
   const committed = createDeferredCore();
   const release = createDeferredCore();
   const order: string[] = [];
-  const original = stateWorker.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
-    (captured, operation, options) =>
-      original(
-        captured,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              committed.resolve();
-              await release.promise;
-              order.push("delivered");
-              return result;
-            },
-          }),
-        options,
-      ),
+  probe.command(
+    stateWorker,
+    async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      committed.resolve();
+      await release.promise;
+      order.push("delivered");
+      return result;
+    },
+    { once: true },
   );
   const redemption = redeemDevicePairingJoinCode({ shortcode, context });
   let closing: Promise<boolean> | undefined;

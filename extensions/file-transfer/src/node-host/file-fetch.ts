@@ -38,19 +38,7 @@ type FileFetchParams = {
   expectedBinding?: unknown;
 };
 
-type FileFetchErrCode =
-  | "INVALID_PATH"
-  | "INVALID_PARAMS"
-  | "NOT_FOUND"
-  | "PERMISSION_DENIED"
-  | "IS_DIRECTORY"
-  | "FILE_TOO_LARGE"
-  | "PATH_TRAVERSAL"
-  | "SYMLINK_REDIRECT"
-  | "CANONICAL_PATH_CHANGED"
-  | "READ_ERROR";
-
-function classifyFsError(err: unknown): FileFetchErrCode {
+function classifyFsError(err: unknown) {
   if (err instanceof FsSafeError && err.code === "too-large") {
     return "FILE_TOO_LARGE";
   }

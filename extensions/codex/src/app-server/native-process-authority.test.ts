@@ -143,6 +143,28 @@ describe("native process custody", () => {
     }
   });
 
+  it("settles confirmed background custody when Codex closes the thread", () => {
+    const client = createClientHarness();
+    const origin = source();
+    origin.owner.bindTurn(client.client, command.threadId, command.turnId);
+    const retain = origin.owner.prepareBackgroundCommands(
+      client.client,
+      command,
+      new Map([[command.itemId, "process"]]),
+    );
+    retain(new Map([[command.itemId, "process"]]));
+    try {
+      origin.owner.release();
+      expect(origin.released).not.toHaveBeenCalled();
+      // Idle unload drops the listener first, so no item/completed reaches this client.
+      client.send({ method: "thread/closed", params: { threadId: command.threadId } });
+      expect(origin.released).toHaveBeenCalledOnce();
+    } finally {
+      origin.owner.release();
+      client.client.close();
+    }
+  });
+
   it("reports failed background settlement and refuses to replace its unsettled command", async () => {
     const client = createClientHarness();
     const origin = source();

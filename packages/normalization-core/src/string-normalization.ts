@@ -20,7 +20,7 @@ export function filterStringEntries(value: unknown): string[] {
 
 /** Coerces entries to strings, trims them, and drops empty results. */
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
-  return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);
+  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 /** Normalizes string entries and lowercases each retained value. */

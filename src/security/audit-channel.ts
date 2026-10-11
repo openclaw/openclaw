@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { resolveChannelAccount, resolvePluginDmPolicy } from "../channels/account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -48,7 +48,6 @@ function hasExplicitProviderAccountConfig(
   return Object.hasOwn(accounts, accountId);
 }
 
-/** Collect channel-specific security findings across active channel plugins/accounts. */
 export async function collectChannelSecurityFindingsCore(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
@@ -306,7 +305,8 @@ export async function collectChannelSecurityFindingsCore(params: {
         orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
-      const dmPolicy = plugin.security.resolveDmPolicy?.({
+      const dmPolicy = await resolvePluginDmPolicy({
+        plugin,
         cfg: params.cfg,
         accountId,
         account,

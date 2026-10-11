@@ -3,12 +3,11 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.SharedAttachmentKind
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
-import ai.openclaw.app.isStageableSharedAttachmentMimeType
 import ai.openclaw.app.node.JpegSizeLimiter
 import ai.openclaw.app.normalizeSharedAttachmentMimeType
 import ai.openclaw.app.sharedAttachmentKindForMimeType
+import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentResolver
-import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -43,9 +42,7 @@ internal fun loadPickedMediaOrDocumentAttachment(
   uri: Uri,
 ): PendingAttachment {
   val mimeType = normalizeSharedAttachmentMimeType(resolver.getType(uri))
-  if (!isStageableSharedAttachmentMimeType(mimeType)) throw IllegalStateException("unsupported attachment")
-  val kind = sharedAttachmentKindForMimeType(mimeType)
-  if (kind == null) throw IllegalStateException("unsupported attachment")
+  val kind = sharedAttachmentKindForMimeType(mimeType) ?: throw IllegalStateException("unsupported attachment")
   return loadSharedAttachment(resolver, SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType)))
 }
 
@@ -56,7 +53,6 @@ internal fun loadSharedAttachment(
 ): PendingAttachment {
   val providerMimeType = normalizeSharedAttachmentMimeType(resolver.getType(attachment.uri))
   val mimeType = providerMimeType ?: attachment.mimeType
-  if (!isStageableSharedAttachmentMimeType(mimeType)) throw IllegalStateException("unsupported attachment")
   val kind = sharedAttachmentKindForMimeType(mimeType) ?: throw IllegalStateException("unsupported attachment")
   if (providerMimeType != null && (kind != attachment.kind || mimeType != attachment.mimeType)) {
     throw IllegalStateException("attachment type changed")
@@ -137,7 +133,12 @@ private fun sharedAttachmentFileName(
     try {
       resolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor -> cursor.firstString(OpenableColumns.DISPLAY_NAME) }
+        ?.use { cursor ->
+          if (!cursor.moveToFirst()) return@use null
+          val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (index < 0 || cursor.isNull(index)) return@use null
+          cursor.getString(index)?.trim()?.takeIf(String::isNotEmpty)
+        }
     } catch (_: Exception) {
       null
     }
@@ -149,22 +150,19 @@ private fun sharedAttachmentFileName(
     .ifEmpty { "attachment" }
 }
 
-private fun Cursor.firstString(columnName: String): String? {
-  if (!moveToFirst()) return null
-  val index = getColumnIndex(columnName)
-  if (index < 0 || isNull(index)) return null
-  return getString(index)?.trim()?.takeIf { it.isNotEmpty() }
-}
-
 /** Loads a picked image URI into the bounded JPEG attachment shape sent to chat. */
 internal fun loadSizedImageAttachment(
   resolver: ContentResolver,
   uri: Uri,
 ): PendingAttachment {
   val fileName = normalizeAttachmentFileName(sharedAttachmentFileName(resolver, uri))
-  val bitmap =
-    decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
+  val oriented =
+    decodeOrientedBitmap(CHAT_ATTACHMENT_MAX_WIDTH, Bitmap.Config.ARGB_8888) { resolver.openInputStream(uri) }
       ?: throw IllegalStateException("unsupported attachment")
+  val bitmap =
+    oriented.scaleToMaxDimension(CHAT_ATTACHMENT_MAX_WIDTH).also { scaled ->
+      if (scaled !== oriented) oriented.recycle()
+    }
   val maxBytes = (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3
   // Reuse the node JPEG limiter so chat attachments and node photo payloads
   // stay within the same gateway frame budget.
@@ -246,17 +244,7 @@ internal fun computeInSampleSize(
   width: Int,
   height: Int,
   maxDimension: Int,
-): Int {
-  if (width <= 0 || height <= 0 || maxDimension <= 0) return 1
-
-  var sample = 1
-  var longestEdge = max(width, height)
-  while (longestEdge > maxDimension && sample < 64) {
-    sample *= 2
-    longestEdge = max(width / sample, height / sample)
-  }
-  return sample.coerceAtLeast(1)
-}
+): Int = imageSampleSize(width, height, maxDimension, maxSample = 64)
 
 /** Normalizes arbitrary picked-image names to the JPEG file name sent upstream. */
 internal fun normalizeAttachmentFileName(raw: String): String {
@@ -264,17 +252,6 @@ internal fun normalizeAttachmentFileName(raw: String): String {
   if (trimmed.isEmpty()) return "image.jpg"
   val stem = trimmed.substringBeforeLast('.', missingDelimiterValue = trimmed).ifEmpty { "image" }
   return "$stem.jpg"
-}
-
-private fun decodeScaledBitmap(
-  resolver: ContentResolver,
-  uri: Uri,
-  maxDimension: Int,
-): Bitmap? {
-  val oriented = decodeOrientedBitmap(maxDimension, Bitmap.Config.ARGB_8888) { resolver.openInputStream(uri) } ?: return null
-  return oriented.scaleToMaxDimension(maxDimension).also { scaled ->
-    if (scaled !== oriented) oriented.recycle()
-  }
 }
 
 private fun decodeOrientedBitmap(

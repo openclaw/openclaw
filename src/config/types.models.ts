@@ -58,7 +58,6 @@ export type ModelProviderConfig = Omit<
   ModelProviderSchemaInput,
   "baseUrl" | "models" | "apiKey" | "headers" | "request" | "agentRuntime"
 > & {
-  /** Provider API base URL. */
   baseUrl: string;
   /** API key or secret reference for this provider. */
   apiKey?: SecretInput;
@@ -79,11 +78,8 @@ export type ModelProviderDeclarationConfig = ModelProviderConfig;
 export type ModelProviderConfigInput = Partial<ModelProviderConfig>;
 
 export type BedrockDiscoveryConfig = {
-  /** Enable AWS Bedrock model discovery. */
   enabled?: boolean;
-  /** AWS region to query for models. */
   region?: string;
-  /** Optional provider id filters for discovery. */
   providerFilter?: string[];
   /** Discovery cache refresh interval in seconds. */
   refreshInterval?: number;

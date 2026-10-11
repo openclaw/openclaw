@@ -1,4 +1,3 @@
-/** Model selection, compression preparation, and provider execution for view_image. */
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -106,10 +105,9 @@ function matchesImageTimeoutEntry(params: {
 }): boolean {
   const configuredProvider = normalizeMediaProviderId(params.entry.provider ?? "");
   const selectedProvider = normalizeMediaProviderId(params.provider);
-  if (!configuredProvider || configuredProvider !== selectedProvider) {
-    return false;
-  }
   if (
+    !configuredProvider ||
+    configuredProvider !== selectedProvider ||
     !matchesMediaEntryCapability({
       entry: params.entry,
       capability: "image",

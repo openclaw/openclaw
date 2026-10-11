@@ -117,7 +117,9 @@ export function getUpsertChannelPairingRequestMock(): MockFn<
 }
 
 const skillCommandListHoisted = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
+  prepareSkillCommandsForAgents: vi.fn<TelegramBotDeps["prepareSkillCommandsForAgents"]>(
+    async () => [],
+  ),
 }));
 const modelProviderDataHoisted = vi.hoisted(() => ({
   buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,
@@ -184,7 +186,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       ),
   };
 });
-export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
+export const prepareSkillCommandsForAgents = skillCommandListHoisted.prepareSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
 const menuSyncHoisted = vi.hoisted(() => ({
@@ -387,6 +389,7 @@ const telegramBotRuntimeForTest = {
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
+  getSessionEntryAsync: async (params) => getSessionEntryMock(params),
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
@@ -403,8 +406,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents:
-    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents:
+    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveApproval: resolveExecApprovalSpy,
@@ -413,7 +416,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
 
 export const getOnHandler = (event: string) => {
-  const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
+  const handler = onSpy.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes(event) : filter === event,
+  )?.[1];
   if (!handler) {
     throw new Error(`Missing handler for event: ${event}`);
   }
@@ -526,8 +531,8 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
-  listSkillCommandsForAgents.mockReset();
-  listSkillCommandsForAgents.mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockReset();
+  prepareSkillCommandsForAgents.mockResolvedValue([]);
   buildModelsProviderData.mockReset();
   buildModelsProviderData.mockResolvedValue({
     byProvider: new Map([["openai", new Set(["gpt-5.4"])]]),

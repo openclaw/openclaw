@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
+import {
+  bindReplyToolAuthorityCallerRead,
+  prepareReplyToolAuthorityCallerRead,
+} from "../../agents/harness/host-private-capabilities.js";
 import type {
   ReplyOperation,
   ReplyToolAuthoritySnapshot,
@@ -140,6 +143,15 @@ type OperationToolAuthority = Pick<
   | "personalToolParticipants"
 > & { bindBackendFingerprint(fingerprint: string | undefined): void; close(): void };
 
+function normalizeToolAuthorityRoute(value: NonNullable<ReplyOperation["toolAuthorityRoute"]>) {
+  const provider = normalizeOptionalString(value.provider);
+  const model = normalizeOptionalString(value.model);
+  if (!provider || !model) {
+    throw new Error("Reply operation tool authority route is required");
+  }
+  return { provider, model };
+}
+
 /** Owns frozen policy, concrete attempt routing, and backend authority for one operation. */
 export function createReplyOperationToolAuthority(lifecycle: {
   isOpen: () => boolean;
@@ -152,11 +164,14 @@ export function createReplyOperationToolAuthority(lifecycle: {
   let automaticFallbackRoute: ReplyOperation["automaticFallbackRoute"];
   let participants: ReplyTurnParticipants | undefined;
 
-  function installSnapshot(value: ReplyToolAuthoritySnapshot, prepared: string) {
+  const canInstallSnapshot = (value: ReplyToolAuthoritySnapshot) => {
     if (!lifecycle.isOpen() || (snapshot && snapshot !== value)) {
       throw new Error("Reply operation cannot change tool authority after admission");
     }
-    if (snapshot) {
+    return !snapshot;
+  };
+  function installSnapshot(value: ReplyToolAuthoritySnapshot, prepared: string) {
+    if (!canInstallSnapshot(value)) {
       return;
     }
     const initialFingerprint = normalizeOptionalString(prepared);
@@ -199,13 +214,9 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
     },
     bindToolAuthoritySnapshot(value) {
-      if (!lifecycle.isOpen() || (snapshot && snapshot !== value)) {
-        throw new Error("Reply operation cannot change tool authority after admission");
+      if (canInstallSnapshot(value)) {
+        installSnapshot(value, value.fingerprint());
       }
-      if (snapshot) {
-        return;
-      }
-      installSnapshot(value, value.fingerprint());
     },
     async bindToolAuthoritySnapshotAsync(value) {
       const assertCurrent = lifecycle.captureCurrent();
@@ -276,12 +287,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
       if (!lifecycle.isOpen() || !snapshot || !lifecycle.ownsRunSlot()) {
         throw new Error("Reply operation has no active tool authority snapshot");
       }
-      const provider = normalizeOptionalString(value.provider);
-      const model = normalizeOptionalString(value.model);
-      if (!provider || !model) {
-        throw new Error("Reply operation tool authority route is required");
-      }
-      const preparedRoute = { provider, model };
+      const preparedRoute = normalizeToolAuthorityRoute(value);
       const preparedFingerprint = snapshot.fingerprint(preparedRoute);
       route = preparedRoute;
       fingerprint = preparedFingerprint;
@@ -294,12 +300,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
       if (!selected || !lifecycle.ownsRunSlot()) {
         throw new Error("Reply operation has no active tool authority snapshot");
       }
-      const provider = normalizeOptionalString(value.provider);
-      const model = normalizeOptionalString(value.model);
-      if (!provider || !model) {
-        throw new Error("Reply operation tool authority route is required");
-      }
-      const preparedRoute = { provider, model };
+      const preparedRoute = normalizeToolAuthorityRoute(value);
       const prepared = await (selected.fingerprintAsync?.(preparedRoute) ??
         selected.fingerprint(preparedRoute));
       assertCurrent();
@@ -311,5 +312,34 @@ export function createReplyOperationToolAuthority(lifecycle: {
       return prepared;
     },
   };
+  bindReplyToolAuthorityCallerRead(
+    result.projectToolAuthorityFingerprintAsync,
+    async (caller, expected, _route, assertActive) => {
+      const selected = snapshot;
+      const selectedRoute = route;
+      const assertOwner = lifecycle.captureCurrent();
+      const assertCurrent = () => {
+        assertActive();
+        assertOwner();
+        if (
+          !selected ||
+          !selectedRoute ||
+          snapshot !== selected ||
+          route !== selectedRoute ||
+          fingerprint !== expected
+        ) {
+          throw new Error("question creator reply authority is no longer active");
+        }
+      };
+      assertCurrent();
+      return await prepareReplyToolAuthorityCallerRead(
+        selected?.projectAsync,
+        caller,
+        expected,
+        selectedRoute,
+        assertCurrent,
+      );
+    },
+  );
   return result;
 }

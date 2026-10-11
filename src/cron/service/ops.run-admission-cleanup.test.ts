@@ -2,7 +2,7 @@
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
+import { observeCronJobCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -542,7 +542,7 @@ describe("cron service run admission cleanup", () => {
       await activationFixture("scheduled");
     let reservationPersisted = false;
     const markerTransitions: Array<"queued" | "running" | "idle"> = [];
-    const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs, runningAtMs }) => {
+    const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
       if (!reservationPersisted && queuedAtMs === dueAt) {
         reservationPersisted = true;
         markerTransitions.push("queued");
@@ -588,7 +588,7 @@ describe("cron service run admission cleanup", () => {
       nowMs: () => now,
       runIsolatedAgentJob,
     });
-    const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs, runningAtMs }) => {
+    const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
       if (queuedAtMs === dueAt) {
         now = dueAt + 1;
       } else if (runningAtMs === dueAt + 1 && !restart) {
@@ -681,28 +681,40 @@ describe("cron service run admission cleanup", () => {
       let activationPersisted = false;
       let failureInjected = false;
       const errorText = terminal ? "terminal cleanup persist failed" : "activation persist failed";
-      const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs, runningAtMs }) => {
+      const database = openOpenClawStateDatabase().db;
+      database.exec(`
+        CREATE TRIGGER fail_cron_activation_or_cleanup
+        BEFORE UPDATE OF state_json ON cron_jobs
+        WHEN NEW.job_id = '${job.id}' AND ${
+          terminal
+            ? "json_extract(OLD.state_json, '$.runningAtMs') IS NOT NULL AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL"
+            : "json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL"
+        }
+        BEGIN
+          SELECT RAISE(ABORT, '${errorText}');
+        END;
+      `);
+      const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
         if (!reservationPersisted && queuedAtMs === dueAt) {
           reservationPersisted = true;
           clock.now = dueAt + 1;
-        } else if (reservationPersisted && runningAtMs === dueAt + 1) {
-          if (failure === "activation" && !failureInjected) {
-            failureInjected = true;
-            throw new Error(errorText);
-          }
-          if (failure !== "activation") {
-            activationPersisted = true;
-            stop(state);
-          }
-        } else if (activationPersisted && queuedAtMs === undefined && runningAtMs === undefined) {
-          failureInjected = true;
-          throw new Error(errorText);
+        } else if (reservationPersisted && runningAtMs === dueAt + 1 && terminal) {
+          activationPersisted = true;
+          stop(state);
         }
       });
       try {
-        await expect(execute()).rejects.toThrow(errorText);
+        await expect(
+          execute().catch((error: unknown) => {
+            failureInjected = true;
+            throw error;
+          }),
+        ).rejects.toThrow(errorText);
+        expect(failureInjected).toBe(true);
+        expect(activationPersisted).toBe(terminal);
       } finally {
         stopObserving();
+        database.exec("DROP TRIGGER fail_cron_activation_or_cleanup");
       }
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);

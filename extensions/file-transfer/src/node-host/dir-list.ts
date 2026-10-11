@@ -26,15 +26,6 @@ type DirListParams = {
   expectedBinding?: unknown;
 };
 
-type DirListErrCode =
-  | "INVALID_PATH"
-  | "NOT_FOUND"
-  | "PERMISSION_DENIED"
-  | "IS_FILE"
-  | "SYMLINK_REDIRECT"
-  | "CANONICAL_PATH_CHANGED"
-  | "READ_ERROR";
-
 function parsePageOffset(input: unknown): number {
   if (typeof input !== "string") {
     return 0;
@@ -42,7 +33,7 @@ function parsePageOffset(input: unknown): number {
   return parseStrictNonNegativeInteger(input) ?? 0;
 }
 
-function classifyFsError(err: unknown): DirListErrCode {
+function classifyFsError(err: unknown) {
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
     return safeCode;

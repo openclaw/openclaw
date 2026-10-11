@@ -67,24 +67,23 @@ export function collectRuntimeConfigAssignments(params: {
       enabled: surface.channelEnabled,
     });
   }
-  collectSimpleChannelFieldAssignments({
+  const assignmentContext = {
     channelKey: "discord",
-    field: "token",
     channel: discord,
     surface,
     defaults: params.defaults,
     context: params.context,
+  };
+  collectSimpleChannelFieldAssignments({
+    ...assignmentContext,
+    field: "token",
     topInactiveReason: "no enabled account inherits this top-level Discord token.",
     accountInactiveReason: "Discord account is disabled.",
   });
   collectNestedChannelFieldAssignments({
-    channelKey: "discord",
+    ...assignmentContext,
     nestedKey: "pluralkit",
     field: "token",
-    channel: discord,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
     topLevelActive:
       isBaseFieldActiveForChannelSurface(surface, "pluralkit") &&
       isRecord(discord.pluralkit) &&
@@ -98,12 +97,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Discord account is disabled or PluralKit is disabled for this account.",
   });
   collectNestedChannelTtsAssignments({
-    channelKey: "discord",
+    ...assignmentContext,
     nestedKey: "voice",
-    channel: discord,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
     topLevelActive:
       isBaseFieldActiveForChannelSurface(surface, "voice") &&
       isRecord(discord.voice) &&
@@ -115,15 +110,11 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Discord account is disabled or voice is disabled for this account.",
   });
   collectNestedChannelTtsAssignments({
-    channelKey: "discord",
+    ...assignmentContext,
     nestedKey: "voice",
     providerBlockKey: "realtime",
     ownerId: ({ accountId, providerId }) =>
       discordRealtimeVoiceSecretOwnerId(accountId, providerId),
-    channel: discord,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
     topLevelActive:
       isBaseFieldActiveForChannelSurface(surface, "voice") && isRealtimeVoiceActive(discord.voice),
     topInactiveReason:

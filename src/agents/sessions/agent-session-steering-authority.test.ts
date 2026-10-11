@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
@@ -245,7 +244,7 @@ it.each([
       operation.setPhase("running");
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
       let changed = false;
-      const project = operation.projectToolAuthorityFingerprintAsync.bind(operation);
+      const project = operation.projectToolAuthorityFingerprintAsync;
       const delayed = vi
         .spyOn(operation, "projectToolAuthorityFingerprintAsync")
         .mockImplementation(async (caller) => {
@@ -419,7 +418,6 @@ it.each([
       operation.setPhase("running");
       setActiveEmbeddedRun("original", handle, sessionKey);
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
-      const peer = new DatabaseSync(database.path);
       try {
         const options = {
           isInboundUserMessage: true,
@@ -456,11 +454,10 @@ it.each([
                   : { label: "renamed" },
           );
         } else if (change !== "worker-revoked") {
-          peer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(policyKey);
+          await updateSessionEntry(
+            { agentId: "main", sessionKey: policyKey, storePath: database.path },
+            () => ({ sandboxMode: undefined }),
+          );
         }
         releaseRecorder.resolve();
         if (change === "worker-revoked") {
@@ -480,7 +477,6 @@ it.each([
       } finally {
         releaseRecorder.resolve();
         releasePolicy.resolve();
-        peer.close();
         operation.complete();
       }
     });

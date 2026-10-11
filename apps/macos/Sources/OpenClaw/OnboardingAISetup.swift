@@ -1260,22 +1260,20 @@ extension OnboardingAISetupModel {
                     modelActivation: result.modelactivation,
                     activationRejection: result.activationrejection)
             } catch {
-                if self.activationWizardCompletion != nil, Self.setupAdmissionIsBusy(error),
-                   token == self.attemptToken, authAttemptID == self.authAttemptID
-                {
-                    self.finishActivationWizard(.failure(error))
-                    self.clearProviderAuth()
-                    return
-                }
                 if Self.setupAdmissionIsBusy(error) {
                     guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                    // No session was admitted; cancelling or reconciling could adopt another operation.
-                    self.applyAuthWizardResult(
-                        done: true,
-                        step: nil,
-                        status: "error",
-                        error: error.localizedDescription,
-                        preparedModelRef: nil)
+                    if self.activationWizardCompletion != nil {
+                        self.finishActivationWizard(.failure(error))
+                        self.clearProviderAuth()
+                    } else {
+                        // No session was admitted; cancelling or reconciling could adopt another operation.
+                        self.applyAuthWizardResult(
+                            done: true,
+                            step: nil,
+                            status: "error",
+                            error: error.localizedDescription,
+                            preparedModelRef: nil)
+                    }
                     return
                 }
                 await self.failProviderAuthRequest(
@@ -1526,9 +1524,9 @@ extension OnboardingAISetupModel {
         }
         self.authConfirmation = anyCodableBool(step?.initialvalue)
         let options = parseWizardOptions(step?.options)
-        self.authSelection = max(0, options.firstIndex {
+        self.authSelection = options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
-        } ?? 0)
+        } ?? 0
         // Gateway-executed steps render progress and expose no input control, so
         // no user action would ever ask for the next frame. Keep polling; the
         // session long-polls until the next update or the terminal result, so a
@@ -1642,14 +1640,12 @@ extension OnboardingAISetupModel {
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: self.defaults)
-        if activationOwner != nil {
-            guard completedReceipt else {
-                self.pendingActivationVerification = false
-                self.statuses[kind] = .failed(Self.transportFailure(
-                    "Another AI setup attempt replaced this activation. Waiting for its result."))
-                self.phase = .ready
-                return
-            }
+        if activationOwner != nil, !completedReceipt {
+            self.pendingActivationVerification = false
+            self.statuses[kind] = .failed(Self.transportFailure(
+                "Another AI setup attempt replaced this activation. Waiting for its result."))
+            self.phase = .ready
+            return
         }
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
@@ -1658,8 +1654,8 @@ extension OnboardingAISetupModel {
         // Keep the destination in the completion itself, including after receipt cleanup.
         self.phase = .connected(handoff)
         self.pendingActivationOwner = activationOwner
-        self.completedHandoff = completedReceipt ? routeIdentity.flatMap { routeIdentity in
-            routeIdentity.isEmpty ? nil : CompletedHandoff(
+        self.completedHandoff = completedReceipt ? routeIdentity.map { routeIdentity in
+            CompletedHandoff(
                 routeIdentity: routeIdentity,
                 activationOwner: activationOwner)
         } : nil

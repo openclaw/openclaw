@@ -184,68 +184,53 @@ it.each(["snapshot", "commit"] as const)(
   },
 );
 
-it.each(["upsert", "removal"] as const)(
-  "projects a lifecycle %s without acquiring unrelated prompt payloads",
-  async (operation) => {
-    await withOpenClawTestState({ label: `lifecycle-selected-${operation}` }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:selected",
-        storePath: path.join(state.sessionsDir("main"), "sessions.json"),
-      };
-      const current = { sessionId: "selected", updatedAt: Date.now(), label: "original" };
-      const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
-      const prompt = "unrelated lifecycle prompt ".repeat(4096);
-      await upsertSessionEntryCore(scope, current);
-      await upsertSessionEntryCore(unrelatedScope, {
-        sessionId: "unrelated",
-        updatedAt: Date.now(),
-        skillsSnapshot: { prompt, skills: [] },
-      });
-      // The connection's one-time canonical check is separate from per-mutation projection.
-      const persistedCurrent = loadSessionEntry(scope)!;
-      const iterate = sqliteQueries.iterateSqliteQuerySync;
-      let acquiredPromptRows = 0;
-      const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
-        Row,
-      >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
-        for (const row of iterate<Row>(...args)) {
-          if (
-            row !== null &&
-            typeof row === "object" &&
-            "entry_json" in row &&
-            typeof row.entry_json === "string" &&
-            row.entry_json.includes(prompt)
-          ) {
-            acquiredPromptRows += 1;
-          }
-          yield row;
-        }
-      });
-      try {
-        await applySessionEntryLifecycleMutation({
-          ...scope,
-          skipMaintenance: true,
-          ...(operation === "removal"
-            ? { removals: [{ sessionKey: scope.sessionKey, expectedEntry: persistedCurrent }] }
-            : {
-                upserts: [
-                  {
-                    sessionKey: scope.sessionKey,
-                    buildEntry: ({ currentEntry }) => {
-                      expect(currentEntry).toEqual(persistedCurrent);
-                      return { ...currentEntry!, label: "updated" };
-                    },
-                  },
-                ],
-              }),
-        });
-      } finally {
-        reads.mockRestore();
-      }
-      expect(acquiredPromptRows).toBe(0);
-      expect(loadSessionEntry(unrelatedScope)?.skillsSnapshot?.prompt).toBe(prompt);
-      expect(loadSessionEntry(scope)?.label).toBe(operation === "removal" ? undefined : "updated");
+it("projects lifecycle removal without acquiring unrelated prompt payloads", async () => {
+  await withOpenClawTestState({ label: "lifecycle-selected-removal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:selected",
+      storePath: path.join(state.sessionsDir("main"), "sessions.json"),
+    };
+    const current = { sessionId: "selected", updatedAt: Date.now(), label: "original" };
+    const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
+    const prompt = "unrelated lifecycle prompt ".repeat(4096);
+    await upsertSessionEntryCore(scope, current);
+    await upsertSessionEntryCore(unrelatedScope, {
+      sessionId: "unrelated",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt, skills: [] },
     });
-  },
-);
+    // The connection's one-time canonical check is separate from per-mutation projection.
+    const persistedCurrent = loadSessionEntry(scope)!;
+    const iterate = sqliteQueries.iterateSqliteQuerySync;
+    let acquiredPromptRows = 0;
+    const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
+      Row,
+    >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
+      for (const row of iterate<Row>(...args)) {
+        if (
+          row !== null &&
+          typeof row === "object" &&
+          "entry_json" in row &&
+          typeof row.entry_json === "string" &&
+          row.entry_json.includes(prompt)
+        ) {
+          acquiredPromptRows += 1;
+        }
+        yield row;
+      }
+    });
+    try {
+      await applySessionEntryLifecycleMutation({
+        ...scope,
+        skipMaintenance: true,
+        removals: [{ sessionKey: scope.sessionKey, expectedEntry: persistedCurrent }],
+      });
+    } finally {
+      reads.mockRestore();
+    }
+    expect(acquiredPromptRows).toBe(0);
+    expect(loadSessionEntry(unrelatedScope)?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(loadSessionEntry(scope)?.label).toBeUndefined();
+  });
+});

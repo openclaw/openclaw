@@ -1,8 +1,3 @@
-/**
- * Interactive terminal theme loader.
- *
- * Validates theme JSON, resolves color variables, and exposes terminal styling helpers.
- */
 import * as fs from "node:fs";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -90,15 +85,25 @@ const validateThemeJson = Compile(ThemeJsonSchema);
 
 type ThemeColor = Exclude<keyof ThemeJson["colors"], ThemeBg>;
 
-type ThemeBg =
-  | "selectedBg"
-  | "userMessageBg"
-  | "customMessageBg"
-  | "toolPendingBg"
-  | "toolSuccessBg"
-  | "toolErrorBg";
+const BACKGROUND_COLOR_KEYS = [
+  "selectedBg",
+  "userMessageBg",
+  "customMessageBg",
+  "toolPendingBg",
+  "toolSuccessBg",
+  "toolErrorBg",
+] as const;
+type ThemeBg = (typeof BACKGROUND_COLOR_KEYS)[number];
 
 type ColorMode = "truecolor" | "256color";
+
+const THINKING_BORDER_COLORS = new Map<string, ThemeColor>([
+  ["minimal", "thinkingMinimal"],
+  ["low", "thinkingLow"],
+  ["medium", "thinkingMedium"],
+  ["high", "thinkingHigh"],
+  ["xhigh", "thinkingXhigh"],
+]);
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const cleaned = hex.replace("#", "");
@@ -176,8 +181,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const minC = Math.min(r, g, b);
   const spread = maxC - minC;
 
-  // Only consider grayscale if color is nearly neutral (spread < 10)
-  // AND grayscale is actually closer
   if (spread < 10 && grayDist < cubeDist) {
     return grayIndex;
   }
@@ -314,22 +317,8 @@ export class Theme {
   getThinkingBorderColor(
     level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ): (str: string) => string {
-    switch (level) {
-      case "off":
-        return (str: string) => this.fg("thinkingOff", str);
-      case "minimal":
-        return (str: string) => this.fg("thinkingMinimal", str);
-      case "low":
-        return (str: string) => this.fg("thinkingLow", str);
-      case "medium":
-        return (str: string) => this.fg("thinkingMedium", str);
-      case "high":
-        return (str: string) => this.fg("thinkingHigh", str);
-      case "xhigh":
-        return (str: string) => this.fg("thinkingXhigh", str);
-      default:
-        return (str: string) => this.fg("thinkingOff", str);
-    }
+    const color = THINKING_BORDER_COLORS.get(level) ?? "thinkingOff";
+    return (str: string) => this.fg(color, str);
   }
 
   getBashModeBorderColor(): (str: string) => string {
@@ -393,14 +382,7 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
   const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
   const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;
-  const bgColorKeys: Set<string> = new Set([
-    "selectedBg",
-    "userMessageBg",
-    "customMessageBg",
-    "toolPendingBg",
-    "toolSuccessBg",
-    "toolErrorBg",
-  ]);
+  const bgColorKeys: Set<string> = new Set(BACKGROUND_COLOR_KEYS);
   for (const [key, value] of Object.entries(resolvedColors)) {
     if (bgColorKeys.has(key)) {
       bgColors[key as ThemeBg] = value;
@@ -452,10 +434,6 @@ const cliHighlightTheme: Record<string, (s: string) => string> = {
   punctuation: (s) => interactiveAgentTheme.fg("syntaxPunctuation", s),
 };
 
-/**
- * Highlight code with syntax coloring based on file extension or language.
- * Returns array of highlighted lines.
- */
 export function highlightCode(code: string, lang?: string): string[] {
   // Validate language before highlighting to avoid stderr spam from cli-highlight
   const validLang = lang && supportsLanguage(lang) ? lang : undefined;
@@ -472,75 +450,57 @@ export function highlightCode(code: string, lang?: string): string[] {
   }
 }
 
-/**
- * Get language identifier from file path extension.
- */
+const EXTENSION_LANGUAGES: Record<string, string> = Object.fromEntries(
+  Object.entries({
+    typescript: ["ts", "tsx"],
+    javascript: ["js", "jsx", "mjs", "cjs"],
+    python: ["py"],
+    ruby: ["rb"],
+    rust: ["rs"],
+    go: ["go"],
+    java: ["java"],
+    kotlin: ["kt"],
+    swift: ["swift"],
+    c: ["c", "h"],
+    cpp: ["cpp", "cc", "cxx", "hpp"],
+    csharp: ["cs"],
+    php: ["php"],
+    bash: ["sh", "bash", "zsh"],
+    fish: ["fish"],
+    powershell: ["ps1"],
+    sql: ["sql"],
+    html: ["html", "htm"],
+    css: ["css"],
+    scss: ["scss"],
+    sass: ["sass"],
+    less: ["less"],
+    json: ["json"],
+    yaml: ["yaml", "yml"],
+    toml: ["toml"],
+    xml: ["xml"],
+    markdown: ["md", "markdown"],
+    dockerfile: ["dockerfile"],
+    makefile: ["makefile"],
+    cmake: ["cmake"],
+    lua: ["lua"],
+    perl: ["perl"],
+    r: ["r"],
+    scala: ["scala"],
+    clojure: ["clj"],
+    elixir: ["ex", "exs"],
+    erlang: ["erl"],
+    haskell: ["hs"],
+    ocaml: ["ml"],
+    vim: ["vim"],
+    graphql: ["graphql"],
+    protobuf: ["proto"],
+    hcl: ["tf", "hcl"],
+  }).flatMap(([language, extensions]) =>
+    extensions.map((extension) => [extension, language] as const),
+  ),
+);
+
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
-  if (!ext) {
-    return undefined;
-  }
-
-  const extToLang: Record<string, string> = {
-    ts: "typescript",
-    tsx: "typescript",
-    js: "javascript",
-    jsx: "javascript",
-    mjs: "javascript",
-    cjs: "javascript",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    go: "go",
-    java: "java",
-    kt: "kotlin",
-    swift: "swift",
-    c: "c",
-    h: "c",
-    cpp: "cpp",
-    cc: "cpp",
-    cxx: "cpp",
-    hpp: "cpp",
-    cs: "csharp",
-    php: "php",
-    sh: "bash",
-    bash: "bash",
-    zsh: "bash",
-    fish: "fish",
-    ps1: "powershell",
-    sql: "sql",
-    html: "html",
-    htm: "html",
-    css: "css",
-    scss: "scss",
-    sass: "sass",
-    less: "less",
-    json: "json",
-    yaml: "yaml",
-    yml: "yaml",
-    toml: "toml",
-    xml: "xml",
-    md: "markdown",
-    markdown: "markdown",
-    dockerfile: "dockerfile",
-    makefile: "makefile",
-    cmake: "cmake",
-    lua: "lua",
-    perl: "perl",
-    r: "r",
-    scala: "scala",
-    clj: "clojure",
-    ex: "elixir",
-    exs: "elixir",
-    erl: "erlang",
-    hs: "haskell",
-    ml: "ocaml",
-    vim: "vim",
-    graphql: "graphql",
-    proto: "protobuf",
-    tf: "hcl",
-    hcl: "hcl",
-  };
-
-  return extToLang[ext];
+  return ext ? EXTENSION_LANGUAGES[ext] : undefined;
 }

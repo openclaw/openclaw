@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -15,10 +16,10 @@ const suite = createControlUiE2eSuite({ name: "Collaborator transcript scroll" }
 
 suite.define(() => {
   it.each(["following", "reading"] as const)(
-    "keeps the viewport stable when a collaborator sends a follow-up while %s",
+    "preserves reader intent when a collaborator sends a follow-up while %s",
     async (mode) => {
       await suite.withPage(
-        { viewport: { width: 1200, height: 900 }, colorScheme: "dark" },
+        { viewport: { width: 1280, height: 860 }, colorScheme: "dark" },
         async ({ page }) => {
           const sessionKey = "agent:main:dashboard:collaborator-scroll";
           const runId = "active-review";
@@ -131,7 +132,32 @@ suite.define(() => {
             .getByText("Please also check the shared components.", { exact: true })
             .waitFor();
           await waitForChatScrollIdle(page);
-          await page.screenshot({ path: path.join(artifacts, "after-message.png") });
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey,
+            runId,
+            state: "delta",
+            seq: 1,
+            message: {
+              role: "assistant",
+              content: Array.from(
+                { length: 25 },
+                (_, index) => `Incoming detail ${index + 1}.`,
+              ).join("\n\n"),
+            },
+          });
+          await page
+            .getByText("Incoming detail 25.", { exact: true })
+            .waitFor({ state: "attached" });
+          await waitForChatScrollIdle(page);
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            thread,
+            [page.locator(".agent-chat__composer-combobox textarea")],
+            {
+              animations: "disabled",
+            },
+          );
+          await writeFile(path.join(artifacts, "after-incoming-turn.png"), frame.png);
           const after = await thread.evaluate((element) => {
             const sampling = element as HTMLElement & {
               scrollSamples: number[];
@@ -141,6 +167,7 @@ suite.define(() => {
             return {
               top: element.scrollTop,
               height: element.scrollHeight,
+              distance: element.scrollHeight - element.clientHeight - element.scrollTop,
               samples: sampling.scrollSamples,
               keys: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
                 (row) => row.dataset.virtualRowKey,
@@ -151,19 +178,23 @@ suite.define(() => {
           expect(new Set(after.keys).size).toBe(after.keys.length);
           expect(after.keys[1]).toBe(before.frameKey);
           expect(after.samples.length).toBeGreaterThan(samplesBeforeEvent);
-          // A peer append cannot acquire follow intent, including at the old end.
+          // Appending a peer turn must not move backwards through existing content.
           for (let index = 1; index < after.samples.length; index += 1) {
             expect(after.samples[index]).toBeGreaterThanOrEqual(after.samples[index - 1]! - 1);
           }
           expect(Math.min(...after.samples)).toBeGreaterThanOrEqual(before.top - 1);
-          expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1);
+          if (mode === "following") {
+            expect(after.distance).toBeLessThanOrEqual(8);
+          } else {
+            expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1);
+          }
         },
       );
     },
   );
 
   it.each(["older-history", "near-bottom", "following"] as const)(
-    "holds the reader anchor across another identified client's send while %s",
+    "preserves reader intent across another identified client's send while %s",
     async (mode) => {
       const options = { viewport: { width: 1200, height: 900 }, colorScheme: "dark" as const };
       await suite.withPage(options, async ({ page: reader }) => {
@@ -548,15 +579,21 @@ suite.define(() => {
           expect(await readerGateway.getRequests("chat.send")).toHaveLength(0);
           for (const point of checkpoints) {
             expect(new Set(point.keys).size, point.stage).toBe(point.keys.length);
-            expect(
-              Math.abs((point.anchor ?? Number.POSITIVE_INFINITY) - before.anchorTop),
-              point.stage,
-            ).toBeLessThanOrEqual(1);
+            if (mode === "following") {
+              expect(point.distance, point.stage).toBeLessThanOrEqual(8);
+            } else {
+              expect(
+                Math.abs((point.anchor ?? Number.POSITIVE_INFINITY) - before.anchorTop),
+                point.stage,
+              ).toBeLessThanOrEqual(1);
+            }
           }
-          for (const sample of samples) {
-            expect(
-              Math.abs((sample.anchor ?? Number.POSITIVE_INFINITY) - before.anchorTop),
-            ).toBeLessThanOrEqual(1);
+          if (mode !== "following") {
+            for (const sample of samples) {
+              expect(
+                Math.abs((sample.anchor ?? Number.POSITIVE_INFINITY) - before.anchorTop),
+              ).toBeLessThanOrEqual(1);
+            }
           }
         });
       });

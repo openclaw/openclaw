@@ -3,13 +3,13 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionEntryCacheCategoryUpdate } from "./session-accessor.sqlite-entry-cache.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
-import {
-  applySessionGroupCategoryMutation,
-  prepareSessionGroupCategoryMutation,
-} from "./session-group-categories.kernel.js";
+import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
+import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 
 /** Prepared rows stay with the broker; only target identities cross the admission boundary. */
@@ -21,8 +21,9 @@ export function updateSessionGroupCategoriesInWorker(params: {
 }): Promise<number> {
   const { scope, from, to, assertTargetCurrent } = params;
   const agentId = scope.agentId;
-  if (scope.incognito) {
-    const { actor, authority } = scope.incognito;
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const { actor, authority } = incognito;
     const resolved = resolveSqliteScope(scope);
     const options = toDatabaseOptions(resolved);
     if (actor.agentId !== resolved.agentId || actor.path !== options.path) {
@@ -66,8 +67,6 @@ export function updateSessionGroupCategoriesInWorker(params: {
       .then((changed) => changed.length);
   }
   let keys: string[] = [];
-  const superseded = new Set<string>();
-  let releasePublicationFence: (() => void) | undefined;
   const assertCurrent = () => {
     for (const sessionKey of keys) {
       assertTargetCurrent?.({ agentId, sessionKey });
@@ -79,8 +78,8 @@ export function updateSessionGroupCategoriesInWorker(params: {
     (capturedScope) => {
       const options = toDatabaseOptions(resolveSqliteScope(capturedScope));
       const database = openOpenClawAgentDatabase(options);
-      const planned = prepareSessionGroupCategoryMutation(database, from);
-      keys = [...planned.keys()];
+      const planned = readSessionGroupCategoryKeys(database, from);
+      keys = planned;
       assertCurrent();
       return runOpenClawAgentWriteTransaction(
         (current) => {
@@ -88,6 +87,7 @@ export function updateSessionGroupCategoriesInWorker(params: {
           return applySessionGroupCategoryMutation(
             current,
             planned,
+            from,
             to,
             capturedScope.env ?? process.env,
           ).length;
@@ -96,25 +96,25 @@ export function updateSessionGroupCategoriesInWorker(params: {
         { operationLabel: "session.group-categories.update" },
       );
     },
-    (changed, location, database) => {
-      releasePublicationFence?.();
+    (changed, location, database, currentKeys) => {
+      const current = currentKeys
+        ? changed.filter(({ sessionKey }) => currentKeys.has(sessionKey))
+        : changed;
       if (database) {
-        publishSessionEntryCacheCategoryUpdate(
-          database,
-          changed.filter(({ sessionKey }) => !superseded.has(sessionKey)),
-          to,
-        );
+        publishSessionEntryCacheCategoryUpdate(database, current, to);
       }
-      sessionChanges.emitBatch(
-        changed.map(({ sessionKey, sessionId }) => ({
-          agentId: location.agentId,
-          storePath: location.storePath,
-          sessionKey,
-          ...(superseded.has(sessionKey)
-            ? { factsInvalidated: true as const }
-            : { facts: { kind: "category" as const, sessionId, category: to?.trim() || null } }),
-        })),
-      );
+      const changes = current.map(({ sessionKey, sessionId }) => ({
+        agentId: location.agentId,
+        storePath: location.storePath,
+        sessionKey,
+        facts: { kind: "category" as const, sessionId, category: to?.trim() || null },
+      }));
+      if (database) {
+        for (const change of changes) {
+          bindSessionEntryPublicationSource(change, database);
+        }
+      }
+      sessionChanges.emitBatch(changes, database?.db);
       return changed.length;
     },
     assertCurrent,
@@ -124,32 +124,6 @@ export function updateSessionGroupCategoriesInWorker(params: {
         input: { scope: preparedScope, from },
       });
       assertCurrent();
-      const targets = new Set(keys);
-      // Legacy synchronous writers can publish after the worker commits but before its reply.
-      // Reconcile those keys instead of replaying an older category over their newer facts.
-      releasePublicationFence = sessionChanges.subscribeFacts((change) => {
-        if ("all" in change) {
-          for (const key of targets) {
-            superseded.add(key);
-          }
-        } else if (
-          targets.has(change.sessionKey) &&
-          change.scope !== "automation" &&
-          (change.factsInvalidated ||
-            (change.facts &&
-              change.facts.kind !== "unchanged" &&
-              change.facts.kind !== "member" &&
-              change.facts.kind !== "participants"))
-        ) {
-          superseded.add(change.sessionKey);
-        }
-      });
     },
-    () => {
-      // The prepared keys bound category writes, but a concurrent structural publication
-      // requires the original store-wide fence. Our own recovery must not supersede itself.
-      releasePublicationFence?.();
-      return superseded.size === 0 ? keys : undefined;
-    },
-  ).finally(() => releasePublicationFence?.());
+  );
 }

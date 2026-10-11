@@ -190,11 +190,6 @@ export function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
-/**
- * Estimates the prompt pressure at the LLM boundary from transcript messages,
- * optional system prompt, and current prompt text. The result intentionally
- * includes a safety margin because this path runs before provider tokenization.
- */
 export function estimateRenderedPromptTokens(params: {
   systemPrompt?: string;
   prompt: string;
@@ -218,6 +213,7 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
     systemPrompt: params.systemPrompt,
     prompt: "",
   });
+  // Apply the safety margin once to the complete request before provider tokenization.
   return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number =>
     Math.ceil(
       (fixedPromptTokens +

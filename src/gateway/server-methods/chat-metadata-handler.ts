@@ -19,6 +19,8 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
+import { readWorkerPlacementIdentity } from "../worker-environments/placement-projector.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { prepareChatMetadataSessionRead } from "./chat-metadata-session-read.js";
@@ -94,6 +96,14 @@ export async function resolveChatMetadataReadParams(
     };
     try {
       assertVisible();
+      const sessionId = session.entry?.sessionId;
+      const placement = await readSessionWorkerPlacementAsync({ context, sessionId });
+      const workerInference = placement
+        ? readWorkerPlacementIdentity(placement, context.workerEnvironmentService)?.inference
+        : undefined;
+      assertVisible();
+      assertRequestCurrent();
+      read.assertCurrent();
       return {
         agentId: resolveSessionAgentId({
           sessionKey: params.sessionKey,
@@ -103,6 +113,7 @@ export async function resolveChatMetadataReadParams(
         sessionKey: session.canonicalKey,
         storePath: session.readSource?.path ?? session.storePath,
         sessionEntry: session.entry,
+        ...(workerInference ? { workerInference } : {}),
         isCurrent,
         assertCurrent: () => {
           assertVisible();
@@ -163,6 +174,7 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
       }
       if (params.includeModels === false) {
         scope.includeModels = false;
+        scope.ifRevision = params.ifRevision;
       }
       const readScope = scope;
       const assertCurrent = () => {

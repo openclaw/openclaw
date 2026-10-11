@@ -19,18 +19,11 @@ type DiscordAccountTokenState = {
 
 function inspectDiscordConfiguredToken(value: unknown): InspectedDiscordConfiguredToken | null {
   const normalized = normalizeSecretInputString(value);
-  if (normalized) {
+  if (normalized || hasConfiguredSecretInput(value)) {
     return {
-      token: normalized.replace(/^Bot\s+/i, ""),
+      token: normalized ? normalized.replace(/^Bot\s+/i, "") : "",
       tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
+      tokenStatus: normalized ? "available" : "configured_unavailable",
     };
   }
   return null;

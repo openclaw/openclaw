@@ -921,7 +921,7 @@ extension ComputerWindowActionExecutor {
             .leftMouseDown
         let upType: CGEventType = button == .center ? .otherMouseUp : button == .right ? .rightMouseUp : .leftMouseUp
         let count = action == .tripleClick ? 3 : action == .doubleClick ? 2 : 1
-        let flags = try self.modifierFlags(modifiers)
+        let flags = try ComputerModifiers.parse(modifiers, syntax: .window)
         for index in 1...count {
             guard let down = CGEvent(
                 mouseEventSource: nil,
@@ -944,25 +944,5 @@ extension ComputerWindowActionExecutor {
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
-    }
-
-    private static func modifierFlags(_ raw: String?) throws -> CGEventFlags {
-        var flags: CGEventFlags = []
-        for token in (raw ?? "")
-            .lowercased()
-            .split(whereSeparator: { $0 == "," || $0 == "+" || $0.isWhitespace })
-        {
-            switch token {
-            case "cmd", "command", "meta": flags.insert(.maskCommand)
-            case "shift": flags.insert(.maskShift)
-            case "ctrl", "control": flags.insert(.maskControl)
-            case "alt", "option": flags.insert(.maskAlternate)
-            case "fn", "function": flags.insert(.maskSecondaryFn)
-            default:
-                throw ComputerActionService.ComputerActionError.invalidRequest(
-                    "unsupported modifier '\(token)'")
-            }
-        }
-        return flags
     }
 }

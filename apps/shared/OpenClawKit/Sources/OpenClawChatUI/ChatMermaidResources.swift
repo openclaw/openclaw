@@ -33,7 +33,13 @@ final class ChatMermaidSchemeHandler: NSObject, WKURLSchemeHandler {
 
     init(directory: URL) throws {
         var resources: [String: Resource] = [:]
-        for filename in ["index.html", "native.js", "frame.js", "mermaid.min.js"] {
+        let assets = try FileManager.default.contentsOfDirectory(
+            atPath: directory.appendingPathComponent("assets", isDirectory: true).path)
+            .filter { $0.hasPrefix("mermaid.min-") && $0.hasSuffix(".js") }
+            .sorted()
+        guard !assets.isEmpty else { throw ChatMermaidFailure.unavailable }
+        let filenames = ["index.html", "native.js", "frame.js"] + assets.map { "assets/\($0)" }
+        for filename in filenames {
             let url = directory.appendingPathComponent(filename, isDirectory: false)
             resources["openclaw-mermaid://renderer/\(filename)"] = try Resource(
                 data: Data(contentsOf: url, options: .mappedIfSafe),
@@ -61,7 +67,7 @@ final class ChatMermaidSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_: WKWebView, stop _: WKURLSchemeTask) {
-        // All four immutable resources complete synchronously on the main actor.
+        // Bundled resources complete synchronously on the main actor.
     }
 }
 #endif

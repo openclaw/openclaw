@@ -75,7 +75,7 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
           );
           if (image.captureUnsupported) {
             lines.push(
-              `  Capture unsupported: ${crabboxCaptureUnsupportedSentence(image.captureUnsupported.message)} Workers use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+              `  Capture unsupported: ${crabboxCaptureUnsupportedSentence(image.captureUnsupported.message)} Workers use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on the profile to stop capture attempts.`,
             );
           }
           if (image.capture) {

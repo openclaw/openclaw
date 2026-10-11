@@ -65,6 +65,27 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
 }
 
 describe("published baseline startup admission", () => {
+  it("checks each pinned recovery driver once before scheduling exact rows", () => {
+    const fixture = runFixture("runtime", {
+      LANES: "published-upgrade-survivor",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+        "package-publication-recovery package-verification-recovery package-stranded-first-hop",
+    });
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(JSON.parse(fixture.result.stdout)).toHaveLength(5);
+    expect(
+      fixture.report.baselines.map((entry: { baseline: string; status: string }) => [
+        entry.baseline,
+        entry.status,
+      ]),
+    ).toEqual([
+      ["openclaw@2026.9.8", "usable"],
+      ["openclaw@2026.9.9", "usable"],
+      ["openclaw@2026.9.7", "usable"],
+    ]);
+    expect(readFileSync(fixture.installs, "utf8").trim().split("\n")).toHaveLength(3);
+  });
+
   it.each(["version", "runtime"] as const)(
     "skips unusable %s baselines with evidence before scheduling scenarios",
     (failure) => {
@@ -88,20 +109,23 @@ describe("published baseline startup admission", () => {
         },
         { docker_lanes: "onboard", label: "onboard" },
       ]);
-      expect(fixture.report.baselines).toEqual([
-        expect.objectContaining({
-          baseline: "openclaw@2026.8.33",
-          status: "skipped",
-          reason: expect.stringContaining("unusable published baseline"),
-          error: expect.stringContaining("Cannot find package fixture-runtime"),
-          scenarios: ["legacy-operator-state", "base"],
-        }),
-        expect.objectContaining({
-          baseline: "openclaw@2026.8.34",
-          status: "usable",
-          scenarios: ["legacy-operator-state", "base"],
-        }),
-      ]);
+      expect(fixture.report.baselines).toHaveLength(2);
+      expect(fixture.report.baselines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            baseline: "openclaw@2026.8.33",
+            status: "skipped",
+            reason: expect.stringContaining("unusable published baseline"),
+            error: expect.stringContaining("Cannot find package fixture-runtime"),
+            scenarios: ["legacy-operator-state", "base"],
+          }),
+          expect.objectContaining({
+            baseline: "openclaw@2026.8.34",
+            status: "usable",
+            scenarios: ["legacy-operator-state", "base"],
+          }),
+        ]),
+      );
       const installs = readFileSync(fixture.installs, "utf8")
         .trim()
         .split("\n")
@@ -154,7 +178,12 @@ describe("published baseline startup admission", () => {
     ({ failure, error }) => {
       const fixture = runFixture(failure);
       expect(fixture.result.status).not.toBe(0);
-      expect(fixture.report.baselines[0]).toMatchObject({
+      expect(
+        fixture.report.baselines.find(
+          (entry: { baseline: string }) => entry.baseline === "openclaw@2026.8.33",
+        ),
+      ).toMatchObject({
+        baseline: "openclaw@2026.8.33",
         status: "failed",
         error: expect.stringContaining(error),
       });

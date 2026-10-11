@@ -216,7 +216,7 @@ if (!isMainThread) {
               input: { kind: "echo", value: taskId },
               interactive: true,
               nativeSections: native.buffer,
-              taskContext: [],
+              taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
             },
             [],
           );
@@ -253,7 +253,7 @@ if (!isMainThread) {
             },
             interactive: true,
             nativeSections: native.buffer,
-            taskContext: [],
+            taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
           },
           [],
         );
@@ -284,7 +284,7 @@ if (!isMainThread) {
               taskId: 2,
               input: { kind: "echo", value: 42 },
               nativeSections: createWorkerNativeSectionState().buffer,
-              taskContext: [],
+              taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
             },
             [],
           );

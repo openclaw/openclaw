@@ -1,4 +1,3 @@
-/** Shared agent-run usage selection for OpenAI-compatible Gateway endpoints. */
 import {
   hasNonzeroUsage,
   normalizeUsage,

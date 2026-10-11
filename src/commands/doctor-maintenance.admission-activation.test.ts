@@ -7,103 +7,62 @@ import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
 
 const native = vi.hoisted(() => ({
-  decoded: new WeakMap<object, unknown>(),
   effects: [] as string[],
   preparingRestart: undefined as (() => void) | undefined,
   closes: 0,
+  ownerReads: 0,
 }));
 
-// Only the external sd-bus ABI is synthetic. Native queueing, deadlines, identity
-// checks, nested service authority, and every Doctor ledger read remain real.
-vi.mock("node:module", async (importOriginal) => {
-  const { mockNodeBuiltinModule } =
-    await import("../plugin-sdk/test-helpers/node-builtin-mocks.js");
-  const original = await importOriginal<typeof import("node:module")>();
-  return mockNodeBuiltinModule(() => Promise.resolve(original), {
-    createRequire: (filename: string | URL) => {
-      const require = original.createRequire(filename);
-      return Object.assign(
-        (specifier: string) =>
-          specifier !== "koffi"
-            ? require(specifier)
-            : {
-                sizeof: () => 24,
-                struct: () => ({}),
-                decode: (buffer: object) => native.decoded.get(buffer),
-                load: () => ({
-                  func: (declaration: string) => {
-                    const name = declaration.match(/\b(sd_bus_[a-z_]+)\(/)?.[1];
-                    const call = (...args: unknown[]) => {
-                      if (name === "sd_bus_new") {
-                        (args[0] as unknown[])[0] = {};
-                      } else if (name === "sd_bus_message_new_method_call") {
-                        (args[1] as unknown[])[0] = { member: args[5] };
-                        if (args[5] === "RestartUnit") {
-                          native.preparingRestart?.();
-                        }
-                      } else if (name === "sd_bus_call") {
-                        const member = (args[1] as { member: string }).member;
-                        const values: Record<string, unknown> = {
-                          GetId: "0123456789abcdef0123456789abcdef",
-                          GetNameOwner: ":1.42",
-                          GetConnectionUnixUser: 2001,
-                          LoadUnit: "/org/freedesktop/systemd1/unit/openclaw_2eservice",
-                          RestartUnit: "/org/freedesktop/systemd1/job/7",
-                          ResetFailedUnit: undefined,
-                        };
-                        if (!Object.hasOwn(values, member)) {
-                          throw new Error(`Unexpected method ${member}`);
-                        }
-                        if (member === "ResetFailedUnit" || member === "RestartUnit") {
-                          native.effects.push(member);
-                        }
-                        (args[4] as unknown[])[0] = { value: values[member] };
-                      } else if (name === "sd_bus_get_property") {
-                        const values: Record<string, string> = {
-                          Id: "openclaw.service",
-                          FragmentPath: "/synthetic-doctor/openclaw.service",
-                          User: "",
-                        };
-                        const member = args[4] as string;
-                        if (!Object.hasOwn(values, member)) {
-                          throw new Error(`Unexpected property ${member}`);
-                        }
-                        (args[6] as unknown[])[0] = { value: values[member] };
-                      } else if (name === "sd_bus_message_read_basic") {
-                        native.decoded.set(
-                          args[2] as object,
-                          (args[0] as { value: unknown }).value,
-                        );
-                        return 1;
-                      } else if (name === "sd_bus_close_unref") {
-                        native.closes++;
-                      }
-                      return name === "sd_bus_is_ready" || name === "sd_bus_message_at_end" ? 1 : 0;
-                    };
-                    return Object.assign(call, {
-                      async: (...args: unknown[]) => {
-                        const complete = args.pop() as (error: unknown, result?: number) => void;
-                        try {
-                          complete(null, call(...args));
-                        } catch (error) {
-                          complete(error);
-                        }
-                      },
-                    });
-                  },
-                }),
-              },
-        require,
-      );
-    },
-  });
-});
+// Only the external systemd transport is synthetic. OpenClaw's queue, deadlines,
+// identity checks, service authority, and every Doctor ledger read remain real.
+vi.mock("@openclaw/proc-safe/systemd", () => ({
+  SystemdBus: {
+    connectBroker: async () => ({
+      close: async () => {
+        native.closes++;
+      },
+      call: async ({ member }: { member: string }) => {
+        const values: Record<string, string | number | undefined> = {
+          GetId: "0123456789abcdef0123456789abcdef",
+          GetNameOwner: ":1.42",
+          GetConnectionUnixUser: 2001,
+          LoadUnit: "/org/freedesktop/systemd1/unit/openclaw_2eservice",
+          RestartUnit: "/org/freedesktop/systemd1/job/7",
+          ResetFailedUnit: undefined,
+        };
+        if (!Object.hasOwn(values, member)) {
+          throw new Error(`Unexpected method ${member}`);
+        }
+        // The last awaited ownership response precedes the next effect's submission.
+        if (member === "GetNameOwner" && ++native.ownerReads === 4) {
+          native.preparingRestart?.();
+        }
+        if (member === "ResetFailedUnit" || member === "RestartUnit") {
+          native.effects.push(member);
+        }
+        return values[member] === undefined ? [] : [values[member]];
+      },
+      getProperty: async ({ member }: { member: string }) => {
+        const values: Record<string, string> = {
+          Id: "openclaw.service",
+          FragmentPath: "/synthetic-doctor/openclaw.service",
+          User: "",
+        };
+        if (!Object.hasOwn(values, member)) {
+          throw new Error(`Unexpected property ${member}`);
+        }
+        return values[member];
+      },
+    }),
+  },
+}));
 
 const fixture = setupDoctorAdmissionFixture();
 afterEach(() => {
   native.effects = [];
   native.preparingRestart = undefined;
   native.closes = 0;
+  native.ownerReads = 0;
 });
 
 const identity: SystemdServiceIdentity = {
@@ -132,11 +91,17 @@ async function activate(admission: () => void, current: () => void = () => {}) {
   );
 }
 
-it("restores within the native deadline when each fresh private snapshot costs two seconds", async () => {
+it("restores within the native deadline when cold source observations cost two seconds", async () => {
   const { admission, family, assertIsolation } = fixture();
   const before = family();
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const observe = snapshots.readSqliteSourceContentVersionSync;
+  vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation((pathname) => {
+    const version = observe(pathname);
+    elapsed += 2_000;
+    return version;
+  });
   const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation((pathname) => {
     const prepared = prepare(pathname);
@@ -154,7 +119,7 @@ it("restores within the native deadline when each fresh private snapshot costs t
   expect(native.closes).toBe(1);
 });
 
-it("refuses an update committed after native restart message preparation", async () => {
+it("refuses an update committed after the final restart ownership reply", async () => {
   const { env, admission, family, assertIsolation } = fixture();
   let committedFamily: unknown;
   native.preparingRestart = () => {
@@ -171,7 +136,7 @@ it("refuses an update committed after native restart message preparation", async
   expect(native.closes).toBe(1);
 });
 
-it("retains final native custody revocation after restart message preparation", async () => {
+it("retains final native custody revocation after the final restart ownership reply", async () => {
   const { admission, assertIsolation } = fixture();
   let current = true;
   native.preparingRestart = () => {

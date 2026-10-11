@@ -20,7 +20,7 @@ type GatewayStatusWarning = {
 };
 
 const noReachableGatewayDiagnostic =
-  "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
+  "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
 function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
   if (!entry.self) {
@@ -84,7 +84,7 @@ export function buildGatewayStatusWarnings(params: {
       code: "ssh_tunnel_failed",
       message: params.sshTunnelError
         ? `SSH tunnel failed: ${params.sshTunnelError}`
-        : "SSH tunnel failed to start; falling back to direct probes.",
+        : "SSH tunnel failed to start; falling back to direct checks.",
     });
   }
   if (params.localTlsLoadError) {
@@ -127,7 +127,7 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_scope_limited",
       message:
-        "Read-probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
+        "Read-check diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
       targetIds: [result.target.id],
     });
   }
@@ -221,7 +221,7 @@ export function writeGatewayStatusText(params: {
     `${colorize(params.rich, theme.info, "Capability")}: ${capability.replaceAll("_", "-")}`,
   );
   params.runtime.log(
-    colorize(params.rich, theme.muted, `Probe budget: ${params.overallTimeoutMs}ms`),
+    colorize(params.rich, theme.muted, `Check budget: ${params.overallTimeoutMs}ms`),
   );
 
   if (params.warnings.length > 0) {

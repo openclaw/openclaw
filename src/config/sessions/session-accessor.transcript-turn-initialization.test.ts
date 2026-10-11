@@ -74,7 +74,7 @@ describe("first transcript turn initialization", () => {
       ],
       sessionTurnMutation: { kind: "goal", operation, runId: operation.operationId },
       sessionLifecyclePatch: {
-        status: "running",
+        status: undefined,
         lifecycleRunId: operation.operationId,
         restartRecoveryDeliveryRunId: operation.operationId,
         restartRecoveryDeliverySourceRunId: operation.operationId,
@@ -100,12 +100,12 @@ describe("first transcript turn initialization", () => {
       );
     });
     const turn = await admit({ onMessageCommitted });
+    expect(turn.sessionEntry?.status).toBeUndefined();
     expect(turn).toMatchObject({
       appendedCount: 1,
       sessionEntry: {
         ...initialSessionEntry,
         updatedAt: expect.any(Number),
-        status: "running",
         restartRecoveryDeliveryRunId: operation.operationId,
         goal: { objective: operation.objective, status: "active" },
       },

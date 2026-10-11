@@ -1,5 +1,6 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { createSessionObserverCompanionSnapshotReader } from "./session-observer-companion.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import type {
@@ -41,7 +42,7 @@ export function createSessionObserverWork(params: {
   const resetting = new Map<string, object>();
   const reportError = params.reportError;
   const background = (run: () => Promise<unknown>) => {
-    void acceptedWork.track(run).catch(reportError);
+    void runInDetachedAsyncContext(() => acceptedWork.track(run)).catch(reportError);
   };
   const enqueue = <T>(
     scopeKey: string,
@@ -68,14 +69,10 @@ export function createSessionObserverWork(params: {
         }),
       ),
     );
-    eventTail = result.then(
-      () => {
-        pending.delete(operation);
-      },
-      () => {
-        pending.delete(operation);
-      },
-    );
+    const clearPending = () => {
+      pending.delete(operation);
+    };
+    eventTail = result.then(clearPending, clearPending);
     return result;
   };
   function handleEvent(event: SessionObserverEvent, settledError = false) {
@@ -258,13 +255,12 @@ export function createSessionObserverWork(params: {
       );
       return enqueue(
         resolveSessionSubscriptionKey(target.canonicalSessionKey, target.agentId),
-        async (assertCurrent) => {
-          return reader.withRead((session) => {
+        async (assertCurrent) =>
+          reader.withRead((session) => {
             assertCurrent();
             reader.assertCurrent();
             return params.companionReader.read(target, session);
-          });
-        },
+          }),
       );
     },
   };

@@ -1,3 +1,4 @@
+import nodePath from "node:path";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import {
@@ -8,6 +9,8 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -21,19 +24,24 @@ import {
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 
 type WorkerTranscriptSourceIdentity = Pick<
   InternalSessionEntry,
   "sessionId" | "lifecycleRevision" | "activeWriterRunId" | "archivedAt"
 >;
 
-export function resolveWorkerTurnTranscriptTarget(
-  turn: Pick<SessionPlacementTurnParams, "agentId" | "sessionId" | "sessionKey" | "sessionTarget">,
-): BoundAgentRunSessionTarget {
+type WorkerTranscriptTurn = Pick<
+  SessionPlacementTurnParams,
+  "agentId" | "sessionId" | "sessionKey" | "sessionTarget"
+>;
+
+function captureWorkerTurnTranscriptTarget(turn: WorkerTranscriptTurn): BoundAgentRunSessionTarget {
   if (
     !turn.sessionTarget?.agentId ||
     !turn.sessionTarget.sessionId ||
@@ -53,20 +61,6 @@ export function resolveWorkerTurnTranscriptTarget(
   ) {
     throw new Error("Cloud worker transcript identity does not match the active turn");
   }
-  const currentEntry = loadSessionEntry({
-    agentId: turn.sessionTarget.agentId,
-    sessionKey: turn.sessionTarget.sessionKey,
-    storePath: turn.sessionTarget.storePath,
-  });
-  if (
-    currentEntry?.sessionId !== turn.sessionId ||
-    (turn.sessionTarget.expectedLifecycleRevision !== undefined &&
-      currentEntry.lifecycleRevision !== turn.sessionTarget.expectedLifecycleRevision) ||
-    (turn.sessionTarget.expectedWriterRunId !== undefined &&
-      currentEntry.activeWriterRunId !== turn.sessionTarget.expectedWriterRunId)
-  ) {
-    throw new Error("Cloud worker transcript identity is no longer current");
-  }
   return {
     agentId: turn.sessionTarget.agentId,
     sessionId: turn.sessionId,
@@ -75,6 +69,133 @@ export function resolveWorkerTurnTranscriptTarget(
     expectedLifecycleRevision: turn.sessionTarget.expectedLifecycleRevision,
     expectedWriterRunId: turn.sessionTarget.expectedWriterRunId,
   };
+}
+
+export function resolveWorkerTurnTranscriptTarget(
+  turn: WorkerTranscriptTurn,
+): BoundAgentRunSessionTarget {
+  const target = captureWorkerTurnTranscriptTarget(turn);
+  const binding = captureIncognitoSessionBinding(target);
+  const currentEntry = binding
+    ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
+    : loadSessionEntry(target);
+  if (
+    currentEntry?.sessionId !== target.sessionId ||
+    (target.expectedLifecycleRevision !== undefined &&
+      currentEntry.lifecycleRevision !== target.expectedLifecycleRevision) ||
+    (target.expectedWriterRunId !== undefined &&
+      currentEntry.activeWriterRunId !== target.expectedWriterRunId)
+  ) {
+    throw new Error("Cloud worker transcript identity is no longer current");
+  }
+  return target;
+}
+
+/** Keep native compatibility guards on the worker-admitted handle through turn settlement. */
+export async function withWorkerTurnTranscriptDatabase<T>(
+  turn: WorkerTranscriptTurn,
+  controls: {
+    assertCurrent(): void;
+    prepareAuthority(): Promise<Pick<PlacementTurnClaimAuthority, "isCurrent" | "release">>;
+    signal?: AbortSignal;
+  },
+  run: (target: BoundAgentRunSessionTarget) => Promise<T>,
+): Promise<T> {
+  const captured = captureWorkerTurnTranscriptTarget(turn);
+  const target = { ...captured, storePath: nodePath.resolve(captured.storePath) };
+  const binding = captureIncognitoSessionBinding(target);
+  let executing = false;
+  let authority: Awaited<ReturnType<typeof controls.prepareAuthority>> | undefined;
+  const assertPreparing = () => {
+    // Execution owns subsequent liveness and can settle after releasing its placement claim.
+    if (executing) {
+      return;
+    }
+    controls.signal?.throwIfAborted();
+    if (authority && !authority.isCurrent()) {
+      throw new Error("Cloud worker placement authority changed during preparation");
+    }
+    const current = captureWorkerTurnTranscriptTarget(turn);
+    if (
+      current.agentId !== target.agentId ||
+      current.sessionId !== target.sessionId ||
+      current.sessionKey !== target.sessionKey ||
+      nodePath.resolve(current.storePath) !== target.storePath ||
+      current.expectedLifecycleRevision !== target.expectedLifecycleRevision ||
+      current.expectedWriterRunId !== target.expectedWriterRunId
+    ) {
+      throw new Error("Cloud worker transcript target changed during preparation");
+    }
+  };
+  const runAdmitted = async (pinned: BoundAgentRunSessionTarget) => {
+    controls.assertCurrent();
+    const current = resolveWorkerTurnTranscriptTarget({ ...pinned, sessionTarget: pinned });
+    executing = true;
+    const originalSessionTarget = turn.sessionTarget;
+    turn.sessionTarget = current;
+    try {
+      return await run(current);
+    } finally {
+      turn.sessionTarget = originalSessionTarget;
+    }
+  };
+  controls.assertCurrent();
+  if (binding) {
+    return binding.actor.sessions.withSharedState(async () => {
+      await binding.actor.sessions.read(
+        { assertCurrent: assertPreparing },
+        { sessionKey: target.sessionKey },
+        binding.admissionSignal,
+      );
+      binding.actor.assertReadable();
+      assertPreparing();
+      authority = await controls.prepareAuthority();
+      try {
+        binding.admissionSignal?.throwIfAborted();
+        binding.actor.assertReadable();
+        assertPreparing();
+        return await runAdmitted(target);
+      } finally {
+        authority.release();
+        authority = undefined;
+      }
+    });
+  }
+  return withSessionEntryReadOnlyInWorker(target, assertPreparing, async (read, owner) => {
+    controls.assertCurrent();
+    if (!read.ok) {
+      throw read.error;
+    }
+    if (!read.value || read.value.sessionId !== target.sessionId) {
+      throw new Error("Cloud worker transcript identity is no longer current");
+    }
+    authority = await controls.prepareAuthority();
+    try {
+      controls.assertCurrent();
+      const scope = owner.scope;
+      if (!scope) {
+        assertPreparing();
+        return await runAdmitted(target);
+      }
+      const pinned = { ...target, storePath: scope.storePath };
+      const assertAdmission = () => {
+        owner.assertCurrent();
+        assertPreparing();
+      };
+      return await withOpenClawAgentDatabaseRuntime(
+        { agentId: scope.databaseAgentId, path: scope.storePath, env: scope.env },
+        () => {
+          assertAdmission();
+          return runAdmitted(pinned);
+        },
+        assertAdmission,
+        controls.signal,
+      );
+    } finally {
+      authority.release();
+      authority = undefined;
+    }
+  });
 }
 
 /** Reuse the accepted turn identity as a transaction-local source predicate. */
@@ -86,17 +207,48 @@ export function captureWorkerTurnTranscriptSource(
     refuse: () => never;
   },
 ): SessionSourceAssertion {
+  const binding = captureIncognitoSessionBinding(target);
+  const expected: WorkerTranscriptSourceIdentity = predicate
+    ? { ...predicate.expected }
+    : {
+        sessionId: target.sessionId,
+        ...(target.expectedLifecycleRevision !== undefined
+          ? { lifecycleRevision: target.expectedLifecycleRevision }
+          : {}),
+        ...(target.expectedWriterRunId !== undefined
+          ? { activeWriterRunId: target.expectedWriterRunId }
+          : {}),
+      };
+  const fields: (keyof WorkerTranscriptSourceIdentity)[] = predicate
+    ? [...predicate.fields]
+    : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
+        Object.hasOwn(expected, field),
+      );
+  const refuse =
+    predicate?.refuse ??
+    ((): never => {
+      throw new Error("Cloud worker transcript identity is no longer current");
+    });
+  const assertEntry = (entry: WorkerTranscriptSourceIdentity | undefined) => {
+    if (!entry || fields.some((field) => entry[field] !== expected[field])) {
+      refuse();
+    }
+  };
+  if (binding) {
+    const claim = binding.actor.sessions.captureCurrent(target.sessionKey);
+    return () => {
+      binding.admissionSignal?.throwIfAborted();
+      binding.actor.assertReadable();
+      claim.assertCurrent();
+      assertEntry(binding.actor.sessions.readSharing(target.sessionKey)?.entry);
+    };
+  }
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const resolved = resolveSqliteScope({ ...target, env });
   const options = toDatabaseOptions(resolved);
   const path = resolveOpenClawAgentSqlitePath(options);
   const incognito = isIncognitoOpenClawAgentSqlitePath(path, options);
   const identity = readDatabasePathIdentitySync(path);
-  const refuse =
-    predicate?.refuse ??
-    ((): never => {
-      throw new Error("Cloud worker transcript identity is no longer current");
-    });
   const captured = { ...target, sessionKey: resolved.sessionKey, storePath: path };
   const assertCurrent = () => {
     if (incognito) {
@@ -106,31 +258,6 @@ export function captureWorkerTurnTranscriptSource(
       refuse();
     }
     assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-  };
-  const expected: WorkerTranscriptSourceIdentity = predicate
-    ? { ...predicate.expected }
-    : {
-        sessionId: captured.sessionId,
-        ...(captured.expectedLifecycleRevision !== undefined
-          ? { lifecycleRevision: captured.expectedLifecycleRevision }
-          : {}),
-        ...(captured.expectedWriterRunId !== undefined
-          ? { activeWriterRunId: captured.expectedWriterRunId }
-          : {}),
-      };
-  const fields: (keyof WorkerTranscriptSourceIdentity)[] = predicate
-    ? [...predicate.fields]
-    : ["sessionId"];
-  if (!predicate && captured.expectedLifecycleRevision !== undefined) {
-    fields.push("lifecycleRevision");
-  }
-  if (!predicate && captured.expectedWriterRunId !== undefined) {
-    fields.push("activeWriterRunId");
-  }
-  const assertEntry = (entry: WorkerTranscriptSourceIdentity | undefined) => {
-    if (!entry || fields.some((field) => entry[field] !== expected[field])) {
-      refuse();
-    }
   };
   const assertNative = () => {
     assertCurrent();

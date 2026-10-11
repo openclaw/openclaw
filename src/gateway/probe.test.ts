@@ -162,14 +162,15 @@ vi.mock("./client.js", () => ({
   isGatewayProtocolResponseError,
 }));
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateDeviceIdentity: () => {
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: () => {
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: (options: unknown) => {
+  loadDeviceIdentityIfPresentAsync: (options: unknown) => {
     deviceIdentityState.identityPaths.push(options);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
@@ -537,7 +538,7 @@ describe("probeGateway", () => {
       close: {
         code: 1008,
         reason: "device identity required",
-        hint: "probe short-circuited by recent device-required rejections",
+        hint: "check short-circuited by recent device-required rejections",
       },
       health: null,
       status: null,

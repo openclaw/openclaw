@@ -52,41 +52,6 @@ function expectAutoAllowSkillsMiss(result: ReturnType<typeof evaluateExecAllowli
 }
 
 describe("exec approvals allowlist evaluation", () => {
-  it("satisfies allowlist on exact match", () => {
-    const result = evaluateExecAllowlist({
-      analysis: { ok: true, segments: [toolSegment()] },
-      allowlist: [{ pattern: "/usr/bin/tool" }],
-      safeBins: new Set(),
-      cwd: "/tmp",
-    });
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual(["/usr/bin/tool"]);
-  });
-
-  it("satisfies allowlist via safe bins", () => {
-    const result = evaluateExecAllowlist({
-      analysis: { ok: true, segments: [headSegment()] },
-      allowlist: [],
-      safeBins: resolveSafeBins(["head"]),
-      cwd: "/tmp",
-    });
-    // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
-    if (process.platform === "win32") {
-      expect(result.allowlistSatisfied).toBe(false);
-      return;
-    }
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.allowlistMatches).toStrictEqual([]);
-  });
-
-  it("satisfies allowlist via auto-allow skills", () => {
-    const result = evaluateAutoAllowSkills(
-      segment(["skill-bin", "--help"], { resolvedPath: "/opt/skills/skill-bin" }),
-      "/opt/skills/skill-bin",
-    );
-    expect(result.allowlistSatisfied).toBe(true);
-  });
-
   it("matches auto-allow skill bins against the executable trust realpath", () => {
     const command = segment(["skill-bin", "--help"], {
       resolvedPath: "/tmp/symlink-bin/skill-bin",

@@ -1,4 +1,3 @@
-/** Mention matching, stripping, and explicit mention handling for group triggers. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -59,7 +58,7 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   // stripping runs on the raw text that still carries them. A literal has to
   // accept both forms or an identity built only from a ZWJ sequence can be
   // stripped but never matched.
-  if (Array.from(literal).every((character) => JOINER_ONLY.test(character))) {
+  if (!literal || JOINER_ONLY.test(literal)) {
     // Nothing survives normalization. Emitting the optional joiner class alone
     // would match the empty string, i.e. every message.
     return "";
@@ -227,10 +226,6 @@ const mentionPatternWarningCache = new Set<string>();
 const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
 
-function normalizeMentionPattern(pattern: string): string {
-  return pattern.replaceAll(BACKSPACE_CHAR, "\\b");
-}
-
 function warnRejectedMentionPattern(
   pattern: string,
   flags: string,
@@ -240,11 +235,10 @@ function warnRejectedMentionPattern(
   if (mentionPatternWarningCache.has(key)) {
     return;
   }
-  mentionPatternWarningCache.add(key);
-  if (mentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+  if (mentionPatternWarningCache.size >= MAX_MENTION_PATTERN_WARNING_KEYS) {
     mentionPatternWarningCache.clear();
-    mentionPatternWarningCache.add(key);
   }
+  mentionPatternWarningCache.add(key);
   log.warn("Ignoring unsupported group mention pattern", {
     pattern,
     flags,
@@ -261,13 +255,14 @@ function compileMentionPatternsCached(params: {
   if (params.patterns.length === 0) {
     return [];
   }
-  const cacheKey = `${params.flags}\u001e${params.patterns.join("\u001f")}`;
+  const patterns = params.patterns.map((pattern) => pattern.replaceAll(BACKSPACE_CHAR, "\\b"));
+  const cacheKey = `${params.flags}\u001e${patterns.join("\u001f")}`;
   const cached = params.cache.get(cacheKey);
   if (cached) {
     return [...cached];
   }
 
-  const compiled = compileConfigRegexes(params.patterns, params.flags);
+  const compiled = compileConfigRegexes(patterns, params.flags);
   if (params.warnRejected) {
     for (const rejected of compiled.rejected) {
       warnRejectedMentionPattern(rejected.pattern, rejected.flags, rejected.reason);
@@ -286,19 +281,15 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
     return { patterns: [], unicode: false };
   }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  const agentGroupChat = agentConfig?.groupChat;
-  if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return { patterns: agentGroupChat.mentionPatterns ?? [], unicode: false };
-  }
-  const globalGroupChat = cfg.messages?.groupChat;
-  if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return { patterns: globalGroupChat.mentionPatterns ?? [], unicode: false };
+  for (const groupChat of [agentConfig?.groupChat, cfg.messages?.groupChat]) {
+    if (groupChat && Object.hasOwn(groupChat, "mentionPatterns")) {
+      return { patterns: groupChat.mentionPatterns ?? [], unicode: false };
+    }
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
   return { patterns: derived, unicode: derived.length > 0 };
 }
 
-/** Builds mention regexes from config, agent identity, and channel policy. */
 export function buildMentionRegexes(
   cfg: OpenClawConfig | undefined,
   agentId?: string,
@@ -308,23 +299,20 @@ export function buildMentionRegexes(
     return [];
   }
   const resolved = resolveMentionPatterns(cfg, agentId);
-  const patterns = resolved.patterns.map(normalizeMentionPattern);
   return compileMentionPatternsCached({
-    patterns,
+    patterns: resolved.patterns,
     flags: resolved.unicode ? "iu" : "i",
     cache: mentionMatchRegexCompileCache,
     warnRejected: true,
   });
 }
 
-/** Normalizes text before mention matching. */
 export function normalizeMentionText(text: string): string {
   return normalizeLowercaseStringOrEmpty(
     (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
   );
 }
 
-/** Returns true when text matches one of the configured mention patterns. */
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
   if (mentionRegexes.length === 0) {
     return false;
@@ -333,7 +321,6 @@ export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): 
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
-/** Combines regex mention matching with provider-native explicit mention metadata. */
 export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
@@ -349,7 +336,6 @@ export function matchesMentionWithExplicit(params: {
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
-/** Removes structural prompt prefixes before mention stripping. */
 export function stripStructuralPrefixes(text: string): string {
   if (!text) {
     return "";
@@ -369,13 +355,9 @@ export function stripStructuralPrefixes(text: string): string {
     afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
   const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
-  if (stripped.startsWith("/")) {
-    return stripped.replace(/[ \t]+/g, " ");
-  }
-  return stripped.replace(/\s+/g, " ");
+  return stripped.replace(stripped.startsWith("/") ? /[ \t]+/g : /\s+/g, " ");
 }
 
-/** Removes bot mentions from command text before command normalization. */
 export function stripMentions(
   text: string,
   ctx: MsgContext,
@@ -392,7 +374,7 @@ export function stripMentions(
     : undefined;
   const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({
-    patterns: resolvedPatterns.patterns.map(normalizeMentionPattern),
+    patterns: resolvedPatterns.patterns,
     flags: resolvedPatterns.unicode ? "giu" : "gi",
     cache: mentionStripRegexCompileCache,
     warnRejected: true,
@@ -400,9 +382,7 @@ export function stripMentions(
   const providerRegexes =
     providerMentions?.stripRegexes?.({ ctx, cfg, agentId }) ??
     compileMentionPatternsCached({
-      patterns: (providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []).map(
-        normalizeMentionPattern,
-      ),
+      patterns: providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? [],
       flags: "gi",
       cache: mentionStripRegexCompileCache,
       warnRejected: false,

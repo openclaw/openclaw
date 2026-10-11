@@ -19,6 +19,7 @@ import {
   createToolGroup,
 } from "./components/chat-message.test-support.ts";
 import { renderToolCard } from "./components/chat-tool-cards.ts";
+import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";
@@ -64,7 +65,7 @@ describe("a launched subagent", () => {
   const running = { status: "running", hasActiveRun: true } satisfies Partial<GatewaySessionRow>;
 
   it("is named by its launch and finds its session from the result", () => {
-    const finished = { key: story.key, running: false, runtimeMs: 42_000 };
+    const finished = { key: story.key, listed: true, running: false, runtimeMs: 42_000 };
     const roster = [child("other", { label: "Other" }), story];
     // History keeps the result as text; a live result still carries details.
     for (const result of [
@@ -79,7 +80,7 @@ describe("a launched subagent", () => {
         resolveSpawnedSubagent(launch({ outputText: accepted(story.key) }), [
           { ...story, ...active },
         ])?.session,
-      ).toEqual({ key: story.key, running: true, runtimeMs: null });
+      ).toEqual({ key: story.key, listed: true, running: true, runtimeMs: null });
     }
   });
 
@@ -180,23 +181,24 @@ describe("a launched subagent", () => {
     expect(spawnedSubagentsRenderKey([{ ...story, ...running }, puzzle])).not.toBe(key);
   });
 
-  it("shows its name and duration, and opens its session without toggling the row", () => {
+  it("shows its name and duration, and opens its session without toggling the row", async () => {
+    const onOpenSubagent = vi.fn();
     const onOpenSession = vi.fn();
     const onToggleExpanded = vi.fn();
-    const mount = (subagentSessions: GatewaySessionRow[]) => {
+    const mount = async (subagentSessions: GatewaySessionRow[]) => {
       const container = document.createElement("div");
-      render(
+      await renderToolFixture(
         renderToolCard(launch({ outputText: accepted(story.key) }), {
           messageKey: "message",
           expanded: false,
           onToggleExpanded,
-          subagents: { subagentSessions, onOpenSession },
+          subagents: { subagentSessions, onOpenSubagent, onOpenSession },
         }),
         container,
       );
       return container;
     };
-    const row = mount([story]);
+    const row = await mount([story]);
     const link = row.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!;
     expect(link.textContent?.trim()).toBe(label);
     expect(row.querySelector(".chat-tool-row__subagent-state")?.textContent).toBe("42s");
@@ -205,23 +207,28 @@ describe("a launched subagent", () => {
       /Reply with the result|demo-mini-story|180/u,
     );
     link.click();
-    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(story.key);
+    expect(onOpenSubagent).toHaveBeenCalledExactlyOnceWith(story.key);
     expect(onToggleExpanded).not.toHaveBeenCalled();
+    (await mount([{ ...story, swarmGroupId: "parallel-audit" }]))
+      .querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!
+      .click();
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(onOpenSubagent).toHaveBeenNthCalledWith(2, story.key);
     row
       .querySelector<HTMLButtonElement>(".chat-tool-row--subagent > .chat-tool-row__toggle")!
       .click();
     expect(onToggleExpanded).toHaveBeenCalledOnce();
 
-    const state = (session: GatewaySessionRow) =>
-      mount([session]).querySelector(".chat-tool-row__subagent-state");
-    expect(state({ ...story, ...running })?.textContent).toBe("running");
+    const state = async (session: GatewaySessionRow) =>
+      (await mount([session])).querySelector(".chat-tool-row__subagent-state");
+    expect((await state({ ...story, ...running }))?.textContent).toBe("running");
     // A subagent that failed says so instead of how long it lasted.
-    const failed = state({ ...story, status: "failed", runtimeMs: 291 });
+    const failed = await state({ ...story, status: "failed", runtimeMs: 291 });
     expect(failed?.textContent).toBe("failed");
     expect(failed?.classList.contains("chat-tool-row__subagent-state--failed")).toBe(true);
-    expect(state({ ...story, status: "killed" })?.textContent).toBe("stopped");
+    expect((await state({ ...story, status: "killed" }))?.textContent).toBe("stopped");
     // Without its session the row is the ordinary disclosure, still named.
-    const unlinked = mount([]);
+    const unlinked = await mount([]);
     expect(unlinked.querySelector(".chat-tool-row__subagent-link")).toBeNull();
     expect(unlinked.querySelector("button.chat-tool-row .chat-tool-row__title")?.textContent).toBe(
       label,

@@ -95,9 +95,7 @@ function sessionAttentionTooltipParts(attention: SidebarSessionAttention) {
   };
 }
 
-export function sessionAttentionTooltipLabel(
-  attention: SidebarSessionAttention,
-): string | undefined {
+function sessionAttentionTooltipLabel(attention: SidebarSessionAttention): string | undefined {
   const { status, preview, more } = sessionAttentionTooltipParts(attention);
   return [status, preview, more].filter(Boolean).join("\n") || undefined;
 }
@@ -190,7 +188,7 @@ export function renderTeamSessionSlots(
       row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
   }
   const state =
-    attention && attention.kind !== "none"
+    attention.kind !== "none"
       ? renderSessionAttentionIcon(attention)
       : failed
         ? html`<span

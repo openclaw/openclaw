@@ -23,15 +23,6 @@ export function validateFirstOnboardingAgentName(value: string | undefined): str
   return validation.ok ? undefined : `${validation.message}. Choose another name.`;
 }
 
-function isInjectedMainRoster(config: OpenClawConfig): boolean {
-  const roster = listAgentEntries(config);
-  const entry = roster[0];
-  // Authored bare main entries are distinguished by snapshot provenance below.
-  return (
-    roster.length === 1 && entry?.id === "main" && Object.keys(entry).every((key) => key === "id")
-  );
-}
-
 function mergeOnboardingCandidate(params: {
   base: OpenClawConfig;
   candidate: OpenClawConfig;
@@ -90,9 +81,14 @@ export async function ensureOnboardingAgent(params: {
     throw new Error("OpenClaw config changed before first-agent creation. Retry setup.");
   }
   const candidateRoster = listAgentEntries(params.config);
+  const firstEntry = candidateRoster[0];
+  // Authored bare main entries are distinguished by snapshot provenance below.
   const hasCandidateRoster =
     candidateRoster.length > 0 &&
-    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config));
+    (params.preserveCandidateRoster ||
+      candidateRoster.length !== 1 ||
+      firstEntry?.id !== "main" ||
+      Object.keys(firstEntry).some((key) => key !== "id"));
   if (params.firstAgent?.team) {
     before ??= await readConfigFileSnapshot();
     if (hasCandidateRoster || hasResolvedRosterBeforeMigrations(before)) {

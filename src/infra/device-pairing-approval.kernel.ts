@@ -8,7 +8,6 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
-// Owner and bootstrap approval flows for pending device pairing requests.
 import type {
   DevicePairingAccessMetadata,
   ApproveDevicePairingResult,
@@ -59,6 +58,13 @@ function mergeApprovalKind(
     return existing.approvedVia;
   }
   return incoming;
+}
+
+function mergeApprovalRoles(
+  existing: PairedDevice | undefined,
+  pending: DevicePairingPendingRequest,
+): string[] | undefined {
+  return mergeDevicePairingRoles(existing?.roles, existing?.role, pending.roles, pending.role);
 }
 
 function buildApprovedPairedDevice(params: {
@@ -230,12 +236,7 @@ export function approveDevicePairingInWorker(
       };
     }
     const now = nowMs;
-    const roles = mergeDevicePairingRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-    );
+    const roles = mergeApprovalRoles(existing, pending);
     const approvedScopes = mergeDevicePairingScopes(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
@@ -344,12 +345,7 @@ export function approveBootstrapDevicePairingInWorker(
         ? []
         : preserveDeviceRoleScopes(existingRole, existing?.approvedScopes ?? existing?.scopes),
     );
-    const roles = mergeDevicePairingRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-    );
+    const roles = mergeApprovalRoles(existing, pending);
     const nextApprovedScopes = mergeDevicePairingScopes(preservedExistingScopes, grantedScopes);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     for (const roleForToken of grantedRoles) {

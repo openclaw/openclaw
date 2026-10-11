@@ -9,6 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import {
   inspectMainRestartRecoveryRolloverEligibility,
   isMainSessionRecoveryReconciliationCandidate,
@@ -17,11 +18,13 @@ import { markOrphanedMainSessionForRecovery } from "../agents/main-session-recov
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import { recoverSessionEntryFromRestartTombstone } from "../config/sessions/session-accessor.js";
 import {
+  buildSessionCreationStamp,
   inheritSessionCreationPolicy,
   type SessionCreatedActor,
 } from "../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
+import { mergeSessionEntry, type InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordSessionCreated } from "../sessions/session-created.js";
@@ -35,11 +38,11 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-key.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
-import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
 import { invalidSessionRequest } from "./session-request-error.js";
 import {
   prepareSessionMutationFacts,
@@ -49,7 +52,7 @@ import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import {
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
   type SessionWorkerPlacementContext,
 } from "./worker-environments/session-placement-lifecycle.js";
@@ -139,6 +142,7 @@ async function prepareRecoverySource(params: {
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
     if (
       !("all" in change) &&
+      change.scope !== "acp" &&
       change.storePath &&
       sourcePaths.has(path.resolve(change.storePath)) &&
       target.storeKeys.includes(change.sessionKey)
@@ -221,7 +225,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
         return undefined;
       }
       await source.refresh();
-      const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+      const assertPlacementCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
         context: params.workerPlacementContext,
         sessionId: initialSource.sessionId,
       });
@@ -454,7 +458,7 @@ export async function recoverGatewaySession(params: {
       if (prepared.stop) {
         try {
           await prepared.stop();
-          assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+          assertPlacementCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
             context: params.workerPlacementContext,
             sessionId: initialSource.sessionId,
           });
@@ -485,20 +489,44 @@ export async function recoverGatewaySession(params: {
             assertPlacementCurrent?.();
           };
           commitGuard();
-          const successorEntry = buildRestartRecoverySuccessorEntry({
+          // Owner attribution keeps the source isolation inherited by actorless recovery.
+          const creation = params.actor
+            ? {
+                actor: params.actor,
+                sandbox:
+                  params.actor.id === GATEWAY_OWNER_PROFILE_ID
+                    ? currentSource.sandbox
+                    : resolveCreatorSandbox(params.cfg, params),
+              }
+            : inheritSessionCreationPolicy(currentSource);
+          const entry = mergeSessionEntry(undefined, {
+            ...inheritSessionSelection(currentSource),
+            ...buildSessionCreationStamp({ via: "operator", ...creation }),
+            delivery: normalizeSessionDeliveryState(),
             sessionId: successorSessionId,
-            source: currentSource,
-            // Owner attribution keeps the source isolation inherited by actorless recovery.
-            creation: params.actor
-              ? {
-                  actor: params.actor,
-                  sandbox:
-                    params.actor.id === GATEWAY_OWNER_PROFILE_ID
-                      ? currentSource.sandbox
-                      : resolveCreatorSandbox(params.cfg, params),
-                }
-              : inheritSessionCreationPolicy(currentSource),
+            previousSessionId: currentSource.sessionId,
+            spawnDepth: 0,
+            ...(currentSource.agentHarnessId
+              ? { agentHarnessId: currentSource.agentHarnessId }
+              : {}),
+            ...(currentSource.modelSelectionLocked === true
+              ? { modelSelectionLocked: true as const }
+              : {}),
+            ...(currentSource.pluginOwnerId ? { pluginOwnerId: currentSource.pluginOwnerId } : {}),
+            ...(currentSource.visibility ? { visibility: currentSource.visibility } : {}),
+            ...(currentSource.communication
+              ? { communication: { ...currentSource.communication } }
+              : {}),
+            ...(currentSource.spawnedCwd ? { spawnedCwd: currentSource.spawnedCwd } : {}),
+            ...(currentSource.execHost ? { execHost: currentSource.execHost } : {}),
+            ...(currentSource.execNode ? { execNode: currentSource.execNode } : {}),
+            ...(currentSource.execCwd ? { execCwd: currentSource.execCwd } : {}),
           });
+          const successorEntry = {
+            ...entry,
+            ...buildMainSessionRecoveryClearPatch(entry),
+            sessionId: successorSessionId,
+          };
 
           const result = await recoverSessionEntryFromRestartTombstone({
             agentId: sourceTarget.agentId,

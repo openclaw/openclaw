@@ -142,14 +142,6 @@ function getLaneState(lane: string): LaneState {
   return created;
 }
 
-function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
-  if (taskGeneration !== state.generation) {
-    return false;
-  }
-  state.activeTaskIds.delete(taskId);
-  return true;
-}
-
 function retireIdleScopedCommandLane(state: LaneState): void {
   if (
     state.draining ||
@@ -184,10 +176,10 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
 }
 
 async function runQueueEntryTask(
-  lane: string,
   entry: QueueEntry,
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
+  const { lane } = marker;
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
   const taskTimeoutMs = entry.taskTimeoutMs;
   if (taskTimeoutMs === undefined) {
@@ -358,7 +350,7 @@ function drainLane(
       canAdmitInGroup(lane)
     ) {
       const entry = dequeueLaneQueue(state.queue) as QueueEntry;
-      const waitedMs = Date.now() - entry.enqueuedAt;
+      const waitedMs = Math.floor(performance.now()) - entry.enqueuedAt;
       const activeBeforeStart = state.activeTaskIds.size;
       const taskId = getQueueState().nextTaskId++;
       const taskGeneration = state.generation;
@@ -367,54 +359,68 @@ function drainLane(
       // account for this task when that nested admission is evaluated.
       state.activeTaskIds.add(taskId);
       started += 1;
-      if (waitedMs >= entry.warnAfterMs) {
-        try {
-          entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue);
-        } catch (err) {
-          diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
-        }
-        diag.warn(
-          `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
-            `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}`,
-          entry.taskIdentity,
-        );
-      }
-      logLaneDequeue(lane, waitedMs, state.queue.length);
+      const startTime = Date.now();
       void (async () => {
-        const startTime = Date.now();
         try {
-          const result = await runQueueEntryTask(lane, entry, {
+          if (waitedMs >= entry.warnAfterMs) {
+            try {
+              entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue);
+            } catch (err) {
+              diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
+            }
+            diag.warn(
+              `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
+                `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}`,
+              entry.taskIdentity,
+            );
+          }
+          logLaneDequeue(lane, waitedMs, state.queue.length);
+          return await runQueueEntryTask(entry, {
             lane,
             taskId,
             generation: taskGeneration,
           });
-          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-          if (completedCurrentGeneration) {
+        } finally {
+          // Admission diagnostics and task cleanup can throw too. Release and
+          // pump exactly once, without letting an old generation free new work.
+          if (taskGeneration === state.generation) {
+            state.activeTaskIds.delete(taskId);
+            drainReadyCommandLane(lane, state);
+          }
+        }
+      })()
+        .then(
+          (result) => {
+            entry.resolve(result);
             diag.debug(
               `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
             );
-            drainReadyCommandLane(lane, state);
-          }
-          entry.resolve(result);
-        } catch (err) {
-          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-          const isProbeLane = isQuietProbeLane(lane);
-          if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
-            diag.error(
-              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
-              { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
+          },
+          (err: unknown) => {
+            entry.reject(err);
+            const isProbeLane = isQuietProbeLane(lane);
+            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+              diag.error(
+                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
+                { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
+              );
+            } else if (!isProbeLane) {
+              diag.debug(
+                `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
+              );
+            }
+          },
+        )
+        .catch(() => {
+          try {
+            diag.warn(
+              `lane task diagnostics failed after settlement: lane=${lane} taskId=${taskId} generation=${taskGeneration}`,
+              entry.taskIdentity,
             );
-          } else if (!isProbeLane) {
-            diag.debug(
-              `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
-            );
+          } catch {
+            // A broken diagnostic sink cannot undo settlement or stop the pump.
           }
-          if (completedCurrentGeneration) {
-            drainReadyCommandLane(lane, state);
-          }
-          entry.reject(err);
-        }
-      })();
+        });
     }
   } finally {
     state.draining = false;
@@ -547,7 +553,7 @@ export function enqueueCommandInLane<T>(
       task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
       resolve: (value) => resolve(value as T),
       reject,
-      enqueuedAt: Date.now(),
+      enqueuedAt: Math.floor(performance.now()),
       sequence: queueState.nextQueueSequence++,
       priority: resolveQueuePriority(opts?.priority),
       warnAfterMs,
@@ -628,11 +634,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
 }
 
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
-export function listCommandLaneTotals(): Array<{
-  lane: string;
-  activeCount: number;
-  queuedCount: number;
-}> {
+export function listCommandLaneTotals() {
   return [...getQueueState().lanes.values()].map((state) => ({
     lane: state.lane,
     activeCount: state.activeTaskIds.size,
@@ -685,6 +687,26 @@ export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntr
   return state ? selectQueuedCommandEntries(state, matches).length : 0;
 }
 
+/** Select queue entries before awaited Stop preparation can admit another turn. */
+export function prepareCommandLaneClear(lane: string, matches: CommandLaneEntryFilter) {
+  const cleaned = normalizeLane(lane);
+  const state = getQueueState().lanes.get(cleaned);
+  const entries = state ? selectQueuedCommandEntries(state, matches) : [];
+  return () => {
+    if (!state || getQueueState().lanes.get(cleaned) !== state) {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (removeLaneQueueEntry(state.queue, entry)) {
+        removed += 1;
+        entry.reject(new CommandLaneClearedError(cleaned));
+      }
+    }
+    return removed;
+  };
+}
+
 export function clearCommandLane(
   lane: string = CommandLane.Main,
   matches?: CommandLaneEntryFilter,
@@ -695,12 +717,7 @@ export function clearCommandLane(
     return 0;
   }
   if (matches) {
-    const entries = selectQueuedCommandEntries(state, matches);
-    for (const entry of entries) {
-      removeLaneQueueEntry(state.queue, entry);
-      entry.reject(new CommandLaneClearedError(cleaned));
-    }
-    return entries.length;
+    return prepareCommandLaneClear(cleaned, matches)();
   }
   const removed = state.queue.length;
   let entry: QueueEntry | undefined;

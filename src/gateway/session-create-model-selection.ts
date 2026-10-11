@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
@@ -33,6 +34,29 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
+
+/** Keep automatic selection provenance distinct from an explicit model pin. */
+export function projectSessionCreateSpawnModelSelection(params: {
+  entry: SessionEntry;
+  creation: CreateGatewaySessionParams["creation"];
+  requestedModel?: string;
+  createdNewEntry: boolean;
+}): Partial<SessionEntry> {
+  // Match the requested model before using the patch owner's canonical selection.
+  const selection = params.creation?.spawnModelAutoSelection;
+  if (!params.createdNewEntry || !selection || selection.model !== params.requestedModel) {
+    return {};
+  }
+  return {
+    modelOverrideSource: "auto",
+    ...(selection.hasFallbackOrigin
+      ? {
+          modelOverrideFallbackOriginProvider: params.entry.providerOverride,
+          modelOverrideFallbackOriginModel: params.entry.modelOverride,
+        }
+      : {}),
+  };
+}
 
 export function resolveSessionCreateModelInputError(
   params: Pick<
@@ -130,21 +154,57 @@ export function prepareSessionCreateModelSelection(params: {
   };
 }
 
-/** Title preparation and the row commit retain the same caller, model, and account fences. */
-export function createSessionCreateCommitGuard(params: {
-  assertCallerCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  selections: readonly ({ assertCurrent: () => void } | undefined)[];
-  validateSelection: () => ErrorShape | undefined;
-}): () => void {
+/** Assemble the creation lifetime once, including host-only publication intent. */
+export function resolveSessionCreationCommitGuard(
+  params: CreateGatewaySessionParams,
+  prepared: {
+    readOperatorAuthority: () => AdmittedRunOperatorAuthority | undefined;
+    assertPreparedTargetCurrent: () => void;
+    validateSelection: () => ErrorShape | undefined;
+  },
+): (() => void) | undefined {
+  const assertDelegationCurrent = captureDelegatedToolPolicyAssertion(
+    params.cfg,
+    params.spawnToolPolicy?.delegatedToolPolicy,
+  );
+  const assertCallerCurrent =
+    params.childSessionPublication || assertDelegationCurrent
+      ? () => {
+          params.commitGuard?.();
+          params.childSessionPublication?.assertCurrent();
+          assertDelegationCurrent?.();
+        }
+      : params.commitGuard;
+  if (
+    !(
+      params.personalModelSelection ||
+      params.operatorAuthority ||
+      params.personalAccountDefaults ||
+      params.activeParentFork ||
+      params.preparedModelSelection ||
+      params.preparedPermissionSelection ||
+      typeof params.model === "string" ||
+      params.agentRuntime !== undefined
+    )
+  ) {
+    return assertCallerCurrent;
+  }
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    params.personalModelSelection,
+    params.personalAccountDefaults,
+  ];
   return () => {
-    params.assertCallerCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-    const error = params.validateSelection();
+    assertCallerCurrent?.();
+    prepared.assertPreparedTargetCurrent();
+    prepared.readOperatorAuthority()?.assertCurrent();
+    const error = prepared.validateSelection();
     if (error) {
       throw new Error(error.message);
     }
-    for (const selection of params.selections) {
+    for (const selection of selections) {
       selection?.assertCurrent();
     }
   };
@@ -181,7 +241,7 @@ export async function prepareSessionCreateDefaultAccount(params: {
     return selected;
   }
   const model = selected.selection;
-  const linked = resolveUserLinkedAuthProfile({
+  const linked = await resolveUserLinkedAuthProfile({
     cfg: resolveModelProviderAuthConfig({
       config: params.cfg,
       provider: model.provider,

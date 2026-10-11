@@ -38,12 +38,13 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
       ];
     }
   }
-  await maybeMigrateLegacyPluginModelCatalogs({
+  const migrationContext = () => ({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
+  await maybeMigrateLegacyPluginModelCatalogs(migrationContext());
   const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
   const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   ctx.cfg = legacyOAuthRepair.config;
@@ -61,12 +62,7 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
-  await maybeMigrateModelCatalogCredentials({
-    cfg: ctx.cfg,
-    ...(ctx.env ? { env: ctx.env } : {}),
-    prompter: ctx.prompter,
-    runtime: ctx.runtime,
-  });
+  await maybeMigrateModelCatalogCredentials(migrationContext());
   let authProfileHealthReady = true;
   if (
     ctx.configResult.retiredAuthProfileCleanupPlans?.length ||

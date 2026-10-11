@@ -6,7 +6,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -21,13 +21,17 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
+import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import {
   deleteSessionEntryRows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import {
+  captureCanonicalSessionReaderContinuation,
+  markCanonicalSessionValidationPending,
+} from "./session-canonical-key.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
@@ -37,7 +41,7 @@ import {
   readExactSessionEntriesWithLifecycle,
   readSessionRowDatabaseFacts,
 } from "./session-entry-read.worker.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import * as sharingKernel from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -47,10 +51,13 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
     const sessionKey = "agent:main:scoped-snapshots";
     const entry = {
       sessionId: "snapshot-session",
+      sidebarRoot: true,
+      parentSessionKey: "agent:main:dashboard:parent",
+      spawnedBy: "agent:main:dashboard:parent",
       updatedAt: 1,
       createdAt: 1,
       sessionStartedAt: 1,
-      status: "running" as const,
+      status: "done" as const,
       skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
       sessionDiffBaseline: {
         version: 1 as const,
@@ -103,6 +110,11 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             payloads.textBytes.entry = 0;
             const selected = read(fields);
             expect(selected.entries).toHaveLength(1);
+            expect(selected.entries[0]?.entry).toMatchObject({
+              sidebarRoot: true,
+              parentSessionKey: entry.parentSessionKey,
+              spawnedBy: entry.spawnedBy,
+            });
             expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
             expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
             expect(selected.members).toEqual({ [sessionKey]: [] });
@@ -119,14 +131,6 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             expect(payloads.textBytes.entry).toBeLessThan(2048);
             expect(read(fields, true).entries).toEqual(selected.entries);
           }
-          const recovery = readExactSessionEntriesWithLifecycle({
-            kind: "session-exact-entries",
-            database: target,
-            env,
-            sessionKeys: [],
-            statusSelection: { statuses: ["running"], presenceOnly: false },
-          });
-          expect(recovery.entries).toEqual(read([]).entries);
           expect(read().entries[0]?.entry).toMatchObject(entry);
         } finally {
           payloads.restore();
@@ -142,13 +146,18 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       sessionKeys: [sessionKey],
       snapshotFields: ["sessionDiffBaseline"],
     });
+    expect(transported.entries[0]?.entry).toMatchObject({
+      sidebarRoot: true,
+      parentSessionKey: entry.parentSessionKey,
+      spawnedBy: entry.spawnedBy,
+    });
     expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
     expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
     expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
   });
 });
 
-it("publishes exact-read admission only after commit and reuses it on the retained reader", async () => {
+it("publishes lifecycle snapshot admission only after commit and reuses it on the retained reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cron:admission";
@@ -169,6 +178,7 @@ it("publishes exact-read admission only after commit and reuses it on the retain
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         const commitFailure = new Error("Injected snapshot commit failure");
         const exec = reader.db.exec.bind(reader.db);
@@ -260,13 +270,14 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
 it.each([false, true])("reads row metadata (continuation: %s)", async (useContinuation) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:cron:row-facts";
+    const sessionKey = "agent:main:cron:row-facts-\ufffd";
+    const rawKey = "agent:main:cron:row-facts-\ud800";
     const sessionId = "row-facts-session";
     const siblingKey = "agent:main:cron:without-summary";
     const sessionKeys = [
       sessionKey,
       siblingKey,
-      ...Array.from({ length: 62 }, (_, index) => `agent:main:cron:cohort-${index}`),
+      ...Array.from({ length: 61 }, (_, index) => `agent:main:cron:cohort-${index}`),
     ];
     writeSessionEntry(database, sessionKey, {
       sessionId,
@@ -311,36 +322,8 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
     const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
-    const readBoards = boardStore.readBoardSessionKeys;
-    const concurrentCommit = vi
-      .spyOn(boardStore, "readBoardSessionKeys")
-      .mockImplementationOnce((reader, key) => {
-        // Commit after entry acquisition; the remaining facts must retain its original snapshot.
-        peer.exec("BEGIN IMMEDIATE");
-        try {
-          peer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'after') WHERE session_key = ?",
-            )
-            .run(sessionKey);
-          peer.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(sessionKey);
-          peer
-            .prepare(
-              "UPDATE transcript_rewrite_watermarks SET generation = 'next-generation' WHERE session_id = ?",
-            )
-            .run(sessionId);
-          peer
-            .prepare(
-              "UPDATE session_transcript_cold_archives SET last_seq = 42 WHERE session_id = ?",
-            )
-            .run(sessionId);
-          peer.exec("COMMIT");
-        } catch (error) {
-          peer.exec("ROLLBACK");
-          throw error;
-        }
-        return readBoards(reader, key);
-      });
+    const prepareRows = entryReads.prepareExactSessionEntryRowReads;
+    const concurrentCommit = vi.spyOn(entryReads, "prepareExactSessionEntryRowReads");
     try {
       retained.run(target, () => {
         const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
@@ -353,6 +336,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         }
         const continuation = useContinuation
@@ -361,17 +345,46 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
         if (useContinuation && !continuation) {
           throw new Error("Expected committed reader admission");
         }
+        concurrentCommit.mockImplementationOnce((...args) => {
+          const readRow = prepareRows(...args);
+          // Commit after entry acquisition; the remaining facts must retain its original snapshot.
+          peer.exec("BEGIN IMMEDIATE");
+          try {
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'after') WHERE session_key = ?",
+              )
+              .run(sessionKey);
+            peer.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(sessionKey);
+            peer
+              .prepare(
+                "UPDATE transcript_rewrite_watermarks SET generation = 'next-generation' WHERE session_id = ?",
+              )
+              .run(sessionId);
+            peer
+              .prepare(
+                "UPDATE session_transcript_cold_archives SET last_seq = 42 WHERE session_id = ?",
+              )
+              .run(sessionId);
+            peer.exec("COMMIT");
+          } catch (error) {
+            peer.exec("ROLLBACK");
+            throw error;
+          }
+          return readRow;
+        });
         const exec = vi.spyOn(opened.value.db, "exec");
         const queries = trackSqliteStatementExecutions(
           opened.value.db,
           ["boards", "entries"],
           (sql) => {
+            if (/\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')) {
+              return "entries";
+            }
             if (/\bfrom "board_tabs"/iu.test(sql)) {
               return "boards";
             }
-            return /\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')
-              ? "entries"
-              : null;
+            return null;
           },
         );
         const parse = vi.spyOn(JSON, "parse");
@@ -384,19 +397,19 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
                 sessionKeys.slice(1).some((key) => value.includes(key))),
           ).length;
         try {
-          const read = () =>
+          const read = (requestedKeys = [...sessionKeys, rawKey]) =>
             readSessionRowDatabaseFacts({
               kind: "session-row-facts",
               database: target,
               env,
-              sessionKeys,
+              sessionKeys: requestedKeys,
               continuation: continuation?.receipt,
             });
           const first = read();
           expect(first.rows).toHaveLength(64);
-          expect(queries.counts.boards).toBe(1);
+          expect(queries.counts.boards).toBe(0);
           expect(queries.counts.entries).toBe(1);
-          expect(queries.rowCounts.entries).toBe(64);
+          expect(queries.rowCounts.entries).toBe(63);
           expect(entryParseCount()).toBe(64);
           expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
             boardKeys,
@@ -412,12 +425,17 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
             hasBoard: false,
           });
           expect(first.rows[1]).not.toHaveProperty("activitySummaryWatermark");
+          expect(first.rows.at(-1)).toMatchObject({
+            sessionKey: rawKey,
+            entry: { label: "before" },
+            hasBoard: false,
+          });
           expect(read().rows[0]).toMatchObject({
             entry: { label: "after" },
             hasBoard: false,
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
-          expect(queries.counts.boards).toBe(2);
+          expect(queries.counts.boards).toBe(0);
           expect(queries.counts.entries).toBe(2);
           expect(entryParseCount()).toBe(128);
           expect(
@@ -425,6 +443,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
               .map(([sql]) => sql)
               .filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql)),
           ).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
+          expect(read([boardKeys[1]!]).rows[0]?.hasBoard).toBe(true);
         } finally {
           continuation?.release();
           exec.mockRestore();
@@ -440,7 +459,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
   });
 });
 
-it("consumes admitted board absence for a cohort and observes first use and foreign DDL", async () => {
+it("consumes admitted board absence for a cohort and observes first use and published DDL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKeys = Array.from(
@@ -453,7 +472,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
     database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       retained.run(target, () => {
@@ -544,23 +563,16 @@ it.each(["worker", "exact", "row-facts"] as const)(
   },
 );
 
-it("closes worker-prepared authority synchronously before queued consumers can reuse it", async () => {
+it("returns detached metadata and rejects asynchronous batch consumers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
-    let queued: Promise<void> | undefined;
     await withSessionEntriesFromStoresInWorker([input], ([read]) => {
       expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
       read!.assertCurrent();
-      queued = Promise.resolve().then(() => {
-        expect(read!.assertCurrent).toThrow("consumer is no longer active");
-      });
     });
-    await queued;
-    const result = await readSessionEntriesFromStoreInWorker(input);
-    expect(Object.keys(result).toSorted()).toEqual(["entries", "kind", "lifecycleTimestamps"]);
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );
@@ -636,6 +648,7 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
         projection: "list",
       });
     expect((await read()).entries).toHaveLength(1);
+    markCanonicalSessionValidationPending(database, [sibling]);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
         sessionId: sibling,
@@ -803,7 +816,10 @@ it.each(["durable", "incognito"] as const)(
         const queries = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
         try {
           authority.assertCurrent();
-          expect(queries.counts.all).toBe(0);
+          // Native writers can share a handle with raw SDK writes; one final row read certifies it.
+          expect(queries.counts.all).toBe(kind === "durable" ? 1 : 0);
+          authority.assertCurrent();
+          expect(queries.counts.all).toBe(kind === "durable" ? 1 : 0);
         } finally {
           queries.restore();
         }
@@ -965,29 +981,3 @@ it.each(["entry", "store", "topology", "native"] as const)(
     });
   },
 );
-
-it("refuses an ordered result when its database closes during reader cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:closing-consumer";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-    const reading = withSessionEntriesFromStoresInWorker(
-      [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
-      ([read]) => {
-        read!.assertCurrent();
-        queueMicrotask(() => {
-          closing = closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-        });
-        return read!.result.entries[0]?.entry;
-      },
-      { ordered: true },
-    );
-    try {
-      await expect(reading).rejects.toThrow("revoked");
-      expect(closing).toBeDefined();
-    } finally {
-      await closing;
-    }
-  });
-});

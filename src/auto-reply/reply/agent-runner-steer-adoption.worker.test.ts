@@ -138,7 +138,6 @@ it.for(
       const entry = {
         sessionId,
         updatedAt: 1,
-        status: "running" as const,
         restartRecoveryDeliveryRunId: "active-run",
         restartRecoveryDeliverySourceRunId: sourceTurnId,
       };

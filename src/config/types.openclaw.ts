@@ -22,7 +22,6 @@ import type { ProxyConfig } from "./zod-schema.proxy.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import type { SecuritySchema } from "./zod-schema.root-support.js";
 
-/** One persisted suppression for a known security audit finding. */
 export type SecurityConfig = NonNullable<z.input<typeof SecuritySchema>>;
 export type SecurityAuditSuppression = NonNullable<
   NonNullable<SecurityConfig["audit"]>["suppressions"]
@@ -37,7 +36,6 @@ type SchemaConfig = {
 type ConfigAuthoringOverrides = {
   /** @deprecated Doctor-only legacy input. */
   audit?: AuditConfig;
-  /** ACP integration settings. */
   acp?: AcpConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (interactive for Bash). */
@@ -55,43 +53,27 @@ type ConfigAuthoringOverrides = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
-  /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
-  /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
-  /** Plugin registry/install/runtime configuration. */
   plugins?: PluginsConfig;
-  /** Model providers, model catalog, pricing, and catalog merge policy. */
   models?: ModelsConfig;
-  /** Node-host pairing and remote command node settings. */
   nodeHost?: NodeHostConfig;
-  /** Agent definitions, defaults, bindings, and runtime policy. */
   agents?: AgentsConfig;
-  /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
   bindings?: AgentBinding[];
-  /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
   /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
   tts?: TtsConfig;
-  /** Chat command settings. */
   commands?: CommandsConfig;
   /** Channel defaults, built-in channel sections, and plugin-owned channel config. */
   channels?: ChannelsConfig;
-  /** Cron schedule and retention settings. */
   cron?: CronConfig;
-  /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
-  /** Runtime hook registration and queue behavior. */
   hooks?: HooksConfig;
-  /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
-  /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
-  /** MCP client/server and Codex MCP approval configuration. */
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
@@ -126,7 +108,6 @@ export type ConfigValidationIssue = {
   path: string;
   /** Structured validator path used internally for lossless source diagnostics. */
   pathSegments?: Array<string | number>;
-  /** Human-readable validation message. */
   message: string;
   /** Optional allowed values shown to the operator. */
   allowedValues?: string[];
@@ -138,7 +119,6 @@ export type ConfigValidationIssue = {
 export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 export type ConfigFileSnapshot = {
-  /** Config file path that was read. */
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
@@ -147,7 +127,6 @@ export type ConfigFileSnapshot = {
   /** Temporary roster-only projection retained until write preparation uses generic ownership. */
   agentRosterIncludeOwned?: boolean;
   bindingsIncludeOwned?: boolean;
-  /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
   raw: string | null;

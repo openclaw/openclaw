@@ -8,18 +8,9 @@ import {
   DecisionModelSchema,
 } from "./zod-schema.agent-model.js";
 
-const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
-
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),
   z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
-]);
-
-const OptionalBootstrapFileNameSchema = z.enum([
-  "SOUL.md",
-  "USER.md",
-  "HEARTBEAT.md",
-  "IDENTITY.md",
 ]);
 
 const AgentThinkingLevelSchema = z.enum(ALL_THINKING_LEVELS);
@@ -39,7 +30,7 @@ const EmbeddedAgentConfigSchema = z.strictObject({
 });
 
 export const SilentReplyPolicyConfigSchema = z.strictObject({
-  group: SilentReplyPolicySchema.optional(),
+  group: z.union([z.literal("allow"), z.literal("disallow")]).optional(),
 });
 
 const AgentOwnerTargetSchema = z
@@ -75,7 +66,9 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   silentReply: SilentReplyPolicyConfigSchema.optional(),
   repoRoot: z.string().optional(),
   skipBootstrap: z.boolean().optional(),
-  skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
+  skipOptionalBootstrapFiles: z
+    .array(z.enum(["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]))
+    .optional(),
   contextInjection: z
     .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
     .optional(),
@@ -138,12 +131,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
     .strictObject({
       /** Enable embedded proactive auto-compaction. Default: true. */
       enabled: z.boolean().optional(),
-      /** Compaction summarization mode. */
       mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
       /**
        * Id of a registered compaction provider plugin.
-       * When set, the provider's summarize() is called instead of
-       * the built-in summarizeInStages(). Falls back to built-in on failure.
+       * When set, the provider's summarize() is called instead of the
+       * built-in summary request. Falls back to built-in on failure.
        */
       provider: z.string().optional(),
       /** Thinking level for embedded OpenClaw compaction summaries. Default: low. */

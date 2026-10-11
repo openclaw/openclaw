@@ -1,18 +1,22 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
 import { renderChatThread } from "./chat-thread.ts";
 import {
   flushDeferredRowPrune,
@@ -35,6 +39,44 @@ async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("announces an appended reply in the same native render commit", () => {
+    const initial = threadProps("native-announcement", "agent:main:main", [
+      { role: "user", content: "Question", timestamp: 1_000 },
+    ]);
+    const [props, setProps] = createSignal(initial);
+    const transcript = createTestTranscript();
+    const view = mountSolid(() =>
+      createComponent(ChatThread, {
+        get props() {
+          return props();
+        },
+        transcript,
+      }),
+    );
+    try {
+      transcript.hostConnected();
+      flush();
+      expect(view.container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+      setProps({
+        ...initial,
+        messages: [
+          ...initial.messages,
+          {
+            role: "assistant",
+            content: "The completed reply",
+            timestamp: 2_000,
+          },
+        ],
+      });
+      flush();
+      expect(view.container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+        "The completed reply",
+      );
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 
   it.each([
     ["blob:configured-agent", "gutter", "props"],
@@ -81,6 +123,9 @@ describe("chat transcript rendering", () => {
         transcript.hostConnected();
         transcript.hostUpdated();
         await flushDeferredRowPrune();
+        expect(
+          container.querySelector(".chat-thread")?.classList.contains("chat-thread--direct"),
+        ).toBe(avatarPlacement !== "gutter");
         const replies = container.querySelectorAll(".chat-group.assistant");
         expect(replies).toHaveLength(3);
         for (const reply of replies) {
@@ -159,12 +204,12 @@ describe("chat transcript rendering", () => {
     const fetchArtwork = vi
       .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
       .mockImplementation(async ({ url }) => `blob:${url}`);
-    let branding = {
-      mascot: "claw" as const,
+    let branding = resolveThemeBranding({
+      mascot: "claw",
       critters: [],
       avatarHat: "beret",
       artwork: { hats: { beret: { url: "/hat?v=1" } } },
-    };
+    });
     const agentId = expectDefined(
       Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),
@@ -186,6 +231,7 @@ describe("chat transcript rendering", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
       await vi.dynamicImportSettled();
+      flush();
     };
     try {
       await draw();

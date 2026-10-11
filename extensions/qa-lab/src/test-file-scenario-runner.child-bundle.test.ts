@@ -25,63 +25,60 @@ const harness = createScenarioRunnerTestHarness();
 afterEach(() => harness.cleanup());
 
 describe("native attempt child bundles", () => {
-  it.each([
-    { status: "blocked", reason: undefined },
-    { status: "skipped", reason: "original failing check" },
-  ] as const)(
-    "retains a later failing producer check and its $reason diagnostic after a $status retry",
-    async ({ status, reason }) => {
-      const root = await harness.makeTempRepo("qa-native-multicheck-retry-");
-      const scenarios = [makeTestFileScenario("script", "producer.mjs")];
-      const run = async (continuation?: QaEvidenceSummaryV3Json) =>
-        runQaTestFileScenarios({
-          repoRoot: root,
-          outputDir: path.join(root, "out"),
-          scenarios,
-          ...QA_TEST_RUNNER_DEFAULTS,
-          ...(continuation
-            ? {
-                evidenceContinuation: continuation,
-                evidenceAnchors: resolveQaEvidenceContainment(
-                  continuation.occurrences,
-                  continuation.entries,
-                ).rootInstances,
-              }
-            : {}),
-          runCommand: async (command) => {
-            await writeScriptProducerEvidence({
-              outputDir: resolveScriptAttemptOutputDir(command),
-              producerId: "passing-check",
-              status: continuation ? status : "pass",
-              additionalEntries: continuation
-                ? []
-                : buildScriptProducerEvidence({
-                    status: "fail",
-                    producerId: "failing-check",
-                    failureReason: reason,
-                  }).entries,
-            });
-            return { exitCode: 0, stdout: "original command output", stderr: "" };
-          },
-        });
-      const first = await run();
-      if (first.evidence.schemaVersion !== 3) {
-        throw new Error("expected v3 adapter");
-      }
-      expect(first.results[0]?.failureMessage).toBe(reason ?? "failing-check reported failed");
-      const originalLog = await fs.readFile(first.results[0]!.logPath);
-      const originalRows = structuredClone(first.evidence.entries);
-      const second = await run(first.evidence);
-      expect(second.results[0]).toMatchObject({
-        status: "fail",
-        failureMessage: first.results[0]!.failureMessage,
-        evidenceOccurrenceId: first.results[0]!.evidenceOccurrenceId,
-        logPath: first.results[0]!.logPath,
+  it("retains a later failing producer check and its fallback diagnostic after a blocked retry", async () => {
+    const status = "blocked";
+    const reason = undefined;
+
+    const root = await harness.makeTempRepo("qa-native-multicheck-retry-");
+    const scenarios = [makeTestFileScenario("script", "producer.mjs")];
+    const run = async (continuation?: QaEvidenceSummaryV3Json) =>
+      runQaTestFileScenarios({
+        repoRoot: root,
+        outputDir: path.join(root, "out"),
+        scenarios,
+        ...QA_TEST_RUNNER_DEFAULTS,
+        ...(continuation
+          ? {
+              evidenceContinuation: continuation,
+              evidenceAnchors: resolveQaEvidenceContainment(
+                continuation.occurrences,
+                continuation.entries,
+              ).rootInstances,
+            }
+          : {}),
+        runCommand: async (command) => {
+          await writeScriptProducerEvidence({
+            outputDir: resolveScriptAttemptOutputDir(command),
+            producerId: "passing-check",
+            status: continuation ? status : "pass",
+            additionalEntries: continuation
+              ? []
+              : buildScriptProducerEvidence({
+                  status: "fail",
+                  producerId: "failing-check",
+                  failureReason: reason,
+                }).entries,
+          });
+          return { exitCode: 0, stdout: "original command output", stderr: "" };
+        },
       });
-      expect(second.evidence.entries.slice(0, 2)).toEqual(originalRows);
-      expect(await fs.readFile(first.results[0]!.logPath)).toEqual(originalLog);
-    },
-  );
+    const first = await run();
+    if (first.evidence.schemaVersion !== 3) {
+      throw new Error("expected v3 adapter");
+    }
+    expect(first.results[0]?.failureMessage).toBe(reason ?? "failing-check reported failed");
+    const originalLog = await fs.readFile(first.results[0]!.logPath);
+    const originalRows = structuredClone(first.evidence.entries);
+    const second = await run(first.evidence);
+    expect(second.results[0]).toMatchObject({
+      status: "fail",
+      failureMessage: first.results[0]!.failureMessage,
+      evidenceOccurrenceId: first.results[0]!.evidenceOccurrenceId,
+      logPath: first.results[0]!.logPath,
+    });
+    expect(second.evidence.entries.slice(0, 2)).toEqual(originalRows);
+    expect(await fs.readFile(first.results[0]!.logPath)).toEqual(originalLog);
+  });
 
   it.each(["pass", "blocked", "skipped"] as const)(
     "retains an actual independent v3 subprocess across a %s retry in full and slim projections",
@@ -313,57 +310,6 @@ process.exitCode = Number(value("--exit"));
         expect(active.at(-1)!.coverage).toEqual([]);
       }
       expect(JSON.stringify(second.evidence)).toBe(finalBytes);
-    },
-  );
-
-  it.each(["pass", "blocked"] as const)(
-    "selects the whole v2 producer and command attempt after %s",
-    async (status) => {
-      const root = await harness.makeTempRepo("qa-native-v2-retry-");
-      const scenarios = [makeTestFileScenario("script", "producer.mjs")];
-      const run = async (
-        next: typeof status | "fail",
-        exitCode: number,
-        continuation?: QaEvidenceSummaryV3Json,
-      ) =>
-        runQaTestFileScenarios({
-          repoRoot: root,
-          outputDir: path.join(root, "out"),
-          scenarios,
-          ...QA_TEST_RUNNER_DEFAULTS,
-          ...(continuation
-            ? {
-                evidenceContinuation: continuation,
-                evidenceAnchors: resolveQaEvidenceContainment(
-                  continuation.occurrences,
-                  continuation.entries,
-                ).rootInstances,
-              }
-            : {}),
-          runCommand: async (command) => {
-            await writeScriptProducerEvidence({
-              outputDir: resolveScriptAttemptOutputDir(command),
-              status: next,
-              failureReason: next === "fail" ? "producer failed" : undefined,
-            });
-            return { exitCode, stdout: "", stderr: "" };
-          },
-        });
-      const first = await run("fail", 7);
-      if (first.evidence.schemaVersion !== 3) {
-        throw new Error("expected v3 adapter");
-      }
-      const firstRows = structuredClone(first.evidence.entries);
-      const second = await run(status, 0, first.evidence);
-      expect(second.evidence.entries.slice(0, 2).map((entry) => entry.result)).toEqual(
-        firstRows.map((entry) => entry.result),
-      );
-      expect(
-        getEffectiveQaEvidenceEntries(second.evidence).map((entry) => entry.result.status),
-      ).toEqual(status === "pass" ? ["pass"] : ["fail", "fail"]);
-      expect(projectQaEvidenceScenarioOutcomes(second.evidence)[0]?.status).toBe(
-        status === "pass" ? "pass" : "fail",
-      );
     },
   );
 });

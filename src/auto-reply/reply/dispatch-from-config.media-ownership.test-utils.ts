@@ -17,7 +17,7 @@ import {
   globalBeforeAll0,
   installThreadingTestPlugin,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 

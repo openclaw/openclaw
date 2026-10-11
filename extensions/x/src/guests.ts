@@ -23,6 +23,10 @@ export function resolveXGuestContainmentError(
   if ((sandbox?.mode ?? defaults?.mode ?? "off") !== "off") {
     return `X guest mode requires agents.entries.${agentId}.sandbox.mode="off" and workspace-only file tools; sandbox mounts can expose files outside the repository.`;
   }
+  const queueMode = cfg.messages?.queue?.byChannel?.x ?? cfg.messages?.queue?.mode ?? "steer";
+  if (queueMode !== "followup" && queueMode !== "collect") {
+    return 'X guest mode requires messages.queue.byChannel.x="followup" or "collect" (or messages.queue.mode with either value) so guests cannot steer or interrupt an active turn.';
+  }
   return undefined;
 }
 

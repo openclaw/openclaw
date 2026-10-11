@@ -85,21 +85,6 @@ export function resolveRuntimeHooks(params?: {
   });
 }
 
-function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
-  const canonicalModelId = canonicalizeOpenAIModelId(params.provider, params.model.id);
-  if (canonicalModelId === params.model.id) {
-    return params.model;
-  }
-  return {
-    ...params.model,
-    id: canonicalModelId,
-    name:
-      canonicalizeOpenAIModelId(params.provider, params.model.name) === canonicalModelId
-        ? canonicalModelId
-        : params.model.name,
-  };
-}
-
 export function normalizeResolvedModel(params: {
   provider: string;
   model: Model;
@@ -113,19 +98,17 @@ export function normalizeResolvedModel(params: {
       return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     }
     const record = cost as Partial<Model["cost"]>;
-    const input = asFiniteNumber(record.input) ?? 0;
-    const output = asFiniteNumber(record.output) ?? 0;
-    const cacheRead = asFiniteNumber(record.cacheRead) ?? 0;
-    const cacheWrite = asFiniteNumber(record.cacheWrite) ?? 0;
-    if (
-      input === record.input &&
-      output === record.output &&
-      cacheRead === record.cacheRead &&
-      cacheWrite === record.cacheWrite
-    ) {
-      return record as Model["cost"];
-    }
-    return { ...cost, input, output, cacheRead, cacheWrite };
+    const normalized = {
+      input: asFiniteNumber(record.input) ?? 0,
+      output: asFiniteNumber(record.output) ?? 0,
+      cacheRead: asFiniteNumber(record.cacheRead) ?? 0,
+      cacheWrite: asFiniteNumber(record.cacheWrite) ?? 0,
+    };
+    return (["input", "output", "cacheRead", "cacheWrite"] as const).every(
+      (key) => normalized[key] === record[key],
+    )
+      ? (record as Model["cost"])
+      : { ...cost, ...normalized };
   };
 
   const normalizedInputModel = {
@@ -210,11 +193,19 @@ export function normalizeResolvedModel(params: {
       : undefined);
   // Capture the final route's preference once; tool construction must not reload provider policy.
   const modelWithToolSearch = { ...modelWithProviderTimeout, toolSearchMode };
+  const canonicalModelId = canonicalizeOpenAIModelId(params.provider, modelWithToolSearch.id);
   return inheritModelProviderRequestRouteFacts(
     params.model,
-    canonicalizeLegacyResolvedModel({
-      provider: params.provider,
-      model: modelWithToolSearch,
-    }),
+    canonicalModelId === modelWithToolSearch.id
+      ? modelWithToolSearch
+      : {
+          ...modelWithToolSearch,
+          id: canonicalModelId,
+          name:
+            canonicalizeOpenAIModelId(params.provider, modelWithToolSearch.name) ===
+            canonicalModelId
+              ? canonicalModelId
+              : modelWithToolSearch.name,
+        },
   );
 }

@@ -196,14 +196,11 @@ function renderClawHubAuditBox(lines: string[]): string {
   const title = "─ ClawHub Security Audit ";
   const borderWidth = innerWidth + 2;
   const top = `╭${title}${"─".repeat(Math.max(0, borderWidth - visibleWidth(title)))}╮`;
-  const body = lines.flatMap((line) => {
-    if (!line) {
-      return [`│ ${" ".repeat(innerWidth)} │`];
-    }
-    return wrapClawHubAuditLine(line, innerWidth).map(
+  const body = lines.flatMap((line) =>
+    wrapClawHubAuditLine(line, innerWidth).map(
       (wrapped) => `│ ${wrapped}${" ".repeat(Math.max(0, innerWidth - visibleWidth(wrapped)))} │`,
-    );
-  });
+    ),
+  );
   return [top, ...body, `╰${"─".repeat(borderWidth)}╯`].join("\n");
 }
 
@@ -255,23 +252,19 @@ function validateClawHubSecurityIdentity(params: {
   version: string;
 }): ClawHubTrustFailure | null {
   const packageLabel = params.packageLabel ?? params.packageName;
-  const responsePackageName = normalizeOptionalString(params.security.package?.name);
-  if (responsePackageName !== params.packageName) {
-    return {
-      ok: false,
-      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned package "${sanitizeTerminalText(responsePackageName ?? "unknown")}".`,
-      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-      version: params.version,
-    };
-  }
-  const responseVersion = normalizeOptionalString(params.security.release?.version);
-  if (responseVersion !== params.version) {
-    return {
-      ok: false,
-      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned version "${sanitizeTerminalText(responseVersion ?? "unknown")}".`,
-      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-      version: params.version,
-    };
+  for (const field of ["package", "version"] as const) {
+    const actual = normalizeOptionalString(
+      field === "package" ? params.security.package?.name : params.security.release?.version,
+    );
+    const expected = field === "package" ? params.packageName : params.version;
+    if (actual !== expected) {
+      return {
+        ok: false,
+        error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned ${field} "${sanitizeTerminalText(actual ?? "unknown")}".`,
+        code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+        version: params.version,
+      };
+    }
   }
   return null;
 }

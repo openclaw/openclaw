@@ -5,13 +5,18 @@ import type { WebSocket } from "ws";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { prepareGatewayReceiverHandoff, raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
-import { scheduleGatewayRequestStart } from "./request-start.js";
+import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
 const workRequest = { method: "chat.send" };
 const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
-function requestStart(bytes = 1, request = workRequest, connId = "connection"): Promise<void> {
-  const permission = scheduleGatewayRequestStart(bytes, request, connId, Promise.resolve());
+function requestStart(
+  bytes = 1,
+  request = workRequest,
+  connId = "connection",
+  settled = Promise.resolve(),
+): Promise<void> {
+  const permission = scheduleGatewayRequestStart(bytes, request, connId, settled);
   if (!permission) {
     throw new Error("expected start capacity");
   }
@@ -28,7 +33,6 @@ describe("Gateway request start fairness", () => {
   it("bounds concurrent reconnect preparations through settlement and yields before each start", async () => {
     const methods = [
       { method: "sessions.subscribe" },
-      { method: "sessions.list" },
       { method: "models.list" },
       { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
     ];
@@ -73,6 +77,57 @@ describe("Gateway request start fairness", () => {
     }
   });
 
+  it("parks preparations without blocking reads or reordering connection mutations", async () => {
+    const held = Array.from({ length: 4 }, () => createDeferredCore());
+    const starts: string[] = [];
+    const start = (method: string, connId: string, params = {}) => {
+      const permission = scheduleGatewayRequestStart(
+        100,
+        { method, params },
+        connId,
+        Promise.resolve(),
+      );
+      if (!permission) {
+        throw new Error("expected waiting capacity");
+      }
+      const started = permission.then(() => {
+        starts.push(method);
+      });
+      permissions.push(started);
+      return started;
+    };
+    try {
+      await Promise.all(
+        held.map((completion, index) =>
+          requestStart(100, { method: "models.list" }, `held-${index}`, completion.promise),
+        ),
+      );
+      const subscription = start("sessions.messages.subscribe", "viewer", {
+        key: "main",
+        includeApprovals: true,
+      });
+      const unsubscribe = start("sessions.messages.unsubscribe", "viewer", { key: "main" });
+      const mutation = start("chat.send", "viewer");
+      void start("chat.history", "viewer");
+      void start("sessions.list", "viewer");
+      void start("sessions.create", "another-viewer");
+      await nextTurn();
+      expect([...starts]).toEqual(["chat.history", "sessions.list", "sessions.create"]);
+      held[0]!.resolve();
+      await Promise.all([subscription, unsubscribe, mutation]);
+      expect(starts.slice(3)).toEqual([
+        "sessions.messages.subscribe",
+        "sessions.messages.unsubscribe",
+        "chat.send",
+      ]);
+    } finally {
+      for (const completion of held) {
+        completion.resolve();
+      }
+      await Promise.all(permissions);
+    }
+  });
+
   it("releases a cancelled preparation waiter while earlier requests still own capacity", async () => {
     const settled = Array.from({ length: 4 }, () => createDeferredCore());
     const request = { method: "sessions.subscribe" };
@@ -109,13 +164,48 @@ describe("Gateway request start fairness", () => {
     await expect(requestStart()).resolves.toBeUndefined();
   });
 
+  it("expires a parked start without releasing active preparation capacity", async () => {
+    const held = Array.from({ length: 4 }, () => createDeferredCore());
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const request = { method: "models.list" };
+    try {
+      await Promise.all(
+        held.map((completion, index) =>
+          requestStart(100, request, `held-${index}`, completion.promise),
+        ),
+      );
+      const waiting = scheduleGatewayRequestStart(100, request, "waiting", Promise.resolve());
+      const rejected = expect(waiting).rejects.toBeInstanceOf(GatewayRequestStartTimeoutError);
+      await nextTurn();
+      now = 30_000;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      const later = requestStart(100, request, "later");
+      let started = false;
+      void later.then(() => {
+        started = true;
+      });
+      await nextTurn();
+      expect(started).toBe(false);
+      held[0]!.resolve();
+      await later;
+    } finally {
+      for (const completion of held) {
+        completion.resolve();
+      }
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["settled", "cancelled"] as const)(
     "bounds settlement listeners while sibling requests are %s",
     async (outcome) => {
       const held = createDeferredCore();
       const observeSettlement = vi.spyOn(held.promise, "then");
       const siblings = Array.from({ length: 3 }, () => createDeferredCore());
-      const request = { method: "sessions.list" };
+      const request = { method: "models.list" };
       const start = (settled: Promise<void>, signal?: AbortSignal) => {
         const permission = scheduleGatewayRequestStart(100, request, "client", settled, signal);
         if (!permission) {

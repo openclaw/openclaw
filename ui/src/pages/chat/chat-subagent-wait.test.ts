@@ -1,12 +1,13 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import {
-  projectSubagentStatus,
-  resolveChatSubagentWait,
-  type ChatSubagentWait,
-} from "./chat-subagent-wait.ts";
+import { projectSubagentStatus, type ChatSubagentWait } from "./chat-subagent-wait.ts";
+import { renderSubagentActivity } from "./components/chat-subagent-activity.ts";
 import { renderChatWorkingIndicator } from "./components/chat-working-indicator.ts";
+
+function resolveChatSubagentWait(input: Parameters<typeof projectSubagentStatus>[0]) {
+  return projectSubagentStatus(input, false).wait;
+}
 
 const parent: GatewaySessionRow = {
   key: "agent:main:parent",
@@ -40,6 +41,106 @@ const messages = [
 ];
 
 describe("chat waiting on subagents", () => {
+  it("keeps each unfinished subagent's current activity visible without reviving old runs", () => {
+    const active = {
+      ...child,
+      activeRunIds: ["backend-run"],
+      createdAt: 1,
+      observerDigest: {
+        runId: "backend-run",
+        headline: "Checking the API response",
+        health: "on-track" as const,
+        revision: 1,
+        updatedAt: 3_000,
+      },
+    };
+    const queued = {
+      ...child,
+      key: "agent:main:subagent:queued",
+      label: "UI regression tests",
+      createdAt: 2,
+      status: "queued" as const,
+      hasActiveRun: false,
+    };
+    const delegated = {
+      ...child,
+      key: "agent:main:subagent:review",
+      label: "Review accessibility",
+      createdAt: 3,
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    };
+    const project = (rows: GatewaySessionRow[], searching = false) =>
+      projectSubagentStatus(
+        {
+          selectedSession: parent,
+          messages,
+          subagentSessions: rows,
+          subagentSessionsHydrated: true,
+        },
+        searching,
+      );
+    const initial = project([delegated, queued, active]);
+    expect(initial.activity).toMatchObject([
+      {
+        key: child.key,
+        label: child.label,
+        status: "running",
+        activity: "Checking the API response",
+        listed: true,
+      },
+      { key: queued.key, label: queued.label, status: "queued", activity: undefined, listed: true },
+      {
+        key: delegated.key,
+        label: delegated.label,
+        status: "waiting",
+        activity: undefined,
+        listed: true,
+      },
+    ]);
+    const updated = project([
+      {
+        ...active,
+        observerDigest: {
+          ...active.observerDigest,
+          headline: "Running the backend tests",
+          revision: 2,
+        },
+      },
+      queued,
+      delegated,
+    ]);
+    expect(updated.statusKey).not.toBe(initial.statusKey);
+    expect(updated.rowsKey).toBe(initial.rowsKey);
+    expect(updated.activity[0]?.activity).toBe("Running the backend tests");
+    expect(
+      project([{ ...active, activeRunIds: ["replacement-run"] }]).activity[0]?.activity,
+    ).toBeUndefined();
+    expect(project([{ ...active, status: "done", hasActiveRun: false }]).activity).toEqual([]);
+    expect(project([active], true).activity).toEqual([]);
+
+    const container = document.createElement("div");
+    const onOpenSubagent = vi.fn();
+    const onOpenSession = vi.fn();
+    render(renderSubagentActivity(initial.activity, onOpenSubagent, onOpenSession), container);
+    expect(container.textContent).toContain("Backend implementation");
+    expect(container.textContent).toContain("Checking the API response");
+    expect(container.textContent).toContain("UI regression tests");
+    expect(container.textContent).toContain("Queued");
+    expect(container.textContent).toContain("Review accessibility");
+    expect(container.textContent).toContain("Waiting on subagents");
+    container.querySelector("button")?.click();
+    expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
+    const acp = project([{ ...active, key: "agent:main:acp:coder" }]);
+    render(renderSubagentActivity(acp.activity, onOpenSubagent, onOpenSession), container);
+    container.querySelector("button")?.click();
+    expect(onOpenSession).toHaveBeenCalledWith("agent:main:acp:coder");
+    render(renderSubagentActivity(updated.activity), container);
+    expect(container.textContent).toContain("Running the backend tests");
+    expect(container.textContent).not.toContain("Checking the API response");
+    expect(container.querySelector("button")).toBeNull();
+  });
+
   it.each([
     {
       name: "idle parent with active descendants",
@@ -228,6 +329,49 @@ describe("chat waiting on subagents", () => {
     expect(count({ selectedSession: undefined })).toBe(0);
   });
 
+  it("keeps an active parent's running count while a covering child read is pending", () => {
+    const input = {
+      selectedSession: { ...parent, hasActiveRun: true },
+      subagentSessions: [child],
+      subagentSessionsHydrated: true,
+      subagentSessionsPending: true,
+      messages,
+    };
+    expect(projectSubagentStatus(input, false)).toMatchObject({
+      wait: null,
+      running: 1,
+      listed: true,
+    });
+    // If the parent hands off before that read answers, its wait is still generic.
+    expect(projectSubagentStatus({ ...input, selectedSession: parent }, false).wait).toEqual({
+      startedAt: 2_000,
+      runId: "parent-run",
+      runningCount: 0,
+    });
+  });
+
+  it("leads to the Subagents panel only when it lists every subagent the line mentions", () => {
+    const listed = (subagentSessions: GatewaySessionRow[], working = true) =>
+      projectSubagentStatus(
+        {
+          selectedSession: working ? { ...parent, hasActiveRun: true } : parent,
+          subagentSessions,
+          subagentSessionsHydrated: true,
+          runWorking: working,
+          messages: working ? [] : messages,
+        },
+        false,
+      ).listed;
+    expect(listed([child])).toBe(true);
+    expect(listed([child], false)).toBe(true);
+    const worker = { ...child, key: "agent:main:subagent:worker", swarmGroupId: "audit" };
+    expect(listed([child, worker])).toBe(true);
+    expect(listed([{ ...child, key: "agent:main:acp:coder" }], false)).toBe(false);
+    // A child session is not one of the line's subagents.
+    expect(listed([child, { ...child, key: "agent:main:dashboard:opened" }])).toBe(true);
+    expect(listed([{ ...child, hasActiveRun: false }])).toBe(false);
+  });
+
   it("ends the working line with the running count and leaves the wait line to its own wording", () => {
     const container = document.createElement("div");
     const draw = (options: Parameters<typeof renderChatWorkingIndicator>[1]) =>
@@ -254,13 +398,13 @@ describe("chat waiting on subagents", () => {
 
   it("renders the wait without parent output usage or rotating phrases and navigates the child", () => {
     const container = document.createElement("div");
-    const onOpenSession = vi.fn();
+    const onOpenSubagent = vi.fn();
     const sole = { key: child.key, label: child.label! };
     const draw = (waitingSubagents: ChatSubagentWait) =>
       render(
         renderChatWorkingIndicator(
           { kind: "reading-indicator", key: "parent-wait", startedAt: 1_500 },
-          { waitingSubagents, onOpenSession, outputTokens: 4_700, workingPhrases: ["Building"] },
+          { waitingSubagents, onOpenSubagent, outputTokens: 4_700, workingPhrases: ["Building"] },
         ),
         container,
       );
@@ -273,7 +417,7 @@ describe("chat waiting on subagents", () => {
     // The wait counts from the handoff, not from the indicator item.
     expect(container.querySelector("openclaw-elapsed-time")).toHaveProperty("startMs", 2_000);
     container.querySelector("button")?.click();
-    expect(onOpenSession).toHaveBeenCalledWith(child.key);
+    expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
     draw({ startedAt: 2_000, runningCount: 3 });
     expect(container.textContent).toContain("Waiting on 3 subagents");
     expect(container.querySelector("button")).toBeNull();
@@ -290,5 +434,31 @@ describe("chat waiting on subagents", () => {
     expect(container.textContent?.replace(/\s+/g, " ")).toContain(
       "Waiting on Backend implementation",
     );
+  });
+
+  it("makes the subagents' count the way to their list, and leaves child sessions as text", () => {
+    const container = document.createElement("div");
+    const onOpenSubagents = vi.fn();
+    const draw = (options: Parameters<typeof renderChatWorkingIndicator>[1]) =>
+      render(
+        renderChatWorkingIndicator(
+          { kind: "reading-indicator", key: "parent-count", startedAt: 1_000 },
+          { onOpenSubagents, ...options },
+        ),
+        container,
+      );
+    const control = () => container.querySelector<HTMLButtonElement>("button");
+    draw({ runningSubagents: 3 });
+    expect(control()?.textContent?.trim()).toBe("3 subagents running");
+    control()?.click();
+    // Waiting: the whole sentence is the control, wherever a language puts the count.
+    draw({ waitingSubagents: { startedAt: 2_000, runningCount: 3 } });
+    expect(control()?.textContent?.trim()).toBe("Waiting on 3 subagents");
+    control()?.click();
+    expect(onOpenSubagents).toHaveBeenCalledTimes(2);
+    // Child sessions are not subagents, so there is no list of them to open.
+    draw({ waitingSubagents: { startedAt: 2_000, runningCount: 0, sessionCount: 2 } });
+    expect(container.textContent).toContain("Waiting on 2 sessions");
+    expect(control()).toBeNull();
   });
 });

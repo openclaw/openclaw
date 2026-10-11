@@ -46,9 +46,7 @@ class CameraHandler(
       val res =
         try {
           camLog("calling camera.snap()")
-          val r = camera.snap(paramsJson)
-          camLog("success, payload size=${r.length}")
-          r
+          camera.snap(paramsJson).also { camLog("success, payload size=${it.length}") }
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
@@ -84,12 +82,10 @@ class CameraHandler(
       val filePayload =
         try {
           clipLog("calling camera.clip()")
-          val r =
-            camera.clip(paramsJson) { file ->
+          camera
+            .clip(paramsJson) { file ->
               check(ownedClipFile.compareAndSet(null, file)) { "camera clip already owns a file" }
-            }
-          clipLog("success, file size=${r.file.length()}")
-          r
+            }.also { clipLog("success, file size=${it.file.length()}") }
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {

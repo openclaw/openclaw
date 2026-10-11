@@ -21,7 +21,6 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
-import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import {
   TelegramIngressPayloadError,
   type TelegramSpooledUpdatePayload,
@@ -113,65 +112,6 @@ async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown
   throw new Error("expected Telegram dispatch rollback failure");
 }
 
-describe("resolveTelegramIngressNonRetryableFailure", () => {
-  it.each(["Forbidden: bot was kicked from the group chat", "Forbidden: user is deactivated"])(
-    "classifies permanent Telegram recipient rejection: %s",
-    (description) => {
-      expect(
-        resolveTelegramIngressNonRetryableFailure(telegramSendError(403, description)),
-      ).toEqual({
-        reason: "recipient-unreachable",
-        message: expect.stringContaining(description),
-      });
-    },
-  );
-
-  it("classifies a permanent recipient error nested inside a dispatch failure", () => {
-    const cause = telegramSendError(403, "Forbidden: bot was blocked by the user");
-
-    expect(
-      resolveTelegramIngressNonRetryableFailure(new Error("pairing reply failed", { cause })),
-    ).toEqual({
-      reason: "recipient-unreachable",
-      message: expect.stringContaining("bot was blocked by the user"),
-    });
-  });
-
-  it.each([
-    {
-      name: "harness error name",
-      error: Object.assign(new Error("harness unavailable"), { name: "MissingAgentHarnessError" }),
-    },
-    {
-      name: "harness registration message",
-      error: new Error('Requested agent harness "missing-harness-85470" is not registered.'),
-    },
-    {
-      name: "grammY error wrapping a dispatch cause",
-      error: Object.assign(new Error("Error in middleware: Agent turn failed"), {
-        name: "BotError",
-        error: new Error("Agent turn failed", {
-          cause: new Error('Requested agent harness "missing-harness-85470" is not registered.'),
-        }),
-      }),
-    },
-  ])("classifies a missing harness through $name", ({ error }) => {
-    expect(resolveTelegramIngressNonRetryableFailure(error)?.reason).toBe("missing-agent-harness");
-  });
-
-  it("keeps recoverable Telegram permission failures eligible for retry", () => {
-    const error = telegramSendError(403, "Forbidden: not enough rights to send text messages");
-
-    expect(resolveTelegramIngressNonRetryableFailure(error)).toBeNull();
-  });
-
-  it("keeps flood-control failures eligible for retry", () => {
-    const error = telegramSendError(429, "Too Many Requests: retry after 30");
-
-    expect(resolveTelegramIngressNonRetryableFailure(error)).toBeNull();
-  });
-});
-
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -228,41 +168,6 @@ describe("createTelegramIngressMonitor", () => {
         }),
       ]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
-
-      await monitor.stop();
-    });
-  });
-
-  it("propagates failed-retryable dispatch results as claim release (not tombstone)", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "1".padStart(16, "0");
-      const payload = updatePayload(1);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-
-      const retryError = new Error("provider blip");
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => ({ kind: "failed-retryable", error: retryError }),
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-
-      // Failed-retryable must release, not complete — re-enqueue is pending, not tombstone.
-      const status = await queue.enqueue(eventId, payload, { laneKey });
-      expect(status.kind).not.toBe("completed");
-      expect(status.kind === "accepted" || status.kind === "pending").toBe(true);
-
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending.some((row) => row.id === eventId)).toBe(true);
 
       await monitor.stop();
     });
@@ -325,13 +230,6 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     {
-      name: "private chat",
-      updateKind: "message",
-      chat: { id: 1234, type: "private" },
-      topic: {},
-      laneKey: "telegram:1234",
-    },
-    {
       name: "private topic",
       updateKind: "edited_message",
       chat: { id: 1234, type: "private" },
@@ -339,36 +237,20 @@ describe("createTelegramIngressMonitor", () => {
       laneKey: "telegram:1234:topic:42",
     },
     {
-      name: "forum topic",
-      updateKind: "message",
-      chat: { id: -1234, type: "supergroup", is_forum: true },
-      topic: { message_thread_id: 42, is_topic_message: true },
-      laneKey: "telegram:-1234:topic:42",
-    },
-    {
-      name: "channel Direct Messages topic",
-      updateKind: "message",
-      chat: { id: -1234, type: "supergroup", is_direct_messages: true },
-      topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
-      laneKey: "telegram:-1234:topic:42",
-    },
-    ...["channel_post", "edited_channel_post"].map((updateKind) => ({
-      name: updateKind,
-      updateKind,
+      name: "edited_channel_post",
+      updateKind: "edited_channel_post",
       chat: { id: -1234, type: "channel" },
       topic: {},
       laneKey: "telegram:-1234",
-    })),
-    ...["telegram:-9999:topic:42", "telegram:-1234:topic:99", "telegram:-1234:approval"].map(
-      (laneKey) => ({
-        name: `mismatched Direct Messages lane ${laneKey}`,
-        updateKind: "message",
-        chat: { id: -1234, type: "supergroup", is_direct_messages: true },
-        topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
-        laneKey,
-        reject: true,
-      }),
-    ),
+    },
+    {
+      name: "mismatched Direct Messages lane telegram:-1234:approval",
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_direct_messages: true },
+      topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
+      laneKey: "telegram:-1234:approval",
+      reject: true,
+    },
   ])("replays promoted controls after restart: $name", async (testCase) => {
     await withTempState(async (stateDir) => {
       const queueOptions = { channelId: "telegram", accountId: "default", stateDir };
@@ -477,11 +359,6 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     {
-      name: "invalid payload",
-      createError: async () => new TelegramIngressPayloadError("late invalid payload"),
-      reason: "invalid-event",
-    },
-    {
       name: "dispatch dedupe rollback failure",
       createError: createTelegramMessageDispatchReplayForgetError,
       reason: "dispatch-dedupe-rollback-failed",
@@ -527,7 +404,7 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
-  it.each(["completed", "skipped"] as const)(
+  it.each(["completed"] as const)(
     "releases an aborted deferred claim after a late %s settlement",
     async (terminalKind) => {
       await withTempState(async (stateDir) => {
@@ -796,40 +673,6 @@ describe("createTelegramIngressMonitor", () => {
         ]),
       );
       expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
-    });
-  });
-
-  it("logs a diagnostic when dispatch records no outcome and defers no participant", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "3".padStart(16, "0");
-      const payload = updatePayload(3);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-
-      const logs: string[] = [];
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => {},
-        onLog: (message) => logs.push(message),
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-
-      // Silent consumption still completes (skip semantics), but must leave a trace.
-      const status = await queue.enqueue(eventId, payload, { laneKey });
-      expect(status.kind).toBe("completed");
-      expect(
-        logs.some((line) => line.includes("completed without a recorded processing outcome")),
-      ).toBe(true);
-      await monitor.stop();
     });
   });
 

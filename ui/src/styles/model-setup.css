@@ -12,7 +12,8 @@
 }
 
 .model-setup__intro h1,
-.model-setup-wizard h2 {
+.model-setup-wizard h2,
+.model-setup-success__copy h2 {
   margin: 0;
   font-size: 20px;
 }
@@ -202,11 +203,6 @@
   color: var(--danger);
 }
 
-.model-setup__failure-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
 .model-setup__failure span:last-child {
   overflow-wrap: anywhere;
 }
@@ -316,6 +312,7 @@
 
 .model-setup-provider-select__chevron svg,
 .model-setup-provider-select__placeholder-icon svg,
+.model-setup__failure-icon svg,
 .model-setup__manual-help svg,
 .model-setup-success__icon svg,
 .model-setup-success__actions svg {
@@ -422,11 +419,6 @@
   height: 28px;
 }
 
-.model-setup-success__copy h2 {
-  margin: 0;
-  font-size: 20px;
-}
-
 .model-setup-success__copy p {
   margin: 8px 0 0;
   color: var(--muted);
@@ -500,6 +492,28 @@
   overflow: auto;
 }
 
+.model-setup-wizard__error {
+  position: relative;
+}
+
+.model-setup-wizard__error-text {
+  max-height: min(220px, 35dvh);
+  margin: 0;
+  padding-right: 32px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.model-setup-wizard__error-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 .model-setup-wizard__footer {
   display: flex;
   justify-content: flex-end;
@@ -514,10 +528,7 @@
   }
 
   .model-setup__loading-icon,
-  .model-setup__loading-action {
-    align-self: flex-start;
-  }
-
+  .model-setup__loading-action,
   .model-setup__row > .btn {
     align-self: flex-start;
   }
