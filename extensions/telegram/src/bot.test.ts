@@ -111,7 +111,7 @@ const {
   getChatSpy,
   getLoadConfigMock,
   getOnHandler,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   onSpy,
   getReadChannelAllowFromStoreMock,
   replySpy,
@@ -1172,7 +1172,7 @@ describe("createTelegramBot", () => {
   );
 
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
-    listSkillCommandsForAgents.mockImplementationOnce(({ agentIds }) => {
+    prepareSkillCommandsForAgents.mockImplementationOnce(async ({ agentIds }) => {
       if (agentIds?.length !== 1 || agentIds[0] !== "main") {
         throw new Error("pagination queried commands for the wrong agent");
       }
@@ -1202,7 +1202,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledOnce();
+    expect(prepareSkillCommandsForAgents).toHaveBeenCalledOnce();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       -100999,
@@ -1716,7 +1716,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgents).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
   });
 

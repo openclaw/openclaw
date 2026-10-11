@@ -8,6 +8,7 @@ import {
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
+import { renderAttachmentRemove } from "./chat-attachment-file.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 
@@ -126,22 +127,7 @@ export function renderComposerPastedTextSolid(
       prop:scope={att.id}
       prop:onOpen={open}
       prop:composerAction={renderRestoreAction()}
-      prop:composerRemoveAction={solidTemplate(
-        () => (
-          <openclaw-tooltip prop:content={removeLabel}>
-            <button
-              class="chat-attachment-remove"
-              type="button"
-              aria-label={removeLabel}
-              disabled={props.disabled}
-              onClick={remove}
-            >
-              <LitContent value={icons.x} />
-            </button>
-          </openclaw-tooltip>
-        ),
-        {},
-      )}
+      prop:composerRemoveAction={renderAttachmentRemove(removeLabel, props.disabled, remove)}
     ></openclaw-chat-pasted-text>
   );
 }

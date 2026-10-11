@@ -640,7 +640,8 @@
   }
 }
 
-.agent-chat__input-btn:disabled {
+.agent-chat__input-btn:disabled,
+.agent-chat__attach-menu > button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -650,11 +651,6 @@
   align-items: center;
   position: relative;
   flex: 0 0 auto;
-}
-
-.agent-chat__attach-menu > button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .agent-chat__attach-menu[open] > button {
@@ -719,7 +715,8 @@
    colour — not just contrast — the thing that marks the button that actually
    sends. Losing availability drops it back to a step of the surface: an
    unavailable send must not keep shouting in brand red. */
-.agent-chat__input .chat-send-btn {
+.agent-chat__input .chat-send-btn,
+.chat-send-btn.chat-send-btn--dictating {
   width: var(--chat-composer-send-size);
   min-width: var(--chat-composer-send-size);
   height: var(--chat-composer-send-size);
@@ -844,14 +841,9 @@
    would release pointer capture mid-hold — so the mode only restyles it. Once
    latched, this square is the explicit discard half of the action pair. */
 .chat-send-btn.chat-send-btn--dictating {
-  width: var(--chat-composer-send-size);
-  min-width: var(--chat-composer-send-size);
-  height: var(--chat-composer-send-size);
-  padding: 5px;
   border-radius: var(--radius-full);
   color: var(--text-strong);
   background: color-mix(in srgb, var(--text) 10%, transparent);
-  box-shadow: none;
   touch-action: none;
   -webkit-touch-callout: none;
   user-select: none;

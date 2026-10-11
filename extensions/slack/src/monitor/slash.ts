@@ -15,7 +15,7 @@ import {
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   parseCommandArgs,
   resolveCommandArgMenu,
   resolveEffectiveAgentRuntime,
@@ -940,7 +940,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       providerSetting: account.config.commands?.nativeSkills,
       globalSetting: startupCfg.commands?.nativeSkills,
     })
-      ? listSkillCommandsForAgents({ cfg: startupCfg })
+      ? await prepareSkillCommandsForAgents({ cfg: startupCfg })
       : [];
     nativeCommands = listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,
