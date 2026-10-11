@@ -579,13 +579,21 @@ export function registerIncognitoHistoryWiringTests(
     ).rejects.toThrow("Incognito session grants must remain synchronous");
   });
 
-  it.each(["unchanged", "abort", "append", "release"] as const)(
+  it.each(["unchanged", "revoke", "abort", "append", "release"] as const)(
     "settles async model context consumers after %s and joins their lifetime",
     async (mode) => {
       const { actor, env } = fixture;
       const session = await create(`async-model-context-${mode}`);
       await append(session, "private context before consumer");
-      const grant: IncognitoSessionAuthority = { assertCurrent() {} };
+      let revoked = false;
+      const grant: IncognitoSessionAuthority = {
+        assertCurrent() {},
+        authorize() {
+          if (revoked) {
+            throw new Error("context grant revoked");
+          }
+        },
+      };
       const borrowed = await captureOpenClawAgentDatabaseExecution({
         kind: "ephemeral",
         agentId: actor.agentId,
@@ -603,12 +611,20 @@ export function registerIncognitoHistoryWiringTests(
       const work = withIncognitoSessionActor(
         borrowed,
         () =>
-          readSessionTranscriptModelContextAsync(scope, async (context) => {
-            calls++;
-            entered.resolve();
-            await resume.promise;
-            return context.events;
-          }),
+          readSessionTranscriptModelContextAsync(
+            scope,
+            async (context) => {
+              calls++;
+              entered.resolve();
+              await resume.promise;
+              return context.events;
+            },
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            mode === "revoke" ? { actor: borrowed, authority: grant, target } : undefined,
+          ),
         admission.signal,
       );
       const settled =
@@ -622,7 +638,11 @@ export function registerIncognitoHistoryWiringTests(
               },
             ])
           : expect(work).rejects.toThrow(
-              mode === "release" ? "reference is released" : "context admission revoked",
+              mode === "release"
+                ? "reference is released"
+                : mode === "abort"
+                  ? "context admission revoked"
+                  : "context grant revoked",
             );
       let releasing: Promise<void> | undefined;
       let released = false;
@@ -632,7 +652,9 @@ export function registerIncognitoHistoryWiringTests(
           work,
           "Context read settled before its consumer",
         );
-        if (mode === "abort") {
+        if (mode === "revoke") {
+          revoked = true;
+        } else if (mode === "abort") {
           admission.abort(new Error("context admission revoked"));
         } else if (mode === "append") {
           await append(session, "context changed while consumer awaited");

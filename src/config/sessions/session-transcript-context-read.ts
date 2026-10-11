@@ -216,7 +216,9 @@ export function readSessionTranscriptModelContextAsync<T>(
         );
       })
       .then((result) => {
-        prepared.authority.assertCurrent();
+        prepared.actor.sessions
+          .captureCurrent(prepared.target.sessionKey)
+          .authorize(prepared.authority, "commit");
         return result;
       });
   }
