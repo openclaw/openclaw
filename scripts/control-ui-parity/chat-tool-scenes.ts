@@ -109,7 +109,7 @@ export const chatToolScenes: Scene[] = [
                 kind: "image",
                 label: "preview.svg",
                 mimeType: "image/svg+xml",
-                url: "/parity-preview.svg",
+                url: "http://parity.localhost:18789/parity-preview.svg",
               },
             },
           ],
