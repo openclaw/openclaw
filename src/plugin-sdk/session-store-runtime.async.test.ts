@@ -1,8 +1,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
-import { afterAll, expect, expectTypeOf, it } from "vitest";
+import { afterEach, expect, expectTypeOf, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   withIncognitoSessionActor,
@@ -11,13 +11,13 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   openIncognitoTestActor,
   useIncognitoActorProbe,
 } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { captureSessionEntryCurrentCheck } from "./session-binding-runtime.js";
 import {
   patchSessionEntry,
@@ -31,10 +31,15 @@ import {
   upsertSessionEntry,
 } from "./session-store-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = createTempDirTracker();
 const probe = useIncognitoActorProbe();
 const authority = { assertCurrent() {} };
-afterAll(() => closeOpenClawAgentDatabasesAsync());
+afterEach(async () => {
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
+  tempDirs.cleanup();
+});
 
 const completeEntry: InternalSessionEntry = {
   sessionId: "selected",

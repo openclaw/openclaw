@@ -32,7 +32,7 @@ describe("pending delivery notice", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    sendRecoveryNotice.mockResolvedValue({ suppressed: false });
+    sendRecoveryNotice.mockReset().mockResolvedValue({ suppressed: false });
     findDeliveryIntentOwner.mockReturnValue(null);
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
     storePath = path.join(sessionDirs.make(), "sessions.json");
@@ -165,15 +165,26 @@ describe("pending delivery notice", () => {
     async (suppressedFirst) => {
       const first = createDeferred<{ suppressed: boolean }>();
       const second = createDeferred<{ suppressed: boolean }>();
-      sendRecoveryNotice.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      sendRecoveryNotice
+        .mockImplementationOnce(() => {
+          firstStarted.resolve();
+          return first.promise;
+        })
+        .mockImplementationOnce(() => {
+          secondStarted.resolve();
+          return second.promise;
+        });
       const attempts = [
         deliverPendingDeliveryNotice(sessionKey, storePath),
         deliverPendingDeliveryNotice(sessionKey, storePath),
       ];
+      await Promise.all([firstStarted.promise, secondStarted.promise]);
       first.resolve({ suppressed: suppressedFirst });
-      await attempts[0];
+      await Promise.race(attempts);
       second.resolve({ suppressed: !suppressedFirst });
-      await attempts[1];
+      await Promise.all(attempts);
       expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
         "acknowledged",
       );
