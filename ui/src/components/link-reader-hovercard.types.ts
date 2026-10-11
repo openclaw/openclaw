@@ -26,3 +26,9 @@ export type HovercardMethods = {
   prefetch(target: LinkReaderTarget, signal: AbortSignal): Promise<void>;
 };
 export type LinkReaderHovercardProvider = SolidBridgeElement<HovercardProperties, HovercardMethods>;
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-link-reader-hovercard-provider": LinkReaderHovercardProvider;
+  }
+}

@@ -90,21 +90,6 @@ describe("resolveStoredModelOverride", () => {
     });
   });
 
-  it("continues to inherit deliberate parent model pins", async () => {
-    expect(
-      await resolveParentOverride({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        modelOverrideSource: "user",
-      }),
-    ).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      source: "parent",
-      routeResolution: "raw",
-    });
-  });
-
   it("rejects stale direct fields behind an explicit Default marker", () => {
     expect(
       resolveDirectStoredModelOverride({

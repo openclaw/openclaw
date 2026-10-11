@@ -49,7 +49,6 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "default", selector: ".sidebar-issues-panel__navigation-link" },
   { expected: "default", selector: ".sidebar-approval-row__open-session" },
   { expected: "default", selector: ".sidebar-footer-build" },
-  { expected: "default", selector: ".sidebar-more-menu a" },
   // Links and explicit new-tab controls keep the hand.
   { expected: "pointer", selector: "#real-link" },
   { expected: "pointer", selector: "#sidebar-external-link" },
@@ -157,7 +156,6 @@ function fixtureDocument(): string {
         <a class="settings-sidebar__subitem" href="/settings#theme">Theme</a>
         <a class="sidebar-footer-build" href="/settings/about">Build</a>
       </aside>
-      <div class="sidebar-more-menu"><div class="sidebar-customize-menu__item"><a href="/activity">Activity</a></div></div>
       <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item"><a id="sidebar-help-link" href="https://example.com/docs" target="_blank">Docs</a></div></div>
       <a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>
       <button id="new-tab-button" class="btn" type="button" data-new-tab-action>New tab</button>

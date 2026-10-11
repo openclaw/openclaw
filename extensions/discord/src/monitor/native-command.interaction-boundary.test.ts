@@ -10,6 +10,7 @@ import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachRestMock,
@@ -28,6 +29,12 @@ import {
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
+
+// Keep transcript persistence outside this interaction boundary fixture.
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
 
 const GUILD = "100000000000000001";
 const CHANNEL = "100000000000000002";

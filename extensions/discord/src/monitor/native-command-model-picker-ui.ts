@@ -13,6 +13,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -35,6 +36,7 @@ import {
   type DiscordModelPickerCommandContext,
 } from "./model-picker.state.js";
 import { renderDiscordModelPickerModelsView } from "./model-picker.view.js";
+import { formatDiscordCommandComponents } from "./native-command-reply.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
@@ -49,6 +51,7 @@ export function createDiscordModelPickerSessionReader(
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.route.agentId });
   return (sessionKey = params.route.sessionKey) =>
     getSessionEntryAsync({
+      agentId: params.route.agentId,
       storePath,
       sessionKey,
       ...(readConsistency ? { readConsistency } : {}),
@@ -271,7 +274,19 @@ export async function replyWithDiscordModelPickerProviders(params: {
     ephemeral: true,
   };
 
-  await params.safeInteractionCall("model picker reply", async () => {
+  const delivered = await params.safeInteractionCall("model picker reply", async () => {
     await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
   });
+  if (delivered !== null) {
+    await recordDeliveredCommandExchange({
+      config: params.cfg,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      expectedSessionId: sessionEntry?.sessionId,
+      commandText: `/${params.command}`,
+      commandId: `discord:${params.accountId}:${route.sessionKey}:${params.interaction.id}`,
+      replyId: "model-picker",
+      replyText: formatDiscordCommandComponents(rendered.components),
+    });
+  }
 }

@@ -191,33 +191,20 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   loadEntries: (registry: BundledCapabilityRuntimeRegistry) => T[];
 }): T[] {
   const discovery = discoverOpenClawPlugins({});
-  let lastFailure: Error | undefined;
-
-  // Manifest IDs exist before registration; only observed runtime entries prove the load worked.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: [params.pluginId],
-      pluginSdkResolution: "dist",
-      discovery,
-    });
-    const entries = params.loadEntries(registry);
-    if (entries.length > 0) {
-      return entries;
-    }
-
-    lastFailure = formatBundledCapabilityPluginLoadError({
-      pluginId: params.pluginId,
-      capabilityLabel: params.capabilityLabel,
-      registry,
-    });
+  const registry = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [params.pluginId],
+    pluginSdkResolution: "dist",
+    discovery,
+  });
+  const entries = params.loadEntries(registry);
+  if (entries.length > 0) {
+    return entries;
   }
-
-  throw (
-    lastFailure ??
-    new Error(
-      `bundled ${params.capabilityLabel} contract load failed for ${params.pluginId}: no entries`,
-    )
-  );
+  throw formatBundledCapabilityPluginLoadError({
+    pluginId: params.pluginId,
+    capabilityLabel: params.capabilityLabel,
+    registry,
+  });
 }
 
 function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
