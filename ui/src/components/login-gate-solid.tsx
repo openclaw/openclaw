@@ -13,6 +13,7 @@ import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { JSX } from "../types/misc-shared-elements.d.ts";
 import {
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
@@ -398,7 +399,7 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement }) {
+function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement }): JSX.Element {
   const host = untrack(() => props.host);
   host.style.display = "contents";
   const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");

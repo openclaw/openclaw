@@ -13,6 +13,7 @@ import {
   custodianSessionStore,
   type CustodianSessionStore,
 } from "../pages/custodian/custodian-session-store.ts";
+import type { JSX } from "../types/misc-shared-elements.d.ts";
 import "../pages/custodian/custodian-surface.ts";
 import "./home-session.runtime.ts";
 import "../styles/assistant-panel-content.css";
@@ -32,7 +33,7 @@ type Props = {
 export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
 export const AssistantPanelContent = defineSolidBridge<Props>(
   "openclaw-assistant-panel-content",
-  (props, element) => {
+  (props, element): JSX.Element => {
     const { host, revision } = useSolidControllerHost(() => [props.store, props.context]);
     const store = () => props.store ?? custodianSessionStore;
     new SubscriptionsController(host)

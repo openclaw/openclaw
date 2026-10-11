@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
@@ -18,6 +17,7 @@ import { formatCountdown } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import type { JSX } from "../types/misc-shared-elements.d.ts";
 import { Icon } from "./solid/icon.tsx";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [

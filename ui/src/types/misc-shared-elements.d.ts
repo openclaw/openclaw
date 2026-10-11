@@ -5,6 +5,7 @@ import "../components/tooltip.ts";
 import "../lib/toast.ts";
 import "../pages/custodian/custodian-surface.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
+export type { JSX } from "./solid-elements.d.ts";
 
 declare module "@solidjs/web" {
   namespace JSX {
