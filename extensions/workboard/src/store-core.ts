@@ -25,11 +25,7 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
-import {
-  invertWorkboardCardMutation,
-  invertWorkboardWorkspaceMutation,
-  sameWorkboardCardState,
-} from "./store-compensation.js";
+import { sameWorkboardCardState, sameWorkboardWorkspace } from "./store-compensation.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardCardPatch,
@@ -68,8 +64,6 @@ type WorkboardMutationJournalEntry = {
   after: WorkboardCard;
 };
 
-const WORKBOARD_CAS_ATTEMPTS = 3;
-
 export class WorkboardCoreStore extends WorkboardBoardStore {
   private lastNotificationSequence = 0;
   private compensationJournal?: WorkboardMutationJournalEntry[];
@@ -98,8 +92,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   }
 
   private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
-    // Reverse replay needs every step: later inverses strip their fields before
-    // an operation-created row can be safely classified as host-adopted.
+    // Undo later steps first so each saved state is restored before its predecessor.
     this.compensationJournal?.push({ before, after });
   }
 
@@ -118,49 +111,62 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   }
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
-    await this.enqueueMutation(() =>
-      this.rollbackCardMutation(before, after, invertWorkboardWorkspaceMutation),
-    );
+    await this.enqueueMutation(async () => {
+      const current = await this.get(after.id);
+      const currentAutomation = current?.metadata?.automation;
+      if (!current || !sameWorkboardWorkspace(current, after)) {
+        return;
+      }
+      const automation = { ...currentAutomation };
+      const originalAutomation = before.metadata?.automation;
+      for (const key of ["workspace", "workspaceAccess"] as const) {
+        if (originalAutomation?.[key] === undefined) {
+          delete automation[key];
+        }
+      }
+      const metadata = {
+        ...current.metadata,
+        automation: {
+          ...automation,
+          ...(originalAutomation?.workspace ? { workspace: originalAutomation.workspace } : {}),
+          ...(originalAutomation?.workspaceAccess
+            ? { workspaceAccess: originalAutomation.workspaceAccess }
+            : {}),
+        },
+      };
+      const restored = {
+        ...current,
+        metadata,
+        updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      };
+      await this.store.registerIfUpdatedAt(
+        restored.id,
+        { version: 1, card: restored },
+        current.updatedAt,
+      );
+    });
   }
 
   private async rollbackCardMutation(
     before: WorkboardCard | undefined,
     after: WorkboardCard,
-    invert = invertWorkboardCardMutation,
   ): Promise<void> {
-    for (let attempt = 0; attempt < WORKBOARD_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.get(after.id);
-      if (!current) {
-        return;
-      }
-      if (!before) {
-        if (
-          !sameWorkboardCardState(current, after) ||
-          (await this.store.deleteIfUpdatedAt(after.id, current.updatedAt))
-        ) {
-          return;
-        }
-        continue;
-      }
-      const merged = invert(before, after, current);
-      if (sameWorkboardCardState(current, merged)) {
-        return;
-      }
-      const compensation = {
-        ...merged,
-        updatedAt: Math.max(Date.now(), current.updatedAt + 1),
-      };
-      if (
-        await this.store.registerIfUpdatedAt(
-          compensation.id,
-          { version: 1, card: compensation },
-          current.updatedAt,
-        )
-      ) {
-        return;
-      }
+    const current = await this.get(after.id);
+    // A later editor owns the whole card. Leave partial work visible instead of
+    // trying to merge a failed operation's inverse into their changes.
+    if (!current || !sameWorkboardCardState(current, after)) {
+      return;
     }
-    throw new Error(`card changed repeatedly during compensation: ${after.id}`);
+    if (!before) {
+      await this.store.deleteIfUpdatedAt(after.id, current.updatedAt);
+      return;
+    }
+    const restored = { ...before, updatedAt: Math.max(Date.now(), current.updatedAt + 1) };
+    await this.store.registerIfUpdatedAt(
+      restored.id,
+      { version: 1, card: restored },
+      current.updatedAt,
+    );
   }
 
   protected async updateLatestCard(
@@ -168,34 +174,22 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     buildPatch: (current: WorkboardCard) => WorkboardCardPatch | undefined,
     options: WorkboardUpdateCardOptions = {},
   ): Promise<{ card: WorkboardCard; updated: boolean }> {
-    for (let attempt = 0; ; attempt += 1) {
-      const current = await this.requireCard(id);
-      if (
-        options.expectedUpdatedAt !== undefined &&
-        current.updatedAt !== options.expectedUpdatedAt
-      ) {
-        throw new WorkboardCardConflictError(current);
-      }
-      const patch = buildPatch(current);
-      if (!patch) {
-        return { card: current, updated: false };
-      }
-      try {
-        const card = await this.updateCard(current, patch, {
-          ...options,
-          expectedUpdatedAt: current.updatedAt,
-        });
-        return { card, updated: card.updatedAt !== current.updatedAt };
-      } catch (error) {
-        if (
-          options.expectedUpdatedAt !== undefined ||
-          !(error instanceof WorkboardCardConflictError) ||
-          attempt === WORKBOARD_CAS_ATTEMPTS - 1
-        ) {
-          throw error;
-        }
-      }
+    const current = await this.requireCard(id);
+    if (
+      options.expectedUpdatedAt !== undefined &&
+      current.updatedAt !== options.expectedUpdatedAt
+    ) {
+      throw new WorkboardCardConflictError(current);
     }
+    const patch = buildPatch(current);
+    if (!patch) {
+      return { card: current, updated: false };
+    }
+    const card = await this.updateCard(current, patch, {
+      ...options,
+      expectedUpdatedAt: current.updatedAt,
+    });
+    return { card, updated: card.updatedAt !== current.updatedAt };
   }
 
   protected async updateMetadata(

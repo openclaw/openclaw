@@ -302,6 +302,26 @@ describe("node worker tunnel manager", () => {
     expect(closeAll).toHaveBeenCalledOnce();
   });
 
+  it("keeps sibling cleanup failures visible beside a disconnected node", async () => {
+    const nodeTransport = transport();
+    nodeTransport.getCurrentNode = async () => undefined;
+    const cleanupError = new Error("transfer cleanup failed");
+    const manager = createManager(environment(), {
+      getTransport: () => nodeTransport,
+      workspaceTransfer: {
+        ...workspaceTransfer(),
+        close: vi.fn(async () => {}),
+        closeAll: vi.fn(async () => {
+          throw cleanupError;
+        }),
+      },
+    });
+
+    const failure = await manager.stopAll().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toContain(cleanupError);
+  });
+
   it.each(["current", "retiring"] as const)(
     "rejects an owner epoch older than the %s owner",
     async (owner) => {
@@ -477,7 +497,7 @@ describe("node worker tunnel manager", () => {
     expect(prepareSync).toHaveBeenCalledWith(
       expect.objectContaining({
         environmentId: "environment-1",
-        generation: record.ownerEpoch,
+        ownerEpoch: record.ownerEpoch,
         localPath: "/gateway/workspace",
       }),
     );

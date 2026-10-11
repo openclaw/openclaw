@@ -220,41 +220,41 @@ describe("doctor-contract-registry module loader", () => {
     );
   });
 
-  it.each(["https://OLLAMA.COM:443/api", "${OLLAMA_BASE_URL}"])(
-    "preserves the hosted Ollama entry during preflight with baseUrl %s",
-    async (baseUrl) => {
-      const root = makeTempDir();
-      fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-      const contract = await vi.importActual("../../extensions/ollama/doctor-contract-api.js");
-      mocks.createJiti.mockImplementation(() => () => contract);
-      mockDoctorPlugins({
-        id: "ollama",
-        providers: ["ollama", "ollama-cloud"],
-        rootDir: root,
-        doctorContract: { configRepair: true },
-      });
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl,
-              api: "ollama",
-              apiKey: "OLLAMA_API_KEY",
-              models: [],
-            },
+  it("defers declared provider renames during compatibility preflight", () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      providerRenames: [{ from: "old", to: "new", baseUrl: "https://models.example" }],
+    }));
+    mockDoctorPlugins({
+      id: "rename-owner",
+      providers: ["old", "new"],
+      rootDir: root,
+      doctorContract: { configRepair: true },
+    });
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          old: {
+            baseUrl: "https://models.example",
+            api: "openai-completions",
+            models: [],
           },
         },
-        agents: { defaults: { model: "ollama/model:cloud@ollama:default" } },
-        auth: { profiles: { "ollama:default": { provider: "ollama", mode: "api_key" } } },
-      };
-      const result = applyPluginDoctorCompatibilityMigrations(config, {
-        env: { OLLAMA_BASE_URL: "https://ollama.com" },
-        pluginIds: ["ollama"],
-      });
-      expect(result.config).toEqual(config);
-      expect(result.changes).toEqual([]);
-    },
-  );
+      },
+      agents: { defaults: { model: "old/model@old:default" } },
+      auth: { profiles: { "old:default": { provider: "old", mode: "api_key" } } },
+    };
+    const original = structuredClone(config);
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      env: {},
+      pluginIds: ["old"],
+    });
+    expect(result.config).toEqual(original);
+    expect(result.changes).toEqual([]);
+    expect(config).toEqual(original);
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])("isolates a normalizer-only config repair (throws=%s)", (throws) => {
     const pluginRoot = makeTempDir();

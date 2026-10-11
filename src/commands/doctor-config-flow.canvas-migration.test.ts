@@ -14,7 +14,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 async function repairConfig(configPath: string) {
-  const ctx = await prepareDoctorContext(configPath);
+  await using ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
   return JSON.parse(await fs.readFile(configPath, "utf8"));
 }

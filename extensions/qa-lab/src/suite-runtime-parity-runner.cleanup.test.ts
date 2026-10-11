@@ -479,7 +479,7 @@ describe("runtime parity suite transport cleanup", () => {
   });
 
   it.each(["cleanupAfterGatewayStop"] as const)(
-    "retries failed parent %s before stopping its owned lab",
+    "retains failed parent %s without replaying cleanup before stopping its owned lab",
     async (cleanupPhase) => {
       const lab = createCleanupTestLab();
       const cleanupError = new Error("credential release failed");
@@ -490,9 +490,12 @@ describe("runtime parity suite transport cleanup", () => {
       const factory = createCleanupTestFactory(lab, () => ({ [cleanupPhase]: cleanup }));
       const runChild = vi.fn<QaSuiteRunner>();
 
-      await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toBe(cleanupError);
+      await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toMatchObject({
+        cause: cleanupError,
+        errors: [cleanupError, cleanupError],
+      });
 
-      expect(cleanup).toHaveBeenCalledTimes(2);
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(runChild).not.toHaveBeenCalled();
       expect(lab.stop).toHaveBeenCalledOnce();
     },

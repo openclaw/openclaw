@@ -238,7 +238,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
       healthChecks: {
         description:
-          "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
+          "Persisted workspace aliases must resolve to the resolved target that owns their stored state.",
         defaultEnabled: true,
         async detect(ctx) {
           const { collectRepointedWorkspaceAliasFindings } =

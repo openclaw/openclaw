@@ -92,19 +92,7 @@ function resolveQaTransportFactoryModuleFlowSupport(
 function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
   let pending: Promise<void> | undefined;
 
-  return () => {
-    if (!pending) {
-      // Share cleanup across overlapping owners; release failed phases so a
-      // later caller can retry instead of leaking a live transport or lease.
-      pending = Promise.resolve().then(async () => {
-        await cleanup();
-      });
-      void pending.catch(() => {
-        pending = undefined;
-      });
-    }
-    return pending;
-  };
+  return () => (pending ??= Promise.resolve().then(cleanup));
 }
 
 async function collectQaTransportCleanupErrors(
