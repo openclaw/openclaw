@@ -3,10 +3,7 @@ import path from "node:path";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  compareOpenClawReleaseVersions,
-  resolveOpenClawReleaseCohortVersion,
-} from "../infra/npm-registry-spec.js";
+import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
@@ -248,21 +245,22 @@ export function loadRuntimePluginCandidate(params: {
 
   const runtimePackage = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
   const hostVersion = resolveCompatibilityHostVersion(context.env);
-  const hostCohort = resolveOpenClawReleaseCohortVersion(hostVersion);
+  const minimumCompatibleVersion = runtimePackage?.minimumCompatibleVersion;
   const packageVersion = manifestRecord.packageVersion;
   if (
     enableState.enabled &&
     candidate.origin !== "bundled" &&
     runtimePackage?.versionBoundToOpenClaw &&
+    minimumCompatibleVersion &&
     manifestRecord.packageName === runtimePackage.npmSpec &&
     packageVersion &&
-    (compareOpenClawReleaseVersions(packageVersion, hostCohort) ?? 0) < 0
+    (compareOpenClawReleaseVersions(packageVersion, minimumCompatibleVersion) ?? 0) < 0
   ) {
     // A broad pluginApi range cannot prove lazy SDK imports from an older runtime still work.
     record.activated = false;
     pushPluginLoadError(
-      `Official runtime plugin ${pluginId} ${packageVersion} is older than OpenClaw ${hostVersion} ` +
-        `(required release cohort ${hostCohort}); it is unavailable until repaired. ` +
+      `Official runtime plugin ${pluginId} ${packageVersion} is incompatible with OpenClaw ${hostVersion} ` +
+        `(minimum compatible plugin version is ${minimumCompatibleVersion}); it is unavailable until repaired. ` +
         `Run \`openclaw update repair\` or \`openclaw plugins update ${pluginId}\`, then restart the Gateway. ` +
         "For a linked plugin, update the linked source or remove its load-path override before retrying.",
     );

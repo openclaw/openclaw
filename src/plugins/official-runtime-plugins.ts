@@ -5,6 +5,7 @@ type ConfiguredRuntimePluginInstallCandidate = {
   trustedSourceLinkedOfficialInstall: true;
   /** Keep this official runtime package on the same release cohort as OpenClaw. */
   versionBoundToOpenClaw?: boolean;
+  minimumCompatibleVersion?: string;
 };
 
 export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly ConfiguredRuntimePluginInstallCandidate[] =
@@ -22,6 +23,8 @@ export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly ConfiguredRu
       npmSpec: "@openclaw/codex",
       trustedSourceLinkedOfficialInstall: true,
       versionBoundToOpenClaw: true,
+      // Bump this floor when a Plugin SDK subpath used by this runtime is removed.
+      minimumCompatibleVersion: "2026.9.7",
     },
   ];
 
