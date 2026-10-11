@@ -453,16 +453,22 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
   const { facts } = observeAuthority();
   const authorityAtNotification: unknown[] = [];
   const key = JSON.stringify(["repository", row.request_id]);
-  const published = vi.fn((_receipt: PublicationMutationReceipt) =>
-    authorityAtNotification.push(facts.get(key)),
-  );
+  const committed = createDeferredCore();
+  const published = vi.fn((_receipt: PublicationMutationReceipt) => {
+    authorityAtNotification.push(facts.get(key));
+    committed.resolve();
+  });
   const claim = scope.mutate(
     command({ operation: "claim", row, instanceId: "gateway", executionId: "execution" }),
     context.admission.assertCurrent,
     published,
   );
   await withinTest(
-    awaitGateBeforeSettlement(reply.ready, claim, "claim reply was not held"),
+    awaitGateBeforeSettlement(
+      Promise.all([reply.ready, committed.promise]),
+      claim,
+      "claim reply was not held through publication",
+    ),
     signal,
   );
   expect(published).toHaveBeenCalledTimes(1);

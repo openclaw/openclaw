@@ -7,7 +7,7 @@ import {
   type GatewayStatusSample,
   type GatewayStatusSnapshot,
 } from "../gateway-vitals.ts";
-import type { SparklineSample } from "../sparkline-tile.ts";
+import type { SparklineSample } from "../sparkline-tile.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {

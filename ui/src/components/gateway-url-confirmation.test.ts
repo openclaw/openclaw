@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
-import { LitElement, html, render } from "lit";
+import { html, render } from "lit";
+import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import "./gateway-url-confirmation.ts";
+import { GatewayUrlConfirmation } from "./gateway-url-confirmation.ts";
 
 const modalModule = vi.hoisted(() => ({ load: vi.fn() }));
 
@@ -33,7 +34,7 @@ it("loads the modal only for a pending gateway and retains its confirmation acti
       container,
     );
     const host = container.firstElementChild;
-    if (!(host instanceof LitElement)) {
+    if (!(host instanceof GatewayUrlConfirmation.Element)) {
       throw new Error("Gateway confirmation did not upgrade");
     }
     return host;
@@ -48,6 +49,7 @@ it("loads the modal only for a pending gateway and retains its confirmation acti
   await host.updateComplete;
   await vi.dynamicImportSettled();
   await host.updateComplete;
+  flush();
   expect(modalModule.load).toHaveBeenCalledOnce();
   const modal = host.querySelector("openclaw-modal-dialog");
   expect(modal?.textContent).toContain("https://current.example");

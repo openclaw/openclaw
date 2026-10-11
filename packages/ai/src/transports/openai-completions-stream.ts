@@ -25,7 +25,6 @@ import {
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
-import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
@@ -60,9 +59,6 @@ type CompletionsStreamOptions = {
   signal?: AbortSignal;
   emitReasoning?: boolean;
   strictReasoningTags?: boolean;
-  firstEventTimeoutMs?: number;
-  abortFirstEventStream?: (reason: Error) => void;
-  onFirstEventTimeout?: (reason: Error) => void;
   sawStreamDONE?: () => boolean;
 } & (
   | {
@@ -87,6 +83,47 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
     ) ??
     readNonEmptyStringPreservingWhitespace(tc.thought_signature)
   );
+}
+
+export async function* observeOpenAICompletionsProgress<
+  T extends ChatCompletionChunk | ChatCompletion,
+>(responseStream: AsyncIterable<T>, signal?: AbortSignal): AsyncGenerator<T> {
+  const maxUsageTokens = { prompt: 0, completion: 0, total: 0, reasoning: 0 };
+  for await (const rawChunk of responseStream) {
+    throwIfModelStreamAborted(signal);
+    if (rawChunk && typeof rawChunk === "object") {
+      const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
+      const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+      const usage = chunk.usage || choice?.usage;
+      let hasUsageProgress = false;
+      // Cumulative snapshots can repeat or regress; billing metadata is not model work.
+      for (const [counter, reported] of [
+        ["prompt", usage?.prompt_tokens],
+        ["completion", usage?.completion_tokens],
+        ["total", usage?.total_tokens],
+        ["reasoning", usage?.completion_tokens_details?.reasoning_tokens],
+      ] as const) {
+        const tokens = asPositiveFiniteNumber(reported) ?? 0;
+        if (tokens > maxUsageTokens[counter]) {
+          maxUsageTokens[counter] = tokens;
+          hasUsageProgress = true;
+        }
+      }
+      const rawChoiceDelta = choice?.delta ?? choice?.message;
+      // Observe physical arrivals before buffering and hidden-reasoning filtering.
+      notifyLlmRequestActivity(
+        signal,
+        Boolean(
+          hasUsageProgress ||
+          choice?.finish_reason ||
+          (rawChoiceDelta &&
+            (rawChoiceDelta.tool_calls?.length ||
+              hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
+        ),
+      );
+    }
+    yield rawChunk;
+  }
 }
 
 export async function processCompletionsStream(
@@ -353,18 +390,8 @@ export async function processCompletionsStream(
       sealTextBeforeReasoning();
     }
   };
-  const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    timeoutMs: options?.firstEventTimeoutMs ?? 0,
-    stage: "completions",
-    abort: options?.abortFirstEventStream,
-    onTimeout: options?.onFirstEventTimeout,
-    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
-  });
-  const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
-  const maxUsageTokens = { prompt: 0, completion: 0, total: 0, reasoning: 0 };
+  const events = directMode ? responseStream : iterateModelStream(responseStream, options?.signal);
+  let maxReasoningTokens = 0;
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
@@ -381,38 +408,16 @@ export async function processCompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
-    let hasUsageProgress = false;
-    let hasReasoningUsageActivity = false;
-    // Cumulative snapshots can repeat or regress; billing metadata is not model work.
-    for (const [counter, reported] of [
-      ["prompt", usage?.prompt_tokens],
-      ["completion", usage?.completion_tokens],
-      ["total", usage?.total_tokens],
-      ["reasoning", usage?.completion_tokens_details?.reasoning_tokens],
-    ] as const) {
-      const tokens = asPositiveFiniteNumber(reported) ?? 0;
-      if (tokens > maxUsageTokens[counter]) {
-        maxUsageTokens[counter] = tokens;
-        hasUsageProgress = true;
-        hasReasoningUsageActivity ||= counter === "reasoning";
-      }
-    }
+    const reasoningTokens =
+      asPositiveFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens) ?? 0;
+    const hasReasoningUsageActivity = reasoningTokens > maxReasoningTokens;
+    maxReasoningTokens = Math.max(maxReasoningTokens, reasoningTokens);
     if (usage) {
       output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
       });
     }
     const rawChoiceDelta = choice?.delta ?? choice?.message;
-    // Classify before legacy-tool buffering and hidden-reasoning display filtering.
-    notifyLlmRequestActivity(
-      options?.signal,
-      Boolean(
-        hasUsageProgress ||
-        choice?.finish_reason ||
-        (rawChoiceDelta &&
-          (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
-      ),
-    );
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
