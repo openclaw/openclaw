@@ -455,7 +455,6 @@ export function buildChatItems(
     key: string,
     text: string,
     thinking?: string,
-    isStreaming = false,
     beforeKey?: string,
   ) => {
     const bounds = resolveProjectionBounds(segment.runId, segment.afterUserSendId);
@@ -466,7 +465,7 @@ export function buildChatItems(
         text,
         ...(thinking ? { thinking } : {}),
         startedAt: segment.ts,
-        isStreaming,
+        isStreaming: false,
         ...optionalRunIdentity(segment.runId),
         ...optionalBoundaryIdentity(segment.runId),
       },
@@ -541,7 +540,11 @@ export function buildChatItems(
   if (props.reasoning) {
     const { runId } = props.reasoning;
     for (const reasoning of props.reasoning.items) {
-      if (!reasoning.text || (props.showReasoning && reasoning.receipt?.persisted)) {
+      if (
+        reasoning === activeReasoning ||
+        !reasoning.text ||
+        (props.showReasoning && reasoning.receipt?.persisted)
+      ) {
         continue;
       }
       const receipt = reasoning.receipt;
@@ -561,9 +564,8 @@ export function buildChatItems(
       appendStreamSegment(
         { runId, ts: reasoning.startedAt },
         `reasoning:${runId}:${reasoning.itemId}`,
-        reasoning === activeReasoning ? visibleText : "",
+        "",
         reasoning.text,
-        reasoning === activeReasoning,
         persisted?.key,
       );
     }
@@ -613,17 +615,21 @@ export function buildChatItems(
     }
   };
   if (
-    !activeReasoning &&
-    visibleText.length > 0 &&
-    !stripHeartbeatTokenForDisplay(visibleText).shouldSkip
+    activeReasoning ||
+    (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
   ) {
     const liveProgress = resolveProgress();
-    const liveRunId = props.runId ?? liveProgress.runId;
+    const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
+    // Unsaved answer text follows accepted steers at the run's live tail.
     appendActiveRunItem({
       kind: "stream",
       key: liveProgress.key,
       text: visibleText,
-      startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
+      thinking: activeReasoning?.text,
+      startedAt: timestampAfterVisibleItems(
+        items,
+        props.streamStartedAt ?? activeReasoning?.startedAt ?? Date.now(),
+      ),
       isStreaming: true,
       ...optionalRunIdentity(liveRunId),
       ...optionalBoundaryIdentity(liveRunId),
