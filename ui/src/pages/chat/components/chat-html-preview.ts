@@ -28,7 +28,7 @@ export const htmlPreviewElement = {
   loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
-export function renderHtmlPreview(
+function renderHtmlPreview(
   loader: LazyCustomElementRequestController,
   content: string,
   sourceIdentity: string,

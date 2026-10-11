@@ -74,7 +74,13 @@ describe("check-runtime-sidecar-loaders", () => {
       relative(resolve(dirname(sourcePath.pathname), "../.."), filePath),
     );
 
-    expect(runtimeGraph.filter((filePath) => /(^|\/)manager(?:-|\.)/.test(filePath))).toEqual([]);
+    // Shared shadow identity helpers have no manager imports or startup effects.
+    const sharedShadowTask = "extensions/memory-core/src/memory/manager-shadow-task.ts";
+    expect(
+      runtimeGraph.filter(
+        (filePath) => filePath !== sharedShadowTask && /(^|\/)manager(?:-|\.)/.test(filePath),
+      ),
+    ).toEqual([]);
   });
 
   it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {

@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
+import type {
+  GitHubPublicationRow,
+  RepositoryGitHubPublicationRow,
+} from "../state/github-publication-read.types.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
-import type { GitHubPublicationInsert } from "../state/github-publication-worker.types.js";
+import type {
+  GitHubPublicationInsert,
+  SharedGitHubPublicationInsert,
+} from "../state/github-publication-worker.types.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
 import {
   bindGitHubPublicationSource,
@@ -35,6 +41,18 @@ async function insert(input: GitHubPublicationInsert, source: GitHubPublicationS
     await scope.close();
     await source.release();
   }
+}
+
+/** Receipt and lifecycle binding share the source-fenced destination transaction. */
+export async function insertGitHubPublicationRequestAsync(
+  input: SharedGitHubPublicationInsert,
+  source: GitHubPublicationSourceCapability,
+): Promise<GitHubPublicationRow> {
+  const receipt = await insert({ kind: "shared", input }, source);
+  if (receipt.kind !== "shared" || !receipt.rows[0]) {
+    throw new Error("GitHub publication request receipt is unavailable.");
+  }
+  return receipt.rows[0];
 }
 
 export async function insertPersonalGitHubPublicationAsync(
