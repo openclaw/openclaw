@@ -27,7 +27,10 @@ import {
   removeTurnClaimReleaseWaiter,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
+import {
+  assertSessionWorkspaceUnreserved,
+  selectActiveSessionWorkspaceReservation,
+} from "./placement-workspace-reservation.kernel.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -115,7 +118,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     options: { allowDraining?: boolean } = {},
   ): { claim: WorkerSessionTurnClaim; placement: WorkerSessionPlacementRecord } => {
     const identity = normalizeIdentity(input);
-    assertSessionWorkspaceUnreserved(db, identity.sessionId);
     const claimId = required(input.claimId, "turn claim id");
     const runId = required(input.runId, "turn claim run id");
     const owner: WorkerSessionTurnOwner =
@@ -143,6 +145,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       updated_at_ms: updatedAtMs,
     };
     const placementQuery = query(db);
+    const reservation = selectActiveSessionWorkspaceReservation(db, identity.sessionId);
     const admissible = (
       eb: ExpressionBuilder<
         Pick<StateDatabase, "worker_session_placements">,
@@ -178,16 +181,38 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     const statement = local
       ? placementQuery
           .insertInto("worker_session_placements")
-          .values({
-            session_id: identity.sessionId,
-            agent_id: identity.agentId,
-            session_key: identity.sessionKey,
-            state: "local",
-            ...claimValues,
-            turn_claim_generation: 0,
-            created_at_ms: updatedAtMs,
-            state_changed_at_ms: updatedAtMs,
-          })
+          .columns([
+            "session_id",
+            "agent_id",
+            "session_key",
+            "state",
+            "turn_claim_owner",
+            "turn_claim_id",
+            "turn_claim_run_id",
+            "turn_claim_owner_epoch",
+            "updated_at_ms",
+            "turn_claim_generation",
+            "created_at_ms",
+            "state_changed_at_ms",
+          ])
+          .expression(
+            placementQuery
+              .selectNoFrom((eb) => [
+                eb.val(identity.sessionId).as("session_id"),
+                eb.val(identity.agentId).as("agent_id"),
+                eb.val(identity.sessionKey).as("session_key"),
+                eb.val("local").as("state"),
+                eb.val(claimValues.turn_claim_owner).as("turn_claim_owner"),
+                eb.val(claimValues.turn_claim_id).as("turn_claim_id"),
+                eb.val(claimValues.turn_claim_run_id).as("turn_claim_run_id"),
+                eb.val(claimValues.turn_claim_owner_epoch).as("turn_claim_owner_epoch"),
+                eb.val(updatedAtMs).as("updated_at_ms"),
+                eb.val(0).as("turn_claim_generation"),
+                eb.val(updatedAtMs).as("created_at_ms"),
+                eb.val(updatedAtMs).as("state_changed_at_ms"),
+              ])
+              .where((eb) => eb.not(eb.exists(reservation))),
+          )
           .onConflict((conflict) =>
             conflict
               .column("session_id")
@@ -204,10 +229,12 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             turn_claim_generation: eb.ref("transition_generation"),
           }))
           .where("session_id", "=", identity.sessionId)
-          .where(admissible);
+          .where(admissible)
+          .where((eb) => eb.not(eb.exists(reservation)));
     const row = executeSqliteQuerySync(db, statement.returningAll()).rows[0];
     if (!row) {
       // Failed admissions alone need a diagnostic read; the successful path is one write.
+      assertSessionWorkspaceUnreserved(db, identity.sessionId);
       const current = find(db, identity.sessionId);
       if (
         current &&

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 /**
@@ -101,6 +102,8 @@ type RunIsolatedCompletionParams = {
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
+  /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
+  answerTokenBudget?: number;
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
@@ -119,14 +122,22 @@ type AgentHarnessIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarness["runIsolatedCompletion"]>
 >[0];
 
-function clampIsolatedStreamParams(
-  streamParams: RunIsolatedCompletionParams["streamParams"],
-  modelMaxTokens: number | undefined,
+function resolveIsolatedStreamParams(
+  { answerTokenBudget, streamParams }: RunIsolatedCompletionParams,
+  model?: Model,
 ): RunIsolatedCompletionParams["streamParams"] {
-  if (streamParams?.maxTokens === undefined || modelMaxTokens === undefined) {
+  let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
+  if (maxTokens === undefined) {
     return streamParams;
   }
-  return { ...streamParams, maxTokens: Math.min(streamParams.maxTokens, modelMaxTokens) };
+  const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
+  if (answerTokenBudget !== undefined && model?.reasoning) {
+    maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
+  }
+  return {
+    ...streamParams,
+    maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
+  };
 }
 
 async function runCliIsolatedCompletion(
@@ -193,7 +204,7 @@ async function runCliIsolatedCompletion(
           model: request.model,
           authProfileId,
           thinkLevel: request.thinkLevel,
-          streamParams: request.streamParams,
+          streamParams: resolveIsolatedStreamParams(request),
           abortSignal: request.abortSignal,
           assertCurrent: request.assertCurrent,
           mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
@@ -487,7 +498,6 @@ async function runIsolatedCompletionOwned(
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
       if (harness.runIsolatedCompletionV2) {
-        let modelMaxTokens: number | undefined;
         let harnessAuth:
           | {
               model: Model;
@@ -597,6 +607,7 @@ async function runIsolatedCompletionOwned(
           }
           try {
             let authorization: AgentHarnessIsolatedCompletionAuthorization;
+            let completionModel: Model | undefined;
             if (
               attempt &&
               harnessAuth &&
@@ -606,7 +617,7 @@ async function runIsolatedCompletionOwned(
               // Auth owns the resolved model tuple; a manifest alias remains only
               // on the caller's dispatch envelope, not on the materialization target.
               const { model: runtimeModel, store: authProfileStore } = harnessAuth;
-              const model = await materializePreparedRuntimeModel({
+              completionModel = await materializePreparedRuntimeModel({
                 plan,
                 provider: runtimeModel.provider,
                 modelId: runtimeModel.id,
@@ -634,7 +645,6 @@ async function runIsolatedCompletionOwned(
                   ),
               });
               assertCurrent();
-              modelMaxTokens = model?.maxTokens;
               authorization = {
                 owner: "harness",
                 plan,
@@ -644,7 +654,7 @@ async function runIsolatedCompletionOwned(
               authorization = await prepareHostAuthorization(
                 attempt?.kind === "profile" ? attempt.profileId : request.authProfileId,
               );
-              modelMaxTokens = authorization.model.maxTokens;
+              completionModel = authorization.model;
             }
             if (!hasAuthCandidate(attempt)) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
@@ -660,7 +670,7 @@ async function runIsolatedCompletionOwned(
                 authorization.owner === "host"
                   ? prepareIsolatedHostAuthorization(harness, authorization)
                   : authorization,
-              streamParams: clampIsolatedStreamParams(request.streamParams, modelMaxTokens),
+              streamParams: resolveIsolatedStreamParams(request, completionModel),
             });
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
@@ -680,24 +690,18 @@ async function runIsolatedCompletionOwned(
           }
         }
         if (!result) {
-          if (firstError instanceof Error) {
-            throw firstError;
-          }
-          throw new Error("No prepared auth attempt succeeded.", { cause: firstError });
+          throw firstError instanceof Error
+            ? firstError
+            : new Error("No prepared auth attempt succeeded.", { cause: firstError });
         }
       } else {
         const authorization = await prepareHostAuthorization(request.authProfileId);
         const harnessParams: AgentHarnessIsolatedCompletionParams = {
           ...commonParams,
-          streamParams: clampIsolatedStreamParams(
-            request.streamParams,
-            authorization.model.maxTokens,
-          ),
+          streamParams: resolveIsolatedStreamParams(request, authorization.model),
           model: authorization.model,
           auth: authorization.auth,
-          ...(authorization.sourceAuthFingerprint
-            ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
-            : {}),
+          sourceAuthFingerprint: authorization.sourceAuthFingerprint,
         };
         assertCurrent();
         const execution = modelAuthority.bind(modelForAuthorization);
@@ -705,9 +709,6 @@ async function runIsolatedCompletionOwned(
           prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
         );
         execution.assertCurrent?.();
-      }
-      if (!result) {
-        throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion failed.");
       }
       return {
         text: requireIsolatedAssistantText(result.assistant),

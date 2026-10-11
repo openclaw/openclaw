@@ -393,6 +393,7 @@ export function installModelPromptProjection(params: {
   assertCurrent?: () => void;
 }): () => void {
   if (
+    !params.recorder?.captureModelPromptProjection &&
     (!params.modelPrompt?.trim() || params.modelPrompt === params.transcriptPrompt) &&
     !params.prependContext?.trim() &&
     !params.appendContext?.trim()
@@ -473,7 +474,13 @@ export function installModelPromptProjection(params: {
         ) {
           text = firstText;
         }
-        if (text !== undefined && (frozen !== undefined || text !== firstText)) {
+        if (
+          text !== undefined &&
+          (frozen !== undefined ||
+            text !== firstText ||
+            (params.recorder?.captureModelPromptProjection &&
+              !firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE)))
+        ) {
           const captureProjection = params.recorder?.captureModelPromptProjection;
           if (frozen === undefined && captureProjection) {
             const pendingText = text;

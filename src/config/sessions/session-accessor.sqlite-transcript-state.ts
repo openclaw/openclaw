@@ -30,6 +30,7 @@ import {
   readSessionColdTranscript,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import {
   publishSessionTranscriptAuthority,
   type SessionTranscriptAuthority,
@@ -332,6 +333,8 @@ export function ensureTranscriptSessionRoot(
                 session_key: scope.sessionKey,
                 current_session_id: scope.sessionId,
                 entry_json: "{}",
+                ...deriveSessionPredicateColumns("{}"),
+                session_started_at: null,
                 entry_valid: -1,
                 updated_at: updatedAt,
               })

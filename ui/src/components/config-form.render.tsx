@@ -14,12 +14,8 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
-import {
-  SettingsEmpty,
-  SettingsHelpTrigger,
-  SettingsPage,
-  LearnMoreLink,
-} from "./solid/settings-ui.tsx";
+import { Icon } from "./solid/icon.tsx";
+import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
 
 export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
@@ -99,13 +95,22 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
             <Show when={docsUrl()}>
               {(url) => (
                 <span class="settings-section__docs">
-                  <SettingsHelpTrigger
-                    id={docsTriggerId()}
-                    label={t("configForm.sectionHelp", { section: props.section.label })}
-                    tooltip={t("configForm.sectionHelp", { section: props.section.label })}
-                    icon="question"
-                    popoverId={`settings-section-help-popover-${props.section.id}`}
-                  />
+                  <openclaw-tooltip
+                    prop:content={t("configForm.sectionHelp", { section: props.section.label })}
+                  >
+                    <button
+                      id={docsTriggerId()}
+                      type="button"
+                      class="settings-section__help-button"
+                      aria-label={t("configForm.sectionHelp", { section: props.section.label })}
+                      aria-controls={`settings-section-help-popover-${props.section.id}`}
+                      aria-haspopup="dialog"
+                    >
+                      <span aria-hidden="true">
+                        <Icon name="circleQuestionMark" />
+                      </span>
+                    </button>
+                  </openclaw-tooltip>
                   <wa-popover
                     ref={syncPopoverLabel}
                     id={`settings-section-help-popover-${props.section.id}`}
