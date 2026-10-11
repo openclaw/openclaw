@@ -39,9 +39,9 @@ export type MemoryPublicationOperations = {
     input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
     output: MemoryPublicationResult<void>;
   };
-  "vector.retireLegacy": {
+  "vector.prepare": {
     input: { state: MemoryPublicationState };
-    output: MemoryPublicationResult<boolean>;
+    output: MemoryPublicationResult<{ extensionPath: string; retiredLegacy: boolean }>;
   };
   "index.facts": { input: undefined; output: MemoryDatabaseFacts };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };

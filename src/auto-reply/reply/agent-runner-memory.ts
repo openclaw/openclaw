@@ -14,7 +14,6 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
-import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -65,6 +64,7 @@ import {
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
+  buildModelResolveContext,
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import {
@@ -906,23 +906,9 @@ export async function runMemoryFlushIfNeeded(params: {
     memorySession,
     memoryAudience: flushMemoryAudience,
     memoryFlushTools,
+    maintenanceRun,
+    sourcePolicySessionKey,
   } = preparedAttempt;
-  const resolveRuntimePolicySessionKey = () =>
-    params.runtimePolicySessionKey ??
-    params.followupRun.run.runtimePolicySessionKey ??
-    params.sessionKey;
-  const sourcePolicySessionKey =
-    resolveRuntimePolicySessionKey() ?? params.followupRun.run.sessionKey;
-  const maintenanceRun = createSessionMaintenanceFollowup({
-    run: params.followupRun.run,
-    sessionEntry: { sessionId: memorySession.sessionId, updatedAt: Date.now() },
-    cfg: params.cfg,
-    sessionKey: memorySession.sessionKey,
-    runtimePolicySessionKey: sourcePolicySessionKey,
-    provider: selection.provider,
-    model: selection.model,
-    auth: params.followupRun.run,
-  }).run;
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId: flushRunId,
     sessionId: memorySession.sessionId,
@@ -968,6 +954,17 @@ export async function runMemoryFlushIfNeeded(params: {
     });
     const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
+      modelResolve: {
+        prompt: activeMemoryFlushPlan.prompt,
+        cwd: maintenanceRun.cwd,
+        modelSelectionLocked: maintenanceRun.modelSelectionLocked,
+        context: buildModelResolveContext({
+          run: maintenanceRun,
+          sessionCtx: {},
+          hasRepliedRef: undefined,
+          trigger: "memory",
+        }),
+      },
       selection: buildRunEntrySelection(selection, params.followupRun.run),
       identity: {
         runId: flushRunId,
@@ -978,7 +975,7 @@ export async function runMemoryFlushIfNeeded(params: {
       },
       harness: {
         workspaceDir: params.followupRun.run.workspaceDir,
-        sessionKey: resolveRuntimePolicySessionKey(),
+        sessionKey: sourcePolicySessionKey,
         preparation: { kind: "direct" },
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
@@ -999,7 +996,7 @@ export async function runMemoryFlushIfNeeded(params: {
           run: params.followupRun.run,
           catalog: params.followupRun.run.thinkingCatalog,
           agentId: params.followupRun.run.agentId,
-          sessionKey: resolveRuntimePolicySessionKey(),
+          sessionKey: sourcePolicySessionKey,
           sessionEntry: entry,
           agentRuntime: sessionRuntimeOverride,
         });
@@ -1039,6 +1036,8 @@ export async function runMemoryFlushIfNeeded(params: {
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+          resolvedModelSelection: runOptions.resolvedModelSelection,
+          modelFallbacksOverride: runOptions.modelFallbacksOverride,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
           abortSignal: deferredLifecycle.signal,

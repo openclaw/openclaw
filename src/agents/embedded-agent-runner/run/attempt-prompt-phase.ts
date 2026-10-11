@@ -103,11 +103,7 @@ export async function runEmbeddedAttemptPromptPhase(
   } = sessionRuntime;
   const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
   const {
-    history: {
-      contextEngineAssemblySucceeded,
-      contextEnginePromptAuthority,
-      unwindowedContextEngineMessagesForPrecheck,
-    },
+    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
     promptActiveSession,
     stream: { stopAcceptingSteerMessages },
   } = preparedStreamRuntime;
@@ -401,7 +397,6 @@ export async function runEmbeddedAttemptPromptPhase(
       appendOnlyRuntimeContext,
       compactionReplayEnabled,
       providerCompactionAtRequestBoundary,
-      contextEngineAssemblySucceeded,
       contextEnginePromptAuthority,
       includeBoundaryTimestamp,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
@@ -409,7 +404,6 @@ export async function runEmbeddedAttemptPromptPhase(
         ? { unwindowedContextEngineMessagesForPrecheck }
         : {}),
       attempt,
-      ...(activeContextEngine ? { activeContextEngine } : {}),
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,

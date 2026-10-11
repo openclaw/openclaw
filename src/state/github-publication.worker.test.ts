@@ -341,15 +341,23 @@ it("revokes personal source authority at commit before reply delivery without re
       }),
     ).toThrow("rollback connection");
     expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+    const receipt = holdNextReceipt();
     const reply = holdNextReply("userGitHubConnections.mutate");
     const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
     try {
       await withinTest(
-        awaitGateBeforeSettlement(reply.ready, disconnected, "connection reply was not held"),
+        awaitGateBeforeSettlement(
+          Promise.all([receipt.ready, reply.ready]),
+          disconnected,
+          "connection receipt and reply were not held",
+        ),
         signal,
       );
+      // Receipt and reply use separate ports; deliver the real commit facts before asserting.
+      receipt.release();
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
     } finally {
+      receipt.release();
       reply.release();
       await disconnected;
     }
@@ -445,16 +453,22 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
   const { facts } = observeAuthority();
   const authorityAtNotification: unknown[] = [];
   const key = JSON.stringify(["repository", row.request_id]);
-  const published = vi.fn((_receipt: PublicationMutationReceipt) =>
-    authorityAtNotification.push(facts.get(key)),
-  );
+  const committed = createDeferredCore();
+  const published = vi.fn((_receipt: PublicationMutationReceipt) => {
+    authorityAtNotification.push(facts.get(key));
+    committed.resolve();
+  });
   const claim = scope.mutate(
     command({ operation: "claim", row, instanceId: "gateway", executionId: "execution" }),
     context.admission.assertCurrent,
     published,
   );
   await withinTest(
-    awaitGateBeforeSettlement(reply.ready, claim, "claim reply was not held"),
+    awaitGateBeforeSettlement(
+      Promise.all([reply.ready, committed.promise]),
+      claim,
+      "claim reply was not held through publication",
+    ),
     signal,
   );
   expect(published).toHaveBeenCalledTimes(1);
@@ -593,11 +607,28 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
       ],
     });
     expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+    const installed = createDeferredCore();
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
+        if (
+          change.kind === "committed" &&
+          change.receipt.source.identity === context.admission.identity.key &&
+          change.receipt.facts.get(JSON.stringify(["repository", row.request_id]))?.kind ===
+            "absent"
+        ) {
+          installed.resolve();
+        }
+      }),
+    );
     const reply = holdNextReply("githubPublication.deleteSessionReceipts");
     const deletion = remove();
     try {
       await withinTest(
-        awaitGateBeforeSettlement(reply.ready, deletion, "deletion reply was not held"),
+        awaitGateBeforeSettlement(
+          Promise.all([reply.ready, installed.promise]),
+          deletion,
+          "deletion receipt was not installed before its reply",
+        ),
         signal,
       );
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");

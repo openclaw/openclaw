@@ -454,7 +454,7 @@ export function installEmbeddedAttemptStreamGuards(
         )
           ? previous
           : undefined;
-      if (request.requestIndex > 1) {
+      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
         contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
       }
       return previousRequest;

@@ -408,6 +408,16 @@ a canonical URL alone is not proof of anonymous access.
       delivered media, request entries for only the URLs confirmed accepted by the transport;
       source aliases for removed or unsent media are not delivery evidence.
 
+      A block with `ReplyPayload.textMode: "delta"` carries a disjoint text chunk.
+      Preview adapters append it within the current answer lane; omitted `textMode`
+      means a replacement snapshot. Never infer this from matching prefixes.
+      Finals always replace, and durable sends/transcripts use the payload's own
+      `text`, not an accumulated preview. A text-rewriting delivery modifier clears
+      delta mode so its replacement remains authoritative. When appending a chunk
+      to an existing preview, use `stripReplyPayloadResponsePrefix(payload, text)`
+      to remove only the response prefix recorded by normalization; retain the
+      decorated text for the first chunk and for independent durable sends.
+
       Streaming delivery can carry one `OutboundPayloadPlan` through the optional
       `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,
       and adapter `deliverPrepared(plan, info)` operations. Modifiers rebuild that

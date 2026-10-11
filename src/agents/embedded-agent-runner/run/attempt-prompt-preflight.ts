@@ -1,5 +1,5 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
-import type { AssembleResult, ContextEngine } from "../../../context-engine/types.js";
+import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -137,10 +137,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
-  activeContextEngine?: Pick<ContextEngine, "info">;
   compactionReplayEnabled: boolean;
   providerCompactionAtRequestBoundary?: boolean;
-  contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextTokenBudget: number;
   hookMessagesForCurrentPrompt: AgentMessage[];
@@ -217,18 +215,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       skipPromptSubmission: true,
     };
   }
-  if (
-    input.contextEngineAssemblySucceeded &&
-    input.activeContextEngine?.info.ownsCompaction &&
-    input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
-    !preemptiveCompaction.compactionReplay
-  ) {
-    log.info(
-      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine.info.id}" owns compaction`,
-    );
-    return { ...input.state };
-  }
-
   const precheckSummary = {
     result: preemptiveCompaction,
     provider: attempt.provider,
