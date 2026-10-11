@@ -26,10 +26,10 @@ import {
   startIncognitoActorSessionLifetime,
 } from "./session-incognito-lifetime.js";
 
-// The fixture retains two actors while the shared-state worker prepares lifecycle cleanup.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+// Two retained private actors plus shared-state cleanup need three broker slots.
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
 it.for(["sidecar", "actor"] as const)(

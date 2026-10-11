@@ -123,17 +123,6 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         /\.(?:md|markdown)$/i.test(props.label))
     );
   };
-  type Source = {
-    src: string;
-    identity: string;
-    size: number | undefined;
-    plain: boolean;
-    mime: string;
-    label: string;
-    retry: number;
-    html: boolean;
-  };
-  let previous: Source | undefined;
   const sourceInput = createMemo(
     () => ({
       src: props.src,
@@ -156,7 +145,7 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         before.retry === after.retry,
     },
   );
-  createEffect(sourceInput, (current) => {
+  createEffect(sourceInput, (current, previous) => {
     const policyChanged =
       !previous ||
       previous.plain !== current.plain ||
@@ -170,7 +159,6 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
       previous?.retry !== current.retry ||
       !current.src ||
       !current.identity;
-    previous = current;
     if (identityChanged) {
       setSource(false);
     }

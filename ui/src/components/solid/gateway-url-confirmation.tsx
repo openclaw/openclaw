@@ -1,10 +1,9 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { Show } from "solid-js";
-import { formatGatewayHost } from "../lib/gateway-host.ts";
-import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import "./modal-dialog.ts";
-import { Icon } from "./solid/icon.tsx";
+import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import "../modal-dialog.ts";
+import { Icon } from "./icon.tsx";
 
 type ConfirmationProps = {
   pendingGatewayUrl: string | null;
@@ -14,19 +13,19 @@ type ConfirmationProps = {
   onCancel: () => void;
 };
 
-function Confirmation(props: ConfirmationProps) {
+function renderConfirmation(props: () => ConfirmationProps) {
   const title = () => t("connection.switchGateway.title");
   const summary = () => t("connection.switchGateway.summary");
   const notes = () =>
     [
       t("connection.switchGateway.note"),
-      props.linkCarriesToken ? t("connection.switchGateway.noteToken") : null,
+      props().linkCarriesToken ? t("connection.switchGateway.noteToken") : null,
       // Tokens are origin-scoped: a different origin never receives the saved one.
-      props.currentGatewayUrl.trim() &&
-      gatewayOriginScope(props.currentGatewayUrl) !==
-        gatewayOriginScope(props.pendingGatewayUrl ?? "")
+      props().currentGatewayUrl.trim() &&
+      gatewayOriginScope(props().currentGatewayUrl) !==
+        gatewayOriginScope(props().pendingGatewayUrl ?? "")
         ? t("connection.switchGateway.noteScoped", {
-            host: formatGatewayHost(props.currentGatewayUrl),
+            host: formatGatewayHost(props().currentGatewayUrl),
           })
         : null,
     ]
@@ -36,7 +35,7 @@ function Confirmation(props: ConfirmationProps) {
     <openclaw-modal-dialog
       label={title()}
       description={summary()}
-      onModal-cancel={() => props.onCancel()}
+      onModal-cancel={() => props().onCancel()}
     >
       <div class="gateway-switch">
         <div class="gateway-switch__head">
@@ -51,24 +50,24 @@ function Confirmation(props: ConfirmationProps) {
         <div class="gateway-switch__hosts">
           <div class="gateway-switch__host">
             <span class="gateway-switch__label">{t("connection.switchGateway.current")}</span>
-            <code translate="no">{props.currentGatewayUrl.trim() || t("common.na")}</code>
+            <code translate="no">{props().currentGatewayUrl.trim() || t("common.na")}</code>
           </div>
           <span class="gateway-switch__arrow" aria-hidden="true">
             <Icon name="arrowRight" />
           </span>
           <div class="gateway-switch__host gateway-switch__host--next">
             <span class="gateway-switch__label">{t("connection.switchGateway.next")}</span>
-            <code translate="no">{props.pendingGatewayUrl}</code>
+            <code translate="no">{props().pendingGatewayUrl}</code>
           </div>
         </div>
         <p class="gateway-switch__note">{notes()}</p>
         <div class="gateway-switch__actions">
-          <button type="button" class="btn primary" onClick={() => props.onConfirm()}>
+          <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
             {t("connection.switchGateway.confirm", {
-              host: formatGatewayHost(props.pendingGatewayUrl ?? ""),
+              host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
             })}
           </button>
-          <button type="button" class="btn" onClick={() => props.onCancel()}>
+          <button type="button" class="btn" onClick={() => props().onCancel()}>
             {t("connection.switchGateway.cancel")}
           </button>
         </div>
@@ -81,11 +80,7 @@ export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationPr
   "openclaw-gateway-url-confirmation",
   (props, host) => {
     host.style.display = "contents";
-    return (
-      <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
-        {(current) => <Confirmation {...current()} />}
-      </Show>
-    );
+    return <>{props.props?.pendingGatewayUrl ? renderConfirmation(() => props.props!) : null}</>;
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );

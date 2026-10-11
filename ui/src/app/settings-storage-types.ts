@@ -7,7 +7,7 @@ export type ScopedSessionSelection = {
   selectedAgentId?: string;
 };
 
-export type ProfileNavigation = Pick<UiSettings, "sidebarEntries" | "navigationScope">;
+export type ProfileNavigation = Pick<UiSettings, "sidebarEntries">;
 export type PersistedUiSettings = Omit<
   UiSettings,
   | "token"
@@ -16,7 +16,6 @@ export type PersistedUiSettings = Omit<
   | "selectedAgentId"
   | "navCollapsed"
   | "sidebarEntries"
-  | "navigationScope"
   | "background"
 > &
   Partial<ProfileNavigation> & {

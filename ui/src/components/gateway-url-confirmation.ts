@@ -1,1 +1,1 @@
-export { GatewayUrlConfirmation } from "./gateway-url-confirmation.tsx";
+export { GatewayUrlConfirmation } from "./solid/gateway-url-confirmation.tsx";

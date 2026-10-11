@@ -22,12 +22,14 @@ import {
   prepareTrajectoryRuntimeRetention,
 } from "./runtime-retention.sqlite.js";
 import {
-  appendSqliteTrajectoryRuntimeEvents,
   appendSqliteTrajectoryRuntimeEventsWithWriter,
   loadSqliteTrajectoryRuntimeEventRowsSync,
   loadSqliteTrajectoryRuntimeEvents,
 } from "./runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "./runtime-store.test-support.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  createTrajectoryEvent,
+} from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeTestDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
@@ -198,7 +200,11 @@ describe("SQLite trajectory runtime retention", () => {
             );
           } else {
             appendSqliteTrajectoryRuntimeEventsWithWriter(
-              { sessionId: "session-1", events: [trigger], discardPrevious: true },
+              {
+                sessionId: "session-1",
+                events: [{ runId: trigger.runId, ts: trigger.ts, line: JSON.stringify(trigger) }],
+                discardPrevious: true,
+              },
               (operationLabel, write) =>
                 runOpenClawAgentWriteTransaction(
                   write,
@@ -360,7 +366,10 @@ describe("SQLite trajectory runtime retention", () => {
         });
         arrivals++;
         appendSqliteTrajectoryRuntimeEventsWithWriter(
-          { sessionId: "history", events: [event] },
+          {
+            sessionId: "history",
+            events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+          },
           (operationLabel, write) =>
             runOpenClawAgentWriteTransaction(
               write,
