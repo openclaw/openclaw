@@ -492,6 +492,34 @@ async function migrateLegacyMemorySidecarSource(params: {
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
+  async collectBackupResources(params) {
+    const sources = await collectLegacyMemorySidecarSources(params);
+    const resources: Array<{ path: string; kind: "sqlite" | "file" }> = [];
+    for (const source of sources) {
+      resources.push({ path: source.agentDatabasePath, kind: "sqlite" });
+      for (const sourcePath of await existingLegacySidecarPaths(source.legacyPath)) {
+        // Header-based capture recognizes real SQLite files without opening empty
+        // or malformed legacy placeholders as databases.
+        resources.push(
+          { path: sourcePath, kind: "file" },
+          { path: `${sourcePath}.migrated`, kind: "file" },
+        );
+      }
+      // Failed imports can preserve a deterministic retry copy in core memory storage.
+      for (const name of [
+        `${source.agentId}.sqlite`,
+        `${source.agentId}.retry-${crypto.createHash("sha256").update(path.resolve(source.legacyPath)).digest("hex").slice(0, 12)}.sqlite`,
+      ]) {
+        for (const suffix of ["", "-wal", "-shm"]) {
+          resources.push({
+            path: path.join(params.stateDir, "memory", `${name}${suffix}`),
+            kind: "file",
+          });
+        }
+      }
+    }
+    return resources;
+  },
   async detectLegacyState(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
     if (sources.length === 0) {
