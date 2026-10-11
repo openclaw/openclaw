@@ -1,5 +1,4 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   beginPanelRefresh,
@@ -13,6 +12,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   requestSessionUsage,
   requestSessionUsageLogs,
@@ -20,7 +20,6 @@ import {
   type SessionUsageQuery,
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
@@ -31,8 +30,8 @@ function sameUsageTarget(a: UsageDetailTarget | undefined, b: UsageDetailTarget)
 }
 
 function createUsageDetailRequest<T>(
-  host: ReactiveControllerHost,
-  gateway: GatewayPageController,
+  notify: () => void,
+  gateway: GatewayPageBinding,
   request: (
     client: GatewayBrowserClient,
     target: SessionUsageTarget,
@@ -46,7 +45,7 @@ function createUsageDetailRequest<T>(
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
-  const task = createUsageRequest(host, {
+  const task = createUsageRequest(notify, {
     task: async (
       [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
       { signal },
@@ -159,8 +158,8 @@ export class UsageDetailsController {
   readonly contextWeight;
 
   constructor(
-    host: ReactiveControllerHost,
-    gateway: GatewayPageController,
+    notify: () => void,
+    gateway: GatewayPageBinding,
     query: () => SessionUsageQuery,
     sessions: () => UsageSessionEntry[],
     clearTimeSeriesRange: () => void,
@@ -171,7 +170,7 @@ export class UsageDetailsController {
       return { key, ...(agentId ? { agentId } : {}), sessionId: session?.sessionId };
     };
     this.timeSeries = createUsageDetailRequest(
-      host,
+      notify,
       gateway,
       requestSessionUsageTimeSeries,
       resolveTarget,
@@ -179,7 +178,7 @@ export class UsageDetailsController {
       clearTimeSeriesRange,
     );
     this.sessionLogs = createUsageDetailRequest(
-      host,
+      notify,
       gateway,
       async (client, target) => {
         const payload = await requestSessionUsageLogs(client, target);
@@ -189,7 +188,7 @@ export class UsageDetailsController {
       resolveTarget,
     );
     this.contextWeight = createUsageDetailRequest(
-      host,
+      notify,
       gateway,
       async (client, target, signal, sessionId) => {
         const result = await requestSessionUsage(

@@ -388,6 +388,19 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     }).catch(() => UNAVAILABLE_SNAPSHOT);
   };
 
+  const enqueueDelivery = (
+    owner: { delivery?: Promise<void> },
+    deliver: () => Promise<void>,
+  ): Promise<void> => {
+    const delivery = (owner.delivery ?? Promise.resolve()).then(deliver).finally(() => {
+      if (owner.delivery === delivery) {
+        delete owner.delivery;
+      }
+    });
+    owner.delivery = delivery;
+    return delivery;
+  };
+
   const push = (
     connIds: ReadonlySet<string>,
     sessionKey: string,
@@ -405,73 +418,55 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       const request = refreshRequests?.get(watched);
       return (!request || watched.refreshPending !== request) && watched.deliveredHash === hash;
     };
-    const previousStateDelivery = state.delivery ?? Promise.resolve();
-    const stateDelivery = previousStateDelivery
-      .then(async () => {
-        const sessions = Object.create(null) as ControlUiSessionPullRequestsChanged["sessions"];
-        sessions[sessionKey] = snapshot;
-        for (const connId of connIds) {
-          const watched = subscriptions.get(connId)?.get(sessionKey);
-          if (!watched || isDelivered(watched)) {
-            continue;
+    return enqueueDelivery(state, async () => {
+      const sessions = Object.create(null) as ControlUiSessionPullRequestsChanged["sessions"];
+      sessions[sessionKey] = snapshot;
+      for (const connId of connIds) {
+        const watched = subscriptions.get(connId)?.get(sessionKey);
+        if (!watched || isDelivered(watched)) {
+          continue;
+        }
+        await enqueueDelivery(watched, async () => {
+          const current = await currentWatcher(connId, sessionKey);
+          if (
+            !current ||
+            scope.isClosing ||
+            current.watched !== watched ||
+            subscriptions.get(connId)?.get(sessionKey) !== watched ||
+            deps.isConnectionActive?.(connId) === false ||
+            keyStates.get(sessionKey) !== state ||
+            isDelivered(watched)
+          ) {
+            return;
           }
-          const previous = watched.delivery ?? Promise.resolve();
-          const delivery = previous
-            .then(async () => {
-              const current = await currentWatcher(connId, sessionKey);
-              if (
-                !current ||
-                scope.isClosing ||
-                current.watched !== watched ||
-                subscriptions.get(connId)?.get(sessionKey) !== watched ||
-                deps.isConnectionActive?.(connId) === false ||
-                keyStates.get(sessionKey) !== state ||
-                isDelivered(watched)
-              ) {
-                return;
-              }
-              assertSourceCurrent();
-              try {
-                // The shared cache can carry another viewer's target after preparation yields.
-                current.target.assertCurrent?.();
-              } catch {
-                // Losing one recipient must not suppress the same snapshot for other viewers.
-                return;
-              }
-              const refreshRequest = refreshRequests?.get(watched);
-              // A socket callback can replace the session or retire another viewer synchronously.
-              deps.broadcastToConnIds(
-                CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
-                { sessions },
-                new Set([connId]),
-                {
-                  sessionKeys: [state.target.params.sessionKey],
-                  agentId: state.target.params.agentId,
-                },
-              );
-              if (subscriptions.get(connId)?.get(sessionKey) === watched) {
-                watched.deliveredHash = hash;
-                if (refreshRequest && watched.refreshPending === refreshRequest) {
-                  delete watched.refreshPending;
-                }
-              }
-            })
-            .finally(() => {
-              if (watched.delivery === delivery) {
-                delete watched.delivery;
-              }
-            });
-          watched.delivery = delivery;
-          await delivery;
-        }
-      })
-      .finally(() => {
-        if (state.delivery === stateDelivery) {
-          delete state.delivery;
-        }
-      });
-    state.delivery = stateDelivery;
-    return stateDelivery;
+          assertSourceCurrent();
+          try {
+            // The shared cache can carry another viewer's target after preparation yields.
+            current.target.assertCurrent?.();
+          } catch {
+            // Losing one recipient must not suppress the same snapshot for other viewers.
+            return;
+          }
+          const refreshRequest = refreshRequests?.get(watched);
+          // A socket callback can replace the session or retire another viewer synchronously.
+          deps.broadcastToConnIds(
+            CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+            { sessions },
+            new Set([connId]),
+            {
+              sessionKeys: [state.target.params.sessionKey],
+              agentId: state.target.params.agentId,
+            },
+          );
+          if (subscriptions.get(connId)?.get(sessionKey) === watched) {
+            watched.deliveredHash = hash;
+            if (refreshRequest && watched.refreshPending === refreshRequest) {
+              delete watched.refreshPending;
+            }
+          }
+        });
+      }
+    });
   };
 
   const schedulePoll = () => {

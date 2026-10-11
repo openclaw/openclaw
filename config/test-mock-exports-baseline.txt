@@ -1033,7 +1033,6 @@
 ["extensions/mattermost/src/mattermost/monitor-posts.bot-threads.test.ts","./thread-participation.js","e811f4ad093bd3211728b989b2c2eda913021519cadfdd6a48585222b9e40e08",1]
 ["extensions/mattermost/src/mattermost/monitor-posts.thread-history.test.ts","./monitor-turn.js","d6f86c1b13ccd5c65540b150ad1ed5c920e42451c575bc161bc610de2075ea03",1]
 ["extensions/mattermost/src/mattermost/monitor-resources.test.ts","./interactions.js","70511353f74167526cb10fb28283697d9501c89540ccae27a63102b204d5b352",1]
-["extensions/mattermost/src/mattermost/monitor-slash.test.ts","./runtime-api.js","041a6539ff1bfa3095ade66cf81bb7edfb2d18bfc4cd947c9628033b0a8dea97",1]
 ["extensions/mattermost/src/mattermost/monitor-slash.test.ts","./slash-commands.js","7a044f1c0cfc629a7724bbdff1facf3b90f9739957158834f26b95f1e33f50a7",1]
 ["extensions/mattermost/src/mattermost/monitor-slash.test.ts","./slash-state.js","b874789c472dc18402977ba1108d5b0e64d2eb615e531a4a44f4fc29e8c6f08f",1]
 ["extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts","../runtime.js","109e7a1a5f483040b7544c1214db4f7d5a5648492ad49eb806f50b8a48680057",1]
