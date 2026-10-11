@@ -358,16 +358,19 @@ async function pruneWorkerBundleCache(params: {
     }
     return;
   }
-  if (
-    !entries.some((entry) => {
-      const bundleHash = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name)?.[1];
-      return (
+  const candidates = entries
+    .map(({ name }) => ({
+      name,
+      bundleHash: BUNDLE_TARBALL_NAME_PATTERN.exec(name)?.[1],
+      staging: BUNDLE_STAGING_NAME_PATTERN.test(name),
+    }))
+    .filter(
+      ({ name, bundleHash, staging }) =>
         (bundleHash !== undefined && bundleHash !== params.currentBundleHash) ||
-        BUNDLE_STAGING_NAME_PATTERN.test(entry.name) ||
-        BUNDLE_TEMP_NAME_PATTERN.test(entry.name)
-      );
-    })
-  ) {
+        staging ||
+        BUNDLE_TEMP_NAME_PATTERN.test(name),
+    );
+  if (candidates.length === 0) {
     return;
   }
   // Read current references only after this queued prune finds possible cleanup work.
@@ -376,14 +379,10 @@ async function pruneWorkerBundleCache(params: {
       /^[a-f0-9]{64}$/u.test(hash),
     ),
   );
-  for (const entry of entries.toSorted((left, right) =>
+  for (const entry of candidates.toSorted((left, right) =>
     compareWorkerBundlePaths(left.name, right.name),
   )) {
-    const tarball = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name);
-    const removableTarball = tarball && !retained.has(tarball[1]!);
-    const removableStaging = BUNDLE_STAGING_NAME_PATTERN.test(entry.name);
-    const removableTemp = BUNDLE_TEMP_NAME_PATTERN.test(entry.name);
-    if (!removableTarball && !removableStaging && !removableTemp) {
+    if (entry.bundleHash !== undefined && retained.has(entry.bundleHash)) {
       continue;
     }
     const target = path.join(params.cacheDir, entry.name);
@@ -392,10 +391,10 @@ async function pruneWorkerBundleCache(params: {
       if (stats.isSymbolicLink()) {
         continue;
       }
-      if (removableStaging ? !stats.isDirectory() : !stats.isFile()) {
+      if (entry.staging ? !stats.isDirectory() : !stats.isFile()) {
         continue;
       }
-      await fs.rm(target, { recursive: removableStaging, force: true });
+      await fs.rm(target, { recursive: entry.staging, force: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         params.onError?.(error);

@@ -313,18 +313,20 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     }
   }
   await assertExistingSeed();
-  const added = await runGit(
-    input.repoRoot,
-    [
-      "worktree",
-      "add",
-      "--no-checkout",
-      ...(existingBranch ? [] : createdBranch ? ["-b", createdBranch] : ["--detach"]),
-      "--",
-      input.destination,
-      existingBranch ?? input.base,
-    ],
-    checkoutGitOptions(input, 0),
+  const added = await timeWorktreePreparationPhase("registration", () =>
+    runGit(
+      input.repoRoot,
+      [
+        "worktree",
+        "add",
+        "--no-checkout",
+        ...(existingBranch ? [] : createdBranch ? ["-b", createdBranch] : ["--detach"]),
+        "--",
+        input.destination,
+        existingBranch ?? input.base,
+      ],
+      checkoutGitOptions(input, 0),
+    ),
   );
   if (added.code !== 0) {
     return added;
@@ -506,11 +508,13 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
           },
         );
       }
-      await requireGit(options.destination, ["update-index", "--refresh"], {
-        ...gitOptions(options),
-        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-        ...options.checkoutBudget,
-      });
+      await timeWorktreePreparationPhase("indexRefresh", () =>
+        requireGit(options.destination, ["update-index", "--refresh"], {
+          ...gitOptions(options),
+          timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+          ...options.checkoutBudget,
+        }),
+      );
     } catch (error) {
       if (hasWorktreeUnknownOutcome(error)) {
         throw error;

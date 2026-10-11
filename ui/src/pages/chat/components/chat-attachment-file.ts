@@ -7,6 +7,25 @@ import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { getChatAttachmentVideoPosterUrl } from "../attachment-payload-store.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
+export function renderAttachmentRemove(
+  label: string,
+  disabled: boolean | undefined,
+  onClick: () => void,
+  className = "chat-attachment-remove",
+) {
+  return html`<openclaw-tooltip .content=${label}>
+    <button
+      class=${className}
+      type="button"
+      aria-label=${label}
+      ?disabled=${disabled}
+      @click=${onClick}
+    >
+      ${icons.x}
+    </button>
+  </openclaw-tooltip>`;
+}
+
 function renderAttachmentVideoPreview(attachment: ChatAttachment) {
   const poster = getChatAttachmentVideoPosterUrl(attachment);
   return html`

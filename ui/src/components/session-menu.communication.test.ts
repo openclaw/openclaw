@@ -9,6 +9,7 @@ import {
   menuItem,
   menuItemLabels,
   selectMenuValue,
+  settleSessionMenu,
 } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
@@ -134,7 +135,7 @@ describe("session communication menu", () => {
       onAction,
     });
     selectMenuValue(menu, "compact:open-advanced");
-    await menu.updateComplete;
+    await settleSessionMenu(menu);
     expect(menuItem(menu, "Back").getAttribute("value")).toBe("compact:back");
     expect(choice(menu, "receive", "ask").getAttribute("aria-pressed")).toBe("true");
     expect(menu.querySelector('[slot="submenu"]')).toBeNull();
@@ -156,10 +157,10 @@ describe("session communication menu", () => {
     expect(document.activeElement).toBe(menuItem(menu, "Open in"));
     for (const view of ["icon", "copy", "open-in"]) {
       selectMenuValue(menu, `compact:open-${view}`);
-      await menu.updateComplete;
+      await settleSessionMenu(menu);
       expect(menuItem(menu, "Back").getAttribute("value")).toBe("compact:back-advanced");
       selectMenuValue(menu, "compact:back-advanced");
-      await menu.updateComplete;
+      await settleSessionMenu(menu);
       expect(choice(menu, "receive", "ask")).toBeTruthy();
     }
     choice(menu, "receive", "never").click();
@@ -168,7 +169,7 @@ describe("session communication menu", () => {
       communication: { receive: "never" },
     });
     selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
+    await settleSessionMenu(menu);
     expect(menuItemLabels(menu)).toContain("Advanced");
     expect(menu.querySelector('[role="group"]')).toBeNull();
   });

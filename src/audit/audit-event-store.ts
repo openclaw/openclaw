@@ -68,9 +68,9 @@ type AuditEventRow = Selectable<AuditEventsTable>;
 export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
-// The single audit writer owns one DB handle. Invalidate on out-of-band
-// maintenance or rollback so the hot path avoids a 100k-row scan per message.
-const auditEventRowCounts = new WeakMap<DatabaseSync, number>();
+// The single audit writer owns one DB handle. Maintenance and rollback drop
+// these facts; ordinary inserts need neither a row scan nor an empty expiry DELETE.
+const auditEventRetention = new WeakMap<DatabaseSync, { rowCount: number; nextExpiryAt: number }>();
 function getAuditKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuditDatabase>(db);
 }
@@ -448,14 +448,22 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): AuditEventIns
   } satisfies AuditEventInsert;
 }
 
-function countAuditEvents(db: DatabaseSync): number {
+function readAuditEventRetention(db: DatabaseSync) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getAuditKysely(db)
       .selectFrom("audit_events")
-      .select((expression) => expression.fn.countAll<number>().as("count")),
+      .select((expression) => [
+        expression.fn.countAll<number>().as("count"),
+        expression.fn.min<number>("occurred_at").as("oldest"),
+      ]),
   );
-  return normalizeSqliteNumber(row?.count ?? null) ?? 0;
+  return {
+    rowCount: normalizeSqliteNumber(row?.count ?? null) ?? 0,
+    nextExpiryAt:
+      (normalizeSqliteNumber(row?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
+      AUDIT_EVENT_RETENTION_MS,
+  };
 }
 function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
   const kysely = getAuditKysely(db);
@@ -471,37 +479,54 @@ function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
     kysely.deleteFrom("audit_events").where("sequence", "in", expiredSequences),
   );
 }
-function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number): void {
+function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number, occurredAt: number): void {
   const kysely = getAuditKysely(db);
-  const expired = deleteExpiredAuditEvents(db, now);
-  const cachedCount = auditEventRowCounts.get(db);
-  let rowCount =
-    cachedCount === undefined
-      ? countAuditEvents(db)
-      : Math.max(0, cachedCount + 1 - Number(expired.numAffectedRows ?? 0n));
-  if (rowCount <= AUDIT_EVENT_MAX_ROWS) {
-    auditEventRowCounts.set(db, rowCount);
-    return;
+  const cached = auditEventRetention.get(db);
+  const retention = cached
+    ? {
+        rowCount: cached.rowCount + 1,
+        nextExpiryAt: Math.min(cached.nextExpiryAt, occurredAt + AUDIT_EVENT_RETENTION_MS),
+      }
+    : readAuditEventRetention(db);
+  let pruned = false;
+  if (retention.nextExpiryAt < now) {
+    const expired = deleteExpiredAuditEvents(db, now);
+    retention.rowCount = Math.max(0, retention.rowCount - Number(expired.numAffectedRows ?? 0n));
+    pruned = true;
   }
-  const retainedRows = Math.max(0, AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS);
-  const overflowRow = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("audit_events")
-      .select("sequence")
-      .orderBy("sequence", "desc")
-      .offset(retainedRows)
-      .limit(1),
-  );
-  const sequenceCutoff = overflowRow ? normalizeSqliteNumber(overflowRow.sequence) : undefined;
-  if (sequenceCutoff !== undefined) {
-    const pruned = executeSqliteQuerySync(
+  if (retention.rowCount > AUDIT_EVENT_MAX_ROWS) {
+    const retainedRows = Math.max(0, AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS);
+    const overflowRow = executeSqliteQueryTakeFirstSync(
       db,
-      kysely.deleteFrom("audit_events").where("sequence", "<=", sequenceCutoff),
+      kysely
+        .selectFrom("audit_events")
+        .select("sequence")
+        .orderBy("sequence", "desc")
+        .offset(retainedRows)
+        .limit(1),
     );
-    rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
+    const sequenceCutoff = overflowRow ? normalizeSqliteNumber(overflowRow.sequence) : undefined;
+    if (sequenceCutoff !== undefined) {
+      const overflow = executeSqliteQuerySync(
+        db,
+        kysely.deleteFrom("audit_events").where("sequence", "<=", sequenceCutoff),
+      );
+      retention.rowCount = Math.max(0, retention.rowCount - Number(overflow.numAffectedRows ?? 0n));
+      pruned = true;
+    }
   }
-  auditEventRowCounts.set(db, rowCount);
+  if (pruned) {
+    const oldest = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("audit_events")
+        .select((expression) => expression.fn.min("occurred_at").as("oldest")),
+    );
+    retention.nextExpiryAt =
+      (normalizeSqliteNumber(oldest?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
+      AUDIT_EVENT_RETENTION_MS;
+  }
+  auditEventRetention.set(db, retention);
 }
 
 /** Persist one projected event idempotently and prune fixed retention bounds. */
@@ -519,10 +544,10 @@ export function recordAuditEventInDatabase(
   if (executionToken) {
     ensureTerminalMessageExecutionBindingSchema(options);
   }
-  let countCacheDatabase: DatabaseSync | undefined;
+  let retentionCacheDatabase: DatabaseSync | undefined;
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
-      countCacheDatabase = db;
+      retentionCacheDatabase = db;
       if (input.kind === "skill_selection") {
         return recordSkillSelectionAuditEvent(input, db, Date.now() - AUDIT_EVENT_RETENTION_MS);
       }
@@ -538,7 +563,7 @@ export function recordAuditEventInDatabase(
         throw new Error("audit event sequence is outside the supported integer range");
       }
       const now = Date.now();
-      pruneAuditEventsAfterInsert(db, now);
+      pruneAuditEventsAfterInsert(db, now, values.occurred_at);
       // Current events cannot be removed by retention: sequence allocation puts
       // them after every existing row. An expired replay may be pruned immediately.
       const row =
@@ -552,10 +577,10 @@ export function recordAuditEventInDatabase(
       return row ? rowToAuditEvent(row) : undefined;
     }, options);
   } catch (error) {
-    if (countCacheDatabase) {
-      auditEventRowCounts.delete(countCacheDatabase);
-      invalidateSkillSelectionAuditCachesForDatabase(countCacheDatabase);
-      clearAuditIdentityKeyCacheForDatabase(countCacheDatabase);
+    if (retentionCacheDatabase) {
+      auditEventRetention.delete(retentionCacheDatabase);
+      invalidateSkillSelectionAuditCachesForDatabase(retentionCacheDatabase);
+      clearAuditIdentityKeyCacheForDatabase(retentionCacheDatabase);
     }
     throw error;
   }
@@ -588,7 +613,7 @@ export function pruneExpiredAuditEventsInDatabase(params: {
     const deleted = deleteExpiredAuditEvents(db, now);
     const retainedAfter = now - AUDIT_EVENT_RETENTION_MS;
     const deletedSkillSelections = pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter });
-    auditEventRowCounts.delete(db);
+    auditEventRetention.delete(db);
     return Number(deleted.numAffectedRows ?? 0n) + deletedSkillSelections;
   }, params.database);
 }

@@ -230,15 +230,12 @@ async function applyWorkerTranscriptCommit(params: {
       outcome = { ok: false, error };
     }
     const cleanupFailures: unknown[] = [];
-    try {
-      await worker?.close();
-    } catch (error) {
-      cleanupFailures.push(error);
-    }
-    try {
-      await execution.release();
-    } catch (error) {
-      cleanupFailures.push(error);
+    for (const close of [() => worker?.close(), () => execution.release()]) {
+      try {
+        await close();
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
     }
     if (cleanupFailures.length > 0) {
       const cleanupError = createSqliteLifecycleAggregateError(

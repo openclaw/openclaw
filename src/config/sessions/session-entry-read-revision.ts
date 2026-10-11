@@ -1,6 +1,6 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionEntry } from "./types.js";
 
 /** Read acknowledgments and cold snapshots do not change retained list metadata. */
