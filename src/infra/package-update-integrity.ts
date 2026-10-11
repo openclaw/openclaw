@@ -317,6 +317,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     root: string,
     originalRoot = root,
     reuse?: PackageIntegrityFingerprint,
+    legacy = false,
   ): Promise<PackageIntegrityFingerprint> {
     const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
@@ -344,7 +345,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     let fileFailed = false;
     const appendEntry = ({ relative, fields, retained, reusable }: HashedEntry) => {
       const retainedEntry = JSON.stringify([relative, retained]);
-      digest.update(retainedEntry);
+      if (!legacy) {
+        digest.update(retainedEntry);
+      }
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
     const settled = (entry: HashedEntry) => {
@@ -406,7 +409,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
       // Keep the observation so a mid-scan substitution still refuses recovery.
-      if (stat.isFile() && /(?:^|\/)node_modules\/\.package-lock\.json$/u.test(relative)) {
+      if (
+        !legacy &&
+        stat.isFile() &&
+        /(?:^|\/)node_modules\/\.package-lock\.json$/u.test(relative)
+      ) {
         return;
       }
       const info = metadata(stat);
@@ -529,6 +536,30 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           )
         ) {
           throw new Error("Package rollback tree changed during verification");
+        }
+      }
+      if (legacy) {
+        for (const { file, stat } of observed) {
+          const relative = path.relative(root, file).split(path.sep).join("/");
+          const fields = entriesObserved.get(relative)!.fields;
+          const info = Object.values(metadata(stat));
+          if (!relative) {
+            info.pop();
+          }
+          digest.update(JSON.stringify([relative, info]));
+          const contents = fields.get("sha256");
+          if (contents !== undefined) {
+            const first =
+              stat.nlink > 1n
+                ? observed.find(
+                    ({ stat: other }) => other.dev === stat.dev && other.ino === stat.ino,
+                  )
+                : undefined;
+            const owner = first ? path.relative(root, first.file).split(path.sep).join("/") : null;
+            digest.update(JSON.stringify(["file", owner, contents]));
+          } else if (fields.has("target")) {
+            digest.update(JSON.stringify(["symlink", fields.get("target")]));
+          }
         }
       }
       const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
