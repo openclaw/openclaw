@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -118,11 +117,7 @@ export async function runCrabboxModelCommand(params: CrabboxModelRunOptions): Pr
       if (result.cleanup === "uncertain") {
         throw new Error("Crabbox could not confirm that the command stopped");
       }
-      return {
-        ...result,
-        stdout: redactSensitiveText(result.stdout),
-        stderr: redactSensitiveText(result.stderr),
-      };
+      return result;
     },
   );
 }

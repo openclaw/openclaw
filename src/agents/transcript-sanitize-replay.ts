@@ -1,5 +1,4 @@
 import { readOpenAIResponsesCompactionWindow } from "@openclaw/ai/internal/openai-responses-payload-policy";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type TranscriptReplayRoute = {
   api?: string;
@@ -15,25 +14,22 @@ type TranscriptReplaySanitizerHelpers = {
   isOpenAIResponsesRoute: (route: TranscriptReplayRoute | undefined) => boolean;
   isPlainTranscriptObject: (value: object) => value is Record<string, unknown>;
   isStructurallyValidOpaqueReplayToken: (value: string) => boolean;
-  redactTranscriptStructuredValue: (value: unknown, cfg?: OpenClawConfig) => unknown;
-  redactTranscriptText: (value: string, cfg?: OpenClawConfig) => string;
+  sanitizeTranscriptStructuredValue: (value: unknown) => unknown;
 };
 
 function sanitizeCompactedWindow(
   replay: { data: string; id?: string; compactedWindow?: unknown },
-  cfg: OpenClawConfig | undefined,
   helpers: TranscriptReplaySanitizerHelpers,
 ) {
   const window = replay.compactedWindow;
   const output = readOpenAIResponsesCompactionWindow(replay);
   const unchanged = output?.every((item) => {
     if (item.type !== "compaction") {
-      return helpers.redactTranscriptStructuredValue(item, cfg) === item;
+      return helpers.sanitizeTranscriptStructuredValue(item) === item;
     }
-    // Only the encrypted token is opaque; optional provider fields still pass
-    // through the same plaintext policy as the retained messages.
+    // Preserve the canonical window only when image normalization leaves it unchanged.
     const { encrypted_content: _encrypted, ...plaintext } = item;
-    return helpers.redactTranscriptStructuredValue(plaintext, cfg) === plaintext;
+    return helpers.sanitizeTranscriptStructuredValue(plaintext) === plaintext;
   });
   return unchanged &&
     window &&
@@ -47,7 +43,6 @@ function sanitizeCompactedWindow(
 export function sanitizeCompactionReplayState(
   value: unknown,
   route: TranscriptReplayRoute | undefined,
-  cfg: OpenClawConfig | undefined,
   helpers: TranscriptReplaySanitizerHelpers,
 ): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || !helpers.isPlainTranscriptObject(value)) {
@@ -72,8 +67,9 @@ export function sanitizeCompactionReplayState(
     (value.type === "openai-responses-retained-compaction" && value.replayIndex !== undefined) ||
     (value.replayIndex !== undefined &&
       (isSuppression ||
+        typeof value.replayIndex !== "number" ||
         !Number.isSafeInteger(value.replayIndex) ||
-        (value.replayIndex as number) < 0)) ||
+        value.replayIndex < 0)) ||
     value.provider !== route?.provider ||
     !(isOpenAI
       ? typeof value.api === "string" && helpers.isOpenAIResponsesApi(value.api)
@@ -95,7 +91,7 @@ export function sanitizeCompactionReplayState(
         ? value.data
         : undefined
       : value.data.length > 0
-        ? helpers.redactTranscriptText(value.data, cfg)
+        ? value.data
         : undefined;
   if (data === undefined) {
     return undefined;
@@ -131,11 +127,9 @@ export function sanitizeCompactionReplayState(
     ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
     ...(!isSuppression && isOpenAI && value.compactedWindow !== undefined
       ? {
-          // Keep the newest fenced barrier when its canonical plaintext cannot
-          // survive redaction; dropping it could expose an older checkpoint.
+          // Keep the newest barrier when its canonical image payload needs refreshing.
           compactedWindow: sanitizeCompactedWindow(
             { data, id: replayId, compactedWindow: value.compactedWindow },
-            cfg,
             helpers,
           ),
         }

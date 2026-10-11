@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToolCard } from "./chat-tool-cards.ts";
 import { renderToolFixture as render } from "./chat-tool-render.test-support.ts";
 
-describe("tool-card redaction", () => {
+describe("tool-card source fidelity", () => {
   it.each([
     ["/Users/alice/Pictures/base.png", "~/Pictures/base.png"],
     ["D:\\Users\\alice\\Pictures\\base.png", "~\\Pictures\\base.png"],
@@ -26,7 +26,6 @@ describe("tool-card redaction", () => {
   const publicUrl = "https://x.com/EliXPampa/status/2097727549400871286";
   const secret = "Ab9Q".repeat(10);
   const numericSlashSecret = "1234/" + "Ab9Q".repeat(8) + "Ab9";
-  const masked = "Ab9QAb...Ab9Q";
 
   it.each([
     ["long URL hostname", `https://${secret}.example.test`, `https://${secret}.example.test`],
@@ -40,11 +39,11 @@ describe("tool-card redaction", () => {
       `data:application/octet-stream;base64,AAAA/${secret}@`,
       `data:application/octet-stream;base64,AAAA/${secret}@`,
     ],
-    ["URL fragment", `https://example.test/#${secret}`, `https://example.test/#${masked}`],
+    ["URL fragment", `https://example.test/#${secret}`, `https://example.test/#${secret}`],
     [
       "adjacent Markdown label",
       `https://example.test/[${secret}](target)`,
-      `https://example.test/[${masked}](target)`,
+      `https://example.test/[${secret}](target)`,
     ],
     [
       "at-sign beyond query cutoff",
@@ -64,37 +63,33 @@ describe("tool-card redaction", () => {
     [
       "URL in parenthesized query value",
       `https://example.test/?next=(https://example.test/path-${secret})`,
-      `https://example.test/?next=(https://example.test/path-${masked})`,
+      `https://example.test/?next=(https://example.test/path-${secret})`,
     ],
     [
       "userinfo before punctuation",
       `https://name-${secret})@example.test`,
-      `https://name-${masked})@example.test`,
+      `https://name-${secret})@example.test`,
     ],
     [
       "s3 numeric slash password",
       `s3://user:${numericSlashSecret}@bucket`,
-      "s3://user:1234/A...QAb9@bucket",
+      `s3://user:${numericSlashSecret}@bucket`,
     ],
-    ["credential after URL", `${publicUrl} ${secret}`, `${publicUrl} ${masked}`],
+    ["credential after URL", `${publicUrl} ${secret}`, `${publicUrl} ${secret}`],
     [
       "credential query",
       `https://example.test/?access_token=${secret}`,
-      `https://example.test/?access_token=${masked}`,
+      `https://example.test/?access_token=${secret}`,
     ],
-  ])(
-    "renderToolCard displays the %s with public URLs intact and credentials masked",
-    async (_label, input, expected) => {
-      const container = document.createElement("div");
-      await render(
-        renderToolCard(
-          { id: "msg:redaction", name: "custom_tool", args: { message: input } },
-          { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
-        ),
-        container,
-      );
-
-      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(expected);
-    },
-  );
+  ])("renderToolCard preserves %s", async (_label, input, expected) => {
+    const container = document.createElement("div");
+    await render(
+      renderToolCard(
+        { id: "msg:redaction", name: "custom_tool", args: { message: input } },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(expected);
+  });
 });

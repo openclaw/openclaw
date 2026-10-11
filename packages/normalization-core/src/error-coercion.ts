@@ -1,8 +1,7 @@
-// Structural formatting stays policy-free. Core and memory-host adapters intentionally inject
-// owner-specific redactors; bypassing them would weaken redaction and break one-argument APIs.
+// Structural formatting stays policy-free; diagnostic adapters supply their redaction policy.
 export type FormatErrorMessageOptions = {
   includeCode?: boolean;
-  redact: (text: string) => string;
+  redact?: (text: string) => string;
 };
 
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
@@ -145,8 +144,11 @@ export function readErrorCauses(current: Record<string, unknown>): unknown[] {
   ];
 }
 
-/** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
-export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
+/** Formats unknown errors with cause/aggregate details and optional diagnostic redaction. */
+export function formatErrorMessage(
+  value: unknown,
+  options: FormatErrorMessageOptions = {},
+): string {
   let formatted: string;
   if (isErrorObject(value)) {
     formatted = readErrorText(value, "message") || readErrorText(value, "name") || "Error";
@@ -187,7 +189,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
   } else {
     formatted = formatStatusAndCode(value) ?? stringifyUnknown(value);
   }
-  return options.redact(formatted);
+  return options.redact ? options.redact(formatted) : formatted;
 }
 
 /**

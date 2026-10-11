@@ -433,33 +433,6 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
-function normalizeViteImporterPath(importer: string): string {
-  return path.normalize(importer.replace(/[?#].*$/u, ""));
-}
-
-export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
-  const sharedRedactImporters = new Set([
-    path.join(repoRoot, "src/agents/tool-display-common.ts"),
-    path.join(repoRoot, "src/agents/tool-display-exec.ts"),
-    path.join(repoRoot, "src/agents/tool-display.ts"),
-  ]);
-  return {
-    name: "control-ui-browser-only-shared-module-aliases",
-    enforce: "pre",
-    resolveId(source, importer) {
-      if (
-        source === "../logging/redact.js" &&
-        importer &&
-        sharedRedactImporters.has(normalizeViteImporterPath(importer))
-      ) {
-        return browserRedactPath;
-      }
-      return null;
-    },
-  };
-}
-
 function controlUiBuildOutputPlugin(buildId: string): Plugin {
   let publicAssets: string[] = [];
   let cacheId: string | undefined;
@@ -740,7 +713,6 @@ export default function controlUiViteConfig(
       },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
-      controlUiBrowserOnlySharedModuleAliases(),
       controlUiBootPreloadsPlugin(),
       controlUiBuildOutputPlugin(buildInfo.buildId),
       {

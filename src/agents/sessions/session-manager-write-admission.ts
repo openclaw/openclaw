@@ -22,8 +22,6 @@ import {
   withOwnedSessionTranscriptWriterFence,
 } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
-import { captureLoggingRedactionPatternGuard } from "../../logging/config.js";
-import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -254,20 +252,10 @@ export async function appendSessionTranscriptNote(
       { getSessionTarget: () => captured, getSessionId: () => captured.sessionId },
       async (admission) => {
         const actor = admission && !("db" in admission.database) ? admission.database : undefined;
-        const redactionRevision = actor ? getSecretRedactionRegistryRevision() : undefined;
-        const redactionCurrent = actor
-          ? captureLoggingRedactionPatternGuard(append.config?.logging?.redactPatterns)
-          : undefined;
         const prepared = actor ? prepareTranscriptMessageAppendForWorker(append) : undefined;
         if (prepared) {
           Object.freeze(prepared.persistedMessage);
         }
-        const assertPrepared = () => {
-          admission?.assertCurrent();
-          if (getSecretRedactionRegistryRevision() !== redactionRevision || !redactionCurrent?.()) {
-            throw new Error("Transcript message redaction changed before persistence");
-          }
-        };
         const { env: _env, ...scope } = captured;
         const receipt =
           actor && admission && prepared
@@ -275,7 +263,7 @@ export async function appendSessionTranscriptNote(
                 (await import("./session-manager-metadata-runtime.js")).withSessionMetadataWorker(
                   admission.options,
                   actor,
-                  assertPrepared,
+                  () => admission.assertCurrent(),
                   (worker) =>
                     worker.execute({
                       type: "session.transcript.appendMessage",
@@ -306,7 +294,7 @@ export async function appendSessionTranscriptNote(
             if (receipt.failure) {
               throw receipt.failure;
             }
-            assertPrepared();
+            admission?.assertCurrent();
           } catch (cause) {
             throw new SessionTranscriptMessageCommittedError(
               result.messageId,

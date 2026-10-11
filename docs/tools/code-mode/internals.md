@@ -64,7 +64,7 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
-Completed nested calls persist as bounded, redacted display-only activity, retaining
+Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
 Nested invocation ids include the cell's replay identity, so a provider can reuse

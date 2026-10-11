@@ -87,9 +87,7 @@ export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   );
 }
 
-export function resolveCodeModeExecToolInputKind(
-  params: unknown,
-): CodeModeExecToolInputKind | undefined {
+function resolveCodeModeExecToolInputKind(params: unknown): CodeModeExecToolInputKind | undefined {
   if (!isPlainObject(params)) {
     return undefined;
   }

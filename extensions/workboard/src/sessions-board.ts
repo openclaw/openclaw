@@ -49,7 +49,6 @@ type Placements = Awaited<ReturnType<WorkboardBoardStore["listSessionPlacements"
 type CachedFacts = {
   source: SourceRow;
   observation: number;
-  redactionRevision: SourceSnapshot["redactionRevision"];
   facts: WorkboardSessionFacts;
   stale?: boolean;
   pin?: Placements[number];
@@ -103,35 +102,6 @@ function inScope(facts: WorkboardSessionFacts, board: WorkboardSessionsBoard, no
     (scope?.includeArchived === true || !facts.archived) &&
     facts.lastActivityAt >= now - (scope?.maxAgeHours ?? 72) * 3_600_000
   );
-}
-
-function retainSessionState(
-  previous: WorkboardSessionFacts,
-  current: WorkboardSessionFacts,
-): WorkboardSessionFacts {
-  const facts: WorkboardSessionFacts = {
-    ...current,
-    lifecycleRevision: previous.lifecycleRevision,
-    run: previous.run,
-    archived: previous.archived,
-    lastActivityAt: previous.lastActivityAt,
-    observerDigest: previous.observerDigest
-      ? {
-          health: previous.observerDigest.health,
-          headline: "",
-          revision: previous.observerDigest.revision,
-        }
-      : undefined,
-    pullRequests: previous.pullRequests.map(({ number, state, url }) => ({
-      number,
-      state,
-      ...(url ? { url } : {}),
-    })),
-    pullRequestsUnavailable: previous.pullRequestsUnavailable,
-    pullRequestsRateLimited: previous.pullRequestsRateLimited,
-  };
-  freezeCardList(facts);
-  return facts;
 }
 
 function createOwner(
@@ -206,7 +176,6 @@ function createOwner(
       const previous = preparedFacts?.get(row.key);
       if (
         previous?.source === row &&
-        previous.redactionRevision === source.redactionRevision &&
         !row.unavailable &&
         isDeepStrictEqual(previous.pin, placements.get(row.key))
       ) {
@@ -217,7 +186,6 @@ function createOwner(
       const current: CachedFacts = {
         source: row,
         observation: admittedObservation,
-        redactionRevision: source.redactionRevision,
         facts,
       };
       if (failure) {
@@ -225,11 +193,7 @@ function createOwner(
         reasons.add(failure);
         const previousFacts = lastKnown.get(row.key);
         const known = previousFacts?.facts.sessionId === row.sessionId ? previousFacts : undefined;
-        current.facts = !known
-          ? facts
-          : known.redactionRevision === source.redactionRevision
-            ? known.facts
-            : retainSessionState(known.facts, facts);
+        current.facts = known ? known.facts : facts;
         current.stale = known?.stale;
       } else {
         current.stale = row.pullRequestsStale;

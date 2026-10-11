@@ -100,9 +100,9 @@ retained inputs were executable. Pending metadata neither authorizes replay nor
 blocks unrelated work. Execution still requires current admission and exact
 input custody.
 
-The returned view is intentionally bounded and redacted:
+The returned view is intentionally bounded:
 
-- credential/token-like text is redacted even when general-purpose log redaction is disabled
+- text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
 - long text blocks are truncated to 4000 characters, with a truncation marker appended
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
@@ -114,7 +114,7 @@ Use the returned **session key** (like `"main"`) with `sessions_history`, `sessi
 
 If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
-Use [`sessions_search`](/concepts/session-search) for exact full-text recall across visible user and assistant transcript text. Its results include a `sessionKey` for a follow-up `sessions_history` call; visibility filtering, snippet redaction, and output bounds match the history boundary.
+Use [`sessions_search`](/concepts/session-search) for exact full-text recall across visible user and assistant transcript text. Its results include a `sessionKey` for a follow-up `sessions_history` call; visibility filtering and output bounds match the history boundary.
 
 ## Managing session settings and groups
 

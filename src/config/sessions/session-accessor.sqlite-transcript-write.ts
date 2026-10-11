@@ -350,7 +350,6 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   workerOptions?: {
-    messageAlreadyRedacted?: true;
     scheduleProjectionReconcile?: boolean;
     onProjectionReconcileNeeded?: () => void;
   },
@@ -363,9 +362,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
       const committed = appendTranscriptMessageInTransaction(
         database,
         resolved,
-        workerOptions?.messageAlreadyRedacted
-          ? { ...options, messageAlreadyRedacted: true }
-          : options,
+        options,
         preparedMessage,
         workerOptions,
       );

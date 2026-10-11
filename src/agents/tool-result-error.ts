@@ -1,5 +1,5 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
@@ -151,7 +151,7 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
   return isTrustedSecretSurfaceUnavailableError(error) || isTrustedToolInputError(error);
 }
 
-/** Format a redacted tool error without allowing hostile getters to escape observability. */
+/** Format a tool error without allowing hostile getters to escape observability. */
 export function formatToolExecutionErrorMessage(error: unknown, fallback: string): string {
   try {
     return formatErrorMessage(error) || fallback;

@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 describe("voice consult concrete store ownership", () => {
-  it("preserves live run identity through transcript storage and redaction", async () => {
+  it("preserves live run identity and source text through transcript storage", async () => {
     const runIdPrefix = "zoom-meetings:zoom_meeting_11111111-2222-4333-8444-123456789012";
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
@@ -54,7 +54,7 @@ describe("voice consult concrete store ownership", () => {
       expect(persisted.map((entry) => readSessionMessageIdentity(entry.message)?.runId)).toEqual(
         runIds,
       );
-      expect(JSON.stringify(persisted)).not.toContain(secret);
+      expect(JSON.stringify(persisted)).toContain(secret);
       return { payloads: [{ text: "Checked" }], meta: { durationMs: 0 } };
     });
     const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };

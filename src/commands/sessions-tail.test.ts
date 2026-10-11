@@ -113,7 +113,7 @@ describe("sessionsTailCommand", () => {
     );
   }
 
-  it("renders compact redacted progress lines", async () => {
+  it("renders compact progress lines with tool arguments", async () => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
@@ -140,12 +140,11 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("12:04:18Z");
     expect(output).toContain("tool.call");
-    expect(output).toContain("bash {...redacted...}");
+    expect(output).toContain('bash {"command":"echo SECRET"}');
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
     expect(output).toContain("model.completed");
     expect(output).toContain("openai/gpt-5.2 done");
-    expect(output).not.toContain("SECRET");
   });
 
   it.each<[string, TrajectoryEvent["data"], string]>([

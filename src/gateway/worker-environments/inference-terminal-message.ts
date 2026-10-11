@@ -1,5 +1,5 @@
 import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { sanitizeOpenAIReasoningSignature } from "../../agents/transcript-redact.js";
+import { sanitizeOpenAIReasoningSignature } from "../../agents/transcript-sanitize.js";
 import type { AssistantMessage, Usage } from "../../llm/types.js";
 import {
   projectWorkerAssistantContent,

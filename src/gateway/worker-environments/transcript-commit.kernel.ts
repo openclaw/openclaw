@@ -296,7 +296,6 @@ export function applyPreparedTranscriptCommit(
       },
       undefined,
       {
-        messageAlreadyRedacted: true,
         scheduleProjectionReconcile: false,
         onProjectionReconcileNeeded,
       },

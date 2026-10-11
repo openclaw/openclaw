@@ -6,7 +6,6 @@ import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../auto-reply/tokens.
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -96,9 +95,7 @@ function keepUtf16SafeTail(value: string, maxChars: number): string {
 }
 
 function sanitizeActivityText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(stripInternalRuntimeContext(value))
-    .replace(/\s+/gu, " ")
-    .trim();
+  const normalized = stripInternalRuntimeContext(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
@@ -125,7 +122,7 @@ function summarizeToolArgs(args: unknown): string {
   ]) {
     const value = record[key];
     if (typeof value === "string") {
-      summary[key] = redactToolPayloadText(value);
+      summary[key] = value;
     } else if (typeof value === "number" || typeof value === "boolean") {
       summary[key] = value;
     }
@@ -182,7 +179,6 @@ export function flushSessionActivityAssistantNote(
 ): void {
   // Consumers force the latest cumulative snapshot; periodic assembly only keeps live state warm.
   syncAssistantBuffer(state);
-  // Redact assembled prose so split secrets match and raw fragments do not count as notes.
   if (!state.assistantBuffer || state.assistantBuffer.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) {
     return;
   }

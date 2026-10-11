@@ -27,6 +27,24 @@ const AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD = {
 export const AGENT_HARNESS_COMPAT_RECORDS = [
   AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD,
   {
+    code: "agent-harness-tool-argument-redaction",
+    status: "removed",
+    owner: "agent-runtime",
+    introduced: "2026-10-11",
+    // Exclusive boundary: immediate removal was approved for October 11.
+    removeAfter: "2026-10-10",
+    replacement: "None; pass tool arguments unchanged. Secret masking belongs in diagnostics.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#tool-argument-redaction",
+    surfaces: ["openclaw/plugin-sdk/agent-harness-runtime.sanitizeToolArgs"],
+    diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "test/scripts/plugin-sdk-shipped-surface.test.ts",
+    ],
+    releaseNote:
+      "Peter approved immediate removal of automatic tool argument and result masking on 2026-10-11. Drop sanitizeToolArgs imports and pass arguments unchanged; logging and diagnostic masking remains available.",
+  },
+  {
     code: "agent-harness-sdk-alias",
     status: "deprecated",
     owner: "agent-runtime",

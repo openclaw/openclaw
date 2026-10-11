@@ -99,22 +99,17 @@ it("retains ordinary shared JSON and unchanged frozen containers", () => {
   expect(normalizeTranscriptJsonValue(frozen, "data")).toBe(frozen);
 });
 
-it.each(["frozen", "preserved"] as const)(
-  "copies changed %s containers without changing the source",
-  (mode) => {
-    const source = { nested: { omitted: undefined, values: [undefined, -0] } };
-    if (mode === "frozen") {
-      Object.freeze(source.nested.values);
-      Object.freeze(source.nested);
-      Object.freeze(source);
-    }
-    const normalized = normalizeTranscriptJsonValue(source, "data", mode === "preserved");
-    expect(normalized).toEqual({ nested: { values: [null, 0] } });
-    expect(normalized).not.toBe(source);
-    expect(source.nested).toHaveProperty("omitted", undefined);
-    expect(source.nested.values).toEqual([undefined, -0]);
-  },
-);
+it("copies changed frozen containers without changing the source", () => {
+  const source = { nested: { omitted: undefined, values: [undefined, -0] } };
+  Object.freeze(source.nested.values);
+  Object.freeze(source.nested);
+  Object.freeze(source);
+  const normalized = normalizeTranscriptJsonValue(source, "data");
+  expect(normalized).toEqual({ nested: { values: [null, 0] } });
+  expect(normalized).not.toBe(source);
+  expect(source.nested).toHaveProperty("omitted", undefined);
+  expect(source.nested.values).toEqual([undefined, -0]);
+});
 
 it.each([
   ["bigint", () => ({ value: 1n })],

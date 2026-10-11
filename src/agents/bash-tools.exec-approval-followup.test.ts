@@ -269,7 +269,7 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("redacts credentials before direct delivery", async () => {
+  it("preserves command output during direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
     await direct({
       turnSourceAccountId: "default",
@@ -283,8 +283,8 @@ describe("exec approval followup", () => {
       threadId: "456",
     }).content;
     expect(content).toContain("Authorization: Bearer ");
-    expect(content).toContain("API_KEY=***");
-    expect(content).not.toContain(secret);
+    expect(content).toContain(`API_KEY=${secret}`);
+    expect(content).toContain(`Authorization: Bearer ${secret}`);
   });
 
   it("provides a summary when a no-session completion has no output", async () => {

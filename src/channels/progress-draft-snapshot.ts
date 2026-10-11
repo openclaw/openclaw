@@ -1,4 +1,3 @@
-import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorParams,
@@ -11,31 +10,15 @@ import {
   type AgentPlanStep,
 } from "./streaming.js";
 
-/** Own public display data before adapters render it or receipts retain it. */
-export function redactProgressDraftLine(
+function copyProgressDraftLine(
   line: ChannelProgressDraftCompositorLine,
 ): ChannelProgressDraftCompositorLine {
   if (typeof line === "string") {
-    return redactToolPayloadText(line);
+    return line;
   }
-  // Keep opaque event IDs stable; commentary sanitizes text before deriving an ID.
-  const redacted = {
-    ...line,
-    text: redactToolPayloadText(line.text),
-    label: redactToolPayloadText(line.label),
-    ...(line.detail !== undefined ? { detail: redactToolPayloadText(line.detail) } : {}),
-    ...(line.status !== undefined ? { status: redactToolPayloadText(line.status) } : {}),
-    ...(line.icon !== undefined ? { icon: redactToolPayloadText(line.icon) } : {}),
-    ...(line.toolName !== undefined ? { toolName: redactToolPayloadText(line.toolName) } : {}),
-  };
-  copyProgressDraftLineMetadata(line, redacted);
-  return redacted;
-}
-
-export function redactProgressPlanSteps(
-  steps?: readonly AgentPlanStep[],
-): AgentPlanStep[] | undefined {
-  return steps?.map((step) => ({ ...step, step: redactToolPayloadText(step.step) }));
+  const copy = { ...line };
+  copyProgressDraftLineMetadata(line, copy);
+  return copy;
 }
 
 export function createProgressDraftSnapshotState(
@@ -48,22 +31,22 @@ export function createProgressDraftSnapshotState(
           streaming: {
             progress: {
               ...resolveChannelProgressDraftConfig(params.entry),
-              label: snapshot.label === undefined ? false : redactToolPayloadText(snapshot.label),
+              label: snapshot.label === undefined ? false : snapshot.label,
             },
           },
         }
       : params.entry,
     transferredStatus: snapshot?.statusHeadline
       ? {
-          text: redactToolPayloadText(snapshot.statusHeadline),
+          text: snapshot.statusHeadline,
           format: snapshot.statusHeadlineFormat,
         }
       : undefined,
     // Without file identities a transferred total cannot deduplicate later mutations.
     transferredDiffStat: snapshot?.diffStat ? { ...snapshot.diffStat } : undefined,
-    lines: snapshot?.lines.map(redactProgressDraftLine) ?? [],
-    planSteps: redactProgressPlanSteps(snapshot?.plan),
-    planExplanation: redactToolPayloadText(snapshot?.planExplanation ?? ""),
+    lines: snapshot?.lines.map(copyProgressDraftLine) ?? [],
+    planSteps: snapshot?.plan?.map((step) => ({ ...step })),
+    planExplanation: snapshot?.planExplanation ?? "",
     planExplanationFormat: snapshot?.planExplanationFormat,
   };
 }

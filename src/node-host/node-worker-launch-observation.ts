@@ -120,9 +120,7 @@ async function observeNodeWorkerChildOutput(
             if (outputError || observationEnded) {
               break;
             }
-            const frame = parseWorkerProcessMessage(
-              parseNodeWorkerOutput(line.toString("utf8"), active.scrubber.scrub),
-            );
+            const frame = parseWorkerProcessMessage(parseNodeWorkerOutput(line.toString("utf8")));
             if (!frame) {
               throw new Error("worker returned an invalid turn result");
             }

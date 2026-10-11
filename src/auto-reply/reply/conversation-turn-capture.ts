@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import {
   findConversationTurnDeliveryByReplyTarget,
   markConversationDeliveryReplied,
@@ -130,7 +130,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     : undefined;
   const input: UserTurnInput = {
     // This is the model-facing reply returned by the tool, so its durable copy
-    // must pass through the same write hook and redaction policy as transcripts.
+    // must pass through the same write hook and normalization as transcripts.
     text: replyText,
     timestamp,
     idempotencyKey: `conversation-inbound:${conversation.conversationRef}:${messageId}`,
@@ -193,7 +193,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     if (!prepared) {
       throw new Error("captured conversation turn reply was blocked before persistence");
     }
-    const persistedMessage = redactTranscriptMessage(prepared, params.cfg);
+    const persistedMessage = sanitizeTranscriptMessage(prepared);
     const persistedReplyText = readPersistedReplyText(persistedMessage);
     if (!persistedReplyText) {
       throw new Error("captured conversation turn reply has no persistable text");

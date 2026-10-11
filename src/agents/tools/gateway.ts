@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -39,7 +40,6 @@ import {
   loadOrCreateDeviceIdentityAsync,
 } from "../../infra/device-identity-async.js";
 import type { DeviceIdentity } from "../../infra/device-identity.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";

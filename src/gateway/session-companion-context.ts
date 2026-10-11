@@ -7,7 +7,6 @@ import {
   captureIncognitoSessionSource,
   withIncognitoSessionEntry,
 } from "../config/sessions/session-incognito-binding.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionContextMessage,
@@ -34,10 +33,7 @@ export type SessionCompanionContextReader = {
 };
 
 function normalizeContextText(value: string): string {
-  return truncateUtf16Safe(
-    redactToolPayloadText(value).replace(/\s+/gu, " ").trim(),
-    CONTEXT_MESSAGE_MAX_CHARS,
-  );
+  return truncateUtf16Safe(value.replace(/\s+/gu, " ").trim(), CONTEXT_MESSAGE_MAX_CHARS);
 }
 
 function extractUserText(message: unknown): string | undefined {

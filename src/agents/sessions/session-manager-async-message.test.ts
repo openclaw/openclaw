@@ -15,7 +15,6 @@ import { readTranscriptEventRows } from "../../config/sessions/session-accessor.
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -351,7 +350,7 @@ it("persists the native first content getter result before provenance reads", as
   });
 });
 
-it("expands message toJSON with its envelope key before applying transcript redaction", async () => {
+it("expands message toJSON with its envelope key without changing tool text", async () => {
   const { target, manager } = await fixture(state, "message-json-redaction");
   await manager.appendMessageAsync(user("json-redaction"));
   const message = {
@@ -380,7 +379,7 @@ it("expands message toJSON with its envelope key before applying transcript reda
     role: "toolResult",
     toolCallId: "json-result",
     toolName: "lookup",
-    content: [{ type: "text", text: "opaque(abcdef…qrst)" }],
+    content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
     details: { serializationKey: "message" },
     isError: false,
     timestamp: 2,
@@ -389,17 +388,16 @@ it("expands message toJSON with its envelope key before applying transcript reda
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({ message: expected });
 });
 
-it("persists prepared tool text once when JSON normalization copies a frozen content block", async () => {
+it("preserves tool text when JSON normalization copies a frozen content block", async () => {
   const { target, manager } = await fixture(state, "frozen-prepared-tool-text");
   await manager.appendMessageAsync(user("frozen-prepared-text"));
   const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
-  const block = Object.freeze(
-    prepareModelVisibleToolTextBlock(
-      { type: "text", text: "opaque(abcdefghijklmnopqrst)", optional: undefined },
-      config.logging,
-    ),
-  );
-  expect(block.text).toBe("opaque(abcdef…qrst)");
+  const block = Object.freeze({
+    type: "text" as const,
+    text: "opaque(abcdefghijklmnopqrst)",
+    optional: undefined,
+  });
+  expect(block.text).toBe("opaque(abcdefghijklmnopqrst)");
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(
     {
       role: "toolResult",
@@ -411,7 +409,7 @@ it("persists prepared tool text once when JSON normalization copies a frozen con
     },
     { config },
   );
-  const expected = [{ type: "text", text: "opaque(abcdef…qrst)" }];
+  const expected = [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }];
   expect(committed.message).toHaveProperty("content", expected);
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
     message: { content: expected },

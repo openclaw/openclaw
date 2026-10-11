@@ -80,5 +80,3 @@ export function redactToolDetail(detail: string): string {
     redacted,
   );
 }
-
-export const redactToolPayloadText = redactToolDetail;

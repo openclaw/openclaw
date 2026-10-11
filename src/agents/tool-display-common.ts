@@ -8,7 +8,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
@@ -63,11 +62,10 @@ function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
-    if (!rawLine) {
+    const firstLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
+    if (!firstLine) {
       return undefined;
     }
-    const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > 160) {
       return `${sliceUtf16Safe(firstLine, 0, 79)}…${sliceUtf16Safe(firstLine, -80)}`;
     }

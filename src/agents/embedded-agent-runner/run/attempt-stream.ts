@@ -16,7 +16,6 @@ import type { StreamFn } from "../../runtime/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -111,7 +110,7 @@ export function installEmbeddedAttemptStreamGuards(
 ) {
   const { attempt } = input;
   const {
-    agentSession: { activeSession: session, codeModeExecToolNames },
+    agentSession: { activeSession: session },
     anthropicPayloadLogger,
     cacheTrace,
     contextGuards,
@@ -438,9 +437,6 @@ export function installEmbeddedAttemptStreamGuards(
     },
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
-  if (codeModeExecToolNames?.size) {
-    installStreamWrapper(wrapStreamFnCodeModeSource, codeModeExecToolNames);
-  }
   return {
     onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();

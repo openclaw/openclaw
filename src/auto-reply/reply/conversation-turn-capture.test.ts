@@ -4,7 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as transcriptRedact from "../../agents/transcript-redact.js";
+import * as transcriptRedact from "../../agents/transcript-sanitize.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -158,8 +158,8 @@ describe("conversation turn capture", () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const prepared = createDeferredCore();
-      const originalRedact = transcriptRedact.redactTranscriptMessage;
-      vi.spyOn(transcriptRedact, "redactTranscriptMessage").mockImplementation((...args) => {
+      const originalRedact = transcriptRedact.sanitizeTranscriptMessage;
+      vi.spyOn(transcriptRedact, "sanitizeTranscriptMessage").mockImplementation((...args) => {
         const message = originalRedact(...args);
         prepared.resolve();
         return message;

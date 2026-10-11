@@ -6,7 +6,7 @@ import {
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
@@ -463,7 +463,7 @@ describe("cli session history", () => {
   it("deduplicates a local redacted copy against an imported full copy", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const secretText = "key is sk-abcdef1234567890xyz";
-      const localMessage = redactTranscriptMessage({
+      const localMessage = sanitizeTranscriptMessage({
         role: "user",
         content: secretText,
       } as AgentMessage);
@@ -585,7 +585,7 @@ describe("cli session history", () => {
     ]);
   });
 
-  it("does not surface a secret present only in imported history after merge", async () => {
+  it("preserves source text present only in imported history after merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const importedSecret = "sk-abcdef1234567890xyz";
       await fs.writeFile(
@@ -605,7 +605,7 @@ describe("cli session history", () => {
       ]);
 
       expect(messages).toHaveLength(2);
-      expect(JSON.stringify(messages)).not.toContain(importedSecret);
+      expect(JSON.stringify(messages)).toContain(importedSecret);
     });
   });
 

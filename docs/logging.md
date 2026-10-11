@@ -1045,46 +1045,27 @@ to `"pretty"`.
 
 ### Redaction
 
-OpenClaw can redact sensitive tokens before they hit console output, file logs,
-OTLP log records, persisted session transcript text, or Control UI tool
-event payloads (tool start args, partial/final result payloads, derived
-exec output, and patch summaries):
+OpenClaw masks sensitive values in console output, file logs, diagnostic and
+support exports, and OpenTelemetry output. Config snapshots, audit output, and
+credential-bearing URLs and command-line options retain their credential masking.
 
-- Sensitive-value redaction is always enabled.
-- `logging.redactPatterns`: list of regex strings that replaces the default string list for log/transcript output. Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply, including when this list is copied or customized. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
+`logging.redactPatterns` replaces the default regex string list for logs and
+diagnostics. Built-in structural protections for form bodies, structured
+authorization headers, and bare AWS secret access keys always apply, including
+when this list is customized. Redaction is best-effort; review diagnostic
+exports before sharing them.
 
-File logs use JSONL; active session transcripts live in the
-[per-agent SQLite database](/reference/database-schemas#database-layout). Matching
-secret values are masked before the line or message is persisted. Redaction is best-effort:
-it applies to text-bearing message content and log strings, not every
-identifier or binary payload field.
+Tool arguments and results are not secret-masked. This includes model context,
+session transcripts, tool events and summaries in the Control UI, session-history
+and search results, and reads of `.env` files. Source such as
+`API_TOKEN = computeToken()` reaches the model unchanged. Existing size limits,
+media handling, and history visibility rules still apply.
 
-Transcript redaction does not replace the live arguments used to execute tools.
-Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
-so stored history can correlate with live tool events. This exemption applies
-only to protocol metadata; the same values in arguments, results, or nested
-payloads still pass through redaction.
-
-In the OpenClaw harness, finalized tool-result text is masked after middleware,
-before entering live model context. This also covers exec output and tool errors;
-it preserves media bytes and the original arguments used to execute tools.
-Redaction happens when the result is added, keeping later prompt replay stable.
-Model-visible tool-result text uses narrower assignment matching so source code
-remains intact. Registered secrets and explicit credential forms, including
-structured fields, authorization headers, URL credentials, and known token
-formats, remain masked. Direct reads of `.env` files apply
-broader assignment masking before their content becomes a tool result. Other
-config and source reads preserve opaque values; register actual secrets instead
-of relying on key-name matching. Bare source assignments such as
-`token = timeObserverToken` remain unchanged.
-
-The built-in defaults cover common API credentials and payment-credential field
-names such as card number, CVC/CVV, shared payment token, and payment credential
-when they appear as JSON fields, URL parameters, CLI flags, or assignments.
-
-OpenClaw also redacts safety-boundary payloads shown to UI clients, support
-bundles, diagnostics observers, approval prompts, or agent tools. Custom
-`logging.redactPatterns` can add project-specific patterns on those surfaces.
+Active session transcripts live in the
+[per-agent SQLite database](/reference/database-schemas#database-layout).
+They can contain credentials and other private data returned by tools or supplied
+in conversation. Protect access to the state directory and review transcripts
+before sharing them. Already-masked historical content cannot be reconstructed.
 
 ## Diagnostics and OpenTelemetry
 

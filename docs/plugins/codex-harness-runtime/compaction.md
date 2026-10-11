@@ -78,8 +78,8 @@ oversized summaries or older context can be truncated. This handoff does not
 change native Codex compaction ownership.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
-projects tool-call names and ids, input shapes, and redacted tool-result
-content into the fresh Codex thread. It does not copy raw tool-call argument
+projects tool-call names and ids, input shapes, and tool-result content
+without secret masking into the fresh Codex thread. It does not copy raw tool-call argument
 values into that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight

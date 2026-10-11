@@ -31,8 +31,6 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
-import { readLoggingConfig } from "../../logging/config.js";
-import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -72,35 +70,14 @@ export function appendSessionTranscriptMessage(
 export async function appendSessionTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage>,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
-  const readRedactPatterns = () =>
-    input.config?.logging?.redactPatterns ?? readLoggingConfig()?.redactPatterns;
-  let redactionRevision = getSecretRedactionRegistryRevision();
-  let redactPatterns = readRedactPatterns()?.slice();
   const prepared = prepareTranscriptMessageAppendForWorker(input);
   Object.freeze(prepared.persistedMessage);
-  const assertPrepared = () => {
-    input.assertCurrent();
-    const revision = getSecretRedactionRegistryRevision();
-    const patterns = readRedactPatterns();
-    if (
-      revision !== redactionRevision ||
-      patterns?.length !== redactPatterns?.length ||
-      patterns?.some((pattern, index) => pattern !== redactPatterns?.[index])
-    ) {
-      if (prepareTranscriptMessageAppendForWorker(input).messageJson !== prepared.messageJson) {
-        throw new Error("Transcript message redaction changed before persistence");
-      }
-      redactionRevision = revision;
-      redactPatterns = patterns?.slice();
-    }
-  };
-  assertPrepared();
+  input.assertCurrent();
   const actorBinding = getOwnedSessionTranscriptActor(input.target);
   if (actorBinding) {
     return appendOwnedActorTranscriptMessage(
       input,
       prepared,
-      assertPrepared,
       actorBinding.actor,
       actorBinding.database,
     );
@@ -108,11 +85,7 @@ export async function appendSessionTranscriptMessage(
   if (!input.candidate) {
     throw new Error("Unbound transcript append requires a captured store candidate");
   }
-  return appendUnboundSdkTranscriptMessage(
-    { ...input, candidate: input.candidate },
-    prepared,
-    assertPrepared,
-  );
+  return appendUnboundSdkTranscriptMessage({ ...input, candidate: input.candidate }, prepared);
 }
 
 type PreparedTranscriptMessage = PreparedTranscriptMessageAppend<TranscriptAppendMessage>;
@@ -125,13 +98,12 @@ type CommittedTranscriptMessage = {
 async function appendOwnedActorTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage>,
   prepared: PreparedTranscriptMessage,
-  assertPrepared: () => void,
   actor: SessionActor,
   options: Readonly<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
   const databasePath = options.path;
   const assertCurrent = () => {
-    assertPrepared();
+    input.assertCurrent();
     if (input.candidate) {
       assertSessionStoreReadCandidate(databasePath, [input.candidate]);
     }
@@ -218,13 +190,12 @@ async function appendOwnedActorTranscriptMessage(
 async function appendUnboundSdkTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage> & { candidate: SessionStoreReadCandidate },
   prepared: PreparedTranscriptMessage,
-  assertPrepared: () => void,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
   const resolved = await prepareSqliteTranscriptReadScope(input.target);
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   const assertCurrent = () => {
-    assertPrepared();
+    input.assertCurrent();
     assertSessionStoreReadCandidate(databasePath, [input.candidate]);
   };
   assertCurrent();

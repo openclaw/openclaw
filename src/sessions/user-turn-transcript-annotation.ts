@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadSessionEntry,
@@ -150,9 +149,6 @@ export function bindUserTurnTranscriptAnnotation(params: {
           throw new Error("native prompt annotation conflicts with recorded provenance");
         }
         const next = { ...admittedMessage, __openclaw: { ...metadata, ...fields } };
-        if (!isDeepStrictEqual(redactTranscriptMessage(next, params.config), next)) {
-          throw new Error("native prompt annotation would restore redacted evidence");
-        }
         verified = true;
         return isDeepStrictEqual(next, admittedMessage) ? undefined : next;
       },

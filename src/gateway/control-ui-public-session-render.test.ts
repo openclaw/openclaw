@@ -116,7 +116,7 @@ describe("public session document", () => {
     );
   });
 
-  it("strips generated envelopes and applies built-in and operator redaction", () => {
+  it("strips generated envelopes while preserving conversation text", () => {
     const token = `sk-${"a".repeat(48)}`;
     const operatorSecret = "internal-ticket-8315";
     applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
@@ -135,8 +135,8 @@ describe("public session document", () => {
       expect(html).toContain("Visible response");
       expect(html).not.toContain("private runtime context");
       expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-      expect(html).not.toContain(token);
-      expect(html).not.toContain(operatorSecret);
+      expect(html).toContain(token);
+      expect(html).toContain(operatorSecret);
     } finally {
       resetLogger();
     }

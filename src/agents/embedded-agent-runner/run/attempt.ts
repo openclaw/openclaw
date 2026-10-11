@@ -134,10 +134,7 @@ async function runEmbeddedAttemptOwned(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
-  const sessionResources = createEmbeddedAttemptSessionResources(
-    params.config,
-    runAbortController.signal,
-  );
+  const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({ ...params, step, cleanup, log });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {

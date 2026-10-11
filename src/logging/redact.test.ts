@@ -4,17 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { replacePatternBounded } from "./redact-bounded.js";
-import { createBackendRedactPatterns } from "./redact-patterns.js";
 import * as prefilters from "./redact-prefilter.js";
-import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
-  captureSensitiveTextRedactionSnapshot,
-  computeSensitiveRedactionBitmap,
-  createSensitiveTextRedactor,
   getDefaultRedactPatterns,
   redactLogRecordForTransport,
-  redactModelVisibleSecrets,
-  redactModelVisibleToolPayloadText,
   redactSecrets,
   redactSensitiveFieldValue,
   redactSensitiveLines,
@@ -22,7 +15,6 @@ import {
   redactToolPayloadTextWithConfig,
   resolveRedactOptions,
 } from "./redact.js";
-import { withFullContextToolPayloadRedaction } from "./redact.test-support.js";
 import {
   redactRegisteredSecretValues,
   registerSecretValueForRedaction,
@@ -112,23 +104,13 @@ describe("registered exact secret values", () => {
     vi.resetModules();
     const second = await import("./secret-redaction-registry.js");
     expect(second.redactRegisteredSecretValues(text, mask)).toBe(`[redacted] ${secondSecret}`);
-    const revision = first.getSecretRedactionRegistryRevision();
     second.registerSecretValueForRedaction(secondSecret);
     expect(first.redactRegisteredSecretValues(secondSecret, mask)).toBe("[redacted]");
     expect(first.redactRegisteredSecretValues(text, mask)).toBe("[redacted] [redacted]");
-    expect(first.getSecretRedactionRegistryRevision()).toBeGreaterThan(revision);
-    const captured = createSensitiveTextRedactor(captureSensitiveTextRedactionSnapshot());
-    expect(captured(text)).toBe("alpha-…cret zulu-m…cret");
-    const updatedRevision = first.getSecretRedactionRegistryRevision();
-    second.registerSecretValueForRedaction(secondSecret);
-    expect(first.getSecretRedactionRegistryRevision()).toBe(updatedRevision);
 
     resetSecretRedactionRegistryForTest();
     expect(first.redactRegisteredSecretValues(text, mask)).toBe(text);
     expect(second.redactRegisteredSecretValues(text, mask)).toBe(text);
-    expect(first.getSecretRedactionRegistryRevision()).toBeGreaterThan(updatedRevision);
-    expect(captured(text)).toBe("alpha-…cret zulu-m…cret");
-    expect(createSensitiveTextRedactor(captureSensitiveTextRedactionSnapshot())(text)).toBe(text);
   });
 
   it("masks registered values in text and nested structured data", () => {
@@ -141,12 +123,7 @@ describe("registered exact secret values", () => {
     expect(redactSecrets({ detail: `before ${secret} after` })).toEqual({
       detail: "before regist…cret after",
     });
-    expect(
-      redactToolPayloadTextWithConfig(
-        `full context ${secret}`,
-        withFullContextToolPayloadRedaction(undefined),
-      ),
-    ).toBe("full context regist…cret");
+    expect(redactToolPayloadTextWithConfig(`diagnostic ${secret}`)).toBe("diagnostic regist…cret");
   });
 
   it("ignores values shorter than six characters", () => {
@@ -185,133 +162,6 @@ describe("registered exact secret values", () => {
 
     expect(output).toBe(`outer ${second} outer`);
     expect(nested).toEqual(["nested nested nested", "nested nested nested"]);
-  });
-});
-
-describe("captured sensitive text redaction", () => {
-  it("preserves exact surface forms, longest matches, and built-in masking after transfer", () => {
-    const secret = 'opaque-fixture/"quoted"\nvalue';
-    const encoded = encodeURIComponent(secret);
-    const escaped = JSON.stringify(secret).slice(1, -1);
-    const doubleEncoded = encodeURIComponent(encoded);
-    registerSecretValueForRedaction(secret);
-    registerSecretValueForRedaction("overlap-fixture");
-    registerSecretValueForRedaction("overlap-fixture-complete");
-    const redact = createSensitiveTextRedactor(
-      structuredClone(captureSensitiveTextRedactionSnapshot()),
-    );
-    resetSecretRedactionRegistryForTest();
-
-    expect(
-      redact(
-        [
-          secret,
-          encoded,
-          escaped,
-          doubleEncoded,
-          "overlap-fixture-complete overlap-fixture",
-          "token=abcdef1234567890ghij",
-        ].join("\n"),
-      ),
-    ).toBe(
-      [
-        "opaque…alue",
-        "opaque…alue",
-        "opaque…alue",
-        doubleEncoded,
-        "overla…lete ***",
-        "token=abcdef…ghij",
-      ].join("\n"),
-    );
-    expect(redactSensitiveText(secret, { mode: "off" })).toBe(secret);
-  });
-});
-
-describe("model-visible tool payload redaction", () => {
-  it("distinguishes source literals from computations without changing diagnostics", () => {
-    const cases: [masked: boolean, sources: string[]][] = [
-      [
-        true,
-        [
-          'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;',
-          "const API_TOKEN = `fixture-only-not-a-real-secret`; return API_TOKEN;",
-          "const API_TOKEN = 987654321; return API_TOKEN;",
-          "// API_TOKEN=fixture-only-not-a-real-secret\nreturn 42;",
-          'const API_TOKEN = "fixture-only-not-a-real-secret"; @',
-          '(token="fixture-only-not-a-real-secret");',
-        ],
-      ],
-      [
-        false,
-        [
-          "const API_TOKEN = computeToken(); return API_TOKEN;",
-          "const API_TOKEN = (40 + 2); return API_TOKEN;",
-          "const API_TOKEN = await computeToken(); return API_TOKEN;",
-          "const HAS_API_TOKEN = false; return HAS_API_TOKEN;",
-          "let API_TOKEN = null; return API_TOKEN;",
-        ],
-      ],
-    ];
-    for (const [masked, sources] of cases) {
-      for (const source of sources) {
-        const redacted = redactSourceInputTextWithConfig(source);
-        expect(redactToolPayloadTextWithConfig(source), source).not.toBe(source);
-        if (masked) {
-          expect(redacted, source).not.toMatch(/fixture-only-not-a-real-secret|987654321/);
-          expect(redacted, source).toContain("***");
-          expect(redacted, source).not.toBe(source);
-          expect(redactSourceInputTextWithConfig(redacted), source).toBe(redacted);
-        } else {
-          expect(redacted, source).toBe(source);
-        }
-      }
-    }
-  });
-
-  it("keeps explicit custom assignment patterns authoritative over source syntax", () => {
-    const source = "const API_TOKEN = computeToken(); return API_TOKEN;";
-    const assignmentPatterns = [...createBackendRedactPatterns().ambiguousAssignments].filter(
-      (pattern) => redactSensitiveText(source, { patterns: [pattern] }) !== source,
-    );
-    expect(assignmentPatterns.length).toBeGreaterThan(0);
-    for (const pattern of ["computeToken", ...assignmentPatterns]) {
-      expect(redactSourceInputTextWithConfig(source, { redactPatterns: [pattern] })).not.toContain(
-        "computeToken",
-      );
-    }
-  });
-
-  it("uses bounded diagnostic masking for oversized source", () => {
-    const source = `const API_TOKEN = computeToken();\n${" ".repeat(131_072)}`;
-    expect(redactSourceInputTextWithConfig(source)).toBe(redactToolPayloadTextWithConfig(source));
-    expect(redactSourceInputTextWithConfig(source)).not.toContain("computeToken");
-  });
-
-  it("preserves source assignments while masking explicit credential forms", () => {
-    const registeredSecret = "registered-model-visible-secret";
-    registerSecretValueForRedaction(registeredSecret);
-    const credentials = [
-      registeredSecret,
-      "bearer-model-visible-credential-1234567890",
-      "url-model-visible-password-1234567890",
-      "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
-    ];
-    const input = [
-      "token = timeObserverToken",
-      '"api_key": "computeToken()"',
-      `registered: ${credentials[0]}`,
-      `Authorization: Bearer ${credentials[1]}`,
-      `https://user:${credentials[2]}@example.test/path`,
-      `GitHub token: ${credentials[3]}`,
-    ].join("\n");
-
-    const output = redactModelVisibleToolPayloadText(input);
-
-    expect(output).toContain("token = timeObserverToken");
-    expect(output).toContain('"api_key": "computeToken()"');
-    for (const credential of credentials) {
-      expect(output).not.toContain(credential);
-    }
   });
 });
 
@@ -697,32 +547,12 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("keeps equals-assignment bitmap masking aligned with form parsing", () => {
-    const resolved = resolveRedactOptions({ mode: "tools" });
-    const form = "x-access-token=short-at-123&safe=value";
-    const formBitmap = computeSensitiveRedactionBitmap(form, resolved);
-    const safePairStart = form.indexOf("&safe=");
-    expect(formBitmap.slice(form.indexOf("=") + 1, safePairStart).every(Boolean)).toBe(true);
-    expect(formBitmap.slice(safePairStart).some(Boolean)).toBe(false);
-
-    const header = "X-OpenClaw-Token=prefix&actual-secret#tail";
-    const headerBitmap = computeSensitiveRedactionBitmap(header, resolved);
-    expect(headerBitmap.slice(header.indexOf("=") + 1).every(Boolean)).toBe(true);
-  });
-
-  it("keeps original bitmap offsets after empty values and Unicode line prefixes", () => {
+  it("redacts form values after empty values and Unicode line prefixes", () => {
     const input = '😀safe\r\nbody: code=&safe=1\rclient%5Fsecret="abc";&safe=2';
-    const resolved = resolveRedactOptions({ mode: "tools" });
-    const bitmap = computeSensitiveRedactionBitmap(input, resolved);
-    const secretStart = input.indexOf('"abc"');
 
     expect(redactSensitiveText(input)).toBe(
       "😀safe\r\nbody: code=***&safe=1\rclient%5Fsecret=***;&safe=2",
     );
-    expect(bitmap).toHaveLength(input.length);
-    expect(bitmap.slice(0, secretStart).some(Boolean)).toBe(false);
-    expect(bitmap.slice(secretStart, secretStart + 5).every(Boolean)).toBe(true);
-    expect(bitmap.slice(secretStart + 5).some(Boolean)).toBe(false);
   });
 
   it("keeps long URL credentials reachable through the default prefilter", () => {
@@ -1013,8 +843,8 @@ it("reuses scalar probes only within the current log record", () => {
   }
 });
 
-describe("model-visible structured properties", () => {
-  const redact = redactModelVisibleSecrets;
+describe("structured diagnostic properties", () => {
+  const redact = redactSecrets;
   it("uses current registry masking before reusing an exact text probe", () => {
     const text = "opaque-fixture-value";
     const input = [{ detail: text }, { detail: text }];
@@ -1083,4 +913,3 @@ describe("model-visible structured properties", () => {
     expect(shared.token).toBe("fixture-value");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

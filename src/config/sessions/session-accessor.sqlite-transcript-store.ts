@@ -2,15 +2,13 @@ import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { redactSecrets } from "../../logging/redact.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -717,17 +715,10 @@ export function readTranscriptMessageByEventId(
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
 }
 
-export function redactTranscriptMessageForStorage<TMessage>(
-  message: TMessage,
-  options: Pick<TranscriptMessageAppendOptions<TMessage>, "config">,
-): TMessage {
+export function sanitizeTranscriptMessageForStorage<TMessage>(message: TMessage): TMessage {
   return isTranscriptAgentMessage(message)
-    ? (redactTranscriptMessage(
-        message,
-        options.config,
-        getCodeModeSourceAppend(options),
-      ) as TMessage)
-    : redactSecrets(message);
+    ? (sanitizeTranscriptMessage(message) as TMessage)
+    : message;
 }
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {

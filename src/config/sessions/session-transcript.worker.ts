@@ -596,12 +596,7 @@ serveOwnedWorkerTasks(
           }
           const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
             await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const { createSensitiveTextRedactor } = await import("../../logging/redact.js");
-          const entry = await buildSessionEntryInProcess(
-            request.absPath,
-            request.options,
-            createSensitiveTextRedactor(request.redaction),
-          );
+          const entry = await buildSessionEntryInProcess(request.absPath, request.options);
           return {
             entry,
             resetRecallCutoff: entry

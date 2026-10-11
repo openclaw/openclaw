@@ -37,7 +37,7 @@ applied. Sandboxed agents remain limited to sessions they spawned when spawned-s
 is enabled. Incognito sessions remain excluded; narrowing visibility from `all` blocks ordinary
 cross-agent access.
 
-Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
+Excerpts preserve transcript text, including credentials. Results are bounded by count, excerpt
 length, and total response size.
 
 ## Control UI search

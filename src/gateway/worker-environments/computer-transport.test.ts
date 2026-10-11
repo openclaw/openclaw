@@ -227,7 +227,7 @@ describe("session computer transport", () => {
     await desktopRegistry.stopAll();
   });
 
-  it("preserves bounded redacted native close causes in the worker RPC error", async () => {
+  it("preserves bounded native close causes in the worker RPC error", async () => {
     const h = createHarness();
     const service = createWorkerComputerService(h.options);
     const prepared = await service.prepare(h.claim);
@@ -263,7 +263,7 @@ describe("session computer transport", () => {
         reason: "gateway-unavailable",
         message: expect.stringContaining("desktop cleanup failed | native close failed"),
       });
-      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(JSON.stringify(result)).toContain(secret);
       if ("message" in result) {
         expect(result.message?.length).toBeLessThanOrEqual(256);
       }

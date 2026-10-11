@@ -340,7 +340,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       name: "lookup",
       toolCallId: "call-1",
       commandBearing: true,
-      args: { action: "search", token: "plain-…2345", text: "hello" },
+      args: { action: "search", token: "plain-secret-value-12345", text: "hello" },
     });
     const resultEvent = agentEvents.find(
       (event) =>
@@ -355,7 +355,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
-    expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
+    expect(JSON.stringify(agentEvents)).toContain("plain-secret-value-12345");
     expect(
       globalAgentEvents.find((event) => event.stream === "tool" && event.data.phase === "start"),
     ).toMatchObject({

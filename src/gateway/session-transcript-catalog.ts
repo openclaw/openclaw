@@ -15,7 +15,6 @@ import { SessionTranscriptColdError } from "../config/sessions/session-cold-stor
 import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -92,7 +91,7 @@ function decodeCursor(cursor: string | undefined): CatalogCursor | undefined {
 }
 
 function boundedText(text: string): Pick<SessionCatalogTranscriptItem, "text" | "truncated"> {
-  const redacted = redactToolPayloadText(text);
+  const redacted = text;
   return redacted.length > MAX_CATALOG_TEXT_CHARS
     ? { text: truncateUtf16Safe(redacted, MAX_CATALOG_TEXT_CHARS), truncated: true }
     : { text: redacted };
@@ -155,9 +154,7 @@ function projectMessageItems(
           ...(metadata?.truncated === true ? { truncated: true } : {}),
           ...(typeof metadata?.id === "string" ? { id: `${metadata.id}:${index}` } : {}),
           ...(timestampText ? { timestamp: timestampText } : {}),
-          ...(typeof message.model === "string"
-            ? { model: redactToolPayloadText(message.model).slice(0, 200) }
-            : {}),
+          ...(typeof message.model === "string" ? { model: message.model.slice(0, 200) } : {}),
           ...(sender ? { sender } : {}),
         }),
       ];

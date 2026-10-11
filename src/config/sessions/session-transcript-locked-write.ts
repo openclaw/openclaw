@@ -17,7 +17,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareTranscriptMessageAppendForWorker } from "./session-accessor.sqlite-transcript-message-append.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   LockedTranscriptMessageAppendOptions,
   SessionTranscriptWriteLockAccessorContext,
@@ -380,7 +380,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                   ? undefined
                   : isRecord(message)
                     ? prepareTranscriptMessageAppendForWorker({ message, config }).messageJson
-                    : JSON.stringify(redactTranscriptMessageForStorage(message, { config }));
+                    : JSON.stringify(sanitizeTranscriptMessageForStorage(message));
               const receipt = await mutate({
                 ...input,
                 kind: "message",

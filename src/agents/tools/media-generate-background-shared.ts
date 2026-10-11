@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { formatErrorMessage as formatToolErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
@@ -415,7 +416,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
               handle: params.handle,
               status: "error",
               statusLabel: "failed",
-              result: formatErrorMessage(error),
+              result: formatToolErrorMessage(error),
             }),
         });
         if (wakeOutcome.status !== "delivered") {
@@ -466,7 +467,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       }
     } catch (error) {
       terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatErrorMessage(error),
+        formatToolErrorMessage(error),
       );
       reportFailure(`${params.toolName} completion wake failed after successful generation`, {
         error,
@@ -557,7 +558,7 @@ export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "vi
       }
       try {
         const endedAt = Date.now();
-        const errorText = formatErrorMessage(params.error);
+        const errorText = formatToolErrorMessage(params.error);
         updateMediaGenerationOperation(params.handle.runId, {
           status: "failed",
           endedAt,

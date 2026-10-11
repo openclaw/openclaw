@@ -12,7 +12,6 @@ import {
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { redactToolPayloadText } from "../../../lib/browser-redact.ts";
 import type { NormalizedMessage, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -176,14 +175,10 @@ function toolIcon(call: ToolCard) {
 function renderToolLine(originalCall: ToolCard) {
   const call = resolveToolCardDisplay(originalCall);
   const view = resolveToolCallView(call);
-  const raw = redactToolPayloadText(
-    (view.command ?? view.code ?? call.inputText ?? call.name).trim(),
-  );
+  const raw = (view.command ?? view.code ?? call.inputText ?? call.name).trim();
   const command = view.command ? stripShellPreamble(view.command).command : undefined;
   const label = truncateUtf16Safe(
-    redactToolPayloadText(
-      view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
-    ),
+    view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
     160,
   );
   const outcome = resolveToolCardOutcome(call, false);

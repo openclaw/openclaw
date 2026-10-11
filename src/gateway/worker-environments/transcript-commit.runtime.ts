@@ -1,6 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import {
   publishTranscriptUpdate,
   withTranscriptWriteTransaction,
@@ -11,7 +11,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
 import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
@@ -88,8 +88,8 @@ async function applyWorkerTranscriptCommit(params: {
     assertOwned();
   };
   assertCurrent();
-  const redactedMessages = params.messages.map((message) =>
-    attachSessionTranscriptRunId(redactTranscriptMessage(message, params.config), params.runId),
+  const normalizedMessages = params.messages.map((message) =>
+    attachSessionTranscriptRunId(sanitizeTranscriptMessage(message), params.runId),
   );
   const { env: _env, ...scope } = target;
   const input: TranscriptCommitInput = {
@@ -101,7 +101,7 @@ async function applyWorkerTranscriptCommit(params: {
     cwd: process.cwd(),
   };
   const prepareFresh = (recoveredCount: number) => {
-    const messages = redactedMessages.slice(recoveredCount);
+    const messages = normalizedMessages.slice(recoveredCount);
     if (!messages.every(isCommittedAgentMessage)) {
       return undefined;
     }
@@ -110,7 +110,7 @@ async function applyWorkerTranscriptCommit(params: {
         Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
         applyAssistantDeliveryDirectives(message);
       }
-      return redactTranscriptMessageForStorage(message, { config: params.config });
+      return sanitizeTranscriptMessageForStorage(message);
     });
   };
   let applied: ApplyTranscriptCommitResult;

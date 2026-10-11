@@ -416,7 +416,7 @@ describe("native transcript catalog SDK", () => {
     });
   });
 
-  it("redacts before clipping text and derives the same human title as local sessions", async () => {
+  it("preserves text before clipping and derives the same human title as local sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([
         { role: "user", content: "A useful session title" },
@@ -427,7 +427,7 @@ describe("native transcript catalog SDK", () => {
       ]);
       const page = await read(1);
       expect(page.items[0]).toMatchObject({ type: "agentMessage", truncated: true });
-      expect(page.items[0]?.text).not.toContain("synthetic-secret-token");
+      expect(page.items[0]?.text).toMatch(/^Authorization: Bearer synthetic-secret-token\n/);
       expect(page.items[0]?.text?.length).toBeLessThanOrEqual(6000);
       const entry = loadSessionEntryReadOnly(scope);
       if (!entry) {

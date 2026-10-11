@@ -345,8 +345,8 @@ preamble headlines remain enabled:
 }
 ```
 
-Narration input is bounded and redacted: the utility model receives the
-inbound request text plus the same compact, redacted tool summaries the draft
+Narration input is bounded: the utility model receives the
+inbound request text plus the same compact tool summaries the draft
 would render — never raw command output or tool results. With
 `commandText: "status"`, narration input also omits exec/bash command text,
 matching what the draft shows.

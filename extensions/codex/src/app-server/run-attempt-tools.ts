@@ -2,17 +2,13 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolCallResponse } from "./protocol.js";
-import { sanitizeCodexAgentEventRecord } from "./tool-progress-normalization.js";
 
 export function toTranscriptToolResult(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  const sanitized = sanitizeCodexAgentEventRecord({ ...response });
-  const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
+  const contentItems = Array.isArray(response.contentItems) ? response.contentItems : [];
   const result: Record<string, unknown> = {
-    ...sanitized,
-    // Progress events are UI/transcript-facing; map only sanitized content so
-    // event redaction cannot be bypassed by raw dynamic tool output.
+    ...response,
     content: contentItems.map(toTranscriptToolResultContentItem),
   };
   delete result.contentItems;

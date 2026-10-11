@@ -1,6 +1,5 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -119,7 +118,7 @@ export function sanitizeProgressStatusText(text: string): string {
   if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
     return "";
   }
-  return redactToolPayloadText(cleaned);
+  return cleaned;
 }
 
 export function normalizeCommentaryProgressText(text: string): string {
@@ -229,7 +228,7 @@ export function createReasoningProgressAccumulator() {
         return "";
       }
       rawText = mergeReasoningProgressText(rawText, text, options);
-      return redactToolPayloadText(normalizeReasoningProgressLine(rawText));
+      return normalizeReasoningProgressLine(rawText);
     },
   };
 }

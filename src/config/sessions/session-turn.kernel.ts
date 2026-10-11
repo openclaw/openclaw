@@ -174,7 +174,6 @@ export function createSessionTranscriptTurnKernel(
             ...appendOptions,
             ...append.workerPreparation,
             message,
-            messageAlreadyRedacted: options.atomicGroup === true || options.workerPrepared === true,
             ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
             ...((append.config ?? options.config)
               ? { config: append.config ?? options.config }

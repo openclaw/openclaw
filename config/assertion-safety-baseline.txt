@@ -148,7 +148,6 @@ extensions/codex/src/app-server/side-question.ts	1
 extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
-extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/command-handlers.ts	3
@@ -164,7 +163,6 @@ extensions/codex/src/session-catalog-transcript-item.ts	1
 extensions/codex/src/session-catalog.ts	2
 extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
-extensions/codex/src/supervision-tools.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
 extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
@@ -1308,10 +1306,10 @@ src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
-src/agents/embedded-agent-subscribe.handlers.tools.start.ts	6
+src/agents/embedded-agent-subscribe.handlers.tools.start.ts	5
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
-src/agents/embedded-agent-tool-results.ts	8
+src/agents/embedded-agent-tool-results.ts	7
 src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
@@ -1489,8 +1487,6 @@ src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
 src/agents/tools/web-search-provider-config.ts	1
 src/agents/transcript-policy.ts	1
-src/agents/transcript-redact-replay.ts	1
-src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
@@ -2244,7 +2240,6 @@ src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/logger.ts	7
 src/logging/parse-log-line.ts	1
-src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6

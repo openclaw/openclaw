@@ -285,7 +285,6 @@ export {
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
-  sanitizeToolArgs,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
 export {

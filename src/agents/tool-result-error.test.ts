@@ -60,6 +60,15 @@ describe("resolveToolExecutionErrorKind", () => {
 });
 
 describe("protectNetworkToolExecutionError", () => {
+  it("preserves source-like assignments and token text in tool failures", () => {
+    const message = "API_TOKEN = computeToken()\nsk-abc123456789012345678";
+    const protectedError = protectNetworkToolExecutionError(
+      new Error(message),
+      "fallback",
+    ) as Error;
+    expect(protectedError.message).toContain(message);
+  });
+
   it("bounds hostile upstream failures without splitting UTF-16 surrogate pairs", () => {
     const original = new Error(`${"x".repeat(3_999)}🚀<|im_start|>${"y".repeat(20_000)}`);
 

@@ -1,4 +1,4 @@
-// Transcript append redaction tests cover secret scrubbing when appending transcript entries.
+// Transcript appends preserve source text while normalizing replay metadata.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,7 +27,7 @@ async function readStoredMessages(params: {
     .map((record) => record.message);
 }
 
-describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
+describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () => {
   const fixture = useTempSessionsFixture("exact-assistant-redact-test-");
 
   async function seedSessionEntry(params: {
@@ -114,7 +114,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     expect(internalUpdates[0]?.message).toHaveProperty("providerReplay.data", OPAQUE_COMPACTION);
   });
 
-  it("always redacts exact assistant transcript appends", async () => {
+  it("preserves secret-shaped text in exact assistant transcript appends", async () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-off";
@@ -166,10 +166,10 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       { content: [{ type: "text" }, { thinkingSignature: signature }] },
     ]);
     const raw = JSON.stringify(stored);
-    expect(raw).not.toContain(fakeApiKey);
+    expect(raw).toContain(fakeApiKey);
   });
 
-  it("emits the redacted assistant message for inline transcript updates", async () => {
+  it("emits the persisted assistant source text for inline transcript updates", async () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-event";
@@ -211,16 +211,16 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       }
 
       const [diskMessage] = await readStoredMessages({ sessionId, sessionKey, storePath });
-      expect(JSON.stringify(diskMessage)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(diskMessage)).toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
       expect(updates[0]?.message).toEqual(diskMessage);
-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(updates[0]?.message)).toContain(fakeApiKey);
     } finally {
       unsubscribe();
     }
   });
 
-  it("dedupes delivery mirrors against the redacted persisted text", async () => {
+  it("dedupes delivery mirrors against exact persisted text", async () => {
     const sessionsDir = fixture.sessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-dedupe";
@@ -251,7 +251,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     expect(second.messageId).toBe(first.messageId);
 
     const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
-    expect(JSON.stringify(events)).not.toContain(fakeApiKey);
+    expect(JSON.stringify(events)).toContain(fakeApiKey);
     expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
       1,
     );
@@ -302,7 +302,7 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     expect(deduped.messageId).toBe(unredacted.messageId);
 
     const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
-    expect(JSON.stringify(events)).not.toContain(fakeApiKey);
+    expect(JSON.stringify(events)).toContain(fakeApiKey);
     expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
       1,
     );
