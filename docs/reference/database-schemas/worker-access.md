@@ -666,6 +666,14 @@ evicting resident entries, while a before/after write-token check preserves one
 consistent cohort. Physical-source and live-authority checks remain with the
 caller. Schemas, stored data, and update behavior are unchanged.
 
+Session rows also reuse the replica's Board presence and transcript watermark,
+avoiding a history-worker request when those facts are resident. Exact metadata
+receipts preserve Board presence for the same session lifecycle; summaries need
+a complete watermark from an actor or projection receipt. Board writes and
+unknown publications invalidate that coverage. Row reads omit the large saved
+prompt snapshots before cloning and retain their existing shared-fact and access
+owners.
+
 Confirmed rollback leaves committed state intact. A lost reply reconciles
 against native commit evidence; an unknown outcome fences further commands and
 disclosure until a read rehydrates the original owner. Neither path replays the

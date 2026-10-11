@@ -13,11 +13,14 @@ import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   assignSessionOwner,
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
@@ -39,6 +42,7 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -90,6 +94,77 @@ function observeRowFacts(
   const spy = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
   return once ? spy.mockImplementationOnce(observe) : spy.mockImplementation(observe);
 }
+
+it("reuses actor row facts after metadata writes and refreshes Board presence after a write", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = { agentId: "main", sessionKey: "agent:main:actor-row-facts" };
+    const entry = {
+      sessionId: "actor-row-facts",
+      lifecycleRevision: "actor-row-lifecycle",
+      updatedAt: 1,
+      label: "Initial",
+      skillsSnapshot: { prompt: "Saved actor instructions", skills: [] },
+    };
+    replaceSessionEntrySync(scope, entry);
+    const authority = { assertCurrent() {}, authorize() {} };
+    const exercised = await withSessionActor(
+      scope,
+      { assertCurrent() {}, assertReadable() {} },
+      async (actor) => {
+        expect((await actor.read(authority)).hasBoard).toBe(false);
+        const updateLabel = (label: string, updatedAt: number) =>
+          runOpenClawAgentWriteTransaction(
+            (database) =>
+              writeSessionEntry(database, scope.sessionKey, { ...entry, updatedAt, label }),
+            { agentId: scope.agentId },
+          );
+        updateLabel("Committed metadata", 2);
+        const reads: string[][] = [];
+        observeRowFacts((owner) => (input) => {
+          reads.push([...input.sessionKeys]);
+          return owner.readRowFacts(input);
+        });
+        const release = retainSessionListForegroundWork();
+        const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+        const query = { agentId: scope.agentId, key: scope.sessionKey };
+        try {
+          await projection.ensureMaterialized();
+          expect(projection.snapshot(query).row).toMatchObject({
+            sessionId: entry.sessionId,
+            label: "Committed metadata",
+            hasBoard: false,
+          });
+          expect(projection.describe(query)?.retainedDatabaseFacts?.entry).not.toHaveProperty(
+            "skillsSnapshot",
+          );
+          expect(reads).toEqual([]);
+
+          const board = new SqliteBoardStore({
+            resolveSession: ({ sessionKey }) => ({ agentId: scope.agentId, sessionKey }),
+          });
+          await board.putWidget({
+            sessionKey: scope.sessionKey,
+            name: "status",
+            content: { kind: "html", html: "<p>Current</p>" },
+          });
+          // An entry-only receipt must not resurrect Board facts revoked by the preceding write.
+          updateLabel("Metadata after Board", 3);
+          await projection.ensureMaterialized();
+          expect(projection.snapshot(query).row).toMatchObject({
+            hasBoard: true,
+            label: "Metadata after Board",
+          });
+          expect(reads).toEqual([[scope.sessionKey]]);
+        } finally {
+          projection.dispose();
+          release();
+        }
+        return true;
+      },
+    );
+    expect(exercised).toBe(true);
+  });
+});
 
 it.each([{ workMs: 20, rowCount: 65 }])(
   "accepts $rowCount rows once with $workMs ms of materialization work",

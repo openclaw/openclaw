@@ -5,6 +5,7 @@ import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runt
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { resolveStateDir } from "../config/paths.js";
+import { readSessionActorRowFacts } from "../config/sessions/session-actor-replica.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import { captureSessionEntryNativeMutationWitness } from "../config/sessions/session-entry-read-ordered.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
@@ -116,6 +117,7 @@ export async function withSessionRowDatabaseFacts(
       rows: Row[];
     }
   >();
+  const actorFacts = new Map<string, RetainedSessionRowDatabaseFacts>();
   for (const row of rows) {
     const agentId = normalizeAgentId(row.storeTarget.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({
@@ -135,7 +137,15 @@ export async function withSessionRowDatabaseFacts(
       groups.set(key, group);
     }
     if (!row.retainedDatabaseFacts) {
-      group.rows.push(row);
+      const facts = readSessionActorRowFacts({
+        path: group.database.path,
+        sessionKey: row.key,
+      });
+      if (facts) {
+        actorFacts.set(identity(row), facts);
+      } else {
+        group.rows.push(row);
+      }
     }
   }
   const selected = [...groups.values()];
@@ -196,6 +206,9 @@ export async function withSessionRowDatabaseFacts(
             return [[identity(row), prepared]];
           }),
         );
+        for (const [id, row] of actorFacts) {
+          facts.set(id, row);
+        }
         // Finish each accepted read before releasing any captured database owner on failure.
         for (const [index, group] of readGroups.entries()) {
           const databaseOwner = expectDefined(owners[index], "captured session row database");
