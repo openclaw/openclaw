@@ -2,19 +2,8 @@
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
-
-/** Call only after archive drain or startup reconciliation has excluded live work. */
-export function settleArchivedSessionRun(entry: SessionEntry, now: number): void {
-  if (entry.archivedAt === undefined || entry.status !== "running") {
-    return;
-  }
-  // Keep recovery/delivery receipts and known run timing; archive cancels execution.
-  entry.status = "killed";
-  entry.abortedLastRun = true;
-  entry.endedAt ??= now;
-  delete entry.lifecycleRunId;
-}
 
 export function applySessionPatchLifecycleFlags(params: {
   patch: SessionsPatchParams;
@@ -25,6 +14,17 @@ export function applySessionPatchLifecycleFlags(params: {
   archivedBy?: SessionEntry["archivedBy"];
 }): ErrorShape | undefined {
   const { patch, next, existingEntry, storeKey, now, archivedBy } = params;
+  if ("sidebarRoot" in patch) {
+    if (patch.sidebarRoot === true) {
+      if (isSubagentSessionKey(storeKey)) {
+        return invalid("cannot promote a hidden subagent run; use a persistent session instead")
+          .error;
+      }
+      next.sidebarRoot = true;
+    } else {
+      delete next.sidebarRoot;
+    }
+  }
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -40,7 +40,6 @@ export function applySessionPatchLifecycleFlags(params: {
       delete next.pinnedAt;
       delete next.snoozedUntil;
       delete next.snoozedAt;
-      settleArchivedSessionRun(next, now);
     } else {
       delete next.archivedAt;
       delete next.archivedBy;
@@ -51,6 +50,8 @@ export function applySessionPatchLifecycleFlags(params: {
   const pinnable = isPinnableSessionEntry(storeKey, next);
   if (!pinnable) {
     delete next.pinnedAt;
+    delete next.snoozedUntil;
+    delete next.snoozedAt;
   }
   if ("snoozedUntil" in patch) {
     const snoozedUntil = patch.snoozedUntil;

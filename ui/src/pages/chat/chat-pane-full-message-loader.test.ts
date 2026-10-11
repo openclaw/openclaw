@@ -125,6 +125,44 @@ describe("explicit full-message reads", () => {
     },
   );
 
+  it("retrieves retained references from the displayed physical session after the live session advances", async () => {
+    const { state, session, load, request } = fixture();
+    await load()(messageRequest);
+    session.sessionId = "successor-session";
+    await load()(messageRequest);
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+      ...messageRequest,
+      sessionId: "physical-session",
+      maxChars: 500_000,
+    });
+
+    for (const input of [
+      { ...messageRequest, sessionKey: "agent:main:other" },
+      { ...messageRequest, messageId: "pending:input-1" },
+    ]) {
+      await load()(input);
+      expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+        ...input,
+        maxChars: 500_000,
+      });
+    }
+
+    state.currentSessionId = session.sessionId;
+    await load()(messageRequest);
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+      ...messageRequest,
+      maxChars: 500_000,
+    });
+    const explicitSource = { ...messageRequest, sessionId: "physical-session" };
+    const reads = request.mock.calls.length;
+    await load()(explicitSource);
+    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+      ...explicitSource,
+      maxChars: 500_000,
+    });
+  });
+
   it("does not borrow the selected global agent for a request that omitted its agent", async () => {
     const { state, session, load, request } = fixture();
     state.sessionKey = "global";

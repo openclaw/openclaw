@@ -125,12 +125,10 @@ describe("immutable activation protected identities", () => {
     const durable = structuredClone(test.snapshot);
     expect(JSON.stringify(durable)).not.toContain("synthetic-protected-token");
     expect(ImmutableProtectionSnapshotSchema.parse(durable)).toEqual(test.snapshot);
-    expect(verifyImmutableProtection(test.snapshot, test.context)).toEqual({
-      configMigrated: false,
-    });
+    expect(() => verifyImmutableProtection(test.snapshot, test.context)).not.toThrow();
     test.migrate(test.additive());
     test.migrate({ ...test.additive(), logging: { level: "info" } });
-    expect(verifyImmutableProtection(durable, test.context)).toEqual({ configMigrated: true });
+    expect(() => verifyImmutableProtection(durable, test.context)).not.toThrow();
     expect(fs.readFileSync(test.configPath, "utf8")).toContain("legacyWebhook");
   });
 

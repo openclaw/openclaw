@@ -237,6 +237,42 @@ describe("login-qr", () => {
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
   });
 
+  it("reports the QR deadline without an unhandled rejection during socket startup", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const socketReleased = Promise.withResolvers<void>();
+    const socketStarting = Promise.withResolvers<void>();
+    const close = vi.fn();
+    createWaSocketMock.mockImplementationOnce(async () => {
+      socketStarting.resolve();
+      await socketReleased.promise;
+      return { ws: { close } } as never;
+    });
+    waitForWaConnectionMock.mockImplementation(waitForever);
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+    const resultPromise = startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId: "qr-timeout-during-socket-startup",
+    });
+    try {
+      await socketStarting.promise;
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForNextTask();
+      socketReleased.resolve();
+
+      await expect(resultPromise).resolves.toEqual({
+        message: "Failed to get QR: Error: Timed out waiting for WhatsApp QR",
+      });
+      expect(close).toHaveBeenCalledOnce();
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      socketReleased.resolve();
+      await resultPromise;
+    }
+  });
+
   it("clears auth and returns a replacement QR when WhatsApp is logged out", async () => {
     const accountId = "logged-out-replacement-qr";
     const beforeCredentialPersistence = vi.fn(async () => {});

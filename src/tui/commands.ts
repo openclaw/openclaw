@@ -6,6 +6,7 @@ import {
   listChatCommandsForConfig,
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   listThinkingLevelLabels,
   type ReasoningLevel,
@@ -34,6 +35,15 @@ type ParsedCommand = {
   name: string;
   args: string;
 };
+
+export function isTuiBtwCommand(text: string): boolean {
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
+}
+
+export function isTuiSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isAbortRequestText(trimmed);
+}
 
 type SlashCommandOptions = {
   cfg?: OpenClawConfig;
@@ -179,9 +189,8 @@ const TUI_COMMAND_ROWS = [
   ],
 ] as const satisfies readonly TuiCommandRow[];
 
-const TUI_COMMAND_ROW_VALUES: readonly TuiCommandRow[] = TUI_COMMAND_ROWS;
-const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROW_VALUES.map(
-  ([name, description, help, completions, options]) => {
+const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROWS.map(
+  ([name, description, help, completions, options]: TuiCommandRow) => {
     const descriptor: TuiCommandDescriptor = { name, description, help, completions };
     descriptor.aliases = options?.aliases;
     descriptor.scope = options?.scope;

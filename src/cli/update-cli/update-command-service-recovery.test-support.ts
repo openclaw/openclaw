@@ -8,9 +8,10 @@ import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
+import { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -32,6 +33,20 @@ import {
 } from "./update-command-service.js";
 
 const hostPlatform = process.platform;
+
+function withHostPlatform<T>(run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: descriptor.enumerable,
+    value: hostPlatform,
+  });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
 
 function createServingOwnerFixture() {
   let lease: ReturnType<typeof acquireGatewayOwnerLease> | undefined;
@@ -76,7 +91,9 @@ function createServingOwnerFixture() {
     },
     async restart() {
       if (lease) {
-        expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "gateway.restart" });
+        expect(await prepareGatewayRestartIntentConsumption(env)()).toEqual({
+          reason: "gateway.restart",
+        });
         await release();
       }
     },
@@ -89,21 +106,15 @@ export async function createServiceActivationFixture() {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
   );
   vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  // Native service transport is simulated; process ancestry and namespaces belong to the host.
   const inspectHostAncestry = processAncestry.inspectSelfAndAncestorPidsSync;
-  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) => {
-    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    // The native manager is simulated; this test process still has real host ancestors.
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      enumerable: descriptor.enumerable,
-      value: hostPlatform,
-    });
-    try {
-      return inspectHostAncestry(...args);
-    } finally {
-      Object.defineProperty(process, "platform", descriptor);
-    }
-  });
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) =>
+    withHostPlatform(() => inspectHostAncestry(...args)),
+  );
+  const classifyOwnerNamespace = gatewayNamespace.classifyGatewayOwnerProcessNamespace;
+  vi.spyOn(gatewayNamespace, "classifyGatewayOwnerProcessNamespace").mockImplementation((...args) =>
+    withHostPlatform(() => classifyOwnerNamespace(...args)),
+  );
   const readProcessStartTime = processIdentity.getFileLockProcessStartTime;
   // The service platform is simulated; only this live test process gets a fixed start identity.
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>

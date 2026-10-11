@@ -276,18 +276,24 @@ describe("config observe recovery", () => {
     await seedConfigBackup(configPath, largeRecoverableCoreConfig);
     const backupRaw = await fsp.readFile(`${configPath}.bak`, "utf-8");
     await writeConfigRaw(configPath, { meta: { lastTouchedVersion: "2026.5.28" } });
-    const append = configAudit.appendConfigAuditRecord;
+    const captureAppender = configAudit.captureConfigAuditAppender;
     let closedAfterRestore = false;
     const audit = vi
-      .spyOn(configAudit, "appendConfigAuditRecord")
-      .mockImplementation(async (params) => {
-        await append(params);
-        const record = "record" in params ? params.record : params;
-        if (!closedAfterRestore && record.event === "config.observe" && record.restoredFromBackup) {
-          expect(await fsp.readFile(configPath, "utf-8")).toBe(backupRaw);
-          closedAfterRestore = true;
-          await closeOpenClawStateDatabaseAsync();
-        }
+      .spyOn(configAudit, "captureConfigAuditAppender")
+      .mockImplementation((...params) => {
+        const append = captureAppender(...params);
+        return async (record) => {
+          await append(record);
+          if (
+            !closedAfterRestore &&
+            record.event === "config.observe" &&
+            record.restoredFromBackup
+          ) {
+            expect(await fsp.readFile(configPath, "utf-8")).toBe(backupRaw);
+            closedAfterRestore = true;
+            await closeOpenClawStateDatabaseAsync();
+          }
+        };
       });
     try {
       const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });

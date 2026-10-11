@@ -5,9 +5,11 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
-/** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import type {
+  HarnessCompletionRecovery,
+  RestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -43,7 +45,6 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
   return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
-/** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
   return hasReplyPayloadContent(payload, {
     extraContent:
@@ -51,7 +52,6 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   });
 }
 
-/** True when a payload should stay internal as reasoning-only output. */
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
@@ -96,7 +96,6 @@ export function readPairingQrReplyChannelData(
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
 
-/** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
 
 export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
@@ -174,7 +173,6 @@ export function getReplyPayloadTtsSupplement(
   };
 }
 
-/** Returns true when the payload is a valid TTS supplement media payload. */
 export function isReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): boolean {
@@ -226,6 +224,16 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
+  /** Current facts from the original process-owned actor, never a replacement. */
+  readCurrentSession?: () =>
+    | {
+        sessionId: string;
+        lifecycleRevision?: string;
+        activeWriterRunId?: string;
+        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
+        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
+      }
+    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
@@ -241,6 +249,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** First index of this block's physical assistant message; each content item advances the index. */
+  assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
@@ -358,7 +368,6 @@ const replyPayloadMetadata = resolveGlobalSingleton(
   () => new WeakMap<object, ReplyPayloadMetadata>(),
 );
 
-/** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(
   payload: T,
   metadata: ReplyPayloadMetadata,
@@ -368,7 +377,6 @@ export function setReplyPayloadMetadata<T extends object>(
   return payload;
 }
 
-/** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
 }
@@ -491,12 +499,10 @@ export function isReplyPayloadSessionWriterDeliveryAuthorized(
   );
 }
 
-/** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
-/** Copies internal payload metadata when cloning or transforming payload objects. */
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;

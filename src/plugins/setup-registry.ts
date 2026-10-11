@@ -28,7 +28,7 @@ import {
   type PluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
-import { getPluginValueInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -56,6 +56,13 @@ const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
+const ORDERED_SETUP_API_EXTENSIONS = RUNNING_FROM_BUILT_ARTIFACT
+  ? SETUP_API_EXTENSIONS
+  : [...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)];
+// Shipped implicit setup entries in the root outrank every package-local dist format.
+const SETUP_API_PATHS = ["", "dist"].flatMap((directory) =>
+  ORDERED_SETUP_API_EXTENSIONS.map((extension) => path.join(directory, `setup-api${extension}`)),
+);
 
 type SetupProviderEntry = {
   pluginId: string;
@@ -138,37 +145,21 @@ function resolveSetupApiPath(
   if (cached !== undefined) {
     return cached?.modulePath ?? null;
   }
-  const modulePath = resolveSetupApiPathUncached(rootDir, options);
+  let modulePath = resolvePluginRootArtifactPath(rootDir, SETUP_API_PATHS);
+  if (!modulePath && options?.includeBundledSourceFallback !== false) {
+    const sourceExtensionRoot = path.resolve(
+      path.dirname(CURRENT_MODULE_PATH),
+      "..",
+      "..",
+      "extensions",
+      path.basename(rootDir),
+    );
+    if (sourceExtensionRoot !== rootDir) {
+      modulePath = resolvePluginRootArtifactPath(sourceExtensionRoot, SETUP_API_PATHS);
+    }
+  }
   artifacts.set(key, modulePath ? { modulePath, boundaryRoot: path.dirname(modulePath) } : null);
   return modulePath;
-}
-
-function resolveSetupApiPathUncached(
-  rootDir: string,
-  options?: { includeBundledSourceFallback?: boolean },
-): string | null {
-  const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
-    ? SETUP_API_EXTENSIONS
-    : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
-
-  // Shipped implicit setup entries in the root outrank every package-local dist format.
-  const artifactPaths = ["", "dist"].flatMap((directory) =>
-    orderedExtensions.map((extension) => path.join(directory, `setup-api${extension}`)),
-  );
-  const direct = resolvePluginRootArtifactPath(rootDir, artifactPaths);
-  if (direct || options?.includeBundledSourceFallback === false) {
-    return direct;
-  }
-  const sourceExtensionRoot = path.resolve(
-    path.dirname(CURRENT_MODULE_PATH),
-    "..",
-    "..",
-    "extensions",
-    path.basename(rootDir),
-  );
-  return sourceExtensionRoot === rootDir
-    ? null
-    : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactPaths);
 }
 
 function resolveRelevantSetupMigrationPluginIds(params: {
@@ -180,11 +171,7 @@ function resolveRelevantSetupMigrationPluginIds(params: {
   const ids = new Set<string>(
     entries && typeof entries === "object" ? normalizeStringEntries(Object.keys(entries)) : [],
   );
-  const plugins = loadSetupManifestRecords({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const plugins = loadSetupManifestRecords(params);
   for (const plugin of plugins) {
     if (
       hasPluginConfigMigrationSource({
@@ -215,62 +202,6 @@ function resolveLoadableSetupRuntimeSource(
       packageManifest: record.packageManifest,
     }),
   );
-}
-
-function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {
-  return (
-    record.setupSource ??
-    resolveSetupApiPath(record.rootDir, {
-      includeBundledSourceFallback: false,
-    })
-  );
-}
-
-function resolveSetupRegistration(
-  record: PluginManifestRecord,
-  diagnostics: PluginSetupRegistryDiagnostic[],
-): {
-  setupSource: string;
-  instance?: PluginInstanceHandle;
-  register: (api: Parameters<typeof runPluginRegistration>[1]) => boolean;
-  initialize: ReturnType<typeof getPluginSetupModuleLoader>["initialize"];
-} | null {
-  const setupArtifact = resolveLoadableSetupRuntimeSource(record);
-  if (!setupArtifact) {
-    return null;
-  }
-  const setupSource = setupArtifact.source;
-
-  let mod: OpenClawPluginModule;
-  let moduleLoader: ReturnType<typeof getPluginSetupModuleLoader>;
-  try {
-    moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
-    mod = moduleLoader(setupSource) as OpenClawPluginModule;
-  } catch (error) {
-    // A broken setup entry silently removes the plugin's providers/CLI
-    // backends/migrations from onboarding; record why instead of vanishing.
-    diagnostics.push({
-      pluginId: record.id,
-      code: "setup-entry-load-failed",
-      message: `setup entry failed to load from ${setupSource}: ${formatErrorMessage(error)}`,
-    });
-    return null;
-  }
-
-  return {
-    setupSource,
-    instance: getPluginValueInstance(mod as object),
-    register(api) {
-      const resolved = resolvePluginModuleExport(mod);
-      if (!resolved.register || (resolved.definition?.id && resolved.definition.id !== record.id)) {
-        return false;
-      }
-      // Setup keeps a legacy async entry's synchronous prefix; later registration stays closed.
-      runPluginRegistration(resolved.register.bind(resolved.definition), api, "ignore");
-      return true;
-    },
-    initialize: moduleLoader.initialize,
-  };
 }
 
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
@@ -444,7 +375,12 @@ function pushDescriptorRuntimeDisabledDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginSetupRegistryDiagnostic[];
 }): void {
-  if (!resolveDeclaredSetupRuntimeSource(params.record)) {
+  if (
+    !(
+      params.record.setupSource ??
+      resolveSetupApiPath(params.record.rootDir, { includeBundledSourceFallback: false })
+    )
+  ) {
     return;
   }
   params.diagnostics.push({
@@ -573,10 +509,27 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       });
       continue;
     }
-    const setupRegistration = resolveSetupRegistration(record, diagnostics);
-    if (!setupRegistration) {
+    const setupArtifact = resolveLoadableSetupRuntimeSource(record);
+    if (!setupArtifact) {
       continue;
     }
+    const setupSource = setupArtifact.source;
+    let mod: OpenClawPluginModule;
+    let moduleLoader: ReturnType<typeof getPluginSetupModuleLoader>;
+    try {
+      moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
+      mod = moduleLoader(setupSource) as OpenClawPluginModule;
+    } catch (error) {
+      // A broken setup entry silently removes the plugin's providers/CLI
+      // backends/migrations from onboarding; record why instead of vanishing.
+      diagnostics.push({
+        pluginId: record.id,
+        code: "setup-entry-load-failed",
+        message: `setup entry failed to load from ${setupSource}: ${formatErrorMessage(error)}`,
+      });
+      continue;
+    }
+    const instance = getPluginValueInstance(mod as object);
 
     const recordProviders = new Map<string, SetupProviderEntry>();
     const recordCliBackends = new Map<string, SetupCliBackendEntry>();
@@ -587,7 +540,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       name: record.name ?? record.id,
       version: record.version,
       description: record.description,
-      source: setupRegistration.setupSource,
+      source: setupSource,
       rootDir: record.rootDir,
       registrationMode: "setup-only",
       config: {},
@@ -626,9 +579,23 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
 
     try {
       if (
-        !setupRegistration.initialize(() =>
-          setupRegistration.register(instrumentPluginInstanceApi(api, setupRegistration.instance)),
-        )
+        !moduleLoader.initialize(() => {
+          const registrationApi = instrumentPluginInstanceApi(api, instance);
+          const resolved = resolvePluginModuleExport(mod);
+          if (
+            !resolved.register ||
+            (resolved.definition?.id && resolved.definition.id !== record.id)
+          ) {
+            return false;
+          }
+          // Setup keeps a legacy async entry's synchronous prefix; later registration stays closed.
+          runPluginRegistration(
+            resolved.register.bind(resolved.definition),
+            registrationApi,
+            "ignore",
+          );
+          return true;
+        })
       ) {
         continue;
       }

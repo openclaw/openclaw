@@ -512,7 +512,7 @@ attempt and success per backup kind, target, and offsite namespace from the whol
 configured backup schedules with their next run, and the configured storage
 locations. Local archives and SQLite snapshots without a named target use one
 status group per kind, displaying the newest attempt's archive path.
-Listing configuration does not probe storage. The Control UI's
+Listing configuration does not check storage. The Control UI's
 Backups section on the Systems landing and Gateway host views uses this status and provides a **Check** action per location
 through `storage.locations.probe`.
 Doctor uses the same retained history, so per-target health survives more than
@@ -521,6 +521,13 @@ Doctor uses the same retained history, so per-target health survives more than
 Recording is best-effort: a record-write failure prints a warning but never
 changes a successful backup into a failed command. Recording uses an existing
 shared state database; it does not create a missing database.
+An empty database or one with the wrong ownership metadata is refused without
+changing its bytes. Outcome recording does not initialize or repair that database.
+When a local Gateway owns the state directory, commands submit the outcome through
+its `backup.recordOutcome` RPC with operator admin scope. With the Gateway stopped,
+recording takes exclusive local ownership until the write settles. An unavailable,
+outdated, or unauthenticated Gateway produces a warning; the command never retries
+the write directly or replays an outcome whose delivery is uncertain.
 
 ### Record external backup jobs
 

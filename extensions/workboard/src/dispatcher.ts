@@ -27,6 +27,7 @@ import {
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
   WORKBOARD_REQUIRED_WORKER_TOOLS,
+  WorkboardWorkspaceOutsideRootsError,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -281,7 +282,6 @@ async function runWorkboardDispatch(
   const startedOwners = new Set<string>();
   // Allow one fallback per worker slot without draining the queue during an outage.
   const maxAttempts = maxStarts * 2;
-  let acceptedStarts = 0;
   let attemptedStarts = 0;
 
   const selection = selectStartableCards(
@@ -297,7 +297,7 @@ async function runWorkboardDispatch(
   }
   for (const card of selection.cards) {
     const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
-    if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
+    if (started.length >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
     if (startedOwners.has(ownerId)) {
@@ -364,10 +364,19 @@ async function runWorkboardDispatch(
         }
       }
     } catch (error) {
+      // A broader caller may retry a host-authorized card; it must never
+      // override the card's own persisted workspace ceiling.
+      const canRequestHostAccess =
+        error instanceof WorkboardWorkspaceOutsideRootsError &&
+        params.options?.workspaceAccess?.unrestricted === false &&
+        card.metadata?.automation?.workspaceAccess?.unrestricted === true;
+      const message = formatErrorMessage(error);
       startFailures.push({
         cardId: card.id,
         title: card.title,
-        error: formatErrorMessage(error),
+        error: canRequestHostAccess
+          ? `${message} Rerun with --admin to request operator.admin for full-host workspace access.`
+          : message,
       });
       continue;
     }
@@ -489,7 +498,6 @@ async function runWorkboardDispatch(
             execution: acceptedExecution,
           })
           .catch(() => undefined)) ?? acceptedCard;
-      acceptedStarts += 1;
       startedOwners.add(ownerId);
       started.push({
         cardId: updated.id,

@@ -1348,6 +1348,51 @@ describe("previous release update compatibility", () => {
     ]);
   });
 
+  it.each(["exact", "changed delegation", "changed binding", "changed target"])(
+    "traces only the exact shipped 2026.9.8 config alias (%s)",
+    (variant) => {
+      const facade =
+        'export { createConfigIO, readConfigFileSnapshot, readSourceConfigBestEffort } from "./config-abcdefgh.mjs";\n';
+      let alias = fsSync.readFileSync(
+        path.join(MODULE_ROOT, "test/fixtures/update-config-runtime-alias-2026.9.8.txt"),
+        "utf8",
+      );
+      if (variant === "changed delegation") {
+        alias = alias.replace("return runtime[name]", "return undefined");
+      } else if (variant === "changed binding") {
+        alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+      } else if (variant === "changed target") {
+        alias = alias.replace('"./io.runtime-BNEtkwm5.mjs"', '"./"');
+      }
+      const record = () =>
+        recordImportedFixture('(await import("./io.runtime.js"))', {
+          "io.runtime.js": alias,
+          "io.runtime-BNEtkwm5.mjs": facade,
+          "config-abcdefgh.mjs": [
+            "//#region src/config/io.ts",
+            "export function createConfigIO() {}",
+            "export function readConfigFileSnapshot() {}",
+            "export function readSourceConfigBestEffort() {}",
+          ].join("\n"),
+        });
+      if (variant !== "exact") {
+        expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
+        return;
+      }
+      expect(record().inventory.releases[0]?.chunks).toMatchObject([
+        {
+          path: "io.runtime.js",
+          exports: ["createConfigIO", "readConfigFileSnapshot", "readSourceConfigBestEffort"].map(
+            (exported) => ({
+              exported,
+              origin: { module: "src/config/io.ts", symbol: exported },
+            }),
+          ),
+        },
+      ]);
+    },
+  );
+
   it.each(["source scripts", "different owner", "mutable binding", "dist path", "unknown script"])(
     "distinguishes source completion contracts from unknown dynamic imports (%s)",
     (variant) => {
@@ -1922,6 +1967,41 @@ describe("previous release update compatibility", () => {
     const current = await import(pathToFileURL(path.join(root, "dist/worker.runtime.js")).href);
     expect(current.x()).toBe("node");
     expect(current.y()).toBe("npm");
+  });
+
+  it("retains published cleanup-scope imports after package replacement", () => {
+    const target = "runtime-cleanup-abcdefgh.mjs";
+    const { root, inventory } = recordImportedFixture(
+      `(await import("./${target}")).runCliDisposerAfterPending()`,
+      {
+        [target]:
+          '//#region src/cli/runtime-cleanup.ts\nexport function runCliDisposerAfterPending() { return "old"; }\n',
+      },
+      undefined,
+      "src/cli/runtime-cleanup-scope.ts",
+    );
+    fsSync.unlinkSync(path.join(root, "dist", target));
+    write(
+      root,
+      "dist/current.mjs",
+      '//#region src/cli/runtime-cleanup.ts\nfunction runCliDisposerAfterPending() { return "current"; } export { runCliDisposerAfterPending as cleanup };\n',
+    );
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    const result = childProcess.execFileSync(
+      testNodeExecPath,
+      [
+        "--input-type=module",
+        "-e",
+        'import { unlinkSync } from "node:fs"; import { fileURLToPath } from "node:url"; const scope = await import(process.argv[1]); unlinkSync(fileURLToPath(process.argv[1])); console.log(await scope.restart());',
+        pathToFileURL(path.join(root, "dist/command.js")).href,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.trim()).toBe("current");
   });
 
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {

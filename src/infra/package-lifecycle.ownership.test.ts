@@ -485,9 +485,9 @@ describe("package lifecycle ownership", () => {
         });
       }
       const runScript = vi.fn(replace);
-      await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toThrow(
-        "lock generation changed",
-      );
+      await expect(
+        completePendingPackageLifecycle({ packageRoot, runScript }),
+      ).rejects.toBeInstanceOf(PackageLifecycleOwnershipError);
       expect(runScript).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
       expect(await fs.readFile(lock, "utf8")).toBe("replacement generation\n");
       expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
@@ -517,6 +517,8 @@ describe("package lifecycle ownership", () => {
         return access(file, mode);
       });
       if (failure === "release") {
+        // This fixture denies the portable unlink; native release owns its retained descriptor.
+        vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
         const unlink = fs.unlink;
         vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
           if (file === lock) {
@@ -528,7 +530,7 @@ describe("package lifecycle ownership", () => {
       const runScript = vi.fn();
       const completion = completePendingPackageLifecycle({ packageRoot, runScript });
       if (failure === "ownership") {
-        await expect(completion).rejects.toThrow("lock generation changed");
+        await expect(completion).rejects.toBeInstanceOf(PackageLifecycleOwnershipError);
       } else {
         await expect(completion).rejects.toMatchObject({
           name: "PackageLifecycleOwnershipError",
@@ -734,6 +736,8 @@ describe("package lifecycle ownership", () => {
   );
 
   it("preserves pending evidence and reports release failure", async () => {
+    // Keep the JS failure injection on its actual portable release path.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     const { packageRoot, pending, lock } = await fixture();
     const unlink = fs.unlink;
     const denial = Object.assign(new Error("release denied"), { code: "EACCES" });

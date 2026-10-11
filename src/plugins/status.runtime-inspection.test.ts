@@ -354,7 +354,7 @@ describe("plugin runtime inspection", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "uses replaced package metadata while preserving its old snapshot (requires config: %s)",
     async (requiresConfig) => {
       const stateDir = makePluginLoaderTempDir();

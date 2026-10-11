@@ -24,7 +24,6 @@ import {
   toDotPath,
   type ConcreteConfigPathSegment,
 } from "../shared/dot-path.js";
-import { formatCliCommand } from "./command-format.js";
 import {
   formatConfigSetPath,
   parseConfigSetPath,
@@ -34,6 +33,7 @@ import {
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode } from "./config-set-dryrun.js";
 import {
+  decodeConfigMutationInput,
   parseBatchSource,
   parseConfigMutationJson5,
   readConfigMutationFileSync,
@@ -380,30 +380,6 @@ export function buildConfigSetOperations(params: {
     pathTokens: parsedConcretePath.tokens,
     quotedNumericSegments: parsedConcretePath.quotedNumericSegments,
   };
-  if (mode === "ref_builder") {
-    if (params.value !== undefined) {
-      throw modeError("ref builder mode does not accept <value>.");
-    }
-    if (!params.opts.refProvider || !params.opts.refSource || !params.opts.refId) {
-      throw modeError(
-        "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec|store>, and --ref-id <id>.",
-      );
-    }
-    return [
-      buildAssignmentOperation({
-        ...pathFields,
-        value: parseSecretRefBuilder({
-          provider: params.opts.refProvider,
-          source: params.opts.refSource,
-          id: params.opts.refId,
-          fieldPrefix: "ref",
-        }),
-        inputMode: "builder",
-        validatedRef: true,
-      }),
-    ];
-  }
-
   if (mode === "provider_builder") {
     if (params.value !== undefined) {
       throw modeError("provider builder mode does not accept <value>.");
@@ -421,14 +397,34 @@ export function buildConfigSetOperations(params: {
     ];
   }
 
-  if (params.value === undefined) {
-    throw modeError("value/json mode requires <value>.");
+  let value: unknown;
+  if (mode === "ref_builder") {
+    if (params.value !== undefined) {
+      throw modeError("ref builder mode does not accept <value>.");
+    }
+    if (!params.opts.refProvider || !params.opts.refSource || !params.opts.refId) {
+      throw modeError(
+        "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec|store>, and --ref-id <id>.",
+      );
+    }
+    value = parseSecretRefBuilder({
+      provider: params.opts.refProvider,
+      source: params.opts.refSource,
+      id: params.opts.refId,
+      fieldPrefix: "ref",
+    });
+  } else {
+    if (params.value === undefined) {
+      throw modeError("value/json mode requires <value>.");
+    }
+    value = parseConfigSetValue(params.value, strictJson);
   }
   return [
     buildAssignmentOperation({
       ...pathFields,
-      value: parseConfigSetValue(params.value, strictJson),
-      inputMode: mode === "json" ? "json" : "value",
+      value,
+      inputMode: mode === "ref_builder" ? "builder" : mode === "json" ? "json" : "value",
+      validatedRef: mode === "ref_builder",
     }),
   ];
 }
@@ -439,7 +435,6 @@ async function readStdinText(): Promise<string> {
       "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
     );
   }
-  process.stdin.setEncoding("utf8");
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
     onOverflow: ({ maxBytes }) =>
@@ -447,7 +442,7 @@ async function readStdinText(): Promise<string> {
         `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
       ),
   });
-  return bytes.toString("utf8");
+  return decodeConfigMutationInput(bytes, "--stdin");
 }
 
 export function buildUnsetOperation(
@@ -531,15 +526,4 @@ export async function readConfigPatchOperations(
     throw configPatchModeError("input patch did not contain any config updates.");
   }
   return operations;
-}
-
-export function formatPluginInstallConfigSetError(): string {
-  return [
-    "plugins.installs is managed by the plugin index and cannot be edited with config set.",
-    "",
-    "Use plugin commands instead:",
-    `  ${formatCliCommand("openclaw plugins install <spec>")}`,
-    `  ${formatCliCommand("openclaw plugins update <plugin-id>")}`,
-    `  ${formatCliCommand("openclaw plugins uninstall <plugin-id>")}`,
-  ].join("\n");
 }

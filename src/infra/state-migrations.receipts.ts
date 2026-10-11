@@ -90,37 +90,23 @@ export function readLegacyMigrationReceipt(
   return readLegacyMigrationReceiptFromDatabase(openOpenClawStateDatabase({ env }).db, sourceKey);
 }
 
-export function readLegacyMigrationRunFromDatabase(database: DatabaseSync, runId: string) {
-  const row = executeSqliteQueryTakeFirstSync(
-    database,
-    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
-      .selectFrom("migration_runs")
-      .select(["status", "report_json"])
-      .where("id", "=", runId),
-  );
-  return row ? { status: row.status, reportJson: row.report_json } : null;
-}
-
 export function recordLegacyMigrationRun(database: DatabaseSync, run: LegacyMigrationRun): void {
+  const updates = () => ({
+    finished_at: run.finishedAt,
+    status: run.status,
+    report_json: run.reportJson,
+  });
   const query = getNodeSqliteKysely<MigrationReceiptDatabase>(database)
     .insertInto("migration_runs")
     .values({
       id: run.runId,
       started_at: run.startedAt,
-      finished_at: run.finishedAt,
-      status: run.status,
-      report_json: run.reportJson,
+      ...updates(),
     });
   executeSqliteQuerySync(
     database,
     run.upsert
-      ? query.onConflict((conflict) =>
-          conflict.column("id").doUpdateSet({
-            finished_at: run.finishedAt,
-            status: run.status,
-            report_json: run.reportJson,
-          }),
-        )
+      ? query.onConflict((conflict) => conflict.column("id").doUpdateSet(updates()))
       : query,
   );
 }
@@ -129,6 +115,15 @@ export function recordLegacyMigrationSource(
   database: DatabaseSync,
   source: LegacyMigrationSource,
 ): void {
+  const updates = () => ({
+    source_sha256: source.sourceSha256,
+    source_size_bytes: source.sourceSizeBytes,
+    source_record_count: source.sourceRecordCount,
+    last_run_id: source.runId,
+    status: source.status,
+    imported_at: source.importedAt,
+    removed_source: 0,
+  });
   const query = getNodeSqliteKysely<MigrationReceiptDatabase>(database)
     .insertInto("migration_sources")
     .values({
@@ -136,13 +131,7 @@ export function recordLegacyMigrationSource(
       migration_kind: source.migrationKind,
       source_path: source.sourcePath,
       target_table: source.targetTable,
-      source_sha256: source.sourceSha256,
-      source_size_bytes: source.sourceSizeBytes,
-      source_record_count: source.sourceRecordCount,
-      last_run_id: source.runId,
-      status: source.status,
-      imported_at: source.importedAt,
-      removed_source: 0,
+      ...updates(),
       report_json: source.reportJson,
     });
   executeSqliteQuerySync(
@@ -150,13 +139,7 @@ export function recordLegacyMigrationSource(
     source.upsert
       ? query.onConflict((conflict) =>
           conflict.column("source_key").doUpdateSet({
-            source_sha256: source.sourceSha256,
-            source_size_bytes: source.sourceSizeBytes,
-            source_record_count: source.sourceRecordCount,
-            last_run_id: source.runId,
-            status: source.status,
-            imported_at: source.importedAt,
-            removed_source: 0,
+            ...updates(),
             ...(source.updateReportOnConflict === false ? {} : { report_json: source.reportJson }),
           }),
         )

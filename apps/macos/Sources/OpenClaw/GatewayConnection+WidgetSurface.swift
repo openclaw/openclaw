@@ -57,9 +57,7 @@ extension GatewayConnection {
     {
         guard !Task.isCancelled else { return nil }
         var params = ["surface": AnyCodable("canvas")]
-        if let observedURL {
-            params["observedUrl"] = AnyCodable(observedURL)
-        }
+        params["observedUrl"] = observedURL.map { AnyCodable($0) }
         do {
             let data = try await self.request(
                 method: "plugin.surface.refresh",

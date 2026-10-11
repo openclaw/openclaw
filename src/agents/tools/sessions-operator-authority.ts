@@ -1,3 +1,4 @@
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
@@ -24,22 +25,30 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const sources = [
     ...new Set([authority, caller, invocation?.operatorRunAuthority, retained]),
   ].filter((source): source is AdmittedRunOperatorAuthority => source !== undefined);
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const assertCurrent = () => {
-    for (const source of sources) {
-      assertAdmittedRunOperatorAuthority(source);
-      source.assertCurrent();
-      if (source.source !== authority.source) {
-        throw new Error("Session control operator source changed.");
+  const assertCurrent = composeSessionSourceAssertion(
+    [
+      ...sources.map((source) =>
+        composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
+          assertAdmittedRunOperatorAuthority(source);
+          assertSource();
+          if (source.source !== authority.source) {
+            throw new Error("Session control operator source changed.");
+          }
+        }),
+      ),
+      captureGatewayToolCallerAssertion("sessions.patch"),
+      composeSessionSourceAssertion([invocation?.assertCurrent], (assertSource) => {
+        invocation?.signal.throwIfAborted();
+        assertSource();
+      }),
+    ],
+    (assertSources) => {
+      assertSources();
+      if (retained && scope?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Session control caller authority is no longer active.");
       }
-    }
-    assertCallerCurrent?.("sessions.patch");
-    invocation?.signal.throwIfAborted();
-    invocation?.assertCurrent?.();
-    if (retained && scope?.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Session control caller authority is no longer active.");
-    }
-  };
+    },
+  );
   assertCurrent();
   return {
     authority,
@@ -49,13 +58,6 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
       (!invocation || operatorScopeSatisfied(requested, invocation.scopes)) &&
       (!retained || operatorScopeSatisfied(requested, scope?.client?.connect.scopes ?? [])),
   };
-}
-
-/** Resolve the original host-issued source without upgrading an insufficient scope. */
-export function readSessionControlAuthority(
-  prepared?: AdmittedRunOperatorAuthority,
-): AdmittedRunOperatorAuthority | undefined {
-  return captureSessionControlAuthority(prepared)?.authority;
 }
 
 /** Availability only; the target guard and underlying Gateway policy still apply. */

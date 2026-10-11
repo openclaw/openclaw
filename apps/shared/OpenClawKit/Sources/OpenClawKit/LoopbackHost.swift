@@ -5,10 +5,6 @@ import Darwin
 #endif
 
 public enum LoopbackHost {
-    public static func isLoopback(_ rawHost: String) -> Bool {
-        self.isLoopbackHost(rawHost)
-    }
-
     public static func isLoopbackHost(_ rawHost: String) -> Bool {
         let host = self.normalizedHost(rawHost)
         if host.isEmpty {

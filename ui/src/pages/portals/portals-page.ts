@@ -53,7 +53,6 @@ class PortalsPage extends OpenClawLightDomElement {
   @state() private portalProbeState: PortalProbeState | null = null;
   @state() private pendingEnvironment: EnvironmentSummary | null = null;
   @state() private environmentFailure: { environmentId: string; message: string } | null = null;
-  private environmentRequestGeneration = 0;
   private environmentLoading = false;
   private readonly environmentPoll = new PollController(
     this,
@@ -62,9 +61,6 @@ class PortalsPage extends OpenClawLightDomElement {
     false,
   );
 
-  private requestGeneration = 0;
-  private portalSetRevision = 0;
-  private portalProbeGeneration = 0;
   private readonly portalProbeCache = new Map<string, PortalReachability>();
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -88,8 +84,6 @@ class PortalsPage extends OpenClawLightDomElement {
   );
 
   override disconnectedCallback() {
-    this.environmentRequestGeneration += 1;
-    this.portalProbeGeneration += 1;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -101,14 +95,8 @@ class PortalsPage extends OpenClawLightDomElement {
         (key) => changed.has(key) && changed.get(key) !== undefined,
       )
     ) {
-      this.requestGeneration += 1;
-      this.environmentRequestGeneration += 1;
-      this.environmentLoading = false;
-      this.pendingEnvironment = null;
-      this.environmentFailure = null;
-      this.environmentPoll.stop();
+      this.resetPendingEnvironment();
       this.loading = false;
-      this.portalProbeGeneration += 1;
       this.portalProbeState = null;
       this.applyPortalSet(this.portals);
       void this.loadPresentation();
@@ -120,7 +108,6 @@ class PortalsPage extends OpenClawLightDomElement {
       void this.loadPresentation();
     } else if (changed.has("presented") && !this.presented) {
       this.environmentPoll.stop();
-      this.environmentRequestGeneration += 1;
       this.environmentLoading = false;
     }
   }
@@ -169,11 +156,8 @@ class PortalsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const generation = ++this.environmentRequestGeneration;
     const isCurrent = () =>
-      this.gateway.isCurrent(scope) &&
-      generation === this.environmentRequestGeneration &&
-      this.pendingEnvironmentId === environmentId;
+      this.gateway.isCurrent(scope) && this.pendingEnvironmentId === environmentId;
     this.environmentLoading = true;
     this.environmentFailure = null;
     try {
@@ -221,27 +205,26 @@ class PortalsPage extends OpenClawLightDomElement {
     return canCallGatewayMethod(this.gateway.snapshot, "portal.close", "operator.write");
   }
 
-  private resetGatewayState() {
-    this.environmentRequestGeneration += 1;
+  private resetPendingEnvironment() {
     this.environmentLoading = false;
     this.pendingEnvironment = null;
     this.environmentFailure = null;
     this.environmentPoll.stop();
-    this.requestGeneration += 1;
-    this.portalSetRevision += 1;
+  }
+
+  private resetGatewayState() {
+    this.resetPendingEnvironment();
     this.portals = [];
     this.selectedPortalId = null;
     this.loading = false;
     this.loaded = false;
     this.error = null;
     this.closingPortalId = null;
-    this.portalProbeGeneration += 1;
     this.portalProbeCache.clear();
     this.portalProbeState = null;
   }
 
   private applyPortalSet(portals: readonly PortalSummary[]) {
-    this.portalSetRevision += 1;
     this.portals = [...portals];
     const previousPortalId = this.selectedPortalId;
     const selectedPortalId = this.pendingEnvironmentId
@@ -257,14 +240,12 @@ class PortalsPage extends OpenClawLightDomElement {
     if (selectedPortal) {
       this.ensurePortalProbe(selectedPortal, selectedPortalId !== previousPortalId);
     } else {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = null;
     }
   }
 
   private ensurePortalProbe(portal: PortalSummary, force = false) {
     if (!portal.tokenQuery || !portal.url) {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = null;
       return;
     }
@@ -274,12 +255,10 @@ class PortalsPage extends OpenClawLightDomElement {
       return;
     }
     if (portalNeedsRemoteIngress(url, this.context.gateway.connection.gatewayUrl)) {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = { key, status: "ingress-required" };
       return;
     }
     if (portalNeedsNewTab(url, location.href)) {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = { key, status: "new-tab-required" };
       return;
     }
@@ -289,10 +268,9 @@ class PortalsPage extends OpenClawLightDomElement {
       return;
     }
 
-    const generation = ++this.portalProbeGeneration;
     this.portalProbeState = { key, status: "probing" };
     void probePortalReachable(url).then((reachability) => {
-      if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+      if (this.portalProbeState?.key === key) {
         this.portalProbeCache.set(key, reachability);
         this.portalProbeState = { key, status: reachability };
       }
@@ -321,32 +299,18 @@ class PortalsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const generation = ++this.requestGeneration;
-    const portalSetRevision = this.portalSetRevision;
     this.loading = true;
     this.error = null;
     try {
       const result = await scope.client.request<PortalListResult>("portal.list", {});
-      if (
-        generation === this.requestGeneration &&
-        portalSetRevision === this.portalSetRevision &&
-        this.gateway.isCurrent(scope)
-      ) {
+      if (this.gateway.isCurrent(scope)) {
         this.applyPortalSet(result.portals);
       }
     } catch (error) {
-      if (
-        generation === this.requestGeneration &&
-        this.gateway.isCurrent(scope) &&
-        this.portalListSupported
-      ) {
-        this.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
-        this.loaded = true;
-      }
+      this.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
+      this.loaded = true;
     } finally {
-      if (generation === this.requestGeneration && this.gateway.isCurrent(scope)) {
-        this.loading = false;
-      }
+      this.loading = false;
     }
   }
 
@@ -360,17 +324,18 @@ class PortalsPage extends OpenClawLightDomElement {
     }
     this.closingPortalId = portal.id;
     this.error = null;
+    const current = () => this.gateway.isCurrent(scope) && this.closingPortalId === portal.id;
     try {
       await scope.client.request<PortalCloseResult>("portal.close", { id: portal.id });
-      if (this.gateway.isCurrent(scope)) {
+      if (current()) {
         void this.loadPortals();
       }
     } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
+      if (current()) {
         this.error = t("portalsPage.closeFailed", { error: formatUiError(error) });
       }
     } finally {
-      if (this.gateway.isCurrent(scope) && this.closingPortalId === portal.id) {
+      if (current()) {
         this.closingPortalId = null;
       }
     }

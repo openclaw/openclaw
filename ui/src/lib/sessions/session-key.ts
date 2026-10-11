@@ -81,8 +81,15 @@ export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
+  sidebarRoot?: boolean;
 }): boolean {
-  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+  if (isSubagentSessionKey(row.key)) {
+    return false;
+  }
+  if (row.sidebarRoot) {
+    return true;
+  }
+  if (normalizeOptionalString(row.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
@@ -468,4 +475,13 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
 /** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   return hasSessionKeyPrefix(sessionKey, "acp:");
+}
+
+/**
+ * Dashboard sessions (`agent:<id>:dashboard:<uuid>`) are opened in their own
+ * right. A child with such a key was launched with `visible`; every other child
+ * of a session runs hidden, as its subagent.
+ */
+export function isDashboardSessionKey(sessionKey: string | undefined | null): boolean {
+  return hasSessionKeyPrefix(sessionKey, "dashboard:");
 }

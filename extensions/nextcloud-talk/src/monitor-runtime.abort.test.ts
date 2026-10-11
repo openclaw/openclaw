@@ -6,12 +6,22 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
+import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+
+vi.mock("./webhook-spool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./webhook-spool.js")>()),
+  createNextcloudTalkWebhookSpool: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(createNextcloudTalkWebhookSpool).mockReset();
+});
 
 const config = {
   channels: {
@@ -33,6 +43,7 @@ function createMonitorFixture() {
     stop: vi.fn(async () => {}),
     waitForIdle: vi.fn(async () => {}),
   };
+  vi.mocked(createNextcloudTalkWebhookSpool).mockReturnValue(spool);
   return {
     registry,
     abortController,
@@ -42,7 +53,6 @@ function createMonitorFixture() {
       runtime: createRuntimeSpies(),
       abortSignal: abortController.signal,
       statusSink: vi.fn(),
-      createSpool: () => spool,
     },
   };
 }
@@ -51,7 +61,7 @@ describe("Nextcloud Talk monitor abort", () => {
   it.each([
     ...["/health", "/healthz", "/ready", "/readyz", "/startup", "/startupz"].map((path) => ({
       path,
-      reason: "reserved for Gateway probes",
+      reason: "reserved for Gateway checks",
     })),
     { path: "/api/channels/talk", reason: "requires Gateway authentication" },
     { path: "/%61pi/channels/talk", reason: "requires Gateway authentication" },
@@ -65,7 +75,7 @@ describe("Nextcloud Talk monitor abort", () => {
       const registry = createTestRegistry();
       setActivePluginRegistry(registry);
       const statusSink = vi.fn();
-      const createSpool = vi.fn(() => ({
+      const createSpool = vi.mocked(createNextcloudTalkWebhookSpool).mockImplementation(() => ({
         receive: vi.fn(async () => "accepted" as const),
         ready: vi.fn(async () => {}),
         stop: vi.fn(async () => {}),
@@ -84,7 +94,6 @@ describe("Nextcloud Talk monitor abort", () => {
           },
           runtime: createRuntimeSpies(),
           statusSink,
-          createSpool,
         };
         const starting = monitorNextcloudTalkProvider(options);
         await expect(starting).rejects.toThrow(reason);
@@ -108,7 +117,6 @@ describe("Nextcloud Talk monitor abort", () => {
         },
         runtime: createRuntimeSpies(),
         statusSink,
-        createSpool,
       });
       try {
         expect(registry.httpRoutes).toHaveLength(1);
@@ -221,6 +229,16 @@ describe("Nextcloud Talk monitor abort", () => {
       const spoolStop = vi.fn(async () => {
         expect(registry.httpRoutes).toHaveLength(0);
       });
+      vi.mocked(createNextcloudTalkWebhookSpool).mockReturnValue({
+        ready: async () => {},
+        receive: async () => {
+          admitted.resolve();
+          await release.promise;
+          return "accepted" as const;
+        },
+        stop: spoolStop,
+        waitForIdle: async () => {},
+      });
       const monitor = await monitorNextcloudTalkProvider({
         config: {
           channels: {
@@ -232,16 +250,6 @@ describe("Nextcloud Talk monitor abort", () => {
         },
         runtime: createRuntimeSpies(),
         abortSignal: abortController.signal,
-        createSpool: () => ({
-          ready: async () => {},
-          receive: async () => {
-            admitted.resolve();
-            await release.promise;
-            return "accepted" as const;
-          },
-          stop: spoolStop,
-          waitForIdle: async () => {},
-        }),
       });
       const route = registry.httpRoutes[0]!;
       const { body, headers } = createSignedCreateMessageRequest({
@@ -270,6 +278,7 @@ describe("Nextcloud Talk monitor abort", () => {
         await route.handler(later, retry);
         expect(retry.statusCode).toBe(503);
 
+        expect(res.writableEnded).toBe(false);
         release.resolve();
         await dispatch;
         expect(res.statusCode).toBe(200);

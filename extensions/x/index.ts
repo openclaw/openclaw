@@ -2,7 +2,8 @@ import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { registerXAllowlistMethods } from "./src/admin.js";
+import type { registerXAllowlistMethods } from "./admin-api.js";
+import type { createXGitHubService } from "./verified-github-api.js";
 
 export default defineBundledChannelEntry({
   id: "x",
@@ -17,5 +18,11 @@ export default defineBundledChannelEntry({
       specifier: "./admin-api.js",
       exportName: "registerXAllowlistMethods",
     })(api);
+    api.registerService(
+      loadBundledEntryExportSync<typeof createXGitHubService>(import.meta.url, {
+        specifier: "./verified-github-api.js",
+        exportName: "createXGitHubService",
+      })(api),
+    );
   },
 });

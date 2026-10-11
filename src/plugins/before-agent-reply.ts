@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyPayloadText,
   SILENT_REPLY_TOKEN,
-  stripMixedSilentReplyTokens,
 } from "../auto-reply/tokens.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
@@ -59,7 +59,7 @@ export function resolveHandledBeforeAgentReplyTranscriptText(reply?: ReplyPayloa
     reply && rawText && !heartbeatReply
       ? isSilentReplyPayloadText(rawText)
         ? undefined
-        : stripMixedSilentReplyTokens(rawText)
+        : (stripMixedSilentReplyTokens(rawText) ?? rawText)
       : rawText;
   const heartbeat =
     text?.includes(HEARTBEAT_TOKEN) && !heartbeatReply

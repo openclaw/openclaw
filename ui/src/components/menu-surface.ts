@@ -1,4 +1,20 @@
+import { html } from "lit";
 import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
+
+export function renderMenuTrigger(
+  position: { x: number; y: number },
+  label: string,
+  edge: "top" | "bottom" = "top",
+) {
+  return html`<button
+    slot="trigger"
+    type="button"
+    tabindex="-1"
+    aria-hidden="true"
+    aria-label=${label}
+    style="position: fixed; left: ${position.x}px; ${edge}: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+  ></button>`;
+}
 
 /**
  * Promotes a connected element into the browser popover top layer so transient

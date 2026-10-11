@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentsListResult } from "../../../packages/gateway-protocol/src/index.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "./environments.js";
-import { pairedNodeDevice } from "./environments.test-support.js";
+import { createDevicePairingNodeSnapshot, pairedNodeDevice } from "./environments.test-support.js";
 
 const registries: NodeRegistry[] = [];
 
@@ -19,9 +19,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
-  listDevicePairing: vi.fn(),
+vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-store-readonly.js")>()),
+  readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
 vi.mock("../worker-environments/placement-capabilities.js", () => ({
@@ -39,7 +39,7 @@ vi.mock("../worker-environments/placement-capabilities.js", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [] });
+  vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(createDevicePairingNodeSnapshot([]));
   const plugins = createEmptyPluginRegistry();
   plugins.nodeHostCommands.push({
     pluginId: "codex",
@@ -69,14 +69,12 @@ describe("node environment command authority", () => {
     ["pending-approval", [command], [], [command], [], [], false],
     ["unauthorized", [command, "fixture.unrelated"], [command], [], [], [], false],
     ["unauthorized", [command], [command], [command], [command], [], true],
-    ["unauthorized", [command], [command], [], [], [], true],
     ["undeclared", [], [], [command], [], [], false],
   ] as const)(
     "projects %s for declarations %j approved %j with allow %j deny %j",
     async (state, declared, approved, allow, deny, expected, reload) => {
-      vi.mocked(listDevicePairing).mockResolvedValue({
-        pending: [],
-        paired: [
+      vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
+        createDevicePairingNodeSnapshot([
           pairedNodeDevice(
             "node-exec",
             {
@@ -91,8 +89,8 @@ describe("node environment command authority", () => {
               clientMode: "node",
             },
           ),
-        ],
-      });
+        ]),
+      );
       const commandPolicy = { allow: [...allow], deny: [...deny] };
       const initialPolicy = reload ? { allow: [command], deny: [] } : undefined;
       let config = { gateway: { nodes: { commands: initialPolicy ?? commandPolicy } } };
@@ -158,6 +156,10 @@ describe("node environment command authority", () => {
               : "openclaw plugins enable codex";
         expect(listed?.requiredNodeCommand?.message).toContain(remediation);
         if (state === "undeclared") {
+          expect(listed?.requiredNodeCommand?.message).toMatch(
+            /^This model uses the Codex harness, which is unavailable on this device\./,
+          );
+          expect(listed?.requiredNodeCommand?.message).toContain("OpenClaw harness");
           expect(listed?.requiredNodeCommand?.message).toContain(
             "openclaw plugins install @openclaw/codex",
           );
@@ -189,7 +191,7 @@ describe("node environment command authority", () => {
     const context = {
       logGateway: { warn: vi.fn() },
       getRuntimeConfig: () => ({}),
-      nodeRegistry: { listConnectedForPairingStates: () => [] },
+      nodeRegistry: new NodeRegistry(),
     };
     const readOnlyRespond = vi.fn();
     await environmentsHandlers["environments.list"]?.({

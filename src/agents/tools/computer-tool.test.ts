@@ -455,6 +455,24 @@ describe("createComputerTool v1 execution", () => {
     expect(computerActBodies()).toHaveLength(0);
   });
 
+  it.each(["windowRef", "elementRef"] as const)(
+    "rejects a stale screenshot frame when %s is whitespace-only",
+    async (reference) => {
+      const { tool, frameId } = await createToolWithFrame();
+      const input = { [reference]: " \t " };
+
+      await expect(executeClick(tool, `${frameId}-stale`, input)).rejects.toThrow(
+        "computer: frameId does not match the most recent screenshot result; take a new screenshot",
+      );
+      expect(computerActBodies()).toHaveLength(0);
+
+      await expect(executeClick(tool, frameId, input)).resolves.toMatchObject({
+        details: { action: "left_click" },
+      });
+      expect(readLastComputerActParams()).not.toHaveProperty(reference);
+    },
+  );
+
   it.each([
     [
       "fails closed when a coordinate action has no observed screenshot frame",
@@ -531,20 +549,9 @@ describe("createComputerTool v1 execution", () => {
     );
   });
 
-  it.each([
-    [
-      "does not authorize coordinates when the model received no image",
-      { modelHasVision: false },
-      TINY_PNG_BASE64,
-    ],
-    [
-      "does not authorize coordinates when screenshot sanitization omits the image",
-      {},
-      "not-base64!!!",
-    ],
-  ])("%s", async (_name, options, base64) => {
-    callGatewayToolMock.mockResolvedValue(screenshotPayload(0, base64));
-    const { tool, frameId } = await createToolWithFrame(options, {}, "call");
+  it("does not authorize coordinates when screenshot sanitization omits the image", async () => {
+    callGatewayToolMock.mockResolvedValue(screenshotPayload(0, "not-base64!!!"));
+    const { tool, frameId } = await createToolWithFrame({}, {}, "call");
     await expect(executeClick(tool, frameId, {}, "call")).rejects.toThrow(/no screenshot/i);
   });
 

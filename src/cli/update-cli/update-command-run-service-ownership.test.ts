@@ -170,6 +170,10 @@ it.each([
           { type: "as", data: [] },
           { type: "b", data: false },
           { type: "s", data: "loaded" },
+          { type: "s", data: "enabled" },
+          { type: "s", data: "active" },
+          { type: "b", data: true },
+          { type: "b", data: false },
         ]);
       }
       return response([

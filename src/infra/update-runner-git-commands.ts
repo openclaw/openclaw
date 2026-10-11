@@ -28,6 +28,10 @@ export type StepFactory = (
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
 
+export function createGitStepFactory(root: string, step: StepFactory) {
+  return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
+}
+
 export function resolveTagFetchRef(candidate: string): string | null {
   const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
   return ref.startsWith("refs/tags/") ? ref : null;
@@ -109,15 +113,12 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  buildCacheRoot?: string,
-): NodeJS.ProcessEnv {
+export function resolveBuildEnv(env: NodeJS.ProcessEnv, buildCacheRoot: string): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
-    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+    BUILD_ALL_CACHE_ROOT: buildCacheRoot,
   };
 }
 

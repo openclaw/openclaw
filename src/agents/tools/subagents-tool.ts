@@ -10,7 +10,6 @@ import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
   resolveSubagentControllerIdentity,
-  type ResolvedSubagentController,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -19,6 +18,7 @@ import {
   MAX_RECENT_MINUTES,
   resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
+import type { ResolvedSubagentController } from "../subagents/registry/subagent-control.types.js";
 import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
 import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
 import {
@@ -233,47 +233,40 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     if (!controller.controllerAgentId) {
       throw new ToolInputError("Subagent controller agent required");
     }
-    const runs = listControlledSubagentRunFacts(
-      controller.controllerSessionKey,
-      controller.controllerAgentId,
-      cfg,
-    );
     const readable = new Map<string, SubagentRunReadRecord>();
     const controlled = new Set<string>();
-    const pending: Array<{
-      owner: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
-      entries: SubagentRunReadRecord[];
-    }> = [{ owner: controller, entries: runs }];
+    const pending: Array<
+      Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">
+    > = [controller];
     const visited = new Set<string>();
     while (pending.length) {
       const current = pending.shift()!;
-      const identity = current.owner.controllerAgentId + "\0" + current.owner.controllerSessionKey;
+      const identity = current.controllerAgentId + "\0" + current.controllerSessionKey;
       if (visited.has(identity)) {
         continue;
       }
       visited.add(identity);
-      for (const entry of current.entries) {
+      const entries = listControlledSubagentRunFacts(
+        current.controllerSessionKey,
+        current.controllerAgentId,
+        cfg,
+      );
+      for (const entry of entries) {
         readable.set(entry.runId, entry);
         if (
           controller.controlScope !== "children" ||
-          ensureSubagentControllerOwnsRun({ cfg, controller: current.owner, entry })
+          ensureSubagentControllerOwnsRun({ cfg, controller: current, entry })
         ) {
           continue;
         }
         controlled.add(entry.runId);
-        const childController = resolveSubagentControllerIdentity({
-          cfg,
-          agentSessionKey: entry.childSessionKey,
-          agentId: entry.childAgentId,
-        });
-        pending.push({
-          owner: childController,
-          entries: listControlledSubagentRunFacts(
-            childController.controllerSessionKey,
-            childController.controllerAgentId,
+        pending.push(
+          resolveSubagentControllerIdentity({
             cfg,
-          ),
-        });
+            agentSessionKey: entry.childSessionKey,
+            agentId: entry.childAgentId,
+          }),
+        );
       }
     }
     return { cfg, controller, readable: [...readable.values()], controlled };

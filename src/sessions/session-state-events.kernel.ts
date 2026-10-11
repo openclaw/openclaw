@@ -1,4 +1,4 @@
-// Shared row mutations for synchronous session signals and the shared-state worker.
+// Connection-bound signal mutations execute in the shared-state worker.
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -25,7 +25,7 @@ import {
 } from "./session-state-event-kinds.js";
 import type { SessionStateEventRecord } from "./session-state-events.types.js";
 import {
-  rowToSessionUpstreamLink,
+  readSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 
@@ -118,15 +118,8 @@ export function isSessionStateUpstreamCurrentInDatabase(
   db: DatabaseSync,
   expected: SessionUpstreamLink,
 ): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db)
-      .selectFrom("session_upstream_links")
-      .selectAll()
-      .where("session_key", "=", expected.sessionKey)
-      .where("agent_id", "=", expected.agentId),
-  );
-  return row !== undefined && isDeepStrictEqual(rowToSessionUpstreamLink(row), expected);
+  const current = readSessionUpstreamLinkInDatabase(db, expected.sessionKey, expected.agentId);
+  return current !== undefined && isDeepStrictEqual(current, expected);
 }
 
 export function normalizeOptionalSqliteNumber(

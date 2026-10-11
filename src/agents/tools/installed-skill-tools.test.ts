@@ -149,7 +149,7 @@ it.each(["inline", "reader", "partial"] as const)(
         expect(reader).toHaveBeenCalledTimes(1);
       } else {
         await expect(read.execute("invalid", { name: "/etc/passwd" })).rejects.toThrow(
-          "Unknown installed skill",
+          "is not available to this agent",
         );
         expect(createInstalledSkillTools([])).toEqual([]);
       }

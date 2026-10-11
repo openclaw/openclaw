@@ -16,7 +16,6 @@ import {
   createError,
   identifyError,
   parseIdentity,
-  type ErrorIdentity,
 } from "./openclaw-state-worker-error-identity.js";
 
 type ErrorValue =
@@ -24,17 +23,7 @@ type ErrorValue =
   | { value: string | number | boolean | null }
   | { undefined: true };
 
-type ErrorNode = ErrorIdentity & {
-  name: string;
-  message: string;
-  code?: string | number;
-  errcode?: number;
-  errno?: number;
-  nativeOpen?: true;
-  stateDatabasePath?: string;
-  cause?: ErrorValue;
-  errors?: ErrorValue[];
-};
+type ErrorNode = NonNullable<ReturnType<typeof parseNode>>;
 
 /** A closed error graph; references preserve shared causes and cyclic aggregates. */
 export type OpenClawStateWorkerErrorPayload = {
@@ -110,7 +99,10 @@ export function encodeOpenClawStateWorkerError(
         ...(typeof errno === "number" && Number.isInteger(errno) ? { errno } : {}),
         ...(nativeOpen ? { nativeOpen: true } : {}),
         ...(stateDatabasePath === undefined ? {} : { stateDatabasePath }),
-        ...("cause" in current ? { cause: encodeValue(current.cause) } : {}),
+        ...("cause" in current &&
+        !(identity.type === "session-transcript-writer-claim-rebound" && identity.refusal)
+          ? { cause: encodeValue(current.cause) }
+          : {}),
         ...(current instanceof AggregateError ? { errors: current.errors.map(encodeValue) } : {}),
       });
     }
@@ -137,7 +129,7 @@ function isErrorValue(value: unknown, count: number): value is ErrorValue {
   return "value" in value ? isScalar(value.value) : value.undefined === true;
 }
 
-function parseNode(value: unknown, count: number): ErrorNode | undefined {
+function parseNode(value: unknown, count: number) {
   if (!isRecord(value) || typeof value.name !== "string" || typeof value.message !== "string") {
     return undefined;
   }
@@ -171,6 +163,9 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
   }
   if (
     Object.keys(value).some((key) => !allowed.has(key)) ||
+    (identity.type === "session-transcript-writer-claim-rebound" &&
+      identity.refusal !== undefined &&
+      "cause" in value) ||
     ("code" in value &&
       typeof value.code !== "string" &&
       !(typeof value.code === "number" && Number.isFinite(value.code))) ||
@@ -191,7 +186,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       : {}),
     ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
     ...(typeof value.errno === "number" ? { errno: value.errno } : {}),
-    ...(value.nativeOpen === true ? { nativeOpen: true } : {}),
+    ...(value.nativeOpen === true ? { nativeOpen: true as const } : {}),
     ...(typeof value.stateDatabasePath === "string"
       ? { stateDatabasePath: value.stateDatabasePath }
       : {}),
@@ -203,7 +198,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
 function decodeErrorGraph(
   value: unknown,
   options: ErrorGraphOptions,
-): { errors: Error[]; nodes: ErrorNode[]; root: number } | undefined {
+): { errors: Error[]; root: number } | undefined {
   try {
     if (
       !isRecord(value) ||
@@ -279,11 +274,7 @@ function decodeErrorGraph(
         error.errors = (node.errors ?? []).map(decodeValue);
       }
     }
-    const group = Object.freeze({});
-    for (const [index, error] of errors.entries()) {
-      retainPayload(error, value, index, true, group);
-    }
-    return { errors, nodes, root: value.root };
+    return { errors, root: value.root };
   } catch {
     return undefined;
   }
@@ -291,21 +282,9 @@ function decodeErrorGraph(
 
 const retainedPayloadKey = Symbol.for("openclaw.sharedStateWorkerErrorPayload");
 
-function retainPayload(
-  error: Error,
-  payload: unknown,
-  node: number,
-  materialized: boolean,
-  group: object,
-): void {
-  Object.defineProperty(error, retainedPayloadKey, {
-    value: Object.freeze({ payload, node, materialized, group }),
-  });
-}
-
-/** Keep the closed wire graph without binding it to a process-global broker's classes. */
+/** Keep the closed wire graph until the receiving caller hydrates it. */
 export function retainOpenClawStateWorkerErrorPayload(error: Error, payload: unknown): void {
-  retainPayload(error, payload, 0, false, Object.freeze({}));
+  Object.defineProperty(error, retainedPayloadKey, { value: payload });
 }
 
 /** Hydrate each caller independently; never rewrite a cached opening rejection. */
@@ -330,7 +309,6 @@ export function hydrateOpenClawStateWorkerError(
     cause?: { value: unknown };
     errors?: unknown[];
   };
-  const groups = new Map<unknown, ReturnType<typeof decodeErrorGraph>>();
   const nodes = new Map<Error, Node>();
   const queue: Node[] = [];
   const add = (error: Error): Node => {
@@ -347,27 +325,12 @@ export function hydrateOpenClawStateWorkerError(
     };
     nodes.set(error, node);
     queue.push(node);
-    const retained: unknown = Object.getOwnPropertyDescriptor(error, retainedPayloadKey)?.value;
-    if (
-      isRecord(retained) &&
-      typeof retained.node === "number" &&
-      Number.isSafeInteger(retained.node) &&
-      retained.node >= 0 &&
-      typeof retained.materialized === "boolean" &&
-      isRecord(retained.group)
-    ) {
-      if (!groups.has(retained.group)) {
-        groups.set(retained.group, decodeErrorGraph(retained.payload, options));
-      }
-      const graph = groups.get(retained.group);
-      const index = retained.materialized ? retained.node : graph?.root;
-      const replacement = index === undefined ? undefined : graph?.errors[index];
-      const identity = index === undefined ? undefined : graph?.nodes[index];
-      if (replacement && identity) {
-        node.replacement = replacement;
-        node.opaque = !retained.materialized;
-        node.changed = node.opaque || identifyError(error).type !== identity.type;
-      }
+    const payload: unknown = Object.getOwnPropertyDescriptor(error, retainedPayloadKey)?.value;
+    const graph = payload === undefined ? undefined : decodeErrorGraph(payload, options);
+    if (graph) {
+      node.replacement = graph.errors[graph.root]!;
+      node.opaque = true;
+      node.changed = true;
     }
     return node;
   };

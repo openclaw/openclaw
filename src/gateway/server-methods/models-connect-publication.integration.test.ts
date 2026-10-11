@@ -4,7 +4,11 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsSnapshotEvent } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -15,12 +19,12 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
-import * as modelCatalogAuth from "../server-model-catalog-auth.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
+import * as chatMetadataHandler from "./chat-metadata-handler.js";
 
 // mock-isolation: Optional startup prewarming must not compete with the catalog request drain.
 vi.mock("../server-startup-handler-prewarm.js", () => ({
@@ -266,21 +270,36 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         }
       }
       enterPhase("initial publication supersession");
-      const acquisitionStarted = createDeferred();
-      const releaseAcquisition = createDeferred();
-      const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
-      let acquisitionSettled = false;
-      const acquisition = vi
-        .spyOn(modelCatalogAuth, "readPreparedCatalog")
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        agentId: "alpha",
+        label: "Initial catalog publication race",
+      });
+      const publicationStarted = createDeferred();
+      const releasePublication = createDeferred();
+      const resolveReadParams = chatMetadataHandler.resolveChatMetadataReadParams;
+      let publicationSettled = false;
+      const publicationSpy = vi
+        .spyOn(chatMetadataHandler, "resolveChatMetadataReadParams")
         .mockImplementationOnce(async (...args) => {
-          // The registered reader has captured the saved account before catalog acquisition.
-          acquisitionStarted.resolve();
-          await releaseAcquisition.promise;
-          try {
-            return await readPreparedCatalog(...args);
-          } finally {
-            acquisitionSettled = true;
+          const scope = await resolveReadParams(...args);
+          if (!scope?.withCurrent) {
+            throw new Error("Expected saved-session publication authority");
           }
+          const withCurrent = scope.withCurrent;
+          return {
+            ...scope,
+            withCurrent: async <T>(consume: () => T): Promise<Awaited<T>> => {
+              // Cached projections still cross the live publication authority boundary.
+              publicationStarted.resolve();
+              await releasePublication.promise;
+              try {
+                return await withCurrent(consume);
+              } finally {
+                publicationSettled = true;
+              }
+            },
+          };
         });
       const racingPublications: ModelsSnapshotEvent[] = [];
       const sessionChanges: unknown[] = [];
@@ -304,9 +323,9 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           },
         });
         await withTestTimeout(
-          acquisitionStarted.promise,
+          publicationStarted.promise,
           10_000,
-          "Initial catalog acquisition did not start",
+          "Initial catalog publication did not start",
         );
         await racingClient.request("sessions.subscribe", { agentId: "alpha" });
         await racingClient.request("sessions.patch", {
@@ -324,13 +343,13 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         });
         expect(racingPublications).toEqual([]);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-        releaseAcquisition.resolve();
+        releasePublication.resolve();
         try {
           await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
         } catch (error) {
           try {
             console.error("Model catalog root work did not settle", {
-              acquisitionSettled,
+              publicationSettled,
               holders: getActiveGatewayRootWorkHolders(),
             });
           } catch {
@@ -356,8 +375,8 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           });
         }
       } finally {
-        releaseAcquisition.resolve();
-        acquisition.mockRestore();
+        releasePublication.resolve();
+        publicationSpy.mockRestore();
         if (racingClient) {
           await disconnectGatewayClient(racingClient);
         }
@@ -370,12 +389,22 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       );
       const requestEntered = createDeferred();
       const releaseRequest = createDeferred();
-      const pendingAcquisition = vi
-        .spyOn(modelCatalogAuth, "readPreparedCatalog")
+      const pendingPublication = vi
+        .spyOn(chatMetadataHandler, "resolveChatMetadataReadParams")
         .mockImplementationOnce(async (...args) => {
-          requestEntered.resolve();
-          await releaseRequest.promise;
-          return readPreparedCatalog(...args);
+          const scope = await resolveReadParams(...args);
+          if (!scope?.withCurrent) {
+            throw new Error("Expected saved-session publication authority");
+          }
+          const withCurrent = scope.withCurrent;
+          return {
+            ...scope,
+            withCurrent: async <T>(consume: () => T): Promise<Awaited<T>> => {
+              requestEntered.resolve();
+              await releaseRequest.promise;
+              return withCurrent(consume);
+            },
+          };
         });
       const pendingCatalog = client.request("models.list", { agentId: "alpha", sessionKey });
       const deliveredCatalog = expect(pendingCatalog).resolves.toMatchObject({
@@ -383,7 +412,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         accountSelection: { authProfileId: "fixture:replacement-account" },
       });
       try {
-        await withTestTimeout(requestEntered.promise, 10_000, "Catalog request did not start");
+        await awaitGateBeforeSettlement(
+          requestEntered.promise,
+          pendingCatalog,
+          "Catalog request settled before its authority check",
+        );
         await client.request("sessions.patch", {
           key: unrelatedKey,
           agentId: "alpha",
@@ -393,7 +426,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         await deliveredCatalog;
       } finally {
         releaseRequest.resolve();
-        pendingAcquisition.mockRestore();
+        pendingPublication.mockRestore();
         await Promise.allSettled([pendingCatalog, deliveredCatalog]);
       }
       enterPhase("legacy clients");

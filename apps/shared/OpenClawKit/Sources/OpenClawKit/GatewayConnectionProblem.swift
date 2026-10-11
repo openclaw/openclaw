@@ -1,5 +1,14 @@
 import Foundation
 
+/// Ingress authorization belongs to the app, independently from Gateway device credentials.
+public struct GatewayExternalAuthorizationError: Error, LocalizedError, Sendable {
+    public init() {}
+
+    public var errorDescription: String? {
+        "This gateway requires browser sign-in. Open Gateway settings to continue."
+    }
+}
+
 public struct GatewayConnectionProblem: Equatable, Sendable {
     public enum PresentationText: Equatable, Sendable {
         case localized(String)
@@ -8,6 +17,7 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
     }
 
     public enum Kind: String, Equatable, Sendable {
+        case externalAuthorizationRequired
         case gatewayAuthTokenMissing
         case gatewayAuthTokenMismatch
         case gatewayAuthTokenNotConfigured
@@ -215,6 +225,16 @@ public enum GatewayConnectionProblemMapper {
     }
 
     private static func rawMap(_ error: Error) -> GatewayConnectionProblem? {
+        if error is GatewayExternalAuthorizationError {
+            return GatewayConnectionProblem(
+                kind: .externalAuthorizationRequired,
+                owner: .iphone,
+                title: "Browser sign-in required",
+                message: "Sign in to this gateway in the browser, then continue with OpenClaw pairing.",
+                actionLabel: "Sign in",
+                retryable: true,
+                pauseReconnect: true)
+        }
         if let authError = error as? GatewayConnectAuthError {
             return self.map(authError)
         }
@@ -431,7 +451,7 @@ extension GatewayConnectionProblemMapper {
         if code == "NOT_PAIRED" || responseError.detailsReason == "not-paired" {
             let authError = GatewayConnectAuthError(
                 message: responseError.message,
-                detailCodeRaw: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+                detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
                 canRetryWithDeviceToken: false,
                 requestId: responseError.details["requestId"]?.stringValue?.trimmedNonEmpty,
                 detailsReason: responseError.detailsReason)

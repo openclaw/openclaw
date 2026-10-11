@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { maybeGenerateDashboardSessionTitle } from "../gateway/dashboard-session-title.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -123,7 +124,6 @@ describe("Doctor session title repair", () => {
   it.each([
     ["a replacement lifecycle", { lifecycleRevision: "replacement" }],
     ["a manual rename", { label: "Manual title" }],
-    ["a newly running turn", { status: "running" }],
     ["a rewritten transcript", undefined],
   ] satisfies Array<[string, Partial<SessionEntry> | undefined]>)(
     "preserves %s admitted before its metadata write",
@@ -135,7 +135,7 @@ describe("Doctor session title repair", () => {
             if (mutation) {
               await patch(scope, () => mutation);
             } else {
-              await sessionAccessor.replaceTranscriptEvents(params, [
+              await replaceTranscriptEvents(params, [
                 { type: "session", version: 3, id: params.sessionId },
                 {
                   type: "message",

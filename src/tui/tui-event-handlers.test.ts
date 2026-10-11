@@ -1,8 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { makeTuiState } from "./tui-event-test-support.js";
+import {
+  createMockBtwPresenter,
+  createMockChatLog,
+  makeTuiState,
+} from "./tui-event-test-support.js";
 import {
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -19,33 +23,6 @@ import type {
 } from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
-type HandlerContext = Parameters<typeof createEventHandlers>[0];
-type HandlerChatLog = HandlerContext["chatLog"];
-type HandlerBtwPresenter = HandlerContext["btw"];
-type MockChatLog = { [Key in keyof HandlerChatLog]: Mock<HandlerChatLog[Key]> };
-type MockBtwPresenter = { [Key in keyof HandlerBtwPresenter]: Mock<HandlerBtwPresenter[Key]> };
-
-function createMockChatLog(): MockChatLog {
-  return {
-    addLiveUser: vi.fn<HandlerChatLog["addLiveUser"]>(),
-    startTool: vi.fn<HandlerChatLog["startTool"]>(),
-    updateToolResult: vi.fn<HandlerChatLog["updateToolResult"]>(),
-    addSystem: vi.fn<HandlerChatLog["addSystem"]>(),
-    addPendingSystem: vi.fn<HandlerChatLog["addPendingSystem"]>(),
-    dismissPendingSystem: vi.fn<HandlerChatLog["dismissPendingSystem"]>(),
-    updateAssistant: vi.fn<HandlerChatLog["updateAssistant"]>(),
-    finalizeAssistant: vi.fn<HandlerChatLog["finalizeAssistant"]>(),
-    dropAssistant: vi.fn<HandlerChatLog["dropAssistant"]>(),
-  };
-}
-
-function createMockBtwPresenter(): MockBtwPresenter {
-  return {
-    showResult: vi.fn<HandlerBtwPresenter["showResult"]>(),
-    clear: vi.fn<HandlerBtwPresenter["clear"]>(),
-  };
-}
-
 function sendingSubmit(runId: string, draftText = "pending"): TuiPendingSubmit {
   return { phase: "sending", runId, draftText };
 }
@@ -226,6 +203,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
       "Provider response.",
       "run-provider-error",
+      [],
     );
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("error");
@@ -433,7 +411,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.pendingSubmit).toBeNull();
     expect(isLocalRunId("run-pending")).toBe(false);
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending", []);
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
@@ -511,8 +489,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state: "final",
       message: { role: "assistant", content: [] },
     });
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("first live response", "run-first");
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("second live response", "run-second");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("first live response", "run-first", []);
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "second live response",
+      "run-second",
+      [],
+    );
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     for (const runId of ["run-first", "run-second"]) {
@@ -557,6 +539,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
       "older peer response",
       "run-without-lifecycle",
+      [],
     );
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
@@ -1036,7 +1019,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
     handleChatEvent(textEvent("run-pending", "done", "final"));
     expect(state.pendingSubmit).toBeNull();
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending", []);
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
@@ -1154,7 +1137,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     chatLog.dropAssistant.mockClear();
     handleChatEvent({ runId: "run-other", state: "final", message: { content: [] } });
 
-    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith("(no output)", "run-other");
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith("(no output)", "run-other", []);
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-other");
     expect(loadHistory).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");
@@ -1196,9 +1179,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it.each([
     {
       name: "non-auth",
-      provider: undefined,
       error: "fixture provider failed",
-      expected: "run error: fixture provider failed",
     },
     {
       name: "auth",
@@ -1213,6 +1194,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       provider: "xai",
       error:
         '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      expected:
+        "run error: HTTP 403: Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.",
     },
   ])(
     "renders local $name errors without losing the backend diagnostic",
@@ -1316,11 +1299,13 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       1,
       "Visible progress from the targetless message tool.",
       "run-message-tool",
+      [],
     );
     expect(chatLog.finalizeAssistant).toHaveBeenNthCalledWith(
       2,
       "Visible automatic final reply.",
       "run-message-tool",
+      [],
     );
     expect(state.activeChatRunId).toBeNull();
   });
@@ -1350,6 +1335,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
       "Delivered once.",
       "run-completed",
+      [],
     );
     expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run error: late provider failure");
     expect(setActivityStatus).not.toHaveBeenCalledWith("error");
@@ -1408,7 +1394,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         message: { role: "assistant", content: [{ type: "text", text: "Recovered reply." }] },
       });
 
-      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Recovered reply.", runId);
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Recovered reply.", runId, []);
       expect(state.sessionProjection?.runs[runId]?.status).toBe(expectedStatus);
     },
   );
@@ -1577,7 +1563,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleSessionsChangedEvent({ runId: "run-active", phase: "end" });
       expect(loadHistory).not.toHaveBeenCalled();
       handleChatEvent(textEvent("run-active", "keep this visible", "final"));
-      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active");
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active", []);
       expect(loadHistory).toHaveBeenCalledTimes(1);
     });
 
@@ -1677,10 +1663,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
           await vi.waitFor(() => expect(state.activeChatRunId).toBeNull());
           expect(setActivityStatus).toHaveBeenCalledWith("idle");
           handleChatEvent(textEvent("run-active", "fallback reply", "final"));
-          expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("fallback reply", "run-active");
+          expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+            "fallback reply",
+            "run-active",
+            [],
+          );
         } else {
           await vi.waitFor(() =>
-            expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("fallback reply", "run-active"),
+            expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+              "fallback reply",
+              "run-active",
+              [],
+            ),
           );
         }
       },

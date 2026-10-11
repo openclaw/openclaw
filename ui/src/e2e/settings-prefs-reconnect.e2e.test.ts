@@ -133,7 +133,7 @@ async function expectThemeActive(page: Page, theme: "claw" | "knot" | "dash"): P
 }
 
 function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
-  return page.locator(`wa-radio.settings-segmented__btn[value="${mode}"]`);
+  return page.locator(`input.settings-segmented__input[value="${mode}"]`);
 }
 
 suite.define(() => {
@@ -243,7 +243,10 @@ suite.define(() => {
         .toMatchObject({ theme: "claw", themeMode: "light" });
 
       await gateway.setOnline(false);
-      await page.locator(".gateway-status__label").filter({ hasText: "Reconnecting…" }).waitFor();
+      const identity = page.locator("openclaw-app-sidebar .sidebar-identity-card");
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("reconnecting");
+      expect(await identity.getAttribute("aria-label")).toContain("Reconnecting…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       await page.locator(".agent-chat__input--offline").waitFor();
 
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");

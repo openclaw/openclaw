@@ -22,6 +22,7 @@ import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
+  icon: string;
   title: string;
   label: string;
   verb?: string;
@@ -48,7 +49,6 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   pollQuestion: "poll",
   maxChars: "max chars",
 };
-const MAX_DETAIL_ENTRIES = 8;
 
 /** Resolves the display model for a tool invocation. */
 export function resolveToolDisplay(params: {
@@ -71,11 +71,11 @@ export function resolveToolDisplay(params: {
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
     toolDetailMode: params.detailMode,
-    detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
   return {
     name,
+    icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
     verb,

@@ -13,6 +13,8 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawPluginApi } from "../api.js";
+import { buildCallBriefInstructions } from "./call-brief.js";
+import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -57,6 +59,8 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
   "Prioritize completing the user's request and returning a fast, speakable result over exhaustive investigation.",
   "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
+  "This consult is bound to the current phone call. Use voice_call end_call to hang up; no other voice_call action or call is permitted.",
+  "The delegated input is the other party's latest words and the transcript shows both sides. Act on that context: when the Agent line says it is hanging up, do exactly that; when both sides have said goodbye or the other party asks to end the call, hang up with end_call.",
   "Do not print secret values or dump environment variables; only check whether required configuration is present.",
   "Be accurate, brief, and speakable.",
 ].join(" ");
@@ -78,51 +82,6 @@ function mapVoiceCallConsultTranscript(
     transcript.push({ role: "user", text: partial });
   }
   return transcript;
-}
-
-function createRuntimeResourceLifecycle(params: {
-  config: VoiceCallConfig;
-  webhookServer: VoiceCallWebhookServer;
-  manager: CallManager;
-}): {
-  setTunnelResult: (result: TunnelResult | null) => void;
-  stop: (opts?: { suppressErrors?: boolean }) => Promise<void>;
-} {
-  let tunnelResult: TunnelResult | null = null;
-  let stopPromise: Promise<void> | null = null;
-
-  return {
-    setTunnelResult: (result) => {
-      tunnelResult = result;
-    },
-    stop: (opts) => {
-      if (stopPromise) {
-        return stopPromise;
-      }
-      const suppressErrors = opts?.suppressErrors ?? false;
-      stopPromise = (async () => {
-        let failure: { error: unknown } | undefined;
-        for (const step of [
-          async () => {
-            await tunnelResult?.stop();
-          },
-          () => cleanupTailscaleExposure(params.config),
-          () => params.webhookServer.stop(),
-          () => params.manager.stop(),
-        ]) {
-          try {
-            await step();
-          } catch (error) {
-            failure ??= { error };
-          }
-        }
-        if (failure && !suppressErrors) {
-          throw failure.error;
-        }
-      })();
-      return stopPromise;
-    },
-  };
 }
 
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
@@ -231,7 +190,11 @@ async function createRealtimeInstructionsResolver(params: {
     }),
   );
   const instructionsByAgentId = new Map(entries);
-  return (call) => instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
+  return (call) => {
+    const instructions = instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
+    const brief = buildCallBriefInstructions(call);
+    return brief ? `${instructions}\n\n${brief}` : instructions;
+  };
 }
 
 export async function createVoiceCallRuntime(params: {
@@ -243,6 +206,8 @@ export async function createVoiceCallRuntime(params: {
   stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: PluginLogger;
+  deliveryRuntime?: Pick<OpenClawPluginApi["runtime"], "gateway" | "subagent">;
+  runInServiceContext?: <T>(run: () => T) => T;
 }): Promise<VoiceCallRuntime> {
   params.scheduler.signal.throwIfAborted();
   const {
@@ -336,6 +301,7 @@ export async function createVoiceCallRuntime(params: {
       config.serve.path,
       webhookServer.getStreamDisconnectLifecycle(),
       cfg,
+      config.voicemail.holdOpeningMaxMs,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -427,18 +393,71 @@ export async function createVoiceCallRuntime(params: {
             timeoutMs: effectiveConfig.responseTimeoutMs,
             spawnedBy: requesterSessionKey,
             contextMode: requesterSessionKey ? "fork" : undefined,
-            toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(
-              effectiveConfig.realtime.toolPolicy,
-            ),
-            extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
+            toolsAllow: (() => {
+              const allowed = resolveRealtimeVoiceAgentConsultToolsAllow(
+                effectiveConfig.realtime.toolPolicy,
+              );
+              return allowed?.length ? [...allowed, "voice_call"] : allowed;
+            })(),
+            toolBindings: {
+              voice_call: { kind: "active-call", callId: call.callId },
+            },
+            extraSystemPrompt: `${REALTIME_VOICE_CONSULT_SYSTEM_PROMPT} The bound call id is ${JSON.stringify(call.callId)}.\n\n${buildCallBriefInstructions(call)}`,
             abortSignal: handlerContext.abortSignal,
           });
         },
       );
     }
+    manager.playRealtimeVoicemail = (callId, instructions) =>
+      realtimeHandler.playVoicemail(callId, instructions);
+    manager.beforeCarrierPlayback = (callId) => realtimeHandler.prepareCarrierPlayback(callId);
+    if (config.reports.enabled || config.live.transcript || config.voicemail.detection !== "off") {
+      manager.beforeCallEnd = (call) => realtimeHandler.drainCall(call.callId);
+    }
     webhookServer.setRealtimeHandler(realtimeHandler);
   }
-  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer, manager });
+  const delivery =
+    (config.reports.enabled || config.live.transcript) &&
+    params.deliveryRuntime &&
+    params.runInServiceContext
+      ? createCallDeliveryRuntime({
+          config,
+          coreConfig: cfg,
+          runtime: params.deliveryRuntime,
+          runInServiceContext: params.runInServiceContext,
+          manager,
+          logger: log,
+        })
+      : undefined;
+  if ((config.reports.enabled || config.live.transcript) && !delivery) {
+    log.warn(
+      "[voice-call] Reports/live transcript require the plugin delivery runtime; transcripts remain in call history.",
+    );
+  }
+  let tunnelResult: TunnelResult | null = null;
+  let stopPromise: Promise<void> | undefined;
+  const stop = (suppressErrors = false): Promise<void> => {
+    stopPromise ??= (async () => {
+      let failure: { error: unknown } | undefined;
+      for (const step of [
+        () => tunnelResult?.stop(),
+        () => cleanupTailscaleExposure(config),
+        () => webhookServer.stop(),
+        () => delivery?.stop(),
+        () => manager.stop(),
+      ]) {
+        try {
+          await step();
+        } catch (error) {
+          failure ??= { error };
+        }
+      }
+      if (failure && !suppressErrors) {
+        throw failure.error;
+      }
+    })();
+    return stopPromise;
+  };
 
   const localUrl = await webhookServer.start();
 
@@ -452,7 +471,7 @@ export async function createVoiceCallRuntime(params: {
 
     if (!publicUrl && config.tunnel?.provider && config.tunnel.provider !== "none") {
       try {
-        const nextTunnelResult = await startTunnel({
+        tunnelResult = await startTunnel({
           provider: config.tunnel.provider,
           port: config.serve.port,
           tailscalePort: config.tailscale.port,
@@ -464,8 +483,7 @@ export async function createVoiceCallRuntime(params: {
           ngrokAuthToken: config.tunnel.ngrokAuthToken,
           ngrokDomain: config.tunnel.ngrokDomain,
         });
-        lifecycle.setTunnelResult(nextTunnelResult);
-        publicUrl = nextTunnelResult?.publicUrl ?? null;
+        publicUrl = tunnelResult?.publicUrl ?? null;
       } catch (err) {
         log.error(`[voice-call] Tunnel setup failed: ${formatErrorMessage(err)}`);
       }
@@ -542,13 +560,13 @@ export async function createVoiceCallRuntime(params: {
       webhookServer,
       webhookUrl,
       publicUrl,
-      stop: () => lifecycle.stop(),
+      stop: () => stop(),
     };
   } catch (err) {
     // If any step after the server started fails, clean up every provisioned
     // resource (tunnel, tailscale exposure, and webhook server) so retries
     // don't leak processes or keep the port bound.
-    await lifecycle.stop({ suppressErrors: true });
+    await stop(true);
     throw err;
   }
 }

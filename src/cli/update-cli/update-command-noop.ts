@@ -52,7 +52,7 @@ export async function finishAlreadyCurrentUpdate(
     managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
     callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
-    runtimeTarget?: { version: string; nodeEngine: string | null };
+    runtimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
     stop: () => void;
     refuseUpdate: RefuseUpdate;
   },
@@ -69,6 +69,14 @@ export async function finishAlreadyCurrentUpdate(
           (await readPackageVersion(params.root)),
       },
     };
+    const completion = () => ({
+      ...params,
+      result,
+      coreAlreadyCurrent: true,
+      mutationStarted: false,
+      installKindChanged: false,
+      downgradeRisk: false,
+    });
     const inspection = {
       ...params,
       roots: [params.root],
@@ -105,13 +113,8 @@ export async function finishAlreadyCurrentUpdate(
       });
       params.stop();
       await finishUpdate({
-        ...params,
-        result,
-        coreAlreadyCurrent: true,
+        ...completion(),
         deferredMaintenance,
-        mutationStarted: false,
-        installKindChanged: false,
-        downgradeRisk: false,
         preManagedServiceStop: service,
         ownedManagedUpdateEnv: context.env,
         configSnapshot: context.configSnapshot,
@@ -236,17 +239,12 @@ export async function finishAlreadyCurrentUpdate(
     }
     params.stop();
     await finishUpdate({
-      ...params,
+      ...completion(),
       packageUpdateNodeRunner,
       serviceRuntimeRefreshRequired: Boolean(
         params.managedServiceRoot || runtime.value.replacedNodeRunner,
       ),
-      result,
       storedChannel,
-      coreAlreadyCurrent: true,
-      mutationStarted: false,
-      installKindChanged: false,
-      downgradeRisk: false,
       preManagedServiceStop: stopState,
       ownedManagedUpdateEnv: env,
       configSnapshot,

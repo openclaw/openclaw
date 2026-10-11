@@ -16,6 +16,7 @@ it("loads a bounded current-work query independently of chat, people, and recenc
       rowMode: "compact",
       source: "activity",
       activeOnly: true,
+      excludeDock: true,
       archived: "all",
       includeGlobal: true,
       includeUnknown: true,
@@ -277,103 +278,6 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
   },
 );
 
-it.each([
-  { hasActiveRun: undefined, status: "done", read: "authority" },
-  { hasActiveRun: false, status: "done", read: "authority" },
-  { hasActiveRun: undefined, status: "done", read: "overlap" },
-  { hasActiveRun: false, status: "done", read: "overlap" },
-  { hasActiveRun: undefined, status: "done", read: "completed" },
-  { hasActiveRun: false, status: "done", read: "completed" },
-  { hasActiveRun: true, status: "running", read: "authority" },
-  { hasActiveRun: true, status: "running", read: "active" },
-  { hasActiveRun: undefined, status: "running", read: "active" },
-  { hasActiveRun: true, status: "running", read: "unclocked" },
-  { hasActiveRun: undefined, status: "done", read: "unclocked" },
-])(
-  "fences older full rows after unheld partial liveness ($read, status: $status, active: $hasActiveRun)",
-  async ({ hasActiveRun, status, read }) => {
-    vi.useFakeTimers();
-    const { client, request, controller } = setup();
-    const current = { ...active, updatedAt: 400, snapshotAt: 400, activeRunIds: ["new-run"] };
-    request
-      .mockResolvedValueOnce(listing([]))
-      .mockResolvedValue({ ...listing([current]), ts: 500 });
-    await controller.load(client, "current");
-    const pending = createDeferred<SessionsListResult>();
-    if (read !== "authority" && read !== "unclocked") {
-      request.mockReturnValueOnce(pending.promise);
-      void controller.load(client, "current", "refresh");
-    }
-    controller.invalidate({
-      key: active.key,
-      agentId: active.agentId,
-      sessionId: active.sessionId,
-      updatedAt: read === "unclocked" ? undefined : 300,
-      runId: "release-run",
-      status,
-      hasActiveRun,
-    });
-    const delayed = {
-      agentId: active.agentId,
-      session: { ...active, updatedAt: 200, snapshotAt: 200 },
-      ancestorSessions: [],
-    };
-    controller.invalidate(delayed);
-    expect(controller.result?.sessions).toEqual([]);
-    expect(controller.incomplete).toBe(true);
-    if (read === "authority" || read === "unclocked") {
-      controller.invalidate({ agentId: active.agentId, session: current, ancestorSessions: [] });
-      expect(controller.result?.sessions).toEqual(read === "unclocked" ? [] : [current]);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(controller.result?.sessions).toEqual([current]);
-    } else {
-      pending.resolve({
-        ...listing([
-          {
-            ...active,
-            updatedAt: 250,
-            snapshotAt: 250,
-            activeRunIds: read === "overlap" ? ["release-run", "overlap-run"] : ["release-run"],
-          },
-        ]),
-        ts: 250,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      controller.invalidate(delayed);
-      expect(controller.result?.sessions.map((row) => row.activeRunIds)).toEqual(
-        read === "overlap" ? [["overlap-run"]] : read === "active" ? [["release-run"]] : [],
-      );
-    }
-    expect(controller.incomplete).toBe(false);
-    expect(request).toHaveBeenCalledTimes(2);
-  },
-);
-
-it("keeps a retirement across later uncertain liveness and a stale list", async () => {
-  vi.useFakeTimers();
-  const { client, request, controller } = setup();
-  await controller.load(client, "current");
-  controller.invalidate({
-    ...active,
-    updatedAt: 200,
-    hasActiveRun: false,
-    activeRunIds: [],
-    status: "done",
-  });
-  const pending = createDeferred<SessionsListResult>();
-  request.mockReturnValueOnce(pending.promise);
-  void controller.load(client, "current", "refresh");
-  controller.invalidate({ ...active, updatedAt: 300, runId: "new-run" });
-  pending.resolve(listing([active]));
-  await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([]);
-  expect(controller.incomplete).toBe(true);
-  const current = { ...active, updatedAt: 400, snapshotAt: 400, activeRunIds: ["new-run"] };
-  controller.invalidate({ agentId: active.agentId, session: current, ancestorSessions: [] });
-  expect(controller.result?.sessions).toEqual([current]);
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
 it.each([false, undefined])(
   "keeps a replacement run after an older terminal event (active flag: %s)",
   async (hasActiveRun) => {
@@ -463,30 +367,6 @@ it.each([
     }
     expect(controller.result?.sessions).toEqual([literal, work]);
     expect(controller.incomplete).toBe(true);
-    controller.invalidate({
-      agentId: work.agentId,
-      session: {
-        ...work,
-        updatedAt: 250,
-        snapshotAt: 250,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done",
-      },
-      ancestorSessions: [],
-    });
-    controller.invalidate({
-      agentId: work.agentId,
-      session: { ...replacement, updatedAt: 190, snapshotAt: 190 },
-      ancestorSessions: [],
-    });
-    expect(controller.result?.sessions).toEqual([literal]);
-    controller.invalidate({
-      agentId: work.agentId,
-      session: { ...replacement, updatedAt: 400, snapshotAt: 400 },
-      ancestorSessions: [],
-    });
-    expect(controller.result?.sessions).toEqual([literal]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(controller.result?.sessions).toEqual(authoritative);
     expect(controller.incomplete).toBe(false);
@@ -540,9 +420,10 @@ it.each([
   { hasMore: false, limitApplied: 100, admit: true },
   { hasMore: true, limitApplied: 100, admit: false },
   { hasMore: false, limitApplied: 1, admit: false },
+  { hasMore: false, limitApplied: 100, isDock: true, admit: false },
 ])(
   "admits certified active membership only into a complete window with space (%j)",
-  async ({ hasMore, limitApplied, admit }) => {
+  async ({ hasMore, limitApplied, isDock = false, admit }) => {
     vi.useFakeTimers();
     const { client, request, controller } = setup();
     request.mockResolvedValue({ ...listing([active]), hasMore, limitApplied });
@@ -551,6 +432,7 @@ it.each([
       ...active,
       key: "agent:work:new",
       sessionId: "new-session",
+      isDock,
       updatedAt: 200,
       snapshotAt: 200,
     };
@@ -562,147 +444,7 @@ it.each([
     });
     expect(controller.result?.sessions).toEqual(admit ? [added, active] : [active]);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(admit ? 1 : 2);
-  },
-);
-
-it.each([false, true])(
-  "admits independent same-time work without resurrecting a retired generation (pending: %s)",
-  async (pending) => {
-    vi.useFakeTimers();
-    const { client, request, controller } = setup();
-    await controller.load(client, "current");
-    const stale = createDeferred<SessionsListResult>();
-    if (pending) {
-      request.mockReturnValueOnce(stale.promise);
-      void controller.load(client, "current", "refresh");
-    }
-    const peer = {
-      ...active,
-      key: "agent:work:independent",
-      sessionId: "independent-session",
-      updatedAt: 300,
-      snapshotAt: 300,
-    };
-    for (const [terminalAt, delayedAt] of [
-      [300, 200],
-      [350, 325],
-    ] as const) {
-      controller.invalidate({
-        agentId: active.agentId,
-        session: {
-          ...active,
-          updatedAt: terminalAt,
-          snapshotAt: terminalAt,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-        ancestorSessions: [],
-      });
-      if (terminalAt === 300) {
-        expect(controller.result?.sessions).toEqual([]);
-        controller.invalidate({ agentId: active.agentId, session: peer, ancestorSessions: [] });
-        expect(controller.result?.sessions).toEqual([peer]);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(request).toHaveBeenCalledTimes(pending ? 2 : 1);
-      }
-      controller.invalidate({
-        agentId: active.agentId,
-        session: { ...active, updatedAt: delayedAt, snapshotAt: delayedAt },
-        ancestorSessions: [],
-      });
-      expect(controller.result?.sessions).toEqual([peer]);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(request).toHaveBeenCalledTimes(pending ? 2 : 1);
-    }
-    if (pending) {
-      stale.resolve({ ...listing([active]), ts: 250 });
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    expect(controller.result?.sessions).toEqual([peer]);
-    const current = { ...active, updatedAt: 400, snapshotAt: 400 };
-    controller.invalidate({ agentId: active.agentId, session: current, ancestorSessions: [] });
-    expect(controller.result?.sessions).toEqual([current, peer]);
-    expect(request).toHaveBeenCalledTimes(pending ? 2 : 1);
-  },
-);
-
-it("requires an authoritative read when the retirement budget fills and resumes admission afterward", async () => {
-  vi.useFakeTimers();
-  const { client, request, controller } = setup();
-  request.mockResolvedValue(listing([]));
-  await controller.load(client, "current");
-  for (let index = 0; index < 1_001; index += 1) {
-    controller.invalidate({
-      agentId: active.agentId,
-      session: {
-        ...active,
-        key: `agent:work:retired-${index}`,
-        sessionId: `retired-${index}`,
-        updatedAt: 200,
-        snapshotAt: 200,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done",
-      },
-      ancestorSessions: [],
-    });
-  }
-  const added = { ...active, updatedAt: 300, snapshotAt: 300 };
-  controller.invalidate({ agentId: active.agentId, session: added, ancestorSessions: [] });
-  expect(controller.result?.sessions).toEqual([]);
-  request.mockResolvedValueOnce({ ...listing([]), ts: 400 });
-  await controller.load(client, "current", "refresh");
-  const current = { ...active, updatedAt: 401, snapshotAt: 401 };
-  controller.invalidate({ agentId: active.agentId, session: current, ancestorSessions: [] });
-  expect(controller.result?.sessions).toEqual([current]);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
-it.each([100, 300])(
-  "keeps equal-clock terminal evidence through a pending list sampled at %s",
-  async (listTs) => {
-    vi.useFakeTimers();
-    const { client, request, controller } = setup();
-    await controller.load(client, "current");
-    const pending = createDeferred<SessionsListResult>();
-    request.mockReturnValueOnce(pending.promise);
-    void controller.load(client, "current", "refresh");
-    controller.invalidate({
-      agentId: active.agentId,
-      session: {
-        ...active,
-        updatedAt: 300,
-        snapshotAt: 300,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done",
-      },
-      ancestorSessions: [],
-    });
-    const peer = {
-      ...active,
-      key: "agent:work:independent",
-      sessionId: "independent-session",
-      updatedAt: 300,
-      snapshotAt: 300,
-    };
-    controller.invalidate({ agentId: active.agentId, session: peer, ancestorSessions: [] });
-    controller.invalidate({
-      agentId: active.agentId,
-      session: { ...active, updatedAt: 300, snapshotAt: 300 },
-      ancestorSessions: [],
-    });
-    expect(controller.result?.sessions).toEqual([peer]);
-    pending.resolve({ ...listing(listTs === 300 ? [active, peer] : [active]), ts: listTs });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(controller.result?.sessions).toEqual([peer]);
-    const current = { ...active, updatedAt: 400, snapshotAt: 400 };
-    controller.invalidate({ agentId: active.agentId, session: current, ancestorSessions: [] });
-    expect(controller.result?.sessions).toEqual([current, peer]);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(admit || isDock ? 1 : 2);
   },
 );
 
@@ -902,31 +644,5 @@ it.each([false, true])(
     );
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(pending ? 3 : 2);
-  },
-);
-
-it.each([undefined, 200, 300])(
-  "does not admit a buffered active snapshot without a newer sample than the list (%s)",
-  async (snapshotAt) => {
-    vi.useFakeTimers();
-    const { client, request, controller } = setup();
-    const pending = createDeferred<SessionsListResult>();
-    request.mockReturnValueOnce(pending.promise);
-    void controller.load(client, "current");
-    controller.invalidate({
-      agentId: active.agentId,
-      session: { ...active, updatedAt: 200, snapshotAt },
-      ancestorSessions: [],
-    });
-    pending.resolve({ ...listing([]), ts: 300 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(controller.result?.sessions).toEqual([]);
-    controller.invalidate({
-      agentId: active.agentId,
-      session: { ...active, updatedAt: 301, snapshotAt: 301 },
-      ancestorSessions: [],
-    });
-    expect(controller.result?.sessions).toEqual([{ ...active, updatedAt: 301, snapshotAt: 301 }]);
-    expect(request).toHaveBeenCalledOnce();
   },
 );

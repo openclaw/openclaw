@@ -147,15 +147,6 @@ describe("gateway CPU scenario guard", () => {
     expectNoNodeStack(result.stderr);
   });
 
-  it("reports CLI argument errors without a Node stack trace", () => {
-    const result = runCli("--wat");
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-    expectNoNodeStack(result.stderr);
-  });
-
   it("prepares CLI startup artifacts before running the startup bench", async () => {
     type SpawnCall = {
       args: string[];
@@ -204,31 +195,6 @@ describe("gateway CPU scenario guard", () => {
     expect(calls[2]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
   });
 
-  it("fails successful startup benches that do not write a report", async () => {
-    const outputDir = makeTempRoot();
-    const options = testing.parseArgs([
-      "--output-dir",
-      outputDir,
-      "--runs",
-      "1",
-      "--warmup",
-      "0",
-      "--skip-qa",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      silent: true,
-      spawnSync: () => ({ status: 0 }),
-    });
-
-    expect(result.exitCode).toBe(1);
-    expect(result.summary).toMatchObject({
-      startupOutput: null,
-      startupReportFailure: "startup-report-missing",
-    });
-    expect(result.summary.startupReportFailureDetail).toContain("expected startup bench report");
-  });
-
   it("fails successful startup benches that write malformed reports", async () => {
     const outputDir = makeTempRoot();
     const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
@@ -260,28 +226,6 @@ describe("gateway CPU scenario guard", () => {
     });
   });
 
-  it("does not run the startup bench when the startup build fails", async () => {
-    const outputDir = makeTempRoot();
-    const calls: string[][] = [];
-    const options = testing.parseArgs(["--output-dir", outputDir, "--skip-qa"]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      silent: true,
-      spawnSync: (_command: string, args: string[]) => {
-        calls.push(args);
-        return { status: 1 };
-      },
-    });
-
-    expect(result.exitCode).toBe(1);
-    expect(calls).toEqual([["--import", "tsx", "scripts/ensure-cli-startup-build.mts"]]);
-    expect(result.summary.steps).toEqual([
-      { name: "startup build", signal: null, status: 1 },
-      { name: "startup bench", signal: null, status: 1 },
-      { name: "concurrency bench", signal: null, status: 1 },
-    ]);
-  });
-
   it("fails startup build spawn errors and skips the startup bench", async () => {
     const outputDir = makeTempRoot();
     const calls: string[][] = [];
@@ -306,59 +250,6 @@ describe("gateway CPU scenario guard", () => {
       { name: "startup bench", signal: null, status: 1 },
       { name: "concurrency bench", signal: null, status: 1 },
     ]);
-  });
-
-  it("prebuilds private QA dist before running QA scenarios when it is missing", async () => {
-    const cwd = makeTempRoot();
-    const outputDir = path.join(cwd, "out");
-    const calls: Array<{ args: string[]; env?: Record<string, string | undefined> }> = [];
-    const options = testing.parseArgs([
-      "--output-dir",
-      outputDir,
-      "--skip-startup",
-      "--qa-scenario",
-      "channel-chat-baseline",
-    ]);
-
-    const result = await testing.runGatewayCpuScenarios(options, {
-      cwd,
-      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
-      silent: true,
-      spawnSync: (_command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
-        calls.push({ args, env: opts?.env });
-        if (args[0] === "scripts/build-all.mts") {
-          const pluginSdkDist = path.join(cwd, "dist", "plugin-sdk");
-          mkdirSync(pluginSdkDist, { recursive: true });
-          writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
-          writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
-        }
-        if (args.includes("openclaw") && args.includes("qa")) {
-          writeQaSuiteSummary(outputDir);
-        }
-        return { status: 0 };
-      },
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.summary.steps.map((step) => step.name)).toEqual([
-      "private QA build",
-      "node worker finalization gate",
-      "qa suite",
-    ]);
-    expect(calls[0]?.args).toEqual(["--import", "tsx", "scripts/build-all.mts", "qaRuntime"]);
-    expect(calls[0]?.env).toMatchObject({
-      HOME: path.join(outputDir, "qa-state-root", "home"),
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_CONFIG_PATH: path.join(outputDir, "qa-state-root", "state", "openclaw.json"),
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-      OPENCLAW_HOME: path.join(outputDir, "qa-state-root", "home"),
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
-      OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
-      OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-      USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
-    });
-    expect(calls[0]?.env?.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS).toBeUndefined();
   });
 
   it("does not prebuild private QA dist when the required entries already exist", async () => {

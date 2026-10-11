@@ -253,9 +253,8 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
-  const runAttribution = { sessionId: params.sessionId, lane: params.lane };
+  const runAttribution = { runId: params.runId, sessionId: params.sessionId, lane: params.lane };
   const runObs = {
-    runId: params.runId,
     ...runAttribution,
     requestedProvider: params.provider,
     requestedModel: params.model,
@@ -475,7 +474,7 @@ async function runWithModelFallbackInternal<T>(
           // Same-provider siblings share one transient cooldown probe per run.
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
-            const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+            const error = `Provider ${candidate.provider} is in cooldown (check already attempted this run)`;
             pushSkippedAttempt(error, decision.reason, authMode);
             await observeCandidateDecision("skip_candidate", {
               reason: decision.reason,

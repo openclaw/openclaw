@@ -9,6 +9,7 @@ import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
+import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
   UpdateCommandOptions,
@@ -35,26 +36,11 @@ function inheritedUpdateTimeout(
   option: "timeout" | "drainTimeout" = "timeout",
 ): string | undefined {
   const timeout = opts[option] as string | undefined;
-  if (timeout !== undefined) {
-    return timeout;
-  }
-  return inheritOptionFromParent<string>(command, option);
+  return timeout !== undefined ? timeout : inheritOptionFromParent<string>(command, option);
 }
 
-type CommanderUpdateOptions = Record<string, unknown> & {
-  acceptCapabilities?: boolean;
-  admission?: string;
-  channel?: string;
-  dryRun?: boolean;
-  json?: boolean;
-  restart?: boolean;
-  reapplyLocalOverrides?: boolean;
-  tag?: string;
-  sha?: string;
-  timeout?: string;
-  drainTimeout?: string;
-  yes?: boolean;
-};
+type CommanderUpdateOptions = Record<string, unknown> &
+  Omit<UpdateCommandOptions, "admission"> & { admission?: string };
 
 function requiredUpdateLeafString(opts: Record<string, unknown>, key: string): string {
   const value = opts[key];
@@ -253,6 +239,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       false,
     )
     .option(
+      "--inspect-release-retention",
+      "Record inspect-only release retention after installing a compatible bridge",
+      false,
+    )
+    .option(
       "--previous-updater-stopped",
       "Confirm the previous updater has settled and stopped scheduling",
       false,
@@ -288,6 +279,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           runtime: requiredUpdateLeafString(opts, "runtime"),
           previousUpdaterStopped: true,
           enableActivation: opts.enableActivation === true,
+          inspectReleaseRetention: opts.inspectReleaseRetention === true,
           json: Boolean(opts.json) || inheritedUpdateJson(command),
         });
       }),

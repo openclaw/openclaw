@@ -1,5 +1,6 @@
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -117,7 +118,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { runStartupSessionMigration } =
+        const { prepareGatewayStartupSessions, runGatewaySessionStartupMaintenance } =
           await import("./server-startup-session-migration.js");
         const assertMigrationCurrent = createPreparationGuard(
           agentId,
@@ -127,11 +128,17 @@ export function activateGatewayAgentDatabaseStartup(params: {
           assertCurrent,
         );
         await withAgentDatabasePreparationGuard(assertMigrationCurrent, async () => {
-          await runStartupSessionMigration({
+          const databases = await prepareGatewayStartupSessions({
             cfg: params.getConfig(),
             env,
             agentIds: new Set([agentId]),
             assertCurrent: assertMigrationCurrent,
+            log: params.log,
+          });
+          await runGatewaySessionStartupMaintenance({
+            databases,
+            assertCurrent: assertMigrationCurrent,
+            signal,
             log: params.log,
           });
           assertMigrationCurrent();
@@ -162,6 +169,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({
             sourceConfig: previousSecrets.sourceConfig,
+            runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
             includeAuthStoreRefs: true,
             assertCurrent: () => {
               signal.throwIfAborted();

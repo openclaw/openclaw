@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
@@ -12,6 +13,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.security.cert.X509Certificate
 import java.util.concurrent.CountDownLatch
+import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.X509ExtendedTrustManager
@@ -156,10 +158,7 @@ class GatewayTlsTest {
       buildGatewayTlsConfig(
         params =
           GatewayTlsParams(
-            required = true,
             expectedFingerprint = "SHA-256: $expected",
-            allowTOFU = false,
-            stableId = "gateway-1",
           ),
         defaultTrust = RecordingExtendedTrustManager(),
       )
@@ -174,14 +173,12 @@ class GatewayTlsTest {
       buildGatewayTlsConfig(
         params =
           GatewayTlsParams(
-            required = true,
             expectedFingerprint = null,
-            allowTOFU = false,
-            stableId = "gateway-1",
           ),
         defaultTrust = defaultTrust,
       )
     val extendedTrust = config.trustManager as X509ExtendedTrustManager
+    assertSame(HttpsURLConnection.getDefaultHostnameVerifier(), config.hostnameVerifier)
 
     Socket().use { socket ->
       extendedTrust.checkServerTrusted(emptyArray(), "RSA", socket)
@@ -204,10 +201,7 @@ class GatewayTlsTest {
       buildGatewayTlsConfig(
         params =
           GatewayTlsParams(
-            required = true,
             expectedFingerprint = "not-a-sha256-fingerprint",
-            allowTOFU = false,
-            stableId = "gateway-1",
           ),
         defaultTrust = defaultTrust,
       )

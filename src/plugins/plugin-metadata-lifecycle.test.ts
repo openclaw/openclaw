@@ -1,6 +1,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   setGatewayPluginMetadataSnapshot,
@@ -61,6 +62,7 @@ it("retains running metadata readers through the final Gateway close after packa
     clearPluginMetadataLifecycleCaches();
     // Released modules register by assigning the shared slot directly.
     Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    await drainGlobalSingletonLifecycleState("close");
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
     expect(
       withPluginMetadataSnapshotScope(scoped, () =>
@@ -90,6 +92,16 @@ it("retains running metadata readers through the final Gateway close after packa
     expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
       "replacement installation cannot read the running scope state",
     );
+    for (const event of ["plugin-registry", "restart"] as const) {
+      await drainGlobalSingletonLifecycleState(event);
+      expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
+        "replacement installation cannot read the running scope state",
+      );
+    }
+    await drainGlobalSingletonLifecycleState("close");
+    expect(snapshotReaderSlot.getCurrentPluginMetadataSnapshot).toBeUndefined();
+    expect(snapshotReaderSlot.loadPluginMetadataSnapshot).toBeUndefined();
+    expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBeUndefined();
   } finally {
     releaseClose.resolve();
     await Promise.all([first.close(), finalClose ?? second.close()]);

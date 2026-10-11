@@ -5,9 +5,9 @@ import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
 import {
   SECRET_STORE_ALLOWED_HOSTS_MAX,
-  SECRET_STORE_VALUE_MAX_BYTES,
   SecretStoreValidationError,
 } from "./secret-store-validation-error.js";
+import { assertSecretStoreValueLength } from "./secret-store-value.js";
 import type { SecretStoreKind } from "./secret-store.types.js";
 
 export type { SecretStoreKind, SecretStoreScope } from "./secret-store.types.js";
@@ -37,23 +37,7 @@ export function assertSecretStoreValue(value: string, kind: SecretStoreKind, nam
       `Secret store entry "${name}" contains a redaction placeholder. Supply a real value or leave the field unchanged. Run openclaw doctor --fix to repair a store-backed Gateway token.`,
     );
   }
-  const bytes = Buffer.byteLength(value, "utf8");
-  if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_VALUE_TOO_LARGE",
-      `Secret store value exceeds ${SECRET_STORE_VALUE_MAX_BYTES} UTF-8 bytes.`,
-    );
-  }
-  // An empty credential is never meaningful and cannot be diagnosed later: `get`
-  // refuses secret kinds and listings mask them, so a silently-empty secret (a
-  // failed `op read |` pipe, for example) would surface only as a confusing 401.
-  // Env entries may legitimately be empty.
-  if (kind === "secret" && value.length === 0) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_VALUE_EMPTY",
-      "Secret store value is empty. Secret entries require a value; check the command that produced it.",
-    );
-  }
+  assertSecretStoreValueLength(value, kind);
 }
 
 export function assertSecretStoreWriteShape(

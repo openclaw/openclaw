@@ -35,10 +35,7 @@ function assertValidExecRemoteCommand(command: string): void {
   const pendingHeredocs: PendingHeredoc[] = [];
 
   for (let index = 0; index < command.length; index += 1) {
-    const frame = frames.at(-1);
-    if (!frame) {
-      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
-    }
+    const frame = frames.at(-1)!;
     const char = command.charAt(index);
 
     if (frame.escaping) {
@@ -63,18 +60,21 @@ function assertValidExecRemoteCommand(command: string): void {
       continue;
     }
 
-    if (frame.quote === "plain" && frame.kind === "arithmetic") {
+    if (
+      frame.quote === "plain" &&
+      (frame.kind === "arithmetic" || frame.kind === "command-substitution")
+    ) {
       if (char === "(") {
         frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
+      } else if (char === ")") {
         frame.parenDepth -= 1;
         if (frame.parenDepth === 0) {
           frames.pop();
         }
       }
-      continue;
+      if (frame.kind === "arithmetic" || char === "(" || char === ")") {
+        continue;
+      }
     }
 
     if (char === "`") {
@@ -142,22 +142,9 @@ function assertValidExecRemoteCommand(command: string): void {
         );
       }
     }
-    if (frame.kind === "command-substitution") {
-      if (char === "(") {
-        frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
-        frame.parenDepth -= 1;
-        if (frame.parenDepth === 0) {
-          frames.pop();
-        }
-      }
-    }
   }
 
-  const openFrame = frames.at(-1);
-  if (openFrame?.escaping) {
+  if (frames.at(-1)!.escaping) {
     throw new Error("Malformed SSH/OpenShell exec command: trailing backslash escape.");
   }
   const pending = pendingHeredocs[0];

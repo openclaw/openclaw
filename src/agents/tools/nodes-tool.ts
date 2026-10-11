@@ -91,13 +91,11 @@ const NodesToolSchema = Type.Object({
     }),
   ),
   requestId: Type.Optional(Type.String()),
-  // notify
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
@@ -110,7 +108,6 @@ const NodesToolSchema = Type.Object({
         "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
     }),
   ),
-  // camera_ptz
   ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
     description:
       "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
@@ -131,19 +128,15 @@ const NodesToolSchema = Type.Object({
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
-  // screen_record
   fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
   screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
-  // location_get
   maxAgeMs: optionalNonNegativeIntegerSchema(),
   locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
-  // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
-  // which
   bins: Type.Optional(
     Type.Array(Type.String({ minLength: 1 }), {
       minItems: 1,
@@ -151,7 +144,6 @@ const NodesToolSchema = Type.Object({
       description: "which: executable names to resolve on the selected node.",
     }),
   ),
-  // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: optionalPositiveIntegerSchema(),
@@ -197,30 +189,22 @@ export function createNodesTool(options?: {
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
-          case "approve": {
-            const requestId = readToolStringParam(params, "requestId", {
-              required: true,
-            });
-            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
-            return jsonResult(
-              await callGatewayTool(
-                "node.pair.approve",
-                gatewayOpts,
-                {
-                  requestId,
-                },
-                { scopes },
-              ),
-            );
-          }
+          case "approve":
           case "reject": {
             const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
+            const approvalOptions =
+              action === "approve"
+                ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
+                : undefined;
             return jsonResult(
-              await callGatewayTool("node.pair.reject", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                `node.pair.${action}`,
+                gatewayOpts,
+                { requestId },
+                approvalOptions,
+              ),
             );
           }
           case "notify": {

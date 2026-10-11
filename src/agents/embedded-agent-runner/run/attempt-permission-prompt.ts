@@ -75,9 +75,6 @@ export function installAttemptPermissionPrompt(input: {
           }
           systemPrompt = prepared?.systemPrompt ?? setActiveSessionSystemPrompt(freshPrompt);
         }
-        if (!prepareReplay && !prepared) {
-          return { systemPrompt };
-        }
         const admitReplay = prepareReplay
           ? await raceWithAbortSignal(prepareReplay(preparationSignal), preparationSignal)
           : undefined;
@@ -85,22 +82,28 @@ export function installAttemptPermissionPrompt(input: {
         if (preparation !== permissionPreparation) {
           continue;
         }
-        const admit = () => {
-          preparationSignal.throwIfAborted();
-          if (preparation !== permissionPreparation) {
-            throw new Error("Session prompt preparation is stale after permission replacement.");
-          }
-          admitReplay?.();
-          if (prepared) {
-            prepared.commit?.();
-            setActiveSessionSystemPrompt(prepared.systemPrompt);
-            if (prepared.update) {
-              activeSession[agentSessionQueuePromptContext](prepared.update);
+        const admit = async (onAdmitted: (commit: () => void) => void) => {
+          const commit = () => {
+            preparationSignal.throwIfAborted();
+            if (preparation !== permissionPreparation) {
+              throw new Error("Session prompt preparation is stale after permission replacement.");
             }
+            if (prepared) {
+              prepared.commit?.();
+              setActiveSessionSystemPrompt(prepared.systemPrompt);
+              if (prepared.update) {
+                activeSession[agentSessionQueuePromptContext](prepared.update);
+              }
+            }
+          };
+          if (admitReplay) {
+            await admitReplay(() => onAdmitted(commit));
+          } else {
+            onAdmitted(commit);
           }
         };
         if (prepared && !deferPromptAdmission) {
-          admit();
+          await admit((commit) => commit());
           return { systemPrompt };
         }
         return { systemPrompt, admitReplay: admit };
@@ -122,9 +125,13 @@ export function installAttemptPermissionPrompt(input: {
       input.prepareInitialUserTurnReplay,
       true,
     );
-    return () => {
+    return async (onAdmitted) => {
       input.runAbortSignal.throwIfAborted();
-      prepared.admitReplay?.();
+      if (prepared.admitReplay) {
+        await prepared.admitReplay(onAdmitted);
+      } else {
+        onAdmitted();
+      }
     };
   });
   const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;

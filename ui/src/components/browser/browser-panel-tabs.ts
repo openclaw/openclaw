@@ -6,10 +6,7 @@ import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.t
 import type { BrowserPanelTab } from "./browser-client.ts";
 
 function tabLabel(tab: BrowserPanelTab): string {
-  if (tab.title.trim()) {
-    return tab.title.trim();
-  }
-  return (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab");
+  return tab.title.trim() || (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab");
 }
 
 export function browserPanelHostedTabs(tabs: BrowserPanelTab[]): PanelHostedTab[] {

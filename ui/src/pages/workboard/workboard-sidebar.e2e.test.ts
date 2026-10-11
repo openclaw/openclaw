@@ -74,38 +74,68 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "new?agent=main");
-      const workboard = page.locator(".sidebar-zone-entry .nav-item", { hasText: "Workboard" });
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const workboardEntry = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="plugin:workboard/workboard"]'),
+      });
+      await workboardEntry.getByRole("button", { name: "Pin", exact: true }).click();
+      const rail = sidebar.locator(".sidebar-rail__pins");
+      const workboard = rail.getByRole("link", { name: "Workboard", exact: true });
       const widths = () =>
-        page.locator(".sidebar-zone-entry:has(.nav-item)").evaluateAll((rows) =>
+        rail.locator(".sidebar-rail__pin:has(.nav-item)").evaluateAll((rows) =>
           rows.map((row) => {
             const link = row.querySelector(".nav-item")!;
+            const icon = link.querySelector(".nav-item__icon")!;
             const menu = row.querySelector(".sidebar-reorder-trigger")!;
             const rowBox = row.getBoundingClientRect();
             const linkBox = link.getBoundingClientRect();
             const menuBox = menu.getBoundingClientRect();
+            const menuIconBox = menu.querySelector("svg")!.getBoundingClientRect();
+            const iconBox = icon.getBoundingClientRect();
             return {
               label: link.textContent?.trim(),
               width: linkBox.width,
-              available: rowBox.width - menuBox.width,
-              right: linkBox.right,
-              menuLeft: menuBox.left,
+              available: rowBox.width,
+              height: linkBox.height,
+              gripStart: menuBox.left - rowBox.left,
+              gripEnd: menuBox.right - rowBox.left,
+              gripTop: menuBox.top - rowBox.top,
+              gripBottom: menuBox.bottom - rowBox.top,
+              gripWidth: menuBox.width,
+              gripHeight: menuBox.height,
+              rowHeight: rowBox.height,
+              railEnd: row.closest(".sidebar-rail")!.getBoundingClientRect().right - rowBox.left,
+              gripIconContained:
+                menuIconBox.left >= menuBox.left &&
+                menuIconBox.right <= menuBox.right &&
+                menuIconBox.top >= menuBox.top &&
+                menuIconBox.bottom <= menuBox.bottom,
+              glyphClearOfGrip:
+                menuBox.left >= iconBox.right ||
+                menuBox.right <= iconBox.left ||
+                menuBox.top >= iconBox.bottom ||
+                menuBox.bottom <= iconBox.top,
+              iconCenter: iconBox.left + iconBox.width / 2 - linkBox.left,
+              labelWidth: link.querySelector(".nav-item__text")!.getBoundingClientRect().width,
             };
           }),
         );
       await workboard.waitFor();
       await expect
         .poll(async () => (await widths()).find((row) => row.label === "Workboard")?.width)
-        .toBeGreaterThan(150);
+        .toBeCloseTo(36, 1);
+      await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
       const initialWidths = await widths();
       expect(await page.locator(".sidebar-session-group-status:empty").count()).toBe(0);
       const capture = async (name: string) => {
         if (!artifactDir) {
           return;
         }
-        const sidebar = page.locator(".sidebar");
+        const surface = page.locator(".sidebar");
         await writeFile(
           path.join(artifactDir, name + ".png"),
-          await takeControlUiElementScreenshot(page, sidebar, [workboard]),
+          await takeControlUiElementScreenshot(page, surface, [workboard]),
         );
       };
       await workboard.hover();
@@ -117,14 +147,28 @@ suite.define(() => {
         .getByRole("button", { name: "Compact", exact: true })
         .click();
       await page.keyboard.press("Escape");
-      await page.locator(".nav-item--home").click();
+      await sidebar.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
+      await page.getByRole("button", { name: "Open Home full page", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/chat(?:\/|$)/u);
       await workboard.hover();
       await capture("after-workboard");
       const finalWidths = await widths();
       expect(finalWidths.map((row) => row.label)).toEqual(initialWidths.map((row) => row.label));
       for (const row of finalWidths) {
         expect.soft(row.width, row.label).toBeCloseTo(row.available, 1);
-        expect.soft(row.right, row.label).toBeLessThanOrEqual(row.menuLeft + 0.1);
+        expect.soft(row.gripStart, row.label).toBeGreaterThanOrEqual(-0.1);
+        expect.soft(row.gripEnd, row.label).toBeLessThanOrEqual(row.available);
+        expect.soft(row.gripEnd, row.label).toBeLessThanOrEqual(row.railEnd);
+        expect.soft(row.gripTop, row.label).toBeGreaterThanOrEqual(0);
+        expect.soft(row.gripBottom, row.label).toBeLessThanOrEqual(row.rowHeight);
+        expect.soft(row.gripWidth, row.label).toBeGreaterThanOrEqual(24);
+        expect.soft(row.gripHeight, row.label).toBeGreaterThanOrEqual(24);
+        expect.soft(row.gripIconContained, row.label).toBe(true);
+        // Either axis may separate a stacked or adjacent control from its glyph.
+        expect.soft(row.glyphClearOfGrip, row.label).toBe(true);
+        expect.soft(row.height, row.label).toBeCloseTo(36, 1);
+        expect.soft(row.iconCenter, row.label).toBeCloseTo(row.width / 2, 1);
+        expect.soft(row.labelWidth, row.label).toBeLessThanOrEqual(1);
       }
       await page.locator(".sidebar-brand__new-thread").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");

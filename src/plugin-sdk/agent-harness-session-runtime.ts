@@ -1,8 +1,10 @@
 /** Production-private native session coordination for official harness plugins. */
 export {
   createNativeSessionBindingLifecycle,
+  createNativeSessionBindingLifecycleV2,
   type NativeSessionBindingLeaseOptions,
   type NativeSessionBindingStateStore,
+  type NativeSessionBindingStateStoreV2,
 } from "../agents/harness/native-session/binding-lifecycle.js";
 export {
   captureNativeSessionGenerationAuthority,
@@ -16,6 +18,7 @@ export {
   prepareNativeSessionGenerationAuthority,
   reclaimNativeSessionGenerationWithAuthority,
   resolveNativeSessionBindingWithAuthority,
+  resolveNativeSessionBindingWithAuthorityV2,
   type NativeSessionGenerationOperationsV2,
 } from "../agents/harness/native-session/binding-generation-authority.js";
 export { createNativeSessionInitializationOwner } from "../agents/harness/native-session/initialization.js";

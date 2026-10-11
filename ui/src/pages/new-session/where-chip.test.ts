@@ -213,7 +213,7 @@ describe("Where chip", () => {
       (heading) => heading.textContent?.trim(),
     );
 
-    expect(headings).toEqual(["Your devices"]);
+    expect(headings).toEqual(["Your devices", "Hosted workspaces"]);
   });
 
   it("shows the Cloud settings action only to admins when a cloud profile is available", () => {
@@ -824,7 +824,7 @@ describe("Where chip", () => {
     {
       name: "no paired device hosts sessions",
       issues: undefined,
-      reason: /no session hosts are paired/i,
+      reason: /no devices have session hosting enabled/i,
     },
     {
       name: "a paired node must be updated before it can advertise session hosting",

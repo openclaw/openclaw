@@ -282,6 +282,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     inheritedAuthDir: input.inheritedAuthDir,
     readOnly: input.readOnly === true,
     loadRuntimePlugins: input.loadRuntimePlugins === true,
+    runtimePluginPurpose: input.runtimePluginPurpose,
     skipCredentials: input.skipCredentials === true,
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
@@ -358,6 +359,7 @@ export function resolvePublishedOwner(
       owner.input.inheritedAuthDir === input.inheritedAuthDir &&
       owner.input.readOnly === input.readOnly &&
       owner.input.loadRuntimePlugins === input.loadRuntimePlugins &&
+      owner.input.runtimePluginPurpose === input.runtimePluginPurpose &&
       owner.input.skipCredentials === input.skipCredentials &&
       // Binding is a publication-time build capability readers cannot know;
       // absent (= undefined after normalization) is a wildcard like the
@@ -407,6 +409,7 @@ export function hasSameLifecycleInput(
     left.inheritedAuthDir === right.inheritedAuthDir &&
     left.readOnly === right.readOnly &&
     left.loadRuntimePlugins === right.loadRuntimePlugins &&
+    left.runtimePluginPurpose === right.runtimePluginPurpose &&
     left.skipCredentials === right.skipCredentials &&
     left.workspaceDir === right.workspaceDir &&
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&
@@ -423,6 +426,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     agentBuildCompletions: Map<string, Promise<void>>;
     buildTimeoutMs: number | undefined;
     includeCredentialProviders?: boolean;
+    providerDiscoveryTimeoutMs?: number;
     isPublicationCurrent?: () => boolean;
     isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isOwnerPublished?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
@@ -572,6 +576,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
                 }
               : undefined,
             params.acquisitionSignal,
+            params.providerDiscoveryTimeoutMs,
           );
           for (const candidate of currentGroup) {
             if (params.registerEntriesAfterBuildStart === true) {
@@ -662,6 +667,7 @@ export async function publishModelRuntimeSnapshot(
   catalogMode: PreparedModelRuntimeCatalogMode = existing?.catalogMode ?? "live",
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  providerDiscoveryTimeoutMs?: number,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const key = ownerKey(input);
   const owner = prepareModelRuntimeOwner(input, provenance, catalogMode, existing);
@@ -680,6 +686,7 @@ export async function publishModelRuntimeSnapshot(
       registerEntriesAfterBuildStart: true,
       selectPluginGeneration: () => reusablePluginGeneration,
       pluginMetadataSnapshot,
+      providerDiscoveryTimeoutMs,
     },
     {
       published: (isGenerationCurrent) => {

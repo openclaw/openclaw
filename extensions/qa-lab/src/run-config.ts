@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { z } from "zod";
 import type {
-  QaLabExecutionKind,
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
@@ -280,6 +279,15 @@ export function resolveQaLabRunPlan(params: {
       };
     },
   );
+  const addExclusions = (scenarios: readonly QaSeedScenarioWithSource[], reason: string) => {
+    exclusions.push(
+      ...scenarios.map((scenario) => ({
+        scenarioId: scenario.id,
+        executionKind: scenario.execution.kind,
+        reasons: [reason],
+      })),
+    );
+  };
   let laneSelection: ReturnType<typeof resolveQaRuntimePairLaneScenarioIds>;
   const errors: string[] = [];
   try {
@@ -305,31 +313,19 @@ export function resolveQaLabRunPlan(params: {
       excludedNonFlowScenarios: [],
     };
   }
-  exclusions.push(
-    ...laneSelection.excludedLaneScenarios.map((scenario) => ({
-      scenarioId: scenario.id,
-      executionKind: scenario.execution.kind,
-      reasons: ["does not match the selected provider/model/channel lane"],
-    })),
-    ...laneSelection.excludedNonFlowScenarios.map((scenario) => ({
-      scenarioId: scenario.id,
-      executionKind: scenario.execution.kind,
-      reasons: ["runtimePair requires execution.kind=flow"],
-    })),
+  addExclusions(
+    laneSelection.excludedLaneScenarios,
+    "does not match the selected provider/model/channel lane",
   );
+  addExclusions(laneSelection.excludedNonFlowScenarios, "runtimePair requires execution.kind=flow");
   if (selection.runtimePairLane && explicitScenarioSelection) {
     const laneScenarioIds = new Set(laneSelection.scenarioIds);
     const alreadyExcludedIds = new Set(exclusions.map((exclusion) => exclusion.scenarioId));
-    exclusions.push(
-      ...membership.selectedScenarios
-        .filter(
-          (scenario) => !laneScenarioIds.has(scenario.id) && !alreadyExcludedIds.has(scenario.id),
-        )
-        .map((scenario) => ({
-          scenarioId: scenario.id,
-          executionKind: scenario.execution.kind,
-          reasons: [`runtimePairLane=${selection.runtimePairLane}`],
-        })),
+    addExclusions(
+      membership.selectedScenarios.filter(
+        (scenario) => !laneScenarioIds.has(scenario.id) && !alreadyExcludedIds.has(scenario.id),
+      ),
+      `runtimePairLane=${selection.runtimePairLane}`,
     );
     laneSelection = {
       ...laneSelection,
@@ -362,13 +358,7 @@ export function resolveQaLabRunPlan(params: {
   const runtimePairSupport = selection.runtimePair
     ? resolveQaRuntimePairScenarioSupport(profileExecution.selectedScenarios)
     : { selectedScenarios: profileExecution.selectedScenarios, excludedScenarios: [] };
-  exclusions.push(
-    ...runtimePairSupport.excludedScenarios.map((scenario) => ({
-      scenarioId: scenario.id,
-      executionKind: scenario.execution.kind,
-      reasons: ["runtimePair requires execution.kind=flow"],
-    })),
-  );
+  addExclusions(runtimePairSupport.excludedScenarios, "runtimePair requires execution.kind=flow");
   const selectedScenarios = runtimePairSupport.selectedScenarios;
   if (membership.categories.length === 0) {
     errors.push(`QA run profile ${selection.profile} did not resolve any taxonomy categories.`);
@@ -390,9 +380,7 @@ export function resolveQaLabRunPlan(params: {
   if (selectedScenarios.length === 0) {
     errors.push("QA run plan selected no runnable scenarios.");
   }
-  const executionKinds = uniqueStrings(
-    selectedScenarios.map((scenario) => scenario.execution.kind),
-  ) as QaLabExecutionKind[];
+  const executionKinds = uniqueValues(selectedScenarios.map((scenario) => scenario.execution.kind));
   return {
     status: errors.length > 0 ? "invalid" : "ready",
     profile: selection.profile,

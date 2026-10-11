@@ -125,21 +125,13 @@ function sanitizeProxyModel(model: Model): Model {
   return safeModel;
 }
 
-type ProxyRequestAbort = {
-  signal: AbortSignal;
-  clear: () => void;
-};
-
 function createProxyRequestTimeoutError(timeoutMs: number): Error {
   const error = new Error(`Proxy request timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";
   return error;
 }
 
-function buildProxyRequestAbort(
-  callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): ProxyRequestAbort {
+function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs: number) {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(createProxyRequestTimeoutError(timeoutMs));
@@ -152,24 +144,6 @@ function buildProxyRequestAbort(
       clearTimeout(timeoutId);
     },
   };
-}
-
-function isProxyRequestTimeoutError(params: {
-  error: unknown;
-  callerSignal: AbortSignal | undefined;
-  requestSignal: AbortSignal;
-}): boolean {
-  if (params.callerSignal?.aborted || !params.requestSignal.aborted) {
-    return false;
-  }
-  if (!(params.error instanceof Error)) {
-    return false;
-  }
-  return (
-    params.error.name === "AbortError" ||
-    params.error.name === "TimeoutError" ||
-    params.error.message === "Request was aborted"
-  );
 }
 
 async function readProxyErrorData(
@@ -242,14 +216,15 @@ export function streamProxy(
       })
         .catch((error: unknown) => {
           if (
-            isProxyRequestTimeoutError({
-              error,
-              callerSignal: options.signal,
-              requestSignal: requestAbort.signal,
-            })
+            !options.signal?.aborted &&
+            requestAbort.signal.aborted &&
+            error instanceof Error &&
+            (error.name === "AbortError" ||
+              error.name === "TimeoutError" ||
+              error.message === "Request was aborted")
           ) {
             throw new Error(`Proxy request timed out after ${readIdleTimeoutMs}ms`, {
-              cause: error instanceof Error ? error : undefined,
+              cause: error,
             });
           }
           throw error;
@@ -398,18 +373,41 @@ function processProxyEvent(
       };
       return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
 
-    case "text_delta": {
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.text += proxyEvent.delta;
-        return {
-          type: "text_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
+      const expectedType =
+        proxyEvent.type === "text_delta"
+          ? "text"
+          : proxyEvent.type === "thinking_delta"
+            ? "thinking"
+            : "toolCall";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
       }
-      throw new Error("Received text_delta for non-text content");
+      if (content.type === "text") {
+        content.text += proxyEvent.delta;
+      } else if (content.type === "thinking") {
+        content.thinking += proxyEvent.delta;
+      } else {
+        const streamingContent = content as StreamingToolCall;
+        streamingContent.partialJson += proxyEvent.delta;
+        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
+        if (!previewSchedule) {
+          throw new Error("Received toolcall_delta without a preview schedule");
+        }
+        if (previewSchedule(streamingContent.partialJson.length)) {
+          content.arguments = parseStreamingJson(streamingContent.partialJson);
+        }
+        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
+      }
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        delta: proxyEvent.delta,
+        partial,
+      };
     }
 
     case "text_end": {
@@ -431,20 +429,6 @@ function processProxyEvent(
     case "thinking_start":
       partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
-
-    case "thinking_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinking += proxyEvent.delta;
-        return {
-          type: "thinking_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_delta for non-thinking content");
-    }
 
     case "thinking_end": {
       const content = partial.content[proxyEvent.contentIndex];
@@ -474,29 +458,6 @@ function processProxyEvent(
         createToolArgumentPreviewSchedule(),
       );
       return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
-    }
-
-    case "toolcall_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        streamingContent.partialJson += proxyEvent.delta;
-        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
-        if (!previewSchedule) {
-          throw new Error("Received toolcall_delta without a preview schedule");
-        }
-        if (previewSchedule(streamingContent.partialJson.length)) {
-          content.arguments = parseStreamingJson(streamingContent.partialJson);
-        }
-        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
-        return {
-          type: "toolcall_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received toolcall_delta for non-toolCall content");
     }
 
     case "toolcall_end": {

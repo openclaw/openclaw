@@ -38,6 +38,16 @@ Use `openclaw doctor --json` when an operator or script wants the advisory Docto
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
+Interactive `doctor` first checks shared schema compatibility and can offer a
+source update. If the update does not take over, Doctor checks all database
+schemas before asking to pause the matching managed Gateway while you review repairs. Accepting takes maintenance custody, keeps individual repair
+prompts, and restores the service's prior state after database handles close.
+Declining skips repairs and continues the same invocation with read-only
+`--lint` checks, without changing the service or persisted state or asking for
+repair approvals. The report exits `1` if it finds warnings or errors, otherwise
+`0`. Existing `--deep` and `--allow-exec` selections still apply. Externally supervised or
+unmatched Gateways remain subject to their existing maintenance ownership checks.
+
 When ordinary `doctor` asks **Apply recommended config repairs now?**, it checks
 that the selected root config file still matches the source of that proposal.
 If its contents or selected path changed before the write, Doctor preserves the newer file,
@@ -116,6 +126,15 @@ conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
 Update-time Doctor runs startup-required repairs before optional inspections.
+When the installed updater supports post-restart inspections, Doctor moves
+lint-backed, inspection-only checks out of the stopped Gateway window. The
+updater runs them after restart and saves their findings in the
+`post-activation doctor inspections` result step. Findings or an incomplete
+inspection remain advisory and do not fail an otherwise successful update.
+Repairs, migrations, readiness gates, and checks without equivalent lint
+coverage keep their existing ordering. Older installed updaters keep the
+inspections in their original Doctor pass.
+
 On large fleets it can defer auth and model diagnostics, plugin inspection,
 skills and workspace metadata, session-snapshot inspection, and advisory lint to
 reserve time for required repairs and update validation. Each deferred check
@@ -130,7 +149,8 @@ checks still run during the update. Project-clone inspection, SQLite database-si
 advice, and workspace backup and memory suggestions retain their standalone scope.
 
 This maintenance window also applies when repair ultimately finds no changes.
-Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
+Non-interactive runs without `--fix`, `--repair`, or `--yes` do not enter
+maintenance. Ordinary interactive runs enter only after custody consent.
 Custom state directories remain runtime-only and do not adopt a native service.
 
 `--force` alone does not select repair mode: `openclaw doctor --force` remains
@@ -218,7 +238,7 @@ openclaw doctor --session-sqlite recover --github-issue
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
 
-For channel-specific permissions, use the channel probes instead of `doctor`:
+For channel-specific permissions, use the channel checks instead of `doctor`:
 
 ```bash
 openclaw channels capabilities --channel discord --target channel:<channel-id>
@@ -240,7 +260,7 @@ openclaw channels status --probe
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
 | `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                                                                       |
-| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
+| `--post-upgrade`                | Run post-upgrade plugin compatibility checks; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
 | `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                                                             |
 | `--session-sqlite <mode>`       | Run targeted session SQLite maintenance or legacy import: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                                                                             |
 | `--session-sqlite-store <path>` | With `--session-sqlite`: select a SQLite database or legacy `sessions.json` source, subject to the mode's [selection rules](/cli/doctor/sqlite-maintenance#session-sqlite-migration).                                                                 |

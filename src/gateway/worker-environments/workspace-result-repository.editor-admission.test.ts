@@ -8,6 +8,7 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import type { Slot } from "../../infra/sqlite-worker-broker.types.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { placements, SESSION_ID, sessionTarget } from "./worker-turn-launcher.test-support.js";
@@ -32,7 +33,6 @@ describe("repository workspace editor admission", () => {
       const originalManifestRef = placements.get(SESSION_ID)!.workspaceBaseManifestRef;
       const editorBytes = "editor bytes retained for authorized recovery\n";
       const manifestWrites = vi.spyOn(placements, "updateWorkspaceBaseManifest");
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let revoked = false;
       let commitObserved = false;
       let measuringCommit = false;
@@ -42,36 +42,32 @@ describe("repository workspace editor admission", () => {
           commitSql.push(query);
         }
       });
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            const input = manifestWrites.mock.calls[0]?.[0];
-            const facts =
-              isRecord(request.facts) && request.facts.kind === "session-entry-current"
-                ? request.facts.domainFacts
-                : request.facts;
-            if (
-              request.stage === "commit" &&
-              input &&
-              isRecord(facts) &&
-              isRecord(facts.placement) &&
-              facts.placement.sessionId === input.claim.sessionId &&
-              facts.placement.workspaceBaseManifestRef === input.manifestRef
-            ) {
-              commitObserved = true;
-              revoked = authority === "revoked";
-              measuringCommit = true;
-              try {
-                admit(request, grant);
-              } finally {
-                measuringCommit = false;
-              }
-              return;
-            }
+      const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+        const input = manifestWrites.mock.calls[0]?.[0];
+        const facts =
+          isRecord(request.facts) && request.facts.kind === "session-entry-current"
+            ? request.facts.domainFacts
+            : request.facts;
+        if (
+          request.stage === "commit" &&
+          input &&
+          isRecord(facts) &&
+          isRecord(facts.placement) &&
+          facts.placement.sessionId === input.claim.sessionId &&
+          facts.placement.workspaceBaseManifestRef === input.manifestRef
+        ) {
+          commitObserved = true;
+          revoked = authority === "revoked";
+          measuringCommit = true;
+          try {
             admit(request, grant);
-          }, attachment),
-        );
+          } finally {
+            measuringCommit = false;
+          }
+          return;
+        }
+        admit(request, grant);
+      });
       try {
         placements.get(SESSION_ID);
         expect(sql.queries.length).toBeGreaterThan(0);
@@ -144,7 +140,6 @@ describe("repository workspace editor admission", () => {
     const receive = brokerReply.receiveSqliteWorkerReply;
     const dispatch = brokerReply.dispatchSqliteWorkerJob;
     const dispatchedSlots = new WeakMap<object, Slot>();
-    const runOperation = stateWorker.runOpenClawStateWorkerOperation;
     const updateManifest = placements.updateWorkspaceBaseManifest.bind(placements);
     let holding = false;
     let heldSlot: Slot | undefined;
@@ -194,24 +189,13 @@ describe("repository workspace editor admission", () => {
         }
         receive(slot, reply, owner);
       });
-    const operations = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        runOperation(
-          context,
-          (scope) =>
-            operation({
-              execute: (command, executeOptions) => {
-                const pending = scope.execute(command, executeOptions);
-                if (command.type === "placementTurns.updateWorkspaceBaseManifest") {
-                  manifestQueued.resolve();
-                }
-                return pending;
-              },
-            }),
-          options,
-        ),
-      );
+    const operations = probe.command(stateWorker, (command, executeOptions, scope) => {
+      const pending = scope.execute(command, executeOptions);
+      if (command.type === "placementTurns.updateWorkspaceBaseManifest") {
+        manifestQueued.resolve();
+      }
+      return pending;
+    });
     const manifestWrites = vi
       .spyOn(placements, "updateWorkspaceBaseManifest")
       .mockImplementation(async (...args) => {

@@ -162,6 +162,41 @@ export function mutateRun(
   );
 }
 
+export const UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS = 1_000;
+
+// Recovery requirements are independent of diagnostic history's eviction priority.
+const REQUIRED_UPDATE_RUN_STEPS = new Set<string>([
+  ...UPDATE_RUN_PHASES,
+  "candidate-admission",
+  "global update",
+  "global update (omit optional)",
+  "candidate-doctor-lint",
+  "previous generation restoration",
+  "post-update verification",
+  "task-delivery-recovery",
+  "openclaw doctor",
+  "package rollback",
+  "config rollback",
+  "git-runtime-rollback",
+]);
+
+/** Recovery reads these receipts as well as phases and terminal outcomes. */
+export function isRequiredUpdateRunStep(step: UpdateRunStep & { reason?: string }): boolean {
+  const key = updateRunStepKey(step.step);
+  return (
+    REQUIRED_UPDATE_RUN_STEPS.has(key) ||
+    step.status === "failed" ||
+    step.reason !== undefined ||
+    step.termination === "signal" ||
+    key.startsWith("finalize:") ||
+    key.startsWith("driver:") ||
+    key.startsWith("notice:") ||
+    key.startsWith("reconcile:") ||
+    key.startsWith("diagnostic:database ") ||
+    key.startsWith("git-rollback-")
+  );
+}
+
 type RecoveryDiagnostics = Pick<UpdateRunRecord["verification"], "recovery" | "rollbackOutcome">;
 type UpdateRunDiagnostics = RecoveryDiagnostics &
   Partial<Pick<UpdateRunResult, "verification" | "steps">> & {
@@ -184,6 +219,25 @@ function applyUpdateRunDiagnostics(
   } = typeof diagnostics === "function" ? diagnostics(record.verification) : diagnostics;
   if (failure && record.status === "running") {
     upsertStep(record, { ...failure, status: "failed" });
+  } else if (failure && record.status === "failed") {
+    // A helper can finish before its parent observes the failure. Enrich only
+    // the already-failed step; terminal outcomes and prior facts stay authoritative.
+    const previous = record.steps.find((step) => step.step === updateRunStepKey(failure.step));
+    if (previous?.status === "failed") {
+      upsertStep(record, {
+        ...previous,
+        detail: previous.detail ?? failure.detail,
+        exitCode: previous.exitCode ?? failure.exitCode,
+        failureFacts: [
+          ...new Map(
+            [...(previous.failureFacts ?? []), ...(failure.failureFacts ?? [])].map((fact) => [
+              JSON.stringify(fact),
+              fact,
+            ]),
+          ).values(),
+        ].slice(0, 5),
+      });
+    }
   }
   if (verification) {
     const { recovery, rollbackOutcome, booted, noticeDelivered, doctorHint } = record.verification;

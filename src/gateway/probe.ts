@@ -1,5 +1,3 @@
-// Gateway reachability probe client.
-// Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
@@ -18,6 +16,7 @@ import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceTokenReadOnly,
 } from "../infra/device-auth-store.js";
+import { publicKeyRawBase64UrlFromEd25519Pem } from "../infra/ed25519-signature.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -36,8 +35,8 @@ import {
   resolveEdgeAuthHeaders,
   type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
-import { READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
+import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -92,9 +91,6 @@ export type GatewayProbeResult = {
 type GatewayProbeDetailLevel = "none" | "presence" | "config" | "full";
 
 const MIN_PROBE_TIMEOUT_MS = 250;
-const OPERATOR_READ_SCOPE = "operator.read";
-const OPERATOR_WRITE_SCOPE = "operator.write";
-const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const DEVICE_IDENTITY_REQUIRED_CLOSE_CODE = 1008;
 const DEVICE_IDENTITY_REQUIRED_CLOSE_REASON = "device identity required";
 const DEVICE_REQUIRED_PROBE_FAILURE_THRESHOLD = 3;
@@ -115,14 +111,6 @@ export function clampProbeTimeoutMs(timeoutMs: number): number {
 
 function formatProbeCloseError(close: GatewayProbeClose): string {
   return `gateway closed (${close.code}): ${close.reason}`;
-}
-
-function resolveDeviceRequiredProbeCacheKey(url: string): string {
-  try {
-    return new URL(url).href;
-  } catch {
-    return url;
-  }
 }
 
 function isDeviceIdentityRequiredClose(close: GatewayProbeClose | null): boolean {
@@ -183,7 +171,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
   const close = {
     code: DEVICE_IDENTITY_REQUIRED_CLOSE_CODE,
     reason: DEVICE_IDENTITY_REQUIRED_CLOSE_REASON,
-    hint: "probe short-circuited by recent device-required rejections",
+    hint: "check short-circuited by recent device-required rejections",
   };
   return {
     ok: false,
@@ -221,11 +209,11 @@ export function resolveProbeAuthSummary(params: {
     }).kind === "pairing-required"
   ) {
     capability = "pairing_pending";
-  } else if (scopes.includes(OPERATOR_ADMIN_SCOPE)) {
+  } else if (scopes.includes(ADMIN_SCOPE)) {
     capability = "admin_capable";
-  } else if (scopes.includes(OPERATOR_WRITE_SCOPE)) {
+  } else if (scopes.includes(WRITE_SCOPE)) {
     capability = "write_capable";
-  } else if (scopes.includes(OPERATOR_READ_SCOPE) || params.verifiedRead === true) {
+  } else if (scopes.includes(READ_SCOPE) || params.verifiedRead === true) {
     capability = "read_only";
   } else if (params.connectLatencyMs != null && params.authMetadataPresent === true) {
     capability = "connected_no_operator_scope";
@@ -297,8 +285,8 @@ export async function probeGateway(opts: {
       if (remote && loopback && !route.bound && !hasProbeAuth(opts.auth)) {
         return null;
       }
-      const identityModule = await import("../infra/device-identity.js");
-      const identity = identityModule.loadDeviceIdentityIfPresent({ env: opts.env });
+      const identityModule = await import("../infra/device-identity-async.js");
+      const identity = await identityModule.loadDeviceIdentityIfPresentAsync({ env: opts.env });
       if (!identity) {
         return null;
       }
@@ -326,8 +314,7 @@ export async function probeGateway(opts: {
           );
           const issuedToken = paired?.tokens?.operator;
           if (
-            paired?.publicKey !==
-              identityModule.publicKeyRawBase64UrlFromPem(identity.publicKeyPem) ||
+            paired?.publicKey !== publicKeyRawBase64UrlFromEd25519Pem(identity.publicKeyPem) ||
             !issuedToken ||
             issuedToken.revokedAtMs ||
             !verifyPairingToken(cachedOperatorToken.token.trim(), issuedToken.token)
@@ -345,9 +332,8 @@ export async function probeGateway(opts: {
       return null;
     }
   })();
-  const cacheKey = resolveDeviceRequiredProbeCacheKey(
-    remote && route.bound && deviceAuthScope ? deviceAuthScope : opts.url,
-  );
+  const cacheUrl = remote && route.bound && deviceAuthScope ? deviceAuthScope : opts.url;
+  const cacheKey = URL.parse(cacheUrl)?.href ?? cacheUrl;
   const cacheEligible = deviceIdentity == null && !hasProbeAuth(opts.auth);
   if (cacheEligible && shouldShortCircuitDeviceRequiredProbe(cacheKey, Date.now())) {
     return makeDeviceRequiredShortCircuitResult(opts.url);
@@ -533,31 +519,22 @@ export async function probeGateway(opts: {
             });
           });
           try {
-            let details: Partial<
-              Pick<GatewayProbeResult, "health" | "status" | "presence" | "configSnapshot">
-            >;
-            if (detailLevel === "presence") {
-              const presence = await client.request("system-presence");
-              details = {
-                presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-              };
-            } else if (detailLevel === "config") {
-              details = { configSnapshot: await client.request("config.get", {}) };
-            } else {
-              const [health, status, presence, configSnapshot] = await Promise.all([
-                client.request("health"),
-                client.request<Partial<StatusSummary>>("status"),
-                client.request("system-presence"),
-                client.request("config.get", {}),
-              ]);
-              details = {
+            const fullDetails = detailLevel !== "presence" && detailLevel !== "config";
+            const [health, status, presence, configSnapshot] = await Promise.all([
+              fullDetails ? client.request("health") : null,
+              fullDetails ? client.request<Partial<StatusSummary>>("status") : null,
+              detailLevel !== "config" ? client.request("system-presence") : null,
+              detailLevel !== "presence" ? client.request("config.get", {}) : null,
+            ]);
+            settleProbe(
+              { ok: true, error: null, verifiedRead: true },
+              {
                 health,
                 status,
                 presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
                 configSnapshot,
-              };
-            }
-            settleProbe({ ok: true, error: null, verifiedRead: true }, details);
+              },
+            );
           } catch (err) {
             const error = formatErrorMessage(err);
             const missingScopeErrorDetails = readMissingScopeError(err);

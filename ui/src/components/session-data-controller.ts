@@ -88,7 +88,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   presenceInstanceId?: string;
   readonly ownerCounts = new SidebarOwnerSessionCounts(() => this.requestSessionDataUpdate());
 
-  // These caches were not Lit state on the element and stay non-reactive here.
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
 
   private readonly subscriptions: SubscriptionsController;
@@ -97,7 +96,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
   readonly sessionCatalogPageDepths = new Map<string, number>();
-  readonly sessionCatalogRevisions = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
   private sessionsSource: SessionCapability | null = null;
   private filteredSessionScope: string | null = null;
@@ -127,8 +125,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
-    // The element used to enter subscriptions before connecting catalog listeners,
-    // then tear subscriptions down after all session cleanup. Keep that ordering.
+    // Subscribe before connecting catalog listeners; unsubscribe after session cleanup.
     this.subscriptions = new SubscriptionsController({
       addController: () => undefined,
       removeController: () => undefined,
@@ -261,7 +258,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionCatalogs = [];
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
     this.sessionCatalogPageDepths.clear();
-    this.sessionCatalogRevisions.clear();
     this.requestSessionDataUpdate();
   }
 
@@ -301,7 +297,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       // Catalog cursors and rows belong to the selected agent, not just its host.
       this.sessionCatalogs = [];
       this.sessionCatalogPageDepths.clear();
-      this.sessionCatalogRevisions.clear();
     }
     if (agentChanged && !ownsCurrentCanonicalList) {
       // A replacement capability may publish its new-agent list before selection synchronizes.

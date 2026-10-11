@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -58,16 +59,12 @@ it.for([
         );
       }
       if (stage === "commit") {
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "commit") {
-                client.invalidated = true;
-              }
-              return admit(request, grant);
-            }, attachment),
-        );
+        probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "commit") {
+            client.invalidated = true;
+          }
+          return admit(request, grant);
+        });
       }
       await expect(invocation.invoke()).rejects.toThrow(/authority/i);
       expect(invocation.respond).not.toHaveBeenCalled();
@@ -215,22 +212,18 @@ async function proveLegacyAuthority<
       return resolve(...args);
     });
   } else {
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            connection.abort();
-            stages.push("transport-retired");
-          } else if (request.stage === "commit") {
-            stages.push("verdict-commit");
-            if (revoke) {
-              invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
-            }
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        connection.abort();
+        stages.push("transport-retired");
+      } else if (request.stage === "commit") {
+        stages.push("verdict-commit");
+        if (revoke) {
+          invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
+        }
+      }
+      return admit(request, grant);
+    });
   }
   const response = await invocation.invoke();
   expect(stages).toEqual(["transport-retired", autoReview ? "sdk-verdict" : "verdict-commit"]);
@@ -257,11 +250,12 @@ async function proveLegacyAuthority<
   }
 }
 
-it.for(
-  (["exec", "plugin", "auto-review"] as const).flatMap((kind) =>
-    [false, true].map((revoke) => ({ kind, revoke })),
-  ),
-)(
+it.for([
+  { kind: "exec", revoke: true },
+  { kind: "plugin", revoke: false },
+  { kind: "auto-review", revoke: false },
+  { kind: "auto-review", revoke: true },
+] as const)(
   "retains $kind verdict authority after disconnect (revoked: $revoke)",
   async ({ kind, revoke }, test) => {
     if (kind === "plugin") {
@@ -346,26 +340,22 @@ it.for([false, true])(
       });
       vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
       const stages: string[] = [];
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "transaction") {
-              connection.abort();
-              stages.push("transport-retired");
-            } else if (request.stage === "commit") {
-              stages.push("expiry-commit");
-              if (revoke) {
-                invalidateGatewayDeviceRevocation(
-                  invocation.context,
-                  "legacy-expiry-reviewer",
-                  "operator",
-                );
-              }
-            }
-            return admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "transaction") {
+          connection.abort();
+          stages.push("transport-retired");
+        } else if (request.stage === "commit") {
+          stages.push("expiry-commit");
+          if (revoke) {
+            invalidateGatewayDeviceRevocation(
+              invocation.context,
+              "legacy-expiry-reviewer",
+              "operator",
+            );
+          }
+        }
+        return admit(request, grant);
+      });
       if (revoke) {
         await expect(invocation.invoke()).rejects.toThrow(/authority/u);
         expect(

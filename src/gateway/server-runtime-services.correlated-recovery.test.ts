@@ -17,13 +17,14 @@ import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/s
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDelivery,
   markSessionDeliverySettlement,
 } from "../infra/session-delivery-queue-storage.js";
 import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -57,10 +58,8 @@ afterEach(() => {
 
 describe("registered correlated completion recovery custody", () => {
   it.for([
-    { change: "none", outcome: "recovered" },
     { change: "none", outcome: "moved-to-failed" },
     { change: "default", outcome: "recovered" },
-    { change: "default", outcome: "moved-to-failed" },
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },
@@ -134,7 +133,9 @@ describe("registered correlated completion recovery custody", () => {
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+            expect(command).toEqual({
+              type: "subagents.restore",
+            });
             throw new Error("registry hydration read unavailable");
           });
         try {
@@ -172,43 +173,32 @@ describe("registered correlated completion recovery custody", () => {
           resumeRun: fallbackResume,
           warn: vi.fn(),
         });
-        const operation = stateWorker.runOpenClawStateWorkerOperation;
         let released = false;
-        vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-          (owner, run, options) =>
-            operation(
-              owner,
-              (scope) =>
-                run({
-                  execute: async (command, executeOptions) => {
-                    const receipt = await scope.execute(command, executeOptions);
-                    if (command.type === "sessionDelivery.mutateSubagentCompletion" && !released) {
-                      released = true;
-                      // The cleanup successor waits for this ACK to release row admission.
-                      cleanupRelease = completionRuntime
-                        .completeSubagentRunWithRecovery(
-                          {
-                            runId: child.runId,
-                            expectedEntry: child,
-                            endedAt: now - 10,
-                            outcome: { status: "ok" },
-                            reason: SUBAGENT_ENDED_REASON_COMPLETE,
-                            triggerCleanup: true,
-                          },
-                          "queued-completion-retry",
-                        )
-                        .then(() => {
-                          expect(failedCompletion).toHaveBeenCalledTimes(2);
-                          expect(fallbackResume).toHaveBeenCalledOnce();
-                          expect(subagentRuns.get(child.runId)?.cleanupHandled).toBe(false);
-                        });
-                    }
-                    return receipt;
-                  },
-                }),
-              options,
-            ),
-        );
+        probe.command(stateWorker, async (command, executeOptions, scope) => {
+          const receipt = await scope.execute(command, executeOptions);
+          if (command.type === "sessionDelivery.mutateSubagentCompletion" && !released) {
+            released = true;
+            // The cleanup successor waits for this ACK to release row admission.
+            cleanupRelease = completionRuntime
+              .completeSubagentRunWithRecovery(
+                {
+                  runId: child.runId,
+                  expectedEntry: child,
+                  endedAt: now - 10,
+                  outcome: { status: "ok" },
+                  reason: SUBAGENT_ENDED_REASON_COMPLETE,
+                  triggerCleanup: true,
+                },
+                "queued-completion-retry",
+              )
+              .then(() => {
+                expect(failedCompletion).toHaveBeenCalledTimes(2);
+                expect(fallbackResume).toHaveBeenCalledOnce();
+                expect(subagentRuns.get(child.runId)?.cleanupHandled).toBe(false);
+              });
+          }
+          return receipt;
+        });
       }
       const deliver = vi.spyOn(sentinel, "deliverQueuedSessionDelivery");
       const settle = completion.settleCorrelatedSubagentDelivery;

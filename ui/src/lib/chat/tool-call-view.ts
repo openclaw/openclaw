@@ -1,11 +1,3 @@
-/**
- * View-model for tool-call rows.
- *
- * Classifies a tool call into a small set of presentation kinds (command,
- * read, edit, write, search, fetch, generic) across the arg spellings used by
- * the OpenClaw session tools and foreign harnesses (Claude/Codex style).
- */
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
@@ -41,7 +33,6 @@ export type ToolCallView = {
   target?: string;
   /** Dimmed secondary detail (directory, query scope, URL host…). */
   targetDetail?: string;
-  /** Inline diff rows for edit/write calls. */
   diff?: DiffLine[];
   stat?: DiffStat;
   /** Producer-recorded operations for patch rows. */
@@ -267,7 +258,7 @@ function buildToolCallView(
   const kind = resolveToolCallKind(key, args, editorCommand);
 
   if (kind === "command") {
-    const command = args ? readNonBlankString(args.command) : undefined;
+    const command = readNonBlankString(args?.command);
     // Display the inner command from a harness's sh -lc wrapper.
     const shellWrapper = command?.match(
       /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
@@ -312,11 +303,9 @@ function buildToolCallView(
     if (details?.changed === false) {
       return view;
     }
-    const content = args
-      ? editorCommand === "create"
-        ? readNonBlankString(args.file_text)
-        : readNonBlankString(args.content)
-      : undefined;
+    const content = readNonBlankString(
+      args?.[editorCommand === "create" ? "file_text" : "content"],
+    );
     if (!content) {
       return view;
     }
@@ -332,11 +321,10 @@ function buildToolCallView(
   }
 
   if (kind === "search") {
-    const pattern = args
-      ? (readNonBlankString(args.pattern) ??
-        readNonBlankString(args.query) ??
-        readNonBlankString(args.glob))
-      : undefined;
+    const pattern =
+      readNonBlankString(args?.pattern) ??
+      readNonBlankString(args?.query) ??
+      readNonBlankString(args?.glob);
     const path = resolvePathArg(args);
     if (!pattern && !path) {
       return { kind: "generic" };
@@ -345,7 +333,7 @@ function buildToolCallView(
   }
 
   if (kind === "fetch") {
-    const url = args ? readNonBlankString(args.url) : undefined;
+    const url = readNonBlankString(args?.url);
     if (!url) {
       return { kind: "generic" };
     }

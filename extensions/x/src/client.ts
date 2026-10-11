@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { resolveXAccount } from "./accounts.js";
 import { createXApiClient, type XApiClient, type XTokenState } from "./api.js";
 import { getXRuntime } from "./runtime.js";
+import { openXSpend } from "./spend.js";
 
 type ClientOptions = Parameters<typeof createXApiClient>[0];
 type ClientEntry = {
@@ -45,6 +47,12 @@ export async function getXApi(accountId: string, cfg: OpenClawConfig): Promise<X
     accounts = new Map();
     clients.set(runtime, accounts);
   }
+  const readConfig = createRuntimeConfigReader(cfg);
+  const spend = openXSpend(
+    runtime,
+    accountId,
+    () => resolveXAccount(readConfig(), accountId).costLimits,
+  );
   const existing = accounts.get(accountId);
   if (existing?.lineageFingerprint === lineageFingerprint) {
     // Transport credential rotation keeps the same in-flight OAuth refresh owner.
@@ -62,6 +70,7 @@ export async function getXApi(accountId: string, cfg: OpenClawConfig): Promise<X
     overflowPolicy: "reject-new",
   });
   const options: ClientOptions = {
+    spend,
     clientId: account.config.clientId!,
     clientSecret,
     refreshToken,

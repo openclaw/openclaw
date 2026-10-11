@@ -2,7 +2,6 @@ import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
@@ -304,25 +303,8 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
     imageCommand,
     "List image generation providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-        await import("./shared.js");
-      const { listRuntimeImageGenerationProviders } =
-        await import("../../image-generation/runtime.js");
-      const selectedProvider = resolveSelectedProviderFromModelRef(
-        resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
-      );
-      return listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
-        available: true,
-        configured:
-          selectedProvider === provider.id ||
-          providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-        selected: selectedProvider === provider.id,
-        id: provider.id,
-        label: provider.label,
-        defaultModel: provider.defaultModel,
-        models: provider.models ?? [],
-        capabilities: provider.capabilities,
-      }));
+      const { listGenerationProviders } = await import("./media-providers.js");
+      return listGenerationProviders("image", cfg, agentId);
     },
     providerSummaryText,
   );

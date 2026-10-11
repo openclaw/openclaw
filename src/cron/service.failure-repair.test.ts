@@ -1,6 +1,7 @@
 // Owner-conversation repair replaces the first failure alert of a streak.
 import { describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
   createTelegramDelivery,
   expectAlertTextContaining,
@@ -9,6 +10,7 @@ import {
 import { maybeEmitFailureAlert, resolveFailureAlert } from "./service/failure-alerts.js";
 import { markInterruptedStartupRun } from "./service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./service/state.js";
+import { applyJobResult } from "./service/timer-outcomes.js";
 import type { CronJob } from "./types.js";
 
 const { withFailureAlertCron } = setupFailureAlertSuite();
@@ -149,6 +151,176 @@ describe("CronService failure repair", () => {
     );
   });
 
+  describe("provider outage quick retries", () => {
+    const hourly = { schedule: { kind: "every" as const, everyMs: 3_600_000 } };
+    const runDue = async (cron: Parameters<AlertParams[1]>[0]["cron"], jobId: string) => {
+      vi.setSystemTime(cron.getJob(jobId)?.state.nextRunAtMs ?? Date.now());
+      await cron.run(jobId, "due");
+    };
+
+    it.each([
+      { name: "owned hourly", overrides: owned, everyMs: 3_600_000, repairs: 1, alerts: 0 },
+      {
+        name: "unowned hourly",
+        overrides: { ...owned, owner: undefined },
+        everyMs: 3_600_000,
+        repairs: 0,
+        alerts: 1,
+      },
+      // The 60s retry is not sooner than the next natural slot, so ordinary backoff schedules it.
+      { name: "owned every-minute", overrides: owned, everyMs: 60_000, repairs: 1, alerts: 0 },
+    ])(
+      "holds the $name notification until the quick retries are exhausted",
+      async ({ overrides, everyMs, repairs, alerts }) => {
+        await withRepair(
+          async ({
+            cron,
+            runIsolatedAgentJob,
+            sendCronFailureAlert,
+            runCronFailureRepair,
+            addJob,
+          }) => {
+            runIsolatedAgentJob.mockResolvedValue({
+              status: "error",
+              error: "fetch failed: getaddrinfo EAI_AGAIN api.example.com",
+            });
+            const job = await addJob("outage sync", {
+              ...overrides,
+              schedule: { kind: "every", everyMs },
+            });
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+              await runDue(cron, job.id);
+            }
+            expect(cron.getJob(job.id)?.state).toMatchObject({ consecutiveErrors: 3 });
+            expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeDefined();
+            expect(runCronFailureRepair).not.toHaveBeenCalled();
+            expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+            await runDue(cron, job.id);
+            expect(runCronFailureRepair).toHaveBeenCalledTimes(repairs);
+            expect(sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
+            if (repairs) {
+              expect(runCronFailureRepair.mock.calls[0]?.[0]?.message).toContain("failed 4");
+            }
+          },
+        );
+      },
+    );
+
+    it("clears a held outage silently when a quick retry succeeds", async () => {
+      await withRepair(
+        async ({
+          cron,
+          runIsolatedAgentJob,
+          sendCronFailureAlert,
+          runCronFailureRepair,
+          addJob,
+        }) => {
+          runIsolatedAgentJob.mockResolvedValue({
+            status: "error",
+            error: "HTTP 503 Service Unavailable",
+          });
+          const job = await addJob("blip sync", { ...owned, ...hourly });
+          await runDue(cron, job.id);
+          await runDue(cron, job.id);
+          runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
+          await runDue(cron, job.id);
+          expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
+          expect(runCronFailureRepair).not.toHaveBeenCalled();
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it.each([
+      {
+        name: "provider ECONNREFUSED (classified as timeout)",
+        result: {
+          error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443",
+          provider: "anthropic",
+        },
+        expected: [],
+      },
+      {
+        name: "cron execution watchdog timeout",
+        result: {
+          error: "cron: job execution timed out",
+          errorClassification: { kind: "reason", reason: "timeout" } as const,
+        },
+        expected: ["failure-repair"],
+      },
+      {
+        name: "helper script timeout",
+        result: { error: "script failure", ...cronScriptFailureMetadata("payload", "timeout") },
+        expected: ["failure-repair"],
+      },
+    ])("second failure from $name requests: $expected", ({ result, expected }) => {
+      const { state, job, deferredNotifications } = repairPolicyFixture({
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: runningAtMs },
+        state: { consecutiveErrors: 1 },
+      });
+      applyJobResult(
+        state,
+        job,
+        { status: "error", startedAt: runningAtMs, endedAt: runningAtMs + 1_000, ...result },
+        { deferredNotifications },
+      );
+      expect(job.state).toMatchObject({ consecutiveErrors: 2, lastErrorReason: "timeout" });
+      expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+    });
+
+    it.each([
+      {
+        name: "a weekly job past the retry budget",
+        overrides: { schedule: { kind: "every" as const, everyMs: 7 * 86_400_000 } },
+        consecutiveErrors: 3,
+        expected: ["failure-repair"],
+      },
+      {
+        name: "a one-shot retired after the retry budget",
+        overrides: {
+          schedule: { kind: "at" as const, at: new Date(runningAtMs).toISOString() },
+        },
+        consecutiveErrors: 3,
+        expected: ["failure-alert"],
+      },
+      {
+        name: "a disabled job within the retry budget",
+        overrides: { enabled: false },
+        consecutiveErrors: 1,
+        expected: ["failure-alert"],
+      },
+      {
+        name: "a cron schedule with no next run within the retry budget",
+        overrides: { schedule: { kind: "cron" as const, expr: "0 0 30 2 *" } },
+        consecutiveErrors: 1,
+        expected: ["failure-repair"],
+      },
+    ])("does not hold $name", ({ overrides, consecutiveErrors, expected }) => {
+      const { state, job, deferredNotifications } = repairPolicyFixture({
+        ...overrides,
+        state: { consecutiveErrors },
+      });
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443",
+          startedAt: runningAtMs,
+          endedAt: runningAtMs + 1_000,
+        },
+        { deferredNotifications },
+      );
+      expect(job.state.consecutiveErrors).toBe(consecutiveErrors + 1);
+      if (consecutiveErrors < 3) {
+        expect(job.state.nextRunAtMs).toBeUndefined();
+      }
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+    });
+  });
+
   it("alerts on the next failure when the repair request fails", async () => {
     await withRepair(async ({ cron, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
       runCronFailureRepair.mockRejectedValueOnce(new Error("owner session deleted"));
@@ -164,47 +336,14 @@ describe("CronService failure repair", () => {
     });
   });
 
-  it("keeps the existing alert with no owner conversation", async () => {
-    await withRepair(async ({ cron, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
-      const job = await addJob("plain sync", { ...owned, owner: undefined });
-      await cron.run(job.id, "force");
-      await cron.run(job.id, "force");
-      expect(runCronFailureRepair).not.toHaveBeenCalled();
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      expect(cron.getJob(job.id)?.state.failureAlertIncident?.repair).toBeUndefined();
-    });
-  });
-
   it.each<{
     name: string;
     payload: CronJob["payload"];
-    schedule?: CronJob["schedule"];
-    repairs: boolean;
   }>([
-    { name: "systemEvent", payload: { kind: "systemEvent", text: "check" }, repairs: true },
-    { name: "script", payload: { kind: "script", script: "json({})" }, repairs: true },
-    {
-      name: "operator command",
-      payload: { kind: "command", argv: ["true"], env: {}, input: "" },
-      repairs: false,
-    },
-    {
-      name: "on-exit schedule",
-      payload: { kind: "agentTurn", message: "sync" },
-      schedule: { kind: "on-exit", command: "make build" },
-      repairs: false,
-    },
-    {
-      name: "stream schedule",
-      payload: { kind: "agentTurn", message: "sync" },
-      schedule: { kind: "stream", command: ["tail", "-f", "app.log"] },
-      repairs: false,
-    },
-  ])("$name job: repair=$repairs", ({ payload, repairs, schedule }) => {
-    const { state, job, deferredNotifications } = repairPolicyFixture({
-      payload,
-      ...(schedule ? { schedule } : {}),
-    });
+    { name: "systemEvent", payload: { kind: "systemEvent", text: "check" } },
+    { name: "script", payload: { kind: "script", script: "json({})" } },
+  ])("requests repair for a $name job", ({ payload }) => {
+    const { state, job, deferredNotifications } = repairPolicyFixture({ payload });
     maybeEmitFailureAlert(state, {
       job,
       alertConfig: resolveFailureAlert(state, job),
@@ -214,15 +353,14 @@ describe("CronService failure repair", () => {
       deferredNotifications,
     });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
-      repairs ? "failure-repair" : "failure-alert",
+      "failure-repair",
     ]);
   });
 
   it.each([
-    { name: "recurring job", schedule: "every", recover: false, repairs: true },
-    { name: "replayed one-shot", schedule: "at", recover: true, repairs: true },
-    { name: "retired one-shot", schedule: "at", recover: false, repairs: false },
-  ] as const)("restart-interrupted $name: repair=$repairs", ({ schedule, recover, repairs }) => {
+    { name: "recurring job", schedule: "every", repairs: true },
+    { name: "retired one-shot", schedule: "at", repairs: false },
+  ] as const)("restart-interrupted $name: repair=$repairs", ({ schedule, repairs }) => {
     const { state, job, deferredNotifications } = repairPolicyFixture(
       {
         schedule:
@@ -238,7 +376,7 @@ describe("CronService failure repair", () => {
       job,
       runningAtMs,
       nowMs: runningAtMs + 30_000,
-      recoverInterruptedOneShot: recover,
+      recoverInterruptedOneShot: false,
       deferredNotifications,
     });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([

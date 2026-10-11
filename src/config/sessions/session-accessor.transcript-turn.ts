@@ -32,10 +32,12 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
+  captureSessionTranscriptSourcePublication,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -54,7 +56,7 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error("Malformed agent session key; refusing transcript turn persistence.");
   }
   const scopedAgentId = params.scopeAgentId?.trim()
-    ? normalizeAgentId(params.scopeAgentId.trim())
+    ? normalizeAgentId(params.scopeAgentId)
     : undefined;
   const parsedAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
   const keyAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
@@ -62,6 +64,15 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error(
       `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
     );
+  }
+  const incognito = captureIncognitoSessionOperation({
+    agentId: scopedAgentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    env: params.env,
+  });
+  if (incognito) {
+    return incognito.actor.agentId;
   }
   const persistedStoreOwner =
     params.sessionStore && !params.storePath
@@ -108,7 +119,12 @@ export async function appendTranscriptMessages<TMessage>(
   options: Pick<SessionTranscriptTurnPersistOptions, "config" | "cwd"> & {
     messages: readonly Omit<
       SessionTranscriptTurnMessageAppend,
-      "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "shouldAppend"
+      | "config"
+      | "cwd"
+      | "parentId"
+      | "preparation"
+      | "prepareMessageAfterIdempotencyCheck"
+      | "shouldAppend"
     >[];
   },
 ): Promise<TranscriptMessageAppendResult<TMessage>[]> {
@@ -153,6 +169,13 @@ export async function persistSessionTranscriptTurn(
   const expectedSessionId = options.expectedSessionId;
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
+  }
+  if (
+    options.messages.some(
+      (append) => append.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
+    )
+  ) {
+    throw new Error("Awaited transcript preparation requires an expected session id");
   }
   if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
     throw new Error("Cannot mutate a session turn without an expected session id");
@@ -259,7 +282,7 @@ async function appendTranscriptTurnMessages(
   }
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
   for (const append of selectedMessages) {
-    const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+    const { shouldAppend: _shouldAppend, workerPreparation, ...appendOptions } = append;
     const result = await appendTranscriptMessage(
       {
         ...(target.agentId ? { agentId: target.agentId } : {}),
@@ -270,7 +293,7 @@ async function appendTranscriptTurnMessages(
       },
       {
         ...appendOptions,
-        ...appendOptions.workerPreparation,
+        ...workerPreparation,
         message: attachSessionTranscriptRunId(appendOptions.message, options.runId),
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
@@ -302,6 +325,10 @@ async function persistExpectedSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
+  const onCommittedSource = captureSessionTranscriptSourcePublication({
+    ...scope,
+    sessionId: expectedSessionId,
+  });
   const { selectedSessionId, selectedLifecycleRevision, ...target } =
     preparedTarget ??
     (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
@@ -340,6 +367,7 @@ async function persistExpectedSessionTranscriptTurn(
           message: attachSessionTranscriptRunId(append.message, options.runId),
         })),
         onMessageCommitted: options.onMessageCommitted,
+        onCommittedSource,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
         sessionTurnMutation: options.sessionTurnMutation,
         sessionFile: target.sessionKey!,

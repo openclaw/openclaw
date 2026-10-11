@@ -24,8 +24,9 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.160.0`; newer custom, remote, and macOS desktop-owned
-  binaries continue with a compatibility warning and normal runtime validation.
+  `@openai/codex` `0.160.0` and may select a newer installed Codex; newer
+  custom, remote, and macOS desktop-owned binaries continue with a
+  compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as
@@ -38,6 +39,9 @@ working.
   `workspace-directory`, and marketplace manifests in the current repository.
   Plugins remain unavailable until an owner or `operator.admin` explicitly
   installs or enables their marketplace-qualified identity.
+- OpenClaw excludes the `visualize@openai-bundled` skill from Codex threads.
+  That skill emits Codex-specific inline visualization directives, while
+  OpenClaw visualizations use the `show_widget` tool on supported surfaces.
 
 `codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
 bindings, or other harnesses, because those paths never create Codex

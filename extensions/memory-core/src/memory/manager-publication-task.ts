@@ -1,7 +1,12 @@
+import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
+import type {
+  loadMemorySourceFileState,
+  refreshMemorySessionSourceState,
+} from "./manager-source-state.js";
 
 export type MemoryPublicationConnection = MemoryShadowConnection;
 export type MemoryPublicationState = {
@@ -28,6 +33,21 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "schema.admit": {
+    input: Pick<
+      Parameters<typeof ensureMemoryIndexSchema>[0],
+      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer"
+    >;
+    output: MemoryPublicationResult<ReturnType<typeof ensureMemoryIndexSchema>>;
+  };
+  "source.refresh": {
+    input: Parameters<typeof refreshMemorySessionSourceState>[1];
+    output: MemoryPublicationResult<boolean>;
+  };
+  "source.state": {
+    input: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
+    output: ReturnType<typeof loadMemorySourceFileState>;
+  };
   "cache.read": {
     input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db">;
     output: ReturnType<typeof loadMemoryEmbeddingCache>;
@@ -35,6 +55,14 @@ export type MemoryPublicationOperations = {
   "source.hash": {
     input: { source: "memory" | "sessions"; path: string };
     output: string | undefined;
+  };
+  "source.chunks": {
+    input: { source: "memory" | "sessions"; path: string };
+    output: Array<{ id: string; embedded: boolean }>;
+  };
+  "session.current": {
+    input: { agentId: string; sessionId: string };
+    output: "current" | "forgotten";
   };
   "cache.prune": {
     input: { maxEntries: number };
@@ -46,6 +74,14 @@ export type MemoryPublicationOperations = {
   };
   "cache.write": {
     input: { operation: string; expectedRevision: number };
+    output: MemoryPublicationResult<boolean>;
+  };
+  "cache.write.inline": {
+    input: {
+      header: MemoryEmbeddingCacheHeader;
+      entries: MemoryEmbeddingCacheEntry[];
+      expectedRevision: number;
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.clear": {
@@ -63,7 +99,20 @@ export type MemoryPublicationOperations = {
   "stage.discard": { input: { operation: string }; output: void };
   "source.replace": {
     input: { operation: string; state: MemoryPublicationState };
-    output: MemoryPublicationResult<{ beforeRevision: number; databaseRevision: number }>;
+    output: MemoryPublicationResult<{
+      beforeRevision: number;
+      databaseRevision: number;
+      retainedDrift: boolean;
+    }>;
+  };
+  "source.replace.inline": {
+    input: {
+      header: MemorySourceIndexHeader;
+      rows: number;
+      fragments: MemoryPublicationFragment[];
+      state: MemoryPublicationState;
+    };
+    output: MemoryPublicationOperations["source.replace"]["output"];
   };
   "source.delete": {
     input: {

@@ -1,3 +1,4 @@
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -97,18 +98,21 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   } = toolBase;
   const { systemPromptReport, systemPromptText } = input.systemPrompt;
   const effectiveToolCount = effectiveTools.length;
-  const preparedSessionManager = await prepareEmbeddedAttemptSessionManager({
+  const sessionPreparation = {
     attempt,
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     agentDir: input.agentDir,
     effectiveCwd,
     effectiveWorkspace,
+    sessionAgentId,
+  };
+  const preparedSessionManager = await prepareEmbeddedAttemptSessionManager({
+    ...sessionPreparation,
     onSessionManagerCreated: (manager) => {
       resources.sessionManager = manager;
     },
     replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
     resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
-    sessionAgentId,
     withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
@@ -131,6 +135,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     attempt.model.api,
     attempt.model.baseUrl,
     transcriptPolicy.inHistorySystemUpdates === true,
+    // Personal bootstrap follows the selected human, not only the session ID.
+    attempt.bootstrapUserProfileId,
   ]);
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
@@ -188,44 +194,45 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     promptCache: undefined,
     systemPromptText,
   };
-  const preparedAgentSession = await prepareEmbeddedAttemptAgentSession({
-    attempt,
-    ...(input.activeContextEngine
-      ? { activeContextEngineInfo: input.activeContextEngine.info }
-      : {}),
-    agentCoreThinkingLevel,
-    agentDir: input.agentDir,
-    clientToolPreparation: {
-      catalogToolHookContext,
-      clientTools,
-      codeModeControlsEnabledForRun,
-      deferredDirectoryToolsCallable,
-      effectiveTools,
-      replaySafetyOptions,
-      sandboxSessionKey,
-      sessionAgentId,
-      toolSearchCatalogRef,
-      toolSearchRuntimeConfig,
-      uncompactedEffectiveTools,
-      getToolAbortSignal: () => toolBase.toolAbortSignal,
-    },
-    effectiveCwd,
-    getCurrentAttemptPluginMetadataSnapshot,
-    initialSystemPrompt: state.systemPromptText,
-    prepareSystemPromptUpdate,
-    markStage: (stage) => prepStages.mark(stage),
-    onSessionCreated: (session) => {
-      resources.session = session;
-    },
-    onSystemPromptChanged: (nextSystemPrompt) => {
-      state.systemPromptText = nextSystemPrompt;
-    },
-    runAbortSignal,
-    sessionAgentId,
-    transcriptLifecycle: sessionLock.transcriptLifecycle,
-    sessionManager,
-    prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
-  });
+  const preparedAgentSession = await withOwnedSessionTranscriptWrites(
+    sessionLock.ownedTranscriptWriteContext,
+    async () =>
+      prepareEmbeddedAttemptAgentSession({
+        ...sessionPreparation,
+        ...(input.activeContextEngine
+          ? { activeContextEngineInfo: input.activeContextEngine.info }
+          : {}),
+        agentCoreThinkingLevel,
+        clientToolPreparation: {
+          catalogToolHookContext,
+          clientTools,
+          codeModeControlsEnabledForRun,
+          deferredDirectoryToolsCallable,
+          effectiveTools,
+          replaySafetyOptions,
+          sandboxSessionKey,
+          sessionAgentId,
+          toolSearchCatalogRef,
+          toolSearchRuntimeConfig,
+          uncompactedEffectiveTools,
+          getToolAbortSignal: () => toolBase.toolAbortSignal,
+        },
+        getCurrentAttemptPluginMetadataSnapshot,
+        initialSystemPrompt: state.systemPromptText,
+        prepareSystemPromptUpdate,
+        markStage: (stage) => prepStages.mark(stage),
+        onSessionCreated: (session) => {
+          resources.session = session;
+        },
+        onSystemPromptChanged: (nextSystemPrompt) => {
+          state.systemPromptText = nextSystemPrompt;
+        },
+        runAbortSignal,
+        transcriptLifecycle: sessionLock.transcriptLifecycle,
+        sessionManager,
+        prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
+      }),
+  );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
@@ -252,7 +259,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (!input.isRawModelRun) {
     restoreCacheTtlToolResultProjections(
       toolResultPromptProjectionState,
-      sessionManager.getBranch(),
+      sessionManager.getToolResultProjectionEntries(),
     );
   }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);
@@ -265,15 +272,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
 
   // Guard hooks execute during prompt submission, after transport preparation.
   const contextGuards = installEmbeddedAttemptContextGuards({
-    ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
+    ...sessionPreparation,
     activeSession,
-    agentDir: input.agentDir,
-    attempt,
     computerContextEpoch,
     dropThinkingBlocksForEstimate: transcriptPolicy.dropThinkingBlocks,
-    effectiveCwd,
     effectiveFsWorkspaceOnly,
-    effectiveWorkspace,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
@@ -284,7 +287,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-    sessionAgentId,
     sessionManager,
     settingsManager,
     sandbox,
@@ -304,13 +306,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const cacheTrace = createCacheTrace({ cfg: attempt.config, ...traceContext });
   const anthropicPayloadLogger = createAnthropicPayloadLogger(traceContext);
   const trajectoryRecorder = await prepareEmbeddedAttemptTrajectory({
+    ...sessionPreparation,
     activeSession,
-    attempt,
+    transcriptOwner: sessionLock.ownedTranscriptWriteContext,
     clientToolCount: preparedAgentSession.clientToolDefs.length,
     effectiveToolCount,
-    effectiveWorkspace,
     localModelLeanEnabled,
-    sessionAgentId,
     ...(systemPromptReport ? { systemPromptReport } : {}),
   });
   resources.trajectoryRecorder = trajectoryRecorder;

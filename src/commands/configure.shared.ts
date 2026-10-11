@@ -12,7 +12,6 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 
-/** Parse repeated `--section` values into known configure wizard sections and invalid entries. */
 export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
@@ -60,27 +59,14 @@ export const CONFIGURE_WIZARD_SECTIONS = CONFIGURE_SECTION_OPTIONS.map((option) 
 
 export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
-export const text = (params: Parameters<typeof clackText>[0]): ReturnType<typeof clackText> =>
-  clackText({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
+function stylePromptParams<Params extends { message: string }>(params: Params): Params {
+  return { ...params, message: stylePromptMessage(params.message) };
+}
+
+export const text: typeof clackText = (params) => clackText(stylePromptParams(params));
 /** Styled password prompt wrapper. Echoes bullets so secrets never appear in cleartext. */
-export const password = (
-  params: Parameters<typeof clackPassword>[0],
-): ReturnType<typeof clackPassword> =>
-  clackPassword({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-export const confirm = (
-  params: Parameters<typeof clackConfirm>[0],
-): ReturnType<typeof clackConfirm> =>
-  clackConfirm({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-/** Styled select prompt wrapper that also normalizes option hints. */
+export const password: typeof clackPassword = (params) => clackPassword(stylePromptParams(params));
+export const confirm: typeof clackConfirm = (params) => clackConfirm(stylePromptParams(params));
 export const select = <T>(
   params: Parameters<typeof clackSelect<T>>[0],
 ): ReturnType<typeof clackSelect<T>> => clackSelect(styleSelectParams(params));

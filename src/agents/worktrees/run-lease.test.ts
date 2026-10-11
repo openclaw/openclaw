@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
@@ -19,11 +20,9 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import * as gitLock from "./git-lock.js";
 import { lockState } from "./git-lock.js";
 import * as registryRead from "./registry-read.js";
-import {
-  claimWorktreeRemovalRow,
-  getRegistryWorktree,
-  releaseWorktreeRunLeaseRow,
-} from "./registry.js";
+import { claimWorktreeRemovalRow, releaseWorktreeRunLeaseRow } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
+import { prepareWorktreeRunEndClose } from "./run-end-lifecycle.js";
 import { releaseWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
 import * as runLeaseStore from "./run-lease-store.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
@@ -32,7 +31,7 @@ import {
   acquireWorktreeRunLease,
   claimWorktreeRemoval,
   hasLiveWorktreeRunLease,
-  resolveWorktreeIdForPath,
+  resolveWorktreeForPath,
 } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -64,6 +63,7 @@ describe("worktree run lease", () => {
       await closeOpenClawStateDatabaseAsync();
       vi.restoreAllMocks();
       runLeaseTesting.resetForTest();
+      vi.unstubAllEnvs();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -91,7 +91,7 @@ describe("worktree run lease", () => {
     service = new ManagedWorktreeService({ env });
   });
 
-  async function createSessionWorktree(): Promise<{ id: string; path: string }> {
+  async function createSessionWorktree() {
     const created = await service.create({
       repoRoot: repo,
       name: "run-lease-session",
@@ -99,7 +99,7 @@ describe("worktree run lease", () => {
       ownerKind: "session",
       ownerId: "agent:main:run-lease",
     });
-    return { id: created.id, path: created.path };
+    return created;
   }
 
   it("shares one worktree across concurrent runs and refcounts the git lock", async () => {
@@ -182,7 +182,7 @@ describe("worktree run lease", () => {
           }
           await unlockWorktree(worktree);
         });
-        await incumbent.release();
+        await expect(incumbent.release()).rejects.toThrow("cleanup did not settle");
       }
       const accepted = createDeferred<SqliteWorkerOperationSettlement>();
       const reported = createDeferred<SqliteWorkerOperationSettlement>();
@@ -261,14 +261,29 @@ describe("worktree run lease", () => {
         reported.resolve(
           settlement === "completed" ? native : { kind: "unknown", error: deliveryFailure },
         );
-        await expect(result).resolves.toEqual({ ok: false, error: deliveryFailure });
+        if (settlement === "unknown") {
+          await expect(result).resolves.toMatchObject({
+            ok: false,
+            error: { code: "outcome-unknown", cause: deliveryFailure },
+          });
+        } else {
+          const recovered = await acquisition;
+          expect(recovered).toMatchObject({ id: created.id, token: admittedToken });
+          expect(tokens()).toEqual([...incumbentTokens, admittedToken].toSorted());
+          expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+          await runLeaseTesting.drainPendingCleanupsForTest();
+          expect(tokens()).toEqual([...incumbentTokens, admittedToken].toSorted());
+          expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+          await recovered.release();
+        }
         const remaining =
           settlement === "unknown"
             ? [...incumbentTokens, admittedToken].toSorted()
             : incumbentTokens;
         expect(tokens()).toEqual(remaining);
-        // A failed admission never retained this guard, including its zero-refcount retry state.
-        expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+        expect(await lockState(record)).toEqual(
+          guard === "live" ? { kind: "live", pid: process.pid } : { kind: "none" },
+        );
         await runLeaseTesting.drainPendingCleanupsForTest();
         expect(tokens()).toEqual(remaining);
         expect(await lockState(record)).toEqual(
@@ -281,13 +296,18 @@ describe("worktree run lease", () => {
         if (outcome.ok) {
           await outcome.lease.release();
         }
-        await incumbent.release();
-        // The real worker settled above; only the injected receipt can remain unknown.
-        if (admittedToken) {
-          await releaseWorktreeRunLeaseRowAsync(env, created.id, admittedToken);
+        if (settlement === "unknown") {
+          await incumbent.release().catch(() => {});
+          // The real native write settled; discard only this fixture's injected uncertainty.
+          runLeaseTesting.resetForTest();
+        } else {
+          await incumbent.release().catch(() => {});
+          if (admittedToken) {
+            await releaseWorktreeRunLeaseRowAsync(env, created.id, admittedToken);
+          }
+          failUnlock = false;
+          await runLeaseTesting.drainPendingCleanupsForTest();
         }
-        failUnlock = false;
-        await runLeaseTesting.drainPendingCleanupsForTest();
       }
     },
   );
@@ -331,19 +351,28 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
-  it("resolves the worktree id for a nested workspace path with no session binding", async () => {
+  it("retains the selected nested-workspace identity through lease admission", async () => {
     const created = await createSessionWorktree();
     const nested = path.join(created.path, "workspace");
     await fs.mkdir(nested);
 
-    const resolved = await resolveWorktreeIdForPath({ candidatePaths: [nested], env });
-    expect(resolved).toBe(created.id);
+    const selected = await resolveWorktreeForPath({ candidatePaths: [nested], env });
+    expect(selected?.record.id).toBe(created.id);
 
-    const lease = await acquireWorktreeRunLease(created.id, { env });
+    const lease = await acquireWorktreeRunLease(created.id, { source: selected });
     await expect(
       claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
     ).rejects.toThrow("worktree is busy");
     await lease.release();
+
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE worktrees SET branch = ? WHERE id = ?")
+      .run("replacement-branch", created.id);
+    await expect(acquireWorktreeRunLease(created.id, { source: selected })).rejects.toThrow(
+      /changed/,
+    );
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+    expect(await lockState(created)).toEqual({ kind: "none" });
   });
 
   it("prunes a dead owner lease so removal can proceed", async () => {
@@ -490,7 +519,7 @@ describe("worktree run lease", () => {
     );
 
     vi.useFakeTimers({ toFake: ["setTimeout"] });
-    const release = lease.release();
+    const release = expect(lease.release()).rejects.toThrow("cleanup did not settle");
     await vi.advanceTimersByTimeAsync(75);
     await release;
     vi.useRealTimers();
@@ -500,13 +529,22 @@ describe("worktree run lease", () => {
       claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
     ).rejects.toThrow("worktree is busy");
 
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const closing = prepareWorktreeRunEndClose();
+    closing.beginClose();
+    await expect(closing.drain()).rejects.toThrow("cleanup remains unsettled");
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+
     fail = false;
     await runLeaseTesting.drainPendingCleanupsForTest();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(await lockState(record)).toEqual({ kind: "none" });
+    const successor = prepareWorktreeRunEndClose();
     await expect(
       claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
     ).resolves.toBeUndefined();
+    successor.beginClose();
+    await successor.drain();
   });
 
   it("serializes overlapping same-process acquisitions so the guard holds until the last release", async () => {
@@ -523,6 +561,37 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
     await second.release();
     expect(await lockState(record)).toEqual({ kind: "none" });
+  });
+
+  it("retains an unknown release without replaying it during lifecycle cleanup", async () => {
+    const created = await createSessionWorktree();
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    const failure = new SqliteWorkerError(
+      "Synthetic release settlement was lost",
+      "outcome-unknown",
+    );
+    const releaseRow = vi
+      .spyOn(runLeaseStore, "releaseWorktreeRunLeaseRowAsync")
+      .mockRejectedValue(failure);
+    try {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      const release = expect(lease.release()).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(75);
+      await release;
+      vi.useRealTimers();
+      await runLeaseTesting.drainPendingCleanupsForTest();
+      await expect(lease.release()).rejects.toBe(failure);
+      expect(releaseRow).toHaveBeenCalledOnce();
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+      expect(await lockState(created)).toEqual({ kind: "live", pid: process.pid });
+      vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      const closing = prepareWorktreeRunEndClose();
+      closing.beginClose();
+      await expect(closing.drain()).rejects.toThrow("cleanup remains unsettled");
+    } finally {
+      // The fault left this synthetic row untouched; teardown must not replay the release.
+      runLeaseTesting.resetForTest();
+    }
   });
 
   it.each(["unlock", "registry read"])(
@@ -551,7 +620,7 @@ describe("worktree run lease", () => {
         });
       }
 
-      await lease.release();
+      await expect(lease.release()).rejects.toThrow("cleanup did not settle");
       expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
       expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
@@ -575,7 +644,7 @@ describe("worktree run lease", () => {
       await unlockWorktree(rec);
     });
 
-    await first.release();
+    await expect(first.release()).rejects.toThrow("cleanup did not settle");
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
     const second = await acquireWorktreeRunLease(created.id, { env });
@@ -596,7 +665,7 @@ describe("worktree run lease", () => {
     });
 
     await expect(
-      resolveWorktreeIdForPath({
+      resolveWorktreeForPath({
         sessionEntry: { worktree: { id: created.id } },
         candidatePaths: [],
         env,

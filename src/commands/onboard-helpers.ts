@@ -31,11 +31,7 @@ export {
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
-export {
-  detectBrowserOpenSupport,
-  openUrl,
-  resolveBrowserOpenCommand,
-} from "../infra/browser-open.js";
+export { detectBrowserOpenSupport, openUrl } from "../infra/browser-open.js";
 export { detectBinary } from "../infra/detect-binary.js";
 export { randomToken } from "./random-token.js";
 
@@ -365,11 +361,12 @@ export async function probeGatewayConfiguredModel(
   } | null;
   const configCandidate =
     snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+  const invalidSnapshot: GatewayConfiguredModelProbeResult = {
+    kind: "reachable-unverified",
+    detail: "Gateway returned an invalid config snapshot",
+  };
   if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
-    return {
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    };
+    return invalidSnapshot;
   }
   try {
     const config = configCandidate as OpenClawConfig;
@@ -381,10 +378,7 @@ export async function probeGatewayConfiguredModel(
           detail: "Gateway default agent has no configured model",
         };
   } catch {
-    return {
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    };
+    return invalidSnapshot;
   }
 }
 

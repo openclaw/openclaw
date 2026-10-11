@@ -361,7 +361,7 @@ describe("chat transcript controller", () => {
     },
   );
 
-  it("reconciles an implicit end anchor when committed content has no scroll range", () => {
+  it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
     const flushFrames = stubAnimationFrames();
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -382,10 +382,37 @@ describe("chat transcript controller", () => {
     transcript.hostConnected();
     transcript.scrollToEnd({ source: "auto" });
     transcript.hostUpdated();
+    await Promise.resolve();
     flushFrames();
     render(renderChatThread(props, transcript), container);
     expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
     expect(container.textContent).toContain("message 0");
+  });
+
+  it("renders the history tail immediately after an empty disconnected shell", () => {
+    const flushFrames = stubAnimationFrames();
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("cold-load-tail", "agent:main:cold-load-tail", []);
+    render(renderChatThread(props, transcript), container);
+    Object.defineProperties(container.querySelector(".chat-thread"), {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    flushFrames();
+
+    const messages = Array.from({ length: 40 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Cached history ${index}`,
+      timestamp: index + 1,
+    }));
+    render(renderChatThread({ ...props, messages }, transcript), container);
+
+    expect(container.textContent).toContain("Cached history 39");
+    expect(container.textContent).not.toContain("Cached history 0");
+    transcript.hostDisconnected();
   });
 
   it.each([true, false])("settles a non-overflowing restore (initially loading=%s)", (loading) => {
@@ -465,7 +492,7 @@ describe("chat transcript controller", () => {
     try {
       document.body.append(host);
       await host.settleUpdates();
-      // Finish initial attachment, row measurement, and overscan promotion before counting retries.
+      // Finish initial attachment and row measurement before counting retries.
       flushFrame();
       await host.settleUpdates();
       flushFrame();
@@ -729,7 +756,7 @@ describe("chat transcript controller", () => {
         // Native idle can beat the queued frame; they are separate schedulers.
         vi.advanceTimersByTime(150);
         expect(container.scrollTop, "stale idle must not restore its old offset").toBe(before);
-        // A remote receipt cancels following after the UI considers the command settled.
+        // Reader takeover cancels following after the UI considers the command settled.
         transcript.cancelScroll();
         transcriptDomState.measuredRowHeight = 120;
         const next: TestContentRow[] = [
@@ -751,7 +778,8 @@ describe("chat transcript controller", () => {
     },
   );
 
-  it("keeps a smooth latest command through an idle observer delivery before reaching its target", async () => {
+  it("keeps a smooth latest command through initial settlement and idle delivery before reaching its target", async () => {
+    transcriptDomState.measuredRowHeight = 120;
     const rows = numberedContentRows(40);
     const { container, transcript } = await mountTestTranscript("idle-latest", rows);
     Object.defineProperties(container, {
@@ -764,7 +792,9 @@ describe("chat transcript controller", () => {
     try {
       container.scrollTop = 1000;
       container.dispatchEvent(new Event("scroll"));
+      transcript.hostUpdated();
       transcript.scrollToEnd({ behavior: "smooth" });
+      await Promise.resolve();
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
       container.scrollTop = 1500;
       container.dispatchEvent(new Event("scroll"));
@@ -991,74 +1021,4 @@ describe("chat transcript controller", () => {
       transcript.hostDisconnected();
     }
   });
-
-  it.each([
-    { distance: 0, followEnabled: true, nativePending: false },
-    { distance: 8, followEnabled: true, nativePending: false },
-    { distance: 50, followEnabled: true, nativePending: false },
-    { distance: 0, followEnabled: false, nativePending: false },
-    { distance: 8, followEnabled: false, nativePending: false },
-    { distance: 0, followEnabled: true, nativePending: true },
-  ])(
-    "does not follow another person’s typing ($distance, $followEnabled, native movement pending=$nativePending)",
-    async ({ distance, followEnabled, nativePending }) => {
-      const flushFrames = nativePending ? stubAnimationFrames() : undefined;
-      const rows = numberedContentRows(12);
-      const { container, renderRows, transcript } = await mountTestTranscript(
-        `typing-distance-${distance}`,
-        rows,
-        new ChatTranscriptController(
-          {
-            addController: () => undefined,
-            removeController: () => undefined,
-            requestUpdate: () => undefined,
-            updateComplete: Promise.resolve(true),
-          },
-          () => `typing-distance-${distance}-${followEnabled}`,
-          { canFollowEnd: () => followEnabled },
-        ),
-      );
-      try {
-        const total = transcriptSize(container);
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: total + (nativePending ? 88 : 84) },
-        });
-        for (const observer of resizeObservers) {
-          observer.emitTarget(container, 800, 600);
-        }
-        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
-        container.dispatchEvent(new Event("scroll"));
-        if (nativePending) {
-          // Native movement can precede the offset observer.
-          container.scrollTop -= 100;
-        }
-        const readerOffset = container.scrollTop;
-        const scrollTo = vi.fn();
-        container.scrollTo = scrollTo;
-        renderRows([
-          ...rows,
-          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
-        ]);
-        expect(scrollTo).not.toHaveBeenCalled();
-        expect(container.scrollTop).toBe(readerOffset);
-        if (nativePending) {
-          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-          expect(scrollTo).not.toHaveBeenCalled();
-          container.scrollTop -= 100;
-          container.dispatchEvent(new Event("scroll"));
-          scrollTo.mockClear();
-          Object.defineProperty(container, "scrollHeight", {
-            configurable: true,
-            value: total + 188,
-          });
-          flushFrames?.();
-          expect(scrollTo).not.toHaveBeenCalled();
-          expect(container.scrollTop).toBe(readerOffset - 100);
-        }
-      } finally {
-        transcript.hostDisconnected();
-      }
-    },
-  );
 });

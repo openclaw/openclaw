@@ -51,7 +51,7 @@ export function prepareMarkdownHumanMentions(
 
 export function restoreMarkdownHumanMentions(
   value: string,
-  tokens: readonly MarkdownHumanMentionToken[] = [],
+  tokens: readonly Pick<MarkdownHumanMentionToken, "marker" | "label">[] = [],
 ): string {
   let restored = value;
   for (const token of tokens) {
@@ -70,13 +70,7 @@ export function installMarkdownHumanMentions(parser: MarkdownIt): void {
     }
     const normalize = parser.utils.normalizeReference;
     const markers = mentions.map(({ marker, label }) => ({ marker: normalize(marker), label }));
-    const referenceKey = (key: string) => {
-      let restored = key;
-      for (const { marker, label } of markers) {
-        restored = restored.replaceAll(marker, () => label);
-      }
-      return normalize(restored);
-    };
+    const referenceKey = (key: string) => normalize(restoreMarkdownHumanMentions(key, markers));
     const canonical = new Map<string, (typeof references)[string]>();
     // Block parsing owns valid definitions and their first-definition-wins order.
     for (const [key, reference] of Object.entries(references)) {

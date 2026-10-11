@@ -15,7 +15,6 @@ import {
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
@@ -57,7 +56,6 @@ export async function handleToolsInvokeHttpRequest(
     req,
     res,
     operatorMethod: "agent",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -114,6 +112,7 @@ export async function handleToolsInvokeHttpRequest(
         signal,
         hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
         isWebchatConnect: () => false,
+        pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },
       () =>
         invokeGatewayTool({

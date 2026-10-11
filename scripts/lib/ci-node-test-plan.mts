@@ -27,6 +27,8 @@ import {
   isPluginControlUiPath,
   isUiBrowserTestFile,
   isUiTestTarget,
+  resolveUiTypeScriptPath,
+  uiTypeScriptPathGlob,
   uiTimingTestFiles,
   uiE2ePrebuiltParallelTestFiles,
   uiE2eRealGatewayTestFiles,
@@ -61,6 +63,14 @@ import {
 } from "./ci-command-test-plan.mts";
 import { rebalanceMeasuredSerialJobs } from "./ci-measured-compact-packing.mts";
 import {
+  BUNDLED_NODE_TEST_RUNNER,
+  DEFAULT_NODE_TEST_RUNNER,
+  EXTRA_LARGE_NODE_TEST_RUNNER,
+  TOOLING_CONFIG,
+  TOOLING_LARGE_CAPACITY_TEST_FILES,
+  resolveCompactNodeTestRunner,
+} from "./ci-node-test-capacity.mts";
+import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
   canSplitWholeConfigGroup,
   listScopedOwnerTestFiles,
@@ -73,6 +83,7 @@ import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
+  RELEASE_ONLY_UI_TEST_FILES,
 } from "./ci-proof-test-inventory.mts";
 import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
 import {
@@ -127,16 +138,12 @@ function compactGroupTimingKey(group: NodeTestShardGroup): string {
   return group.timing_key ?? group.shard_name;
 }
 
-export type NodeTestShard = {
+export type NodeTestShard = Omit<
+  NodeTestShardGroup,
+  "shard_name" | "fallbackMaxWorkers" | "minTotalMemoryBytes"
+> & {
   checkName: string;
   shardName: string;
-  timing_key?: string;
-  configs: string[];
-  runner: string;
-  requiresDist: boolean;
-  pretestBuildMode?: NodeTestPretestBuildMode;
-  includePatterns?: string[];
-  env?: Record<string, string>;
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
@@ -294,9 +301,6 @@ const EXCLUDED_PROJECT_CONFIGS = new Set([
   // checks-ui owns the Chromium project; Node stripes retain Node-driven Playwright tests.
   "test/vitest/vitest.ui-browser.config.ts",
 ]);
-const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
-const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
-const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
@@ -406,349 +410,198 @@ const UNIT_FAST_NODE_TEST_STRIPES = 2;
 const EMBEDDED_BASE_NODE_TEST_STRIPES = 3;
 // Cold-start fallback when committed CI measurements are missing. Refresh
 // config/ci-test-timings.json with pnpm ci:timings:refit, not these literals.
-const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
-  ["agentic-agents-core-auth", 30],
-  ["agentic-agents-core-isolated", 18],
-  ["agentic-agents-core-models", 41],
-  ["agentic-agents-core-runner-cli-1", 6],
-  ["agentic-agents-core-runner-cli-2", 13],
-  ["agentic-agents-core-runner-cli-3", 7],
-  ["agentic-agents-core-runner-commands", 28],
-  ["agentic-agents-core-runner-embedded", 17],
-  ["agentic-agents-core-runner-sessions", 14],
-  ["agentic-agents-core-runtime", 106],
-  ["agentic-agents-core-subagents", 20],
-  ["agentic-agents-core-tools", 39],
-  ["agentic-agents-embedded-base-1", 86],
-  ["agentic-agents-embedded-base-2", 86],
-  ["agentic-agents-embedded-base-3", 86],
-  ["agentic-agents-embedded-incomplete-turn", 19],
-  ["agentic-agents-embedded-overflow-compaction", 20],
-  ["agentic-agents-embedded-run", 46],
-  // Main runs 33537556582/33537739443/33543106647 totaled 478.25s/450.21s/418.13s
-  // across the complete support inventory. Keep its upper bound as the fallback
-  // when membership changes and exact generation timings no longer match.
-  ["agentic-agents-support", 479],
-  ["agentic-agents-tools", 69],
-  // The measured 131s pair split per config; apportioned by the hosted
-  // per-config walls (139s/67s) until direct Blacksmith samples exist.
-  ["agentic-cli", 88],
-  ["agentic-cli-process", 43],
-  ["agentic-command-support", 49],
-  ["agentic-commands-agent-channel", 76],
-  ["agentic-commands-doctor", 23],
-  ["agentic-commands-doctor-auth", 19],
-  ["agentic-commands-doctor-config-state", 67],
-  ["agentic-commands-doctor-device", 2],
-  ["agentic-commands-doctor-gateway", 3],
-  ["agentic-commands-doctor-platform", 5],
-  ["agentic-commands-doctor-plugins-tools", 13],
-  // Job 99770912022 measured 116.6s/112.3s of test bodies and 53.8s of
-  // group overhead. Charge that full overhead to each new process until
-  // the canonical refit has two main-run samples for the new owners.
-  ["agentic-commands-doctor-sessions-cron", 31],
-  ["agentic-commands-doctor-sessions-cron-memory", 167],
-  ["agentic-commands-doctor-sessions-cron-sqlite", 171],
-  // Job 106098306092 measured 11.27s including setup for both recovery files.
-  ["agentic-commands-doctor-sessions-cron-sqlite-recovery", 15],
-  ["agentic-commands-doctor-shared", 37],
-  ["agentic-commands-doctor-whatsapp", 1],
-  ["agentic-commands-doctor-workspace", 1],
-  ["agentic-commands-models", 32],
-  ["agentic-commands-onboard-config", 49],
-  ["agentic-commands-status-tools", 35],
-  ["agentic-control-plane-agent-chat", 167],
-  ["agentic-control-plane-auth-node", 166],
-  ["agentic-control-plane-http-models", 41],
-  ["agentic-control-plane-http-plugin-ws", 52],
-  ["agentic-control-plane-runtime", 19],
-  ["agentic-control-plane-runtime-config", 20],
-  ["agentic-control-plane-runtime-cron", 22],
-  ["agentic-control-plane-runtime-server", 23],
-  ["agentic-control-plane-runtime-shared-token", 9],
-  ["agentic-control-plane-runtime-state", 33],
-  ["agentic-control-plane-runtime-ui-tools", 9],
-  ["agentic-control-plane-startup-config", 5],
-  ["agentic-control-plane-startup-core", 31],
-  ["agentic-control-plane-startup-health-runtime", 11],
-  ["agentic-control-plane-startup-restart-close", 10],
-  // Run 33364935118 measured 21s of tests; the build belongs to bin admission.
-  ["agentic-gateway-core-runtime", 21],
-  // Two-CPU Linux proof: 40s including preparation, 19s for the 13,000-file case.
-  ["agentic-gateway-core-inventory", 40],
-  ["agentic-gateway-core-1", 99],
-  ["agentic-gateway-core-2", 99],
-  ["agentic-gateway-core-3", 99],
-  // Five successful main runs through 35607421993 measured a 1,043s median
-  // across both configs and complete child spans; direct refits remain authoritative.
-  ["agentic-gateway-server-isolated", 1043],
-  ["agentic-gateway-methods", 157],
-  ["agentic-plugin-sdk", 45],
-  ["auto-reply-core-top-level", 27],
-  ["auto-reply-reply-agent-runner", 60],
-  ["auto-reply-reply-commands-1", 28],
-  ["auto-reply-reply-commands-2", 9],
-  ["auto-reply-reply-commands-3", 24],
-  ["auto-reply-reply-dispatch", 15],
-  ["auto-reply-reply-dispatch-core", 35],
-  ["auto-reply-reply-dispatch-delivery", 32],
-  ["auto-reply-reply-dispatch-lifecycle", 8],
-  ["auto-reply-reply-session", 34],
-  ["auto-reply-reply-state-routing", 63],
-  // Apportioned from the split infra-process trio (see below).
-  ["core-runtime-config", 113],
-  ["core-runtime-cron-parallel-core", 13],
-  ["core-runtime-cron-parallel-isolated-agent", 53],
-  ["core-runtime-cron-parallel-service", 29],
-  ["core-runtime-hooks", 19],
-  ["core-runtime-infra-approval-exec", 28],
-  ["core-runtime-infra-channel-plugin", 19],
-  ["core-runtime-infra-cli-ui", 2],
-  ["core-runtime-infra-core-utils", 3],
-  ["core-runtime-infra-device", 8],
-  ["core-runtime-infra-diagnostics-state", 24],
-  ["core-runtime-infra-env-auth", 6],
-  ["core-runtime-infra-events-runtime", 8],
-  ["core-runtime-infra-file-safety", 2],
-  ["core-runtime-infra-files-commands", 5],
-  ["core-runtime-infra-gateway-lock-argv", 3],
-  ["core-runtime-infra-gateway-processes", 1],
-  ["core-runtime-infra-gateway-watch", 1],
-  ["core-runtime-infra-heartbeat-core", 7],
-  ["core-runtime-infra-heartbeat-runner", 59],
-  ["core-runtime-infra-misc", 14],
-  ["core-runtime-infra-misc-dedupe-disk", 1],
-  ["core-runtime-infra-misc-os", 1],
-  ["core-runtime-infra-misc-values", 2],
-  ["core-runtime-infra-net-install", 11],
-  ["core-runtime-infra-network-node", 3],
-  ["core-runtime-infra-network-platform", 5],
-  ["core-runtime-infra-outbound-actions", 37],
-  ["core-runtime-infra-outbound-core", 59],
-  // The measured 126s trio split; apportioned by the hosted per-config walls
-  // (17s/157s) until direct Blacksmith samples exist.
-  ["core-runtime-infra-process", 13],
-  ["core-runtime-infra-provider-push", 13],
-  ["core-runtime-infra-repo-tooling", 4],
-  ["core-runtime-infra-storage-state", 104],
-  ["core-runtime-infra-system-runtime", 36],
-  ["core-runtime-media-ui-1", 93],
-  ["core-runtime-media-ui-2", 93],
-  ["core-runtime-media-ui-3", 93],
-  ["core-runtime-media-ui-support", 100],
-  ["core-runtime-secrets", 61],
-  ["core-runtime-shared", 67],
-  // This dist-only group is outside the sampled nondist logs and retains its
-  // prior measured hint. The exclusive-bin cap keeps its lane lightly packed.
-  ["core-runtime-tui-pty", 116],
-  // This PR-only owner is excluded from sampled push plans. Retained exact runs
-  // measured 108.79s/130.83s, so use the conservative wall until its owner can
-  // supply canonical samples through another path.
-  ["core-tooling-isolated", 131],
-  ["core-unit-fast-1", 66],
-  ["core-unit-fast-2", 64],
-  // The measured 116s pair split per config; apportioned by the hosted
-  // per-config walls (158s/32s) until direct Blacksmith samples exist.
-  ["core-unit-fast-fake-timers", 20],
-  ["core-unit-fast-isolated", 96],
-  ["core-unit-src-security-1", 101],
-  ["core-unit-src-security-2", 101],
-  ["core-unit-src-security-3", 101],
-  ["core-unit-src-security-support", 12],
-  ["core-unit-support", 20],
-]);
-
-// Rounded mean of the same 8-vCPU groups across successful canonical-main
+// Large-stripe column: rounded means of 8-vCPU groups across successful canonical-main
 // compact runs 31684307744, 31683213137, 31682494259, 31682258389,
 // 31681118857, 31680010311, 31678309660, 31678086868, and 31677305067.
 // Means expose recurrent slow tails hidden by medians; resource ownership
 // remains with resolveCiNodeTestRunner.
-const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
-  ["agentic-agents-core-auth", 33],
-  ["agentic-agents-core-models", 41],
-  ["agentic-agents-core-runner-cli-1", 7],
-  ["agentic-agents-core-runner-cli-2", 14],
-  ["agentic-agents-core-runner-cli-3", 7],
-  ["agentic-agents-core-runner-commands", 28],
-  ["agentic-agents-core-runner-embedded", 20],
-  ["agentic-agents-core-runner-sessions", 16],
-  ["agentic-agents-core-runtime", 119],
-  ["agentic-agents-core-subagents", 21],
-  ["agentic-agents-core-tools", 47],
-  ["agentic-agents-embedded-base-1", 86],
-  ["agentic-agents-embedded-base-2", 86],
-  ["agentic-agents-embedded-base-3", 86],
-  ["agentic-agents-embedded-incomplete-turn", 20],
-  ["agentic-agents-embedded-overflow-compaction", 21],
-  ["agentic-agents-embedded-run", 47],
-  ["agentic-agents-support", 479],
-  ["agentic-control-plane-startup-core", 33],
-  // Run 31691151297 measured 296.68s for gateway-core and 303.93s for unit-src.
-  // Run 31694057974 measured the two isolated UI envelopes at 159.50s and
-  // 120.55s. Rebalance those walls over the three-way LPT weights: 457/455/455,
-  // 633/634/633, and 393/393/393 respectively.
-  ["agentic-gateway-core-1", 99],
-  ["agentic-gateway-core-2", 99],
-  ["agentic-gateway-core-3", 99],
-  ["agentic-gateway-methods", 153],
-  ["auto-reply-reply-commands-1", 34],
-  ["auto-reply-reply-commands-2", 11],
-  ["auto-reply-reply-commands-3", 28],
-  ["auto-reply-reply-dispatch", 18],
-  ["auto-reply-reply-dispatch-core", 42],
-  ["auto-reply-reply-dispatch-delivery", 38],
-  ["auto-reply-reply-dispatch-lifecycle", 10],
-  ["core-runtime-media-ui-1", 93],
-  ["core-runtime-media-ui-2", 93],
-  ["core-runtime-media-ui-3", 93],
-  ["core-runtime-media-ui-support", 100],
-  ["core-unit-fast-1", 68],
-  ["core-unit-fast-2", 67],
-  ["core-unit-fast-fake-timers", 21],
-  ["core-unit-fast-isolated", 96],
-  ["core-unit-src-security-1", 101],
-  ["core-unit-src-security-2", 101],
-  ["core-unit-src-security-3", 101],
-  ["core-unit-src-security-support", 12],
-]);
 
-// Rounded medians from standard 4-core GitHub-hosted runs 31737316152,
+// GitHub column: rounded medians from standard 4-core hosted runs 31737316152,
 // 31742781948, 31749838728, 31754493208, 31776290645, 31784022043, and
 // 31784883914. Exclude failed samples and reject media-ui-3's 444s compact
 // retry sample because its log records a 300s no-output timeout; its three
 // healthy samples are 52-63s. Unmeasured groups use the scale above.
-const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
-  ["agentic-agents-core-auth", 50],
-  ["agentic-agents-core-isolated", 23],
-  ["agentic-agents-core-models", 198],
-  ["agentic-agents-core-runner-cli-1", 16],
-  ["agentic-agents-core-runner-cli-2", 25],
-  ["agentic-agents-core-runner-cli-3", 23],
-  ["agentic-agents-core-runner-commands", 55],
-  ["agentic-agents-core-runner-embedded", 30],
-  ["agentic-agents-core-runner-sessions", 23],
-  ["agentic-agents-core-runtime", 185],
-  ["agentic-agents-core-subagents", 29],
-  ["agentic-agents-core-tools", 83],
-  ["agentic-agents-embedded-base-1", 138],
-  ["agentic-agents-embedded-base-2", 138],
-  ["agentic-agents-embedded-base-3", 138],
-  ["agentic-agents-embedded-incomplete-turn", 3],
-  ["agentic-agents-embedded-overflow-compaction", 31],
-  ["agentic-agents-embedded-run", 62],
-  ["agentic-agents-support", 253],
-  ["agentic-agents-tools", 124],
-  // Measured per config inside run 31814517685's combined 206s wall.
-  ["agentic-cli", 139],
-  ["agentic-cli-process", 67],
-  ["agentic-command-support", 67],
-  ["agentic-commands-agent-channel", 121],
-  ["agentic-commands-doctor", 33],
-  ["agentic-commands-doctor-auth", 32],
-  ["agentic-commands-doctor-config-state", 124],
-  ["agentic-commands-doctor-device", 5],
-  ["agentic-commands-doctor-gateway", 8],
-  ["agentic-commands-doctor-platform", 7],
-  ["agentic-commands-doctor-plugins-tools", 21],
-  // Conservative native fallbacks above, scaled by 1.6 until hosted samples exist.
-  ["agentic-commands-doctor-sessions-cron", 87],
-  ["agentic-commands-doctor-sessions-cron-memory", 268],
-  ["agentic-commands-doctor-sessions-cron-sqlite", 274],
-  ["agentic-commands-doctor-shared", 61],
-  ["agentic-commands-doctor-whatsapp", 2],
-  ["agentic-commands-doctor-workspace", 3],
-  ["agentic-commands-models", 64],
-  ["agentic-commands-onboard-config", 76],
-  ["agentic-commands-status-tools", 57],
-  ["agentic-control-plane-agent-chat", 232],
-  ["agentic-control-plane-auth-node", 254],
-  ["agentic-control-plane-http-models", 59],
-  ["agentic-control-plane-http-plugin-ws", 86],
-  ["agentic-control-plane-runtime", 31],
-  ["agentic-control-plane-runtime-config", 31],
-  ["agentic-control-plane-runtime-cron", 52],
-  ["agentic-control-plane-runtime-server", 54],
-  ["agentic-control-plane-runtime-shared-token", 28],
-  ["agentic-control-plane-runtime-state", 55],
-  ["agentic-control-plane-runtime-ui-tools", 31],
-  ["agentic-control-plane-startup-config", 15],
-  ["agentic-control-plane-startup-core", 51],
-  ["agentic-control-plane-startup-health-runtime", 31],
-  ["agentic-control-plane-startup-restart-close", 28],
-  ["agentic-gateway-core-1", 176],
-  ["agentic-gateway-core-2", 149],
-  ["agentic-gateway-core-3", 141],
-  ["agentic-gateway-core-inventory", 40],
-  ["agentic-gateway-methods", 169],
-  // Full Release Validation job 106995310855 (4-core ubuntu-24.04, two workers)
+// Keep each owner's fallback prices together; missing columns retain the original fallback.
+const COMPACT_SECONDS_HINTS: readonly [
+  shard: string,
+  blacksmith: number,
+  largeStripe: number | undefined,
+  github: number | undefined,
+][] = [
+  ["agentic-agents-core-auth", 30, 33, 50],
+  ["agentic-agents-core-isolated", 18, undefined, 23],
+  ["agentic-agents-core-models", 41, 41, 198],
+  ["agentic-agents-core-runner-cli-1", 6, 7, 16],
+  ["agentic-agents-core-runner-cli-2", 13, 14, 25],
+  ["agentic-agents-core-runner-cli-3", 7, 7, 23],
+  ["agentic-agents-core-runner-commands", 28, 28, 55],
+  ["agentic-agents-core-runner-embedded", 17, 20, 30],
+  ["agentic-agents-core-runner-sessions", 14, 16, 23],
+  ["agentic-agents-core-runtime", 106, 119, 185],
+  ["agentic-agents-core-subagents", 20, 21, 29],
+  ["agentic-agents-core-tools", 39, 47, 83],
+  ["agentic-agents-embedded-base-1", 86, 86, 138],
+  ["agentic-agents-embedded-base-2", 86, 86, 138],
+  ["agentic-agents-embedded-base-3", 86, 86, 138],
+  ["agentic-agents-embedded-incomplete-turn", 19, 20, 3],
+  ["agentic-agents-embedded-overflow-compaction", 20, 21, 31],
+  ["agentic-agents-embedded-run", 46, 47, 62],
+  // Main runs 33537556582/33537739443/33543106647 totaled 478.25s/450.21s/418.13s
+  // across the complete support inventory. Keep its upper bound as the fallback
+  // when membership changes and exact generation timings no longer match.
+  ["agentic-agents-support", 479, 479, 253],
+  ["agentic-agents-tools", 69, undefined, 124],
+  // The measured 131s pair split per config; apportioned by the hosted
+  // per-config walls (139s/67s) until direct Blacksmith samples exist.
+  // GitHub: Measured per config inside run 31814517685's combined 206s wall.
+  ["agentic-cli", 88, undefined, 139],
+  ["agentic-cli-process", 43, undefined, 67],
+  ["agentic-command-support", 49, undefined, 67],
+  ["agentic-commands-agent-channel", 76, undefined, 121],
+  ["agentic-commands-doctor", 23, undefined, 33],
+  ["agentic-commands-doctor-auth", 19, undefined, 32],
+  ["agentic-commands-doctor-config-state", 67, undefined, 124],
+  ["agentic-commands-doctor-device", 2, undefined, 5],
+  ["agentic-commands-doctor-gateway", 3, undefined, 8],
+  ["agentic-commands-doctor-platform", 5, undefined, 7],
+  ["agentic-commands-doctor-plugins-tools", 13, undefined, 21],
+  // Job 99770912022 measured 116.6s/112.3s of test bodies and 53.8s of
+  // group overhead. Charge that full overhead to each new process until
+  // the canonical refit has two main-run samples for the new owners.
+  // GitHub: Conservative native fallbacks above, scaled by 1.6 until hosted samples exist.
+  ["agentic-commands-doctor-sessions-cron", 31, undefined, 87],
+  ["agentic-commands-doctor-sessions-cron-memory", 167, undefined, 268],
+  ["agentic-commands-doctor-sessions-cron-sqlite", 171, undefined, 274],
+  // Job 106098306092 measured 11.27s including setup for both recovery files.
+  ["agentic-commands-doctor-sessions-cron-sqlite-recovery", 15, undefined, undefined],
+  ["agentic-commands-doctor-shared", 37, undefined, 61],
+  ["agentic-commands-doctor-whatsapp", 1, undefined, 2],
+  ["agentic-commands-doctor-workspace", 1, undefined, 3],
+  ["agentic-commands-models", 32, undefined, 64],
+  ["agentic-commands-onboard-config", 49, undefined, 76],
+  ["agentic-commands-status-tools", 35, undefined, 57],
+  ["agentic-control-plane-agent-chat", 167, undefined, 232],
+  ["agentic-control-plane-auth-node", 166, undefined, 254],
+  ["agentic-control-plane-http-models", 41, undefined, 59],
+  ["agentic-control-plane-http-plugin-ws", 52, undefined, 86],
+  ["agentic-control-plane-runtime", 19, undefined, 31],
+  ["agentic-control-plane-runtime-config", 20, undefined, 31],
+  ["agentic-control-plane-runtime-cron", 22, undefined, 52],
+  ["agentic-control-plane-runtime-server", 23, undefined, 54],
+  ["agentic-control-plane-runtime-shared-token", 9, undefined, 28],
+  ["agentic-control-plane-runtime-state", 33, undefined, 55],
+  ["agentic-control-plane-runtime-ui-tools", 9, undefined, 31],
+  ["agentic-control-plane-startup-config", 5, undefined, 15],
+  ["agentic-control-plane-startup-core", 31, 33, 51],
+  ["agentic-control-plane-startup-health-runtime", 11, undefined, 31],
+  ["agentic-control-plane-startup-restart-close", 10, undefined, 28],
+  // Run 33364935118 measured 21s of tests; the build belongs to bin admission.
+  ["agentic-gateway-core-runtime", 21, undefined, undefined],
+  // Two-CPU Linux proof: 40s including preparation, 19s for the 13,000-file case.
+  ["agentic-gateway-core-inventory", 40, undefined, 40],
+  // Large stripe: Run 31691151297 measured 296.68s for gateway-core and 303.93s for unit-src.
+  // Run 31694057974 measured the two isolated UI envelopes at 159.50s and
+  // 120.55s. Rebalance those walls over the three-way LPT weights: 457/455/455,
+  // 633/634/633, and 393/393/393 respectively.
+  ["agentic-gateway-core-1", 99, 99, 176],
+  ["agentic-gateway-core-2", 99, 99, 149],
+  ["agentic-gateway-core-3", 99, 99, 141],
+  // Five successful main runs through 35607421993 measured a 1,043s median
+  // across both configs and complete child spans; direct refits remain authoritative.
+  // GitHub: Full Release Validation job 106995310855 (4-core ubuntu-24.04, two workers)
   // ran the whole cohort in 2914s wall; 1.6x the Blacksmith median predicted 1669s.
-  ["agentic-gateway-server-isolated", 2914],
-  ["agentic-plugin-sdk", 70],
-  ["auto-reply-core-top-level", 43],
-  ["auto-reply-reply-agent-runner", 169],
-  ["auto-reply-reply-commands-1", 53],
-  ["auto-reply-reply-commands-2", 26],
-  ["auto-reply-reply-commands-3", 48],
-  ["auto-reply-reply-dispatch", 55],
-  ["auto-reply-reply-dispatch-core", 75],
-  ["auto-reply-reply-dispatch-delivery", 70],
-  ["auto-reply-reply-dispatch-lifecycle", 20],
-  ["auto-reply-reply-session", 79],
-  ["auto-reply-reply-state-routing", 34],
-  // Measured per config inside run 31814517685's combined 175s infra wall.
-  ["core-runtime-config", 157],
-  ["core-runtime-cron-parallel-core", 22],
-  ["core-runtime-cron-parallel-isolated-agent", 77],
-  ["core-runtime-cron-parallel-service", 66],
-  ["core-runtime-hooks", 31],
-  ["core-runtime-infra-approval-exec", 45],
-  ["core-runtime-infra-channel-plugin", 30],
-  ["core-runtime-infra-cli-ui", 3],
-  ["core-runtime-infra-core-utils", 7],
-  ["core-runtime-infra-device", 13],
-  ["core-runtime-infra-diagnostics-state", 34],
-  ["core-runtime-infra-env-auth", 10],
-  ["core-runtime-infra-events-runtime", 11],
-  ["core-runtime-infra-file-safety", 4],
-  ["core-runtime-infra-files-commands", 7],
-  ["core-runtime-infra-gateway-lock-argv", 3],
-  ["core-runtime-infra-gateway-processes", 1],
-  ["core-runtime-infra-gateway-watch", 1],
-  ["core-runtime-infra-heartbeat-core", 10],
-  ["core-runtime-infra-heartbeat-runner", 106],
-  ["core-runtime-infra-misc", 33],
-  ["core-runtime-infra-misc-dedupe-disk", 1],
-  ["core-runtime-infra-misc-os", 1],
-  ["core-runtime-infra-misc-values", 2],
-  ["core-runtime-infra-net-install", 17],
-  ["core-runtime-infra-network-node", 5],
-  ["core-runtime-infra-network-platform", 8],
-  ["core-runtime-infra-outbound-actions", 53],
-  ["core-runtime-infra-outbound-core", 112],
-  // Measured per config inside run 31814517685's combined 175s wall.
-  ["core-runtime-infra-process", 17],
-  ["core-runtime-infra-provider-push", 29],
-  ["core-runtime-infra-repo-tooling", 6],
-  ["core-runtime-infra-storage-state", 235],
-  ["core-runtime-infra-system-runtime", 69],
-  ["core-runtime-media-ui-1", 97],
-  ["core-runtime-media-ui-2", 78],
-  ["core-runtime-media-ui-3", 71],
-  ["core-runtime-media-ui-support", 101],
-  ["core-runtime-secrets", 73],
-  ["core-runtime-shared", 92],
-  ["core-tooling-isolated", 41],
-  ["core-unit-fast-1", 85],
-  ["core-unit-fast-2", 84],
-  // Measured per config inside run 31814517685's combined 190s wall.
-  ["core-unit-fast-fake-timers", 32],
-  ["core-unit-fast-isolated", 158],
-  ["core-unit-src-security-1", 132],
-  ["core-unit-src-security-2", 131],
-  ["core-unit-src-security-3", 132],
-  ["core-unit-src-security-support", 20],
-  ["core-unit-support", 32],
-]);
+  ["agentic-gateway-server-isolated", 1043, undefined, 2914],
+  ["agentic-gateway-methods", 157, 153, 169],
+  ["agentic-plugin-sdk", 45, undefined, 70],
+  ["auto-reply-core-top-level", 27, undefined, 43],
+  ["auto-reply-reply-agent-runner", 60, undefined, 169],
+  ["auto-reply-reply-commands-1", 28, 34, 53],
+  ["auto-reply-reply-commands-2", 9, 11, 26],
+  ["auto-reply-reply-commands-3", 24, 28, 48],
+  ["auto-reply-reply-dispatch", 15, 18, 55],
+  ["auto-reply-reply-dispatch-core", 35, 42, 75],
+  ["auto-reply-reply-dispatch-delivery", 32, 38, 70],
+  ["auto-reply-reply-dispatch-lifecycle", 8, 10, 20],
+  ["auto-reply-reply-session", 34, undefined, 79],
+  ["auto-reply-reply-state-routing", 63, undefined, 34],
+  // Apportioned from the split infra-process trio (see below).
+  // GitHub: Measured per config inside run 31814517685's combined 175s infra wall.
+  ["core-runtime-config", 113, undefined, 157],
+  ["core-runtime-cron-parallel-core", 13, undefined, 22],
+  ["core-runtime-cron-parallel-isolated-agent", 53, undefined, 77],
+  ["core-runtime-cron-parallel-service", 29, undefined, 66],
+  ["core-runtime-hooks", 19, undefined, 31],
+  ["core-runtime-infra-approval-exec", 28, undefined, 45],
+  ["core-runtime-infra-channel-plugin", 19, undefined, 30],
+  ["core-runtime-infra-cli-ui", 2, undefined, 3],
+  ["core-runtime-infra-core-utils", 3, undefined, 7],
+  ["core-runtime-infra-device", 8, undefined, 13],
+  ["core-runtime-infra-diagnostics-state", 24, undefined, 34],
+  ["core-runtime-infra-env-auth", 6, undefined, 10],
+  ["core-runtime-infra-events-runtime", 8, undefined, 11],
+  ["core-runtime-infra-file-safety", 2, undefined, 4],
+  ["core-runtime-infra-files-commands", 5, undefined, 7],
+  ["core-runtime-infra-gateway-lock-argv", 3, undefined, 3],
+  ["core-runtime-infra-gateway-processes", 1, undefined, 1],
+  ["core-runtime-infra-gateway-watch", 1, undefined, 1],
+  ["core-runtime-infra-heartbeat-core", 7, undefined, 10],
+  ["core-runtime-infra-heartbeat-runner", 59, undefined, 106],
+  ["core-runtime-infra-misc", 14, undefined, 33],
+  ["core-runtime-infra-misc-dedupe-disk", 1, undefined, 1],
+  ["core-runtime-infra-misc-os", 1, undefined, 1],
+  ["core-runtime-infra-misc-values", 2, undefined, 2],
+  ["core-runtime-infra-net-install", 11, undefined, 17],
+  ["core-runtime-infra-network-node", 3, undefined, 5],
+  ["core-runtime-infra-network-platform", 5, undefined, 8],
+  ["core-runtime-infra-outbound-actions", 37, undefined, 53],
+  ["core-runtime-infra-outbound-core", 59, undefined, 112],
+  // The measured 126s trio split; apportioned by the hosted per-config walls
+  // (17s/157s) until direct Blacksmith samples exist.
+  // GitHub: Measured per config inside run 31814517685's combined 175s wall.
+  ["core-runtime-infra-process", 13, undefined, 17],
+  ["core-runtime-infra-provider-push", 13, undefined, 29],
+  ["core-runtime-infra-repo-tooling", 4, undefined, 6],
+  ["core-runtime-infra-storage-state", 104, undefined, 235],
+  ["core-runtime-infra-system-runtime", 36, undefined, 69],
+  ["core-runtime-media-ui-1", 93, 93, 97],
+  ["core-runtime-media-ui-2", 93, 93, 78],
+  ["core-runtime-media-ui-3", 93, 93, 71],
+  ["core-runtime-media-ui-support", 100, 100, 101],
+  ["core-runtime-secrets", 61, undefined, 73],
+  ["core-runtime-shared", 67, undefined, 92],
+  // This dist-only group is outside the sampled nondist logs and retains its
+  // prior measured hint. The exclusive-bin cap keeps its lane lightly packed.
+  ["core-runtime-tui-pty", 116, undefined, undefined],
+  // This PR-only owner is excluded from sampled push plans. Retained exact runs
+  // measured 108.79s/130.83s, so use the conservative wall until its owner can
+  // supply canonical samples through another path.
+  ["core-tooling-isolated", 131, undefined, 41],
+  ["core-unit-fast-1", 66, 68, 85],
+  ["core-unit-fast-2", 64, 67, 84],
+  // The measured 116s pair split per config; apportioned by the hosted
+  // per-config walls (158s/32s) until direct Blacksmith samples exist.
+  // GitHub: Measured per config inside run 31814517685's combined 190s wall.
+  ["core-unit-fast-fake-timers", 20, 21, 32],
+  ["core-unit-fast-isolated", 96, 96, 158],
+  ["core-unit-src-security-1", 101, 101, 132],
+  ["core-unit-src-security-2", 101, 101, 131],
+  ["core-unit-src-security-3", 101, 101, 132],
+  ["core-unit-src-security-support", 12, 12, 20],
+  ["core-unit-support", 20, undefined, 32],
+];
+
+function compactSecondsHints(column: 1 | 2 | 3): Map<string, number> {
+  return new Map(
+    COMPACT_SECONDS_HINTS.flatMap<[string, number]>((row) => {
+      const seconds = row[column];
+      return seconds === undefined ? [] : [[row[0], seconds]];
+    }),
+  );
+}
+
+const COMPACT_GROUP_SECONDS_HINTS = compactSecondsHints(1);
+const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = compactSecondsHints(2);
+const COMPACT_GITHUB_GROUP_SECONDS_HINTS = compactSecondsHints(3);
 
 // Hybrid-specific Blacksmith observations, plus the gateway-core-3 139.5s spike
 // in 31938297538 that must stay singleton.
@@ -791,11 +644,9 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/channels/message-access/operator-authority.test.ts", 31.775],
   ["src/agents/subagents/registry/subagent-registry.persistence.test.ts", 23.639],
   ["src/auto-reply/reply/session.acp-reset-routing.test.ts", 8.938],
-  ["src/agents/tools/skill-workshop-tool.support-paths.test.ts", 1.686],
   ["src/claws/package-update.test.ts", 4.164],
   ["src/cli/update-cli.git-service.test.ts", 24.578],
   ["src/flows/doctor-health.fleet-preflight.test.ts", 8.648],
-  ["src/agents/embedded-agent-runner/run/attempt-prompt-submit.retention.test.ts", 6.452],
   ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
@@ -1502,16 +1353,8 @@ function expandCompactGroup(
     applyCompactGroupWorkerPins(expandedGroup, runnerBackend),
   );
 }
-const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_UNIFIED_DECLARATIONS_TEST_FILE = "test/scripts/write-unified-entry-dts.test.ts";
-const TOOLING_LARGE_CAPACITY_TEST_FILES = new Set([
-  // Generation-retention cases require eight CPUs / 24 GiB; the two-CPU
-  // screen also peaked at 6.05 GiB before those gated cases could run.
-  "test/scripts/vitest-worker-artifacts.ci.test.ts",
-  "test/scripts/write-unified-entry-dts.test.ts",
-  "test/scripts/write-plugin-sdk-entry-dts.test.ts",
-]);
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 // The full matrix is capped at 28 jobs. Admit the consistently slow serial
 // shards first so short alphabetical groups cannot leave them on the tail.
@@ -1571,22 +1414,6 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
-const RELEASE_ONLY_UI_TEST_FILES = new Set([
-  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
-  "ui/src/components/app-sidebar.stress.browser.test.ts",
-  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
-  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
-]);
-
 const sharedUiE2eInputs = [
   "ui/{package.json,tsconfig.json,index.html,vite.config.ts}",
   "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule}.ts",
@@ -1604,7 +1431,8 @@ const sharedUiE2eInputs = [
 export function hasSharedUiE2eInput(changedPaths: readonly string[]): boolean {
   return changedPaths.some(
     (file) =>
-      !file.endsWith(".test.ts") && sharedUiE2eInputs.some((glob) => matchesGlob(file, glob)),
+      !/\.test\.tsx?$/u.test(file) &&
+      sharedUiE2eInputs.some((glob) => matchesGlob(file, uiTypeScriptPathGlob(glob))),
   );
 }
 
@@ -1637,8 +1465,15 @@ export function resolveUiE2ePrTestSelection(
   }
   const paths = [...changedPaths];
   const graphOptions = { tooling: true, resolveAliases: true, runtimeOnly: true };
-  const roots = [...new Set(UI_E2E_OWNER_WATCHES.flatMap(({ ownerRoots }) => ownerRoots))];
-  const policyTargets = new Set(resolvePolicyTestTargets(paths));
+  const ownerWatches = UI_E2E_OWNER_WATCHES.map((watch) => ({
+    testFile: resolveUiTypeScriptPath(watch.testFile, cwd),
+    ownerRoots: watch.ownerRoots.map((root) => resolveUiTypeScriptPath(root, cwd)),
+    watchGlobs: watch.watchGlobs,
+  }));
+  const roots = [...new Set(ownerWatches.flatMap(({ ownerRoots }) => ownerRoots))];
+  const policyTargets = new Set(
+    resolvePolicyTestTargets(paths).map((file) => resolveUiTypeScriptPath(file, cwd)),
+  );
   const importedTargets = new Set(
     resolveAffectedTestsFromImportGraph(paths, cwd, { ...graphOptions, forceFull: true }),
   );
@@ -1650,8 +1485,8 @@ export function resolveUiE2ePrTestSelection(
       hasImportGraphImpactOnTargets(paths, [root], cwd, { ...graphOptions, direct: true }),
     ),
   );
-  const watches = new Map(UI_E2E_OWNER_WATCHES.map((watch) => [watch.testFile, watch]));
-  const smoke = new Set<string>(UI_E2E_SMOKE_TEST_FILES);
+  const watches = new Map(ownerWatches.map((watch) => [watch.testFile, watch]));
+  const smoke = new Set(UI_E2E_SMOKE_TEST_FILES.map((file) => resolveUiTypeScriptPath(file, cwd)));
   const reasons: Record<string, string[]> = {};
   const files = inventory.filter((file) => {
     const selected: string[] = [];
@@ -1690,15 +1525,13 @@ export function createUiTestShardGroups(
 ) {
   const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
   const changedPaths = new Set(options.changedPaths ?? []);
+  const includeUiTest = (file: string) =>
+    includeReleaseOnlyTests || !RELEASE_ONLY_UI_TEST_FILES.has(file) || changedPaths.has(file);
   const files =
     includeReleaseOnlyTests && options.includePrExemptRuntimeTests !== false
       ? undefined
       : listTrackedTestFiles(".").filter(
-          (file) =>
-            (includeReleaseOnlyTests ||
-              !RELEASE_ONLY_UI_TEST_FILES.has(file) ||
-              changedPaths.has(file)) &&
-            isRuntimeTestFileIncluded(file, options),
+          (file) => includeUiTest(file) && isRuntimeTestFileIncluded(file, options),
         );
   const group = (config: string, ownsFile: (file: string) => boolean) => [
     {
@@ -1719,7 +1552,7 @@ export function createUiTestShardGroups(
     );
     e2eGroups[0]!.includePatterns = [
       ...new Set([
-        ...options.uiE2eFiles,
+        ...options.uiE2eFiles.filter(includeUiTest),
         ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
       ]),
     ].toSorted();
@@ -1738,15 +1571,17 @@ export function createUiRealGatewayTestShards(
   );
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
   // Balance the serial phase with standalone fixtures that need no preview build.
-  const standaloneCompanions = new Set([
-    "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-    "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-    "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
-    "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
-  ]);
-  const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
+  const standaloneCompanions = new Set(
+    [
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+    ].map((file) => resolveUiTypeScriptPath(file)),
+  );
+  const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
   const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
   // Desktop transport proof owns its file separately, alongside the serial phase.
   return ([1, 2] as const).map((shard) => ({
@@ -1765,13 +1600,13 @@ export function createUiRealGatewayTestShards(
   }));
 }
 
-export const RELEASE_ONLY_TOOLING_CONFIGS = new Set(
+const RELEASE_ONLY_TOOLING_CONFIGS = new Set(
   fullSuiteVitestShards
     .filter((shard) => RELEASE_ONLY_TOOLING_SHARDS.has(shard.name))
     .flatMap((shard) => shard.projects),
 );
 
-export function isReleaseOnlyToolingTestFile(file: string): boolean {
+function isReleaseOnlyToolingTestFile(file: string): boolean {
   return (
     !file.endsWith(".e2e.test.ts") &&
     !file.endsWith(".live.test.ts") &&
@@ -3033,12 +2868,9 @@ function createNodeTestShardsForOwners(
 }
 
 /** Select planner envelopes that produce the protected Vitest transform-cache seed. */
-export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = "full"): Array<{
-  configs: string[];
-  env?: Record<string, string>;
-  includePatterns?: string[];
-  shard_name: string;
-}> {
+export function createVitestCacheWarmGroups(
+  profile: "full" | "hybrid-hosted" = "full",
+): Pick<NodeTestShardGroup, "configs" | "env" | "includePatterns" | "shard_name">[] {
   // Preserve the package root and aliases used by checks-ui in either backend.
   const uiGroup = {
     configs: ["ui/vitest.config.ts"],
@@ -3051,7 +2883,7 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
       "ui/src/pages/chat/chat-view.test.ts",
       "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
       "ui/src/pages/usage/metrics.node.test.ts",
-    ],
+    ].map((file) => resolveUiTypeScriptPath(file)),
     shard_name: "cache-warm:ui-package",
   };
   if (profile === "hybrid-hosted") {
@@ -3208,7 +3040,7 @@ function createStripedBatches<T>(
   entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
   const batches: Array<{
     totalWeight: number;
-    entries: Array<{ index: number; value: T; weight: number }>;
+    entries: typeof entries;
   }> = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
   const firstBatch = batches[0];
   if (!firstBatch) {
@@ -3324,11 +3156,7 @@ export function createNodeTestShardBundles(
   const unbundled: NodeTestShard[] = [];
   const groups = new Map<
     string,
-    {
-      configs: string[];
-      pretestBuildMode?: NodeTestPretestBuildMode;
-      requiresDist: boolean;
-      runner: string;
+    Pick<NodeTestShard, "configs" | "pretestBuildMode" | "requiresDist" | "runner"> & {
       shards: NodeTestShard[];
     }
   >();
@@ -3454,15 +3282,100 @@ export function createNodeTestShardBundles(
 
   const full = [...unbundled, ...bundled];
   return (
-    options.runnerBackend === "github" ? full.flatMap(splitHostedReleaseShard) : full
+    options.runnerBackend === "github"
+      ? packHostedReleaseShards(full.flatMap(splitHostedReleaseShard))
+      : full
   ).toSorted(compareFullNodeTestAdmissionOrder);
 }
+
+const HOSTED_RELEASE_JOB_SECONDS = 720;
+
+function packHostedReleaseShards(shards: NodeTestShard[]): NodeTestShard[] {
+  const unmeasured = shards.filter(
+    (shard) => shard.requiresDist || !shard.predictedSeconds || shard.groups,
+  );
+  const measured = shards
+    .filter((shard) => !unmeasured.includes(shard))
+    .toSorted(
+      (a, b) => b.predictedSeconds! - a.predictedSeconds! || a.shardName.localeCompare(b.shardName),
+    );
+  const seconds = (bin: readonly NodeTestShard[]) =>
+    bin.reduce((sum, shard) => sum + shard.predictedSeconds!, 0);
+  const bins = packNodeTestGroups(measured, (bin, shard) => {
+    const first = bin[0];
+    return (
+      first.runner === shard.runner &&
+      first.pretestBuildMode === shard.pretestBuildMode &&
+      first.timeoutMinutes === shard.timeoutMinutes &&
+      JSON.stringify(first.env) === JSON.stringify(shard.env) &&
+      bin.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+      seconds([...bin, shard]) <= HOSTED_RELEASE_JOB_SECONDS
+    );
+  });
+  return [
+    ...unmeasured,
+    ...bins.map((bin, index): NodeTestShard => {
+      if (bin.length === 1) {
+        return bin[0];
+      }
+      const first = bin[0];
+      const shardName = `release-packed-${index + 1}`;
+      // Keep every measured selection in its own process and timing identity.
+      // Summed whole-job walls conservatively retain each group's setup cost.
+      return {
+        checkName: formatNodeTestShardCheckName(shardName),
+        shardName,
+        configs: [...new Set(bin.flatMap((shard) => shard.configs))],
+        groups: bin.map((shard) => ({
+          shard_name: shard.shardName,
+          timing_key: shard.timing_key,
+          configs: shard.configs,
+          includePatterns: shard.includePatterns,
+          // Serial jobs admit more workers by default; retain the measured
+          // full-release two-worker ceiling for each separate test process.
+          env: {
+            ...shard.env,
+            OPENCLAW_VITEST_MAX_WORKERS: String(
+              Math.min(2, Number(shard.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+            ),
+          },
+          pretestBuildMode: shard.pretestBuildMode,
+          runner: shard.runner,
+          requiresDist: shard.requiresDist,
+        })),
+        env: first.env,
+        pretestBuildMode: first.pretestBuildMode,
+        runner: first.runner,
+        requiresDist: first.requiresDist,
+        timeoutMinutes: first.timeoutMinutes,
+        planConcurrency: 1,
+        predictedSeconds: seconds(bin),
+      };
+    }),
+  ];
+}
+
+// These owners retain their execution contract as test inventory changes. Keep
+// complete historical observations until the current selection is measured.
+const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
+  "agentic-cli-process",
+  "agentic-control-plane-agent-chat",
+  "agentic-gateway-methods",
+  "core-runtime-config",
+]);
+
+// Preserve existing whole-job headroom until these owners have complete timings.
+const LONG_UNFITTED_RELEASE_SHARDS = new Set([
+  "agentic-cli-process",
+  "agentic-control-plane-agent-chat",
+  "core-runtime-config",
+]);
 
 // Full release jobs include setup and can execute both runtimes. Keep their
 // measured walls separate from compact test-group spans and reserve eight minutes
 // of the 20-minute objective for changes in setup and cold-run overhead.
 function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
-  const budget = 720;
+  const budget = HOSTED_RELEASE_JOB_SECONDS;
   const parentShardName = `release-full-${shard.shardName}`;
   const timings = readCompactGroupTimings("github");
   const files = canSplitWholeConfigGroup(shard.shardName)
@@ -3491,10 +3404,28 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
       stripes,
     });
   const original = generation([files]);
+  const currentGenerationSeconds = readCompleteSplitGenerationSeconds(
+    timings,
+    original.selectorKey,
+  );
+  const retainHistoricalTimings =
+    RELEASE_TIMING_CONTINUITY_SHARDS.has(shard.shardName) &&
+    timings[parentShardName] === undefined &&
+    currentGenerationSeconds === undefined;
+  const singletonKeys = generation(files.map((file) => [file])).timingKeys;
+  const currentSingletons = new Set(
+    singletonKeys.map((key) => key.match(/#include-1-[a-f0-9]{12}$/u)![0]),
+  );
   const singletonCosts = new Map<string, number>();
   for (const [key, cost] of Object.entries(timings)) {
     const singleton = key.match(/#include-1-[a-f0-9]{12}$/u)?.[0];
-    if (singleton && key.startsWith(`${original.selectorKey}#generation-`)) {
+    if (
+      singleton &&
+      currentSingletons.has(singleton) &&
+      (key.startsWith(`${original.selectorKey}#generation-`) ||
+        (retainHistoricalTimings &&
+          parseCompactSplitTimingKey(key)?.parentShardName === parentShardName))
+    ) {
       singletonCosts.set(singleton, Math.max(singletonCosts.get(singleton) ?? 0, cost));
     }
   }
@@ -3503,24 +3434,41 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
       `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
     );
   }
-  const seconds = Math.max(
+  let seconds = Math.max(
     timings[parentShardName] ?? 0,
     timings[original.timingKeys[0]!] ?? 0,
-    readCompleteSplitGenerationSeconds(timings, original.selectorKey) ?? 0,
+    currentGenerationSeconds ?? 0,
   );
+  if (retainHistoricalTimings) {
+    const selectors = new Set(
+      Object.keys(timings).flatMap((key) => {
+        const parsed = parseCompactSplitTimingKey(key);
+        return parsed?.parentShardName === parentShardName ? [parsed.selectorKey] : [];
+      }),
+    );
+    seconds = Math.max(
+      0,
+      ...Array.from(
+        selectors,
+        (selector) => readCompleteSplitGenerationSeconds(timings, selector) ?? 0,
+      ),
+    );
+  }
   if (seconds <= budget) {
     return [
       {
         ...shard,
         timing_key: original.timingKeys[0]!,
         ...(seconds === 0 ? {} : { predictedSeconds: seconds }),
+        ...(LONG_UNFITTED_RELEASE_SHARDS.has(shard.shardName) && seconds === 0
+          ? { timeoutMinutes: Math.max(shard.timeoutMinutes ?? 60, 90) }
+          : {}),
       },
     ];
   }
   const weight = (entries: readonly string[]) =>
     entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
   const totalWeight = weight(files);
-  const singletonKeys = generation(files.map((file) => [file])).timingKeys;
   const knownFileCosts = new Map<string, number>();
   for (const [index, file] of files.entries()) {
     const singleton = singletonKeys[index]!.match(/#include-1-[a-f0-9]{12}$/u)![0];
@@ -4410,7 +4358,12 @@ export function createSelectedNodeTestShardBundles(
           : `changed-${timingParent}`,
         stripes: [includePatterns],
       });
-      const selectedSeconds = Math.max(fallbackSeconds, selectedTimings[timingKeys[0]!] ?? 0);
+      // An older complete-group price cannot cap a known indivisible file's cost.
+      const selectedSeconds = Math.max(
+        fallbackSeconds,
+        ...includePatterns.map(stripeFileWeight),
+        selectedTimings[timingKeys[0]!] ?? 0,
+      );
       retainedSeconds += selectedSeconds;
       const projectedGroup = {
         ...group,
@@ -5394,10 +5347,11 @@ function createCompactNodeTestShardBundles(
   }
   const finalJobs = compactJobs.filter((job) => !retiredJobs.has(job));
   for (const job of finalJobs) {
-    // The 4/8 classes both deliver two CPUs. Routing must not alter placement anchors.
-    if (usesBlacksmithCapacity(job.runner) && job.runner === BUNDLED_NODE_TEST_RUNNER) {
-      job.runner = DEFAULT_NODE_TEST_RUNNER;
-    }
+    job.runner = resolveCompactNodeTestRunner(
+      job,
+      options.runnerBackend,
+      usesBlacksmithCapacity(job.runner),
+    );
   }
 
   // Split/packing admission retains the two-worker retry budget. Once placement

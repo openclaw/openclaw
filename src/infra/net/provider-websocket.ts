@@ -58,7 +58,7 @@ async function createProviderWebSocketAgent(params: {
     useManagedProxy || dispatcherPolicy?.mode !== "direct"
       ? resolveEnvNodeProxyUrlForTarget(url)
       : undefined;
-  let proxyUrl: URL | undefined;
+  let proxyUrl = envProxyUrl;
   if (dispatcherPolicy?.mode === "explicit-proxy") {
     try {
       proxyUrl = new URL(dispatcherPolicy.proxyUrl);
@@ -68,8 +68,6 @@ async function createProviderWebSocketAgent(params: {
     if (proxyUrl.protocol !== "http:" && proxyUrl.protocol !== "https:") {
       throw new Error("Explicit proxy URL must use http or https");
     }
-  } else if (dispatcherPolicy?.mode !== "direct") {
-    proxyUrl = envProxyUrl;
   }
   if (useManagedProxy) {
     proxyUrl = envProxyUrl;

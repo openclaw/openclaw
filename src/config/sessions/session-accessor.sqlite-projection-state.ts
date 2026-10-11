@@ -1,6 +1,5 @@
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { SessionEntryLifecycleUpsertConflictError } from "./session-accessor.lifecycle-types.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
@@ -29,6 +28,7 @@ import {
 } from "./session-accessor.sqlite-maintenance-store.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
+import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
 
 type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "maintenance"> & {
@@ -170,6 +170,8 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       allowStoredAliases: options.allowCanonicalRepair === true,
       preserveNodeSuggestions: options.allowCanonicalRepair === true,
       previousEntry: expectedCurrentEntry ?? null,
+      // Reset appends can change entry metadata after the authoritative read above.
+      ...(!resetBoundary ? { canonicalPreviousEntry: currentEntry ?? null } : {}),
       ...(routeContext !== undefined ? { routeContext } : {}),
     });
     const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {

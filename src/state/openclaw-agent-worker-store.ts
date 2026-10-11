@@ -17,7 +17,9 @@ import {
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
+  type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import {
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerOperations,
@@ -29,6 +31,7 @@ import {
   getGatewayShutdownCleanupSignal,
 } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -37,9 +40,9 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionScope,
-  AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -61,6 +64,17 @@ function reportCompletedPublicationCleanupFailure(error: unknown): void {
 }
 
 export type OpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
+  execute<Key extends keyof Operations>(
+    command: { type: Key; input: Operations[Key]["input"] },
+    assertCurrent: () => void,
+    options?: { signal?: AbortSignal },
+  ): Promise<Operations[Key]["output"]>;
+  /** Absence has no receipt; a present command can legitimately return undefined. */
+  executeExisting<Key extends keyof Operations>(
+    command: { type: Key; input: Operations[Key]["input"] },
+    assertCurrent: () => void,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ value: Operations[Key]["output"] } | undefined>;
   run<T>(
     operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
     assertCurrent: () => void,
@@ -97,26 +111,52 @@ export function executeOpenClawAgentWorkerPublication<
   return result as Promise<Operations[Key]["output"]>;
 }
 
+// Published plugins provide the released execution shape, not private host capabilities.
+type AgentWorkerPublicationExecution = Pick<
+  OpenClawAgentDatabaseExecution,
+  | "agentId"
+  | "path"
+  | "fileIdentity"
+  | "assertCurrent"
+  | "captureGenerationClaim"
+  | "prepare"
+  | "runExisting"
+  | "release"
+>;
+
+type AgentWorkerPublicationOptions = {
+  moduleUrl: URL;
+  input: unknown;
+  assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
+  observeAdmission?: (
+    admission: SqliteWorkerOperationAdmission,
+    retained: RetainedWorkerTransactionAdmission,
+  ) => void;
+  onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
+};
+
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
+// Keep the latest released shape last for consumers deriving parameters from this function.
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource:
+    | DatabaseSync
+    | {
+        execution: AgentWorkerPublicationExecution &
+          Pick<OpenClawAgentDatabaseExecution, "capturePreparedGenerationClaim">;
+      },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 /** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  publicationSource: DatabaseSync | { execution: OpenClawAgentDatabaseExecution },
-  worker: {
-    moduleUrl: URL;
-    input: unknown;
-    assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
-    /** Only for an accepted sequence whose owner closes this store at settlement. */
-    retainExecutionUntilClose?: true;
-  },
-): Promise<
-  OpenClawAgentSqliteWorkerStore<Operations> & {
-    execute<Key extends keyof Operations>(
-      command: { type: Key; input: Operations[Key]["input"] },
-      assertCurrent: () => void,
-      options?: { signal?: AbortSignal },
-    ): Promise<Operations[Key]["output"]>;
-  }
-> {
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {
@@ -157,7 +197,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   let revoked = false;
   let closing: Promise<void> | undefined;
   let drainExecution: OpenClawAgentDatabaseExecution | undefined;
-  let retainedExecution: OpenClawAgentDatabaseExecution | undefined;
   let releaseBorrow: (() => void) | undefined;
   let unregisterAgent: (() => void) | undefined;
   let unregisterState: (() => void) | undefined;
@@ -169,7 +208,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   };
   const assertHeld = (cleanup = false) => {
     if (revoked && !cleanup) {
-      throw new Error("Agent database Worker owner is closed");
+      throw new AgentDatabaseExecutionAdmissionClosedError("Agent database Worker owner is closed");
     }
     state.assertCurrent();
     if (capturedExecution) {
@@ -201,8 +240,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     closing ??= (async () => {
       await Promise.allSettled(pending);
       await releaseDrainExecution();
-      await retainedExecution?.release();
-      retainedExecution = undefined;
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -239,10 +276,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     if (expectedDatabase) {
       releaseBorrow = retainAgentDatabase(expectedDatabase);
     }
-    if (worker.retainExecutionUntilClose) {
-      // A lifetime borrow leaves native opening lazy and each command in its own FIFO turn.
-      retainedExecution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
-    }
   } catch (error) {
     try {
       await close();
@@ -266,7 +299,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     signal?: AbortSignal,
   ): Promise<T> => {
     if (revoked) {
-      return Promise.reject(new Error("Agent database Worker owner is closed"));
+      return Promise.reject(
+        new AgentDatabaseExecutionAdmissionClosedError("Agent database Worker owner is closed"),
+      );
     }
     const assert = () => {
       assertHeld();
@@ -277,28 +312,32 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent: assert,
       createAdmission(binding) {
-        return () => {
+        return (retained) => {
           let phase: "waiting" | "transaction" | "commit" = "waiting";
-          return {
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(worker.assertAdmission?.(request) ?? request);
-              if (request.stage === "transaction" || request.stage === "commit") {
-                if (
-                  !(
-                    (phase === "waiting" && request.stage === "transaction") ||
-                    (phase === "transaction" && request.stage === "commit")
-                  )
-                ) {
-                  throw new Error("Agent publication authority requested out of order");
-                }
-                phase = request.stage;
+          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(worker.assertAdmission?.(request) ?? request);
+            if (request.stage === "transaction" || request.stage === "commit") {
+              if (
+                !(
+                  (phase === "waiting" && request.stage === "transaction") ||
+                  (phase === "transaction" && request.stage === "commit")
+                )
+              ) {
+                throw new Error("Agent publication authority requested out of order");
               }
-              if (!grant()) {
-                throw new Error("Agent publication authority expired");
-              }
-            }, binding.attachment),
-          };
+              phase = request.stage;
+            }
+            if (!grant(() => worker.onAdmitted?.(request))) {
+              throw new Error("Agent publication authority expired");
+            }
+          }, binding.attachment);
+          try {
+            worker.observeAdmission?.(admission, retained);
+          } catch (error) {
+            admission.finish();
+            throw error;
+          }
+          return { nativeLocations: binding.nativeLocations, admission };
         };
       },
     };
@@ -319,7 +358,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       if (
         completed.ok &&
         !revoked &&
-        !retainedExecution &&
         getGatewayRestartDrainSignal().aborted &&
         !cleanupSignal.aborted
       ) {
@@ -349,45 +387,62 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     void result.finally(() => pending.delete(result)).catch(() => {});
     return result;
   };
-  return {
-    async execute(command, assertCurrent, commandOptions) {
-      commandOptions?.signal?.throwIfAborted();
-      if (typeof command.type !== "string") {
-        throw new Error("Agent publication commands require a string type");
-      }
-      const publication = {
-        id: randomUUID(),
-        moduleUrl,
-        input,
-        command: { type: command.type, input: command.input },
-      };
-      const captured = serialize(publication);
-      const preparation = reserveSqliteWorkerInputPreparation(captured.byteLength, "snapshot");
-      try {
-        const result = runPublication(
-          assertCurrent,
-          async (execution, source) => {
-            const receipt = await execution.runExisting(source, async (scope) => ({
-              value: await preparation.handoff(() =>
-                executeOpenClawAgentWorkerPublication<Operations, typeof command.type>(
-                  scope,
-                  // SAFETY: These private bytes snapshot this method's typed publication above.
-                  deserialize(captured) as typeof publication,
-                  commandOptions,
-                ),
+  const executeCommand = async <Key extends keyof Operations, Output>(
+    command: { type: Key; input: Operations[Key]["input"] },
+    assertCurrent: () => void,
+    select: (receipt: { value: Operations[Key]["output"] } | undefined) => Output,
+    commandOptions?: { signal?: AbortSignal },
+  ): Promise<Output> => {
+    commandOptions?.signal?.throwIfAborted();
+    if (typeof command.type !== "string") {
+      throw new Error("Agent publication commands require a string type");
+    }
+    const publication = {
+      id: randomUUID(),
+      moduleUrl,
+      input,
+      command: { type: command.type, input: command.input },
+    };
+    const captured = serialize(publication);
+    const preparation = reserveSqliteWorkerInputPreparation(captured.byteLength, "snapshot");
+    try {
+      return await runPublication(
+        assertCurrent,
+        async (execution, source) => {
+          const receipt = await execution.runExisting(source, async (scope) => ({
+            value: await preparation.handoff(() =>
+              executeOpenClawAgentWorkerPublication<Operations, Key>(
+                scope,
+                // SAFETY: These private bytes snapshot this method's typed publication above.
+                deserialize(captured) as typeof publication,
+                commandOptions,
               ),
-            }));
-            if (!receipt) {
-              throw new Error("Agent database disappeared before publication");
-            }
-            return receipt.value;
-          },
-          commandOptions?.signal,
-        );
-        return await result;
-      } finally {
-        preparation.release();
-      }
+            ),
+          }));
+          return select(receipt);
+        },
+        commandOptions?.signal,
+      );
+    } finally {
+      preparation.release();
+    }
+  };
+  return {
+    execute(command, assertCurrent, commandOptions) {
+      return executeCommand(
+        command,
+        assertCurrent,
+        (receipt) => {
+          if (!receipt) {
+            throw new Error("Agent database disappeared before publication");
+          }
+          return receipt.value;
+        },
+        commandOptions,
+      );
+    },
+    executeExisting(command, assertCurrent, commandOptions) {
+      return executeCommand(command, assertCurrent, (receipt) => receipt, commandOptions);
     },
     run<T>(
       operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
@@ -495,7 +550,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
               { retireNativeOnFailure: true },
             );
           } catch (error) {
-            if (outcome.ok && failures.length === 0) {
+            if (error instanceof AgentDatabaseExecutionAdmissionClosedError) {
+              // Refused cleanup retired its captured native generation, including TEMP bindings.
+            } else if (outcome.ok && failures.length === 0) {
               reportCompletedPublicationCleanupFailure(error);
             } else {
               failures.push(error);

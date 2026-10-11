@@ -107,7 +107,7 @@ export class DiscordCommandDeployer {
   }
 }
 
-function stableCommandKey(command: Pick<SerializedCommand, "name" | "type">) {
+function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
 }
 
@@ -122,11 +122,7 @@ function isApplicationCommandLimitError(error: unknown): boolean {
 
 function stableCommandSetHash(commands: SerializedCommand[]): string {
   const stable = commands
-    .map((command) => stableComparableObject(command))
-    .toSorted((a, b) =>
-      stableCommandKey(a as APIApplicationCommand).localeCompare(
-        stableCommandKey(b as APIApplicationCommand),
-      ),
-    );
+    .toSorted((a, b) => stableCommandKey(a).localeCompare(stableCommandKey(b)))
+    .map((command) => stableComparableObject(command));
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
