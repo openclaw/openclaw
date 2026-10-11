@@ -29,7 +29,7 @@ import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
-import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
@@ -471,8 +471,78 @@ function readIncognitoSessionRow(params: {
   });
 }
 
+/** Bind discovery and resident identity reads to the projection's current owner. */
+export function createSessionRowLookup(owner: {
+  state: () => {
+    cfg: records.Inputs["cfg"];
+    scope: ReturnType<typeof prepareSessionRowScopes>;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
+    disposed: boolean;
+    topologyDirty: boolean;
+    registryPrepared: boolean;
+  };
+  lookup: (query: records.Lookup) => records.Row | undefined;
+  matching: (query: records.Query, kind?: string) => records.Row[];
+  acquireEntry: (
+    row: records.Row,
+    storedEntry: records.Row["storedEntry"],
+  ) => records.Row | undefined;
+  env: NodeJS.ProcessEnv;
+  runInOwner: <T>(consume: () => T) => T;
+}) {
+  return {
+    async readLookup(selection: Parameters<typeof readSessionRowLookup>[0], agentId?: string) {
+      const selected = owner.state();
+      const queries = await owner.runInOwner(() =>
+        readSessionRowLookup(selection, {
+          agentId: selected.scope.select({ agentId }).agentId,
+          env: owner.env,
+          stores: selected.stores,
+          paths: selected.scope.select({ agentId }).paths,
+          matching: owner.matching,
+        }),
+      );
+      return {
+        queries,
+        isCurrent: () => {
+          const current = owner.state();
+          return (
+            !current.disposed &&
+            !current.topologyDirty &&
+            current.scope === selected.scope &&
+            current.cfg === selected.cfg
+          );
+        },
+      };
+    },
+    capture(query: records.Lookup) {
+      const row = owner.lookup(query);
+      const state = owner.state();
+      // Capture retains published identity while category facts wait for reconciliation.
+      return row &&
+        row.unresolvedDatabaseFacts !== "category" &&
+        !state.topologyDirty &&
+        !row.entry &&
+        row.storedEntry !== undefined &&
+        row.unresolvedDatabaseFacts !== true &&
+        state.registryPrepared
+        ? (owner.acquireEntry(row, row.storedEntry) ?? row)
+        : row;
+    },
+    findBySessionId(query: Parameters<typeof findSessionRowById>[0]) {
+      const { disposed, scope } = owner.state();
+      return findSessionRowById(query, {
+        disposed,
+        scope,
+        lookup: owner.lookup,
+        matching: owner.matching,
+      });
+    },
+  };
+}
+
 /** Resident identities use indexes; private identities remain exact process-local reads. */
-export function findSessionRowById(
+function findSessionRowById(
   query: { sessionId: string; agentId?: string; storePath?: string; federated?: boolean },
   owner: {
     disposed: boolean;
