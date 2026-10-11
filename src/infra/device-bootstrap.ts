@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  GatewayControlUiIngressError,
+  type GatewayControlUiIngressV1,
+} from "../plugins/gateway-ingress.types.js";
 import {
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolveRemoteControlUiBootstrapPolicy,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
@@ -12,6 +18,7 @@ import type {
   CloudWorkerSetupMutationAdmission,
   DeviceBootstrapMutationAdmission,
 } from "./device-bootstrap.worker-types.js";
+import { deriveDeviceIdFromPublicKey } from "./device-identity.js";
 import { loadBoundDeviceBootstrapContextReadOnly } from "./device-pairing-store-readonly.js";
 import {
   DevicePairingAuthorityRefusedError,
@@ -22,6 +29,68 @@ import { createAsyncLock } from "./pairing-files.js";
 
 const withLock = createAsyncLock();
 const log = createSubsystemLogger("device-bootstrap");
+
+/** Storage cutover seam: no ordinary bootstrap or device credential may stand in for audience binding. */
+function requireRemoteControlUiEnrollmentStorage(): never {
+  throw new GatewayControlUiIngressError(
+    "unavailable",
+    "Remote Control UI enrollment is unavailable until durable audience-bound device storage is supported. Keep remote UI enrollment disabled; do not substitute a shared Gateway credential or a generic bootstrap token.",
+  );
+}
+
+/** Validate the closed remote policy without entering the existing auto-approval bootstrap lane. */
+export async function issueRemoteControlUiPairingBootstrap(
+  input: Parameters<GatewayControlUiIngressV1["issuePairingBootstrap"]>[0],
+  authority: {
+    operatorScopeCeiling: readonly string[];
+    assertCurrent: () => void;
+  },
+): ReturnType<GatewayControlUiIngressV1["issuePairingBootstrap"]> {
+  authority.assertCurrent();
+  input.signal.throwIfAborted();
+  if (!resolveRemoteControlUiBootstrapPolicy({ ...input, ...authority })) {
+    throw new GatewayControlUiIngressError(
+      "invalid-options",
+      "Pairing scopes must be exactly operator.read or operator.read/operator.write within this ingress handle's ceiling.",
+    );
+  }
+  if (
+    !/^[A-Za-z0-9_-]{43}$/.test(input.publicKey) ||
+    Buffer.from(input.publicKey, "base64url").toString("base64url") !== input.publicKey ||
+    deriveDeviceIdFromPublicKey(input.publicKey) !== input.deviceId
+  ) {
+    throw new GatewayControlUiIngressError(
+      "invalid-options",
+      "Pairing requires a canonical Ed25519 public key and its matching device ID.",
+    );
+  }
+  if (
+    !input.displayName.trim() ||
+    input.displayName.length > 128 ||
+    containsAsciiControlCharacter(input.displayName)
+  ) {
+    throw new GatewayControlUiIngressError(
+      "invalid-options",
+      "Pairing displayName must contain 1–128 characters without control characters.",
+    );
+  }
+  return requireRemoteControlUiEnrollmentStorage();
+}
+
+export async function cancelRemoteControlUiPairingBootstrap(
+  enrollmentId: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  if (
+    !enrollmentId.trim() ||
+    enrollmentId.length > 256 ||
+    containsAsciiControlCharacter(enrollmentId)
+  ) {
+    throw new GatewayControlUiIngressError("invalid-options", "Invalid pairing enrollment ID.");
+  }
+  requireRemoteControlUiEnrollmentStorage();
+}
 
 function assertBootstrapTokenCurrent(
   facts: Exclude<DeviceBootstrapMutationAdmission, { kind: "bootstrap.cloudWorkerSetup" }>,

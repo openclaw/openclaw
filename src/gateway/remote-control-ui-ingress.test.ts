@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -72,6 +73,28 @@ function request(handle: GatewayControlUiIngressV1, pathAndQuery = "/claw/") {
 }
 
 describe("remote Control UI handle", () => {
+  it("binds enrollment preparation to the handle ceiling and refuses retained methods after close", async () => {
+    const { open } = fixture();
+    const handle = await open({ operatorScopeCeiling: ["operator.read"] });
+    const publicKey = Buffer.alloc(32, 9).toString("base64url");
+    const input = {
+      deviceId: createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("hex"),
+      publicKey,
+      displayName: "Synthetic browser",
+      scopes: ["operator.read", "operator.write"],
+      signal: new AbortController().signal,
+    };
+    await expect(handle.issuePairingBootstrap(input)).rejects.toMatchObject({
+      code: "invalid-options",
+      message: expect.stringContaining("ceiling"),
+    });
+    const issue = handle.issuePairingBootstrap;
+    const cancel = handle.cancelPairingBootstrap;
+    await handle.close();
+    await expect(issue(input)).rejects.toMatchObject({ code: "closed" });
+    await expect(cancel("synthetic-enrollment")).rejects.toMatchObject({ code: "closed" });
+  });
+
   it.each(["token", "password"] as const)(
     "rejects a redacted configured %s before opening transport",
     async (mode) => {

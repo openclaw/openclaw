@@ -103,6 +103,38 @@ The error `code` is one of `invalid-options`, `unsupported-auth`, `unavailable`,
 `closed`, `limit-exceeded`, or `forbidden`. Treat `closed` as terminal for that
 handle; do not retry through another authentication path.
 
+## Enrollment contract (unavailable)
+
+The handle declares two enrollment operations:
+
+- `issuePairingBootstrap({ deviceId, publicKey, displayName, scopes, signal })`
+  validates a canonical raw Ed25519 public key in unpadded base64url, its matching
+  device ID, a bounded display name, and the exact requested scopes. Scopes must
+  be `operator.read` or `operator.read` plus `operator.write`, within the handle's
+  ceiling. Core rejects extra scopes instead of silently widening or stripping them.
+- `cancelPairingBootstrap(enrollmentId)` addresses one enrollment. It does not
+  mean device or audience revocation.
+
+Both operations currently reject with `GatewayControlUiIngressError` code
+`unavailable` for valid requests. They issue no credential, create no pending
+pairing request, and do not report successful cancellation. Closed handles and
+unsupported configurations retain their lifecycle errors. Method presence alone
+does not mean enrollment is usable; keep enrollment disabled on `unavailable`.
+
+The in-memory policy specifies manual owner approval, a maximum five-minute
+bootstrap lifetime, one pending enrollment per call site, and three per audience.
+Those issuance and quota rules await the durable storage implementation. The
+bootstrap owner stops at `requireRemoteControlUiEnrollmentStorage` before any
+write. It never falls back to the existing auto-approved `purpose: "control-ui"`
+profile or a generic bootstrap token.
+
+Durable device/key/audience/scope binding, trusted owner approval with grant
+context and fingerprint, shared-auth issuer generation, cancellation, and
+audience revocation require the accepted storage migration and downgrade
+contract. No storage or credential representation changes are included here.
+The existing transport still accepts ordinary pre-paired devices; it does not
+yet enforce durable audience restrictions and is not ready for remote UI deployment.
+
 ## Security boundary
 
 Core marks every virtual request and connection `remote-forwarded` before
@@ -125,7 +157,5 @@ network proxy. A relay can read and modify the active content it forwards and
 can exercise a compromised browser device's permitted capabilities; the
 connection is not end-to-end encrypted against that relay.
 
-Version 1 does not yet expose remote enrollment operations. Audience-bound
-pairing, durable audience restrictions, and the embedded browser presentation
-are separate follow-up work; this transport alone is not a complete remote UI
-deployment.
+Audience-bound enrollment and the embedded browser presentation remain
+follow-up work; this transport alone is not a complete remote UI deployment.

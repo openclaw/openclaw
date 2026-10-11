@@ -1,5 +1,35 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
+/** In-memory policy only: never serialize this as an existing bootstrap profile. */
+export function resolveRemoteControlUiBootstrapPolicy(params: {
+  scopes: readonly string[];
+  operatorScopeCeiling: readonly string[];
+}) {
+  const isBounded = (scopes: readonly string[]) =>
+    Array.isArray(scopes) &&
+    scopes.length >= 1 &&
+    scopes.length <= 2 &&
+    scopes.includes("operator.read") &&
+    new Set(scopes).size === scopes.length &&
+    scopes.every((scope) => scope === "operator.read" || scope === "operator.write");
+  if (
+    !isBounded(params.scopes) ||
+    !isBounded(params.operatorScopeCeiling) ||
+    params.scopes.some((scope) => !params.operatorScopeCeiling.includes(scope))
+  ) {
+    return null;
+  }
+  // Do not use the generic normalizer: scope implication would change the exact request.
+  return {
+    approval: "manual" as const,
+    role: "operator" as const,
+    scopes: params.scopes.toSorted(),
+    maxTtlMs: 5 * 60 * 1000,
+    maxPendingPerCallSite: 1,
+    maxPendingPerAudience: 3,
+  };
+}
+
 export type DeviceBootstrapPurpose =
   | "control-ui"
   | "control-ui-owner"

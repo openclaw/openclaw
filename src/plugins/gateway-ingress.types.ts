@@ -85,6 +85,26 @@ export interface GatewayControlUiIngressV1 {
     protocol?: string;
     socket: GatewayIngressSocketV1;
   }>;
+  /** Reserved enrollment contract; rejects unavailable until durable audience binding is supported. */
+  issuePairingBootstrap(
+    this: void,
+    input: {
+      deviceId: string;
+      /** Canonical raw Ed25519 public key, encoded as unpadded base64url. */
+      publicKey: string;
+      displayName: string;
+      /** Exact requested set; must contain read and optionally write, within this handle's ceiling. */
+      scopes: readonly string[];
+      signal: AbortSignal;
+    },
+  ): Promise<{
+    enrollmentId: string;
+    bootstrapToken: string;
+    expiresAtMs: number;
+    scopes: string[];
+  }>;
+  /** Rejects unavailable while the enrollment storage owner is unavailable; never reports a fake cancellation. */
+  cancelPairingBootstrap(this: void, enrollmentId: string): Promise<void>;
   /** Fence admission, abort reads, and wait for owned work to settle. */
   close(): Promise<void>;
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
@@ -126,14 +127,29 @@ describe("service Control UI ingress authority", () => {
     });
     const factory = serviceContext.controlUiIngress!;
     const ingress = await factory.open(openOptions());
-    const stopping = service.stop();
+    const issue = ingress.issuePairingBootstrap;
+    const cancel = ingress.cancelPairingBootstrap;
+    const publicKey = Buffer.alloc(32, 11).toString("base64url");
+    const enrollment = {
+      deviceId: createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("hex"),
+      publicKey,
+      displayName: "Synthetic service browser",
+      scopes: ["operator.read"],
+      signal: new AbortController().signal,
+    };
+    let stopping: Promise<unknown> | undefined;
     try {
+      await expect(issue(enrollment)).rejects.toMatchObject({ code: "unavailable" });
+      await expect(cancel("synthetic-enrollment")).rejects.toMatchObject({ code: "unavailable" });
+      stopping = service.stop();
       await awaitGateBeforeSettlement(
         enteredStop.promise,
         stopping,
         "Service stopped before its cleanup",
       );
       await expect(factory.open(openOptions())).rejects.toThrow(/stopped|active|closed/);
+      await expect(issue(enrollment)).rejects.toThrow(/stopped|active|closed/);
+      await expect(cancel("synthetic-enrollment")).rejects.toThrow(/stopped|active|closed/);
       await expect(
         ingress.request({
           surface: "control-ui",

@@ -99,6 +99,8 @@ export function createPluginServiceControlUiIngress(options: {
             presentation: handle.presentation,
             request: (request) => handle.request(request),
             openWebSocket: (request) => handle.openWebSocket(request),
+            issuePairingBootstrap: (request) => handle.issuePairingBootstrap(request),
+            cancelPairingBootstrap: (enrollmentId) => handle.cancelPairingBootstrap(enrollmentId),
             async close() {
               await handle.close();
               handles.delete(ownedHandle);

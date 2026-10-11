@@ -6,6 +6,7 @@ import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/devi
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -13,8 +14,9 @@ import {
   type DeviceIdentity,
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { loadDeviceBootstrapTokenRecords } from "../infra/device-pairing-store.js";
 import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
+import { listDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   GatewayControlUiIngressError,
@@ -75,6 +77,7 @@ describe("remote Control UI ingress production composition", () => {
   let ingress: GatewayControlUiIngressV1 | undefined;
   let factory: GatewayControlUiIngressFactoryV1;
   let identity: DeviceIdentity;
+  let freshIdentity: DeviceIdentity;
   let deviceToken: string;
   let config: OpenClawConfig;
   let auth: ResolvedGatewayAuth;
@@ -123,6 +126,7 @@ describe("remote Control UI ingress production composition", () => {
     setRuntimeConfigSnapshot(config, config);
     auth = { mode: "token", token: SHARED_TOKEN, allowTailscale: false };
     identity = loadOrCreateDeviceIdentity();
+    freshIdentity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-fresh-remote-browser" });
     const pending = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -228,6 +232,22 @@ describe("remote Control UI ingress production composition", () => {
 
   it("loads the UI and admits a signed paired device while refusing browser shared credentials and unauthenticated hosts", async () => {
     ingress = await factory.open(openOptions);
+    const pairingBefore = await listDevicePairing();
+    const bootstrapBefore = loadDeviceBootstrapTokenRecords();
+    await expect(
+      ingress.issuePairingBootstrap({
+        deviceId: freshIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(freshIdentity.publicKeyPem),
+        displayName: "Fresh synthetic browser",
+        scopes: ["operator.read"],
+        signal: grantLifetime.signal,
+      }),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    await expect(ingress.cancelPairingBootstrap("synthetic-enrollment")).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    expect(await listDevicePairing()).toEqual(pairingBefore);
+    expect(loadDeviceBootstrapTokenRecords()).toEqual(bootstrapBefore);
     for (const [pathname, expected] of [
       ["/claw/", "Remote UI fixture"],
       ["/claw/assets/app.js", 'document.body.dataset.ready = "remote-ui";'],
@@ -243,7 +263,11 @@ describe("remote Control UI ingress production composition", () => {
       expect(await response.text()).toContain(expected);
     }
 
-    for (const credential of ["paired-device", "shared-token"] as const) {
+    // A real existing auto-approval bootstrap must not become a remote enrollment fallback.
+    const genericBootstrap = await issueDeviceBootstrapToken({
+      profile: { purpose: "control-ui", roles: ["operator"], scopes: [...SCOPES] },
+    });
+    for (const credential of ["paired-device", "shared-token", "generic-bootstrap"] as const) {
       const { socket } = await ingress.openWebSocket({
         pathAndQuery: "/claw",
         origin: PUBLIC_ORIGIN,
@@ -259,9 +283,15 @@ describe("remote Control UI ingress production composition", () => {
           throw new Error("Missing device challenge nonce");
         }
         const signedAt = Date.now();
-        const token = credential === "paired-device" ? deviceToken : SHARED_TOKEN;
+        const signingIdentity = credential === "generic-bootstrap" ? freshIdentity : identity;
+        const token =
+          credential === "paired-device"
+            ? deviceToken
+            : credential === "generic-bootstrap"
+              ? genericBootstrap.token
+              : SHARED_TOKEN;
         const payload = buildDeviceAuthPayloadV3({
-          deviceId: identity.deviceId,
+          deviceId: signingIdentity.deviceId,
           clientId: CLIENT.id,
           clientMode: CLIENT.mode,
           platform: CLIENT.platform,
@@ -283,11 +313,16 @@ describe("remote Control UI ingress production composition", () => {
               client: CLIENT,
               role: "operator",
               scopes: [...SCOPES],
-              auth: credential === "paired-device" ? { deviceToken: token } : { token },
+              auth:
+                credential === "paired-device"
+                  ? { deviceToken: token }
+                  : credential === "generic-bootstrap"
+                    ? { bootstrapToken: token }
+                    : { token },
               device: {
-                id: identity.deviceId,
-                publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-                signature: signDevicePayload(identity.privateKeyPem, payload),
+                id: signingIdentity.deviceId,
+                publicKey: publicKeyRawBase64UrlFromPem(signingIdentity.publicKeyPem),
+                signature: signDevicePayload(signingIdentity.privateKeyPem, payload),
                 signedAt,
                 nonce,
               },
@@ -317,6 +352,11 @@ describe("remote Control UI ingress production composition", () => {
         await messages.return?.();
       }
     }
+    const pairingAfter = await listDevicePairing();
+    expect(pairingAfter.pending).toEqual([]);
+    expect(pairingAfter.paired.some((device) => device.deviceId === freshIdentity.deviceId)).toBe(
+      false,
+    );
     await ingress.close();
     auth = { mode: "none", allowTailscale: false };
     config = { ...config, gateway: { ...config.gateway, auth: { mode: "none" } } };
