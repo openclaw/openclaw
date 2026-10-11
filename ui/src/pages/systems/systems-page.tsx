@@ -1,10 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { For, Show, createEffect, createMemo, onSettled } from "solid-js";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import "../../components/sparkline-tile.ts";
+import "../../components/sparkline-tile.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/desktop/desktop-panel.ts";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -14,6 +13,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import type { SparklineSample } from "../../lib/sparkline-types.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsController, SystemsRouteData } from "./systems-controller.ts";

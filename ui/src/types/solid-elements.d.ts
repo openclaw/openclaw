@@ -8,7 +8,6 @@ import type { JSX } from "@solidjs/web";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { MascotMood } from "../components/mascot-pose.ts";
-import type { SparklineSample } from "../lib/sparkline-types.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
 
@@ -23,16 +22,6 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
-      "openclaw-sparkline": HTMLAttributes<HTMLElement> & {
-        "prop:label": string;
-        "prop:sub"?: string;
-        "prop:samples": readonly SparklineSample[];
-        "prop:format": (value: number) => string;
-        "prop:floorMax"?: number;
-        "prop:stackColors"?: readonly string[];
-        "prop:autorange"?: boolean;
-        autorange?: boolean;
-      };
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
         "prop:surface": "tool-result";
         "prop:props": ControlUiSurfaceProps["tool-result"];

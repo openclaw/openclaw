@@ -6,7 +6,7 @@ import type {
   ControlUiView,
   ControlUiViewContext,
 } from "../../../src/plugin-sdk/control-ui.js";
-import { useApplication } from "../lib/reactive/context.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
@@ -84,7 +84,7 @@ function MountedContent(props: { value: unknown; host?: object }) {
 const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>();
 
 function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
-  const context = useApplication();
+  const context = useOptionalApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const notify = () => setRevision((value) => value + 1);
   let registration: ViewRegistration | undefined;

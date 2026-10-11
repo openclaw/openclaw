@@ -245,7 +245,7 @@ export const KEYBOARD_SHORTCUTS_ELEMENT = {
   get label() {
     return t("shortcutsOverlay.title");
   },
-  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.tsx"),
 } satisfies OptionalCustomElement;
 
 const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
