@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.10.5-beta.1",
+  "version": "2026.10.5-beta.2",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",

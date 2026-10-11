@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/code-mode-quickjs",
-  "version": "2026.10.5-beta.1",
+  "version": "2026.10.5-beta.2",
   "private": true,
   "description": "QuickJS executor for OpenClaw Code Mode",
   "type": "module",

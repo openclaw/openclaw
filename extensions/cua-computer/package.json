@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/cua-computer",
-  "version": "2026.10.5-beta.1",
+  "version": "2026.10.5-beta.2",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
   "repository": {
     "type": "git",
@@ -56,11 +56,11 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.10.5-beta.1"
+      "pluginApi": ">=2026.10.5-beta.2"
     },
     "build": {
       "bundledDist": true,
-      "openclawVersion": "2026.10.5-beta.1"
+      "openclawVersion": "2026.10.5-beta.2"
     },
     "release": {
       "publishToClawHub": true,

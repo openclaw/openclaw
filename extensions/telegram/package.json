@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.10.5-beta.1",
+  "version": "2026.10.5-beta.2",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.5-beta.1"
+    "openclaw": ">=2026.10.5-beta.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,7 +26,7 @@
   },
   "openclaw": {
     "compat": {
-      "pluginApi": ">=2026.10.5-beta.1"
+      "pluginApi": ">=2026.10.5-beta.2"
     },
     "extensions": [
       "./index.ts"

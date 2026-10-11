@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/canvas-plugin",
-  "version": "2026.10.5-beta.1",
+  "version": "2026.10.5-beta.2",
   "private": true,
   "description": "OpenClaw Canvas plugin",
   "type": "module",
