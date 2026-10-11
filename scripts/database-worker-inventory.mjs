@@ -1290,9 +1290,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readSubagentRunRow", "readSubagentSessionListRows"],
+        operations: [
+          "readSubagentRunRow",
+          "readSubagentSessionListRows",
+          "readSubagentRegistryRows",
+        ],
         evidence:
-          "Row reads are only completion/subagent-completion-admission.worker.ts:94,155 or its mutation kernel at :246,274,293,412,523,562,576 (admission.worker.ts:188). Session-list loader at store.sqlite.ts:409 is called only by src/state/openclaw-state-read.worker.ts:196; other native registry readers remain T1.",
+          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts; maintenance no longer opens a host reader. Descendant-basis comparisons retain their native deletion boundary and T1 classification.",
       },
     ],
   ],

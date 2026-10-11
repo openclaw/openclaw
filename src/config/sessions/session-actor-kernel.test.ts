@@ -588,5 +588,58 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         hydrateSessionActorState(database, target, state.hot.version, state.hot.writeToken),
       ),
     ).toEqual(projectSessionActorHotState(state));
+    rejectFresh = false;
+    runOpenClawAgentWriteTransaction(
+      (db) =>
+        withSessionActorTransactionState(db, state, () =>
+          applySessionActorAppend(
+            {
+              kind: "metadata",
+              input: {
+                ...append.input,
+                event: {
+                  type: "message",
+                  id: "newer-user",
+                  parentId: "prepared-assistant",
+                  timestamp: "2026-01-01T00:00:04.000Z",
+                },
+                message: {
+                  ...append.input.message!,
+                  messageJson: JSON.stringify({ role: "user", content: "a different turn" }),
+                  validateTurn: false,
+                },
+              },
+            },
+            state,
+            context,
+          ),
+        ),
+      options,
+    );
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        (db) =>
+          withSessionActorTransactionState(db, state, () =>
+            applySessionActorAppend(
+              {
+                kind: "metadata",
+                input: {
+                  ...append.input,
+                  event: {
+                    type: "message",
+                    id: "stale-assistant",
+                    parentId: "prepared-assistant",
+                    timestamp: "2026-01-01T00:00:05.000Z",
+                  },
+                },
+              },
+              state,
+              context,
+            ),
+          ),
+        options,
+      ),
+    ).toThrow("changed");
+    expect(f.events().at(-1)).toMatchObject({ id: "newer-user" });
   });
 });
