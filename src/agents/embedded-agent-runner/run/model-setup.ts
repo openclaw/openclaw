@@ -63,8 +63,6 @@ export type PreparedNativeSessionRuntime = {
   assertCurrent: () => Promise<void>;
 } & ({ auth: "native"; modelRef?: ModelRef } | { auth: "host"; modelRef: ModelRef });
 
-class NativeSessionOwnershipReadRaceError extends Error {}
-
 async function prepareNativeSessionRuntime(
   runParams: RunEmbeddedAgentInternalParams,
   harness: AgentHarness,
@@ -87,7 +85,7 @@ async function prepareNativeSessionRuntime(
     agentId: admission.agentId,
     sessionKey: admission.sessionKey,
   });
-  const readOwnership = async () => {
+  const readOwnership = async (admittedEntry?: SessionEntry) => {
     assertCallerCurrent();
     const publication = prepareSessionRowPublicationScope([
       admission.storePath,
@@ -117,14 +115,11 @@ async function prepareNativeSessionRuntime(
           }
           try {
             assertReadCurrent();
-            if (changed) {
-              throw new NativeSessionOwnershipReadRaceError();
-            }
           } catch (cause) {
-            if (cause instanceof NativeSessionOwnershipReadRaceError) {
-              throw cause;
-            }
             throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause });
+          }
+          if (changed) {
+            throw new AgentHarnessPreflightError(ownershipChangedMessage);
           }
           const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
           if (
@@ -148,6 +143,9 @@ async function prepareNativeSessionRuntime(
           readPreparedPreviousSessionId: () => current?.previousSessionId,
         });
       };
+      if (admittedEntry) {
+        return await consume(admittedEntry, assertCallerCurrent);
+      }
       if (isIncognitoSessionKey(admission.sessionKey)) {
         return await withSessionEntryReadOnlyInWorker(
           admission,
@@ -205,24 +203,7 @@ async function prepareNativeSessionRuntime(
       stop();
     }
   };
-  const resolveOwnership = async () => {
-    // A row publication can race the worker reply; re-read once under the same caller authority.
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        const ownership = await readOwnership();
-        assertCallerCurrent();
-        return ownership;
-      } catch (error) {
-        if (!(error instanceof NativeSessionOwnershipReadRaceError)) {
-          throw error;
-        }
-        if (attempt > 0) {
-          throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause: error });
-        }
-      }
-    }
-  };
-  const ownership = await resolveOwnership();
+  const ownership = await readOwnership(admission.entry);
   if (!ownership) {
     throw new AgentHarnessPreflightError(
       "The pinned runtime's native session ownership is unavailable. Reattach the original native session instead of starting a replacement model run.",
@@ -248,7 +229,7 @@ async function prepareNativeSessionRuntime(
         }),
     // Compare host-prepared auth against its exact tuple; native auth may follow its owner's model.
     assertCurrent: async () => {
-      const current = await resolveOwnership();
+      const current = await readOwnership();
       assertOperatorModelAllowed(operatorAuthority, current?.modelRef);
       if (
         current?.model !== ownership.model ||

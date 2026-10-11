@@ -22,6 +22,10 @@ import {
   resolveNativeHookRelayDeferredToolApproval,
   testing,
 } from "./native-hook-relay.js";
+import {
+  clearNativeHookRelayBridgeRecordsForTests,
+  clearNativeHookRelaysForTests,
+} from "./native-hook-relay.test-support.js";
 
 function relayParams(runId: string, sessionId = runId) {
   return { provider: "codex", sessionId, runId } satisfies Parameters<
@@ -84,7 +88,7 @@ function bridgeInvocation({ relayId, generation }: RelayIdentity) {
 }
 
 afterEach(async () => {
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
@@ -416,7 +420,7 @@ it("joins unregister when listener startup has not completed", async () => {
 
 it("renews logical invocation beyond its original expiry when the listener is unavailable", async () => {
   await withOpenClawTestState({ label: "relay-logical-renewal" }, async () => {
-    await store.clearNativeHookRelayBridgeRecordsForTests();
+    clearNativeHookRelayBridgeRecordsForTests();
     const failure = new Error("fixture listener failed");
     vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server) {
       queueMicrotask(() => this.emit("error", failure));
@@ -783,7 +787,7 @@ it("does not restore an old locator when renewal finishes after unregister", asy
     } finally {
       resume.resolve();
       relay.unregister();
-      await testing.clearNativeHookRelaysForTests();
+      await clearNativeHookRelaysForTests();
     }
   });
 });

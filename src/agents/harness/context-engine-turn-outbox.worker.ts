@@ -5,10 +5,8 @@ import {
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
-import {
-  executeContextEngineTurnOutboxCommand,
-  type ContextEngineTurnOutboxWorkerOperations,
-} from "./context-engine-turn-outbox.js";
+import type { ContextEngineTurnOutboxWorkerOperations } from "./context-engine-turn-outbox.js";
+import { executeContextEngineTurnOutboxCommand } from "./context-engine-turn-outbox.kernel.worker.js";
 
 /** Borrows the canonical agent connection for one admitted outbox operation. */
 export function bindSqliteWorkerBackend(

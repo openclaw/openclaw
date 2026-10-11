@@ -69,11 +69,7 @@ import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./remov
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
-import {
-  abortWorktreeRemoval,
-  claimWorktreeRemoval,
-  hasLiveWorktreeRunLease,
-} from "./run-lease.js";
+import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { reconcileListedWorktrees } from "./service-list.js";
 import {
   removeFailedWorktree,
@@ -1096,11 +1092,7 @@ export class ManagedWorktreeService {
         }
       }
       const liveLeaseScopes = new Set(leases.liveScopes);
-      const observedIds = new Set(records.map((record) => record.id));
-      const hasLiveLease = (id: string) =>
-        observedIds.has(id)
-          ? liveLeaseScopes.has(worktreeRunLeaseScope(id))
-          : hasLiveWorktreeRunLease(this.env, id);
+      const hasLiveLease = (id: string) => liveLeaseScopes.has(worktreeRunLeaseScope(id));
       const protect = (record: ManagedWorktreeRecord) =>
         autoRemovalProtectionReason(
           record,

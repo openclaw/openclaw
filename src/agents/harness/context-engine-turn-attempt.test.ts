@@ -24,7 +24,7 @@ import {
 import {
   enqueueContextEngineTurnCommit,
   enqueueContextEngineTurnIntent,
-} from "./context-engine-turn-outbox.js";
+} from "./context-engine-turn-outbox.kernel.worker.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-turn-range-");
 

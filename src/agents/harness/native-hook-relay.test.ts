@@ -44,6 +44,7 @@ import {
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
+import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-relay-policy-");
 
@@ -121,7 +122,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");

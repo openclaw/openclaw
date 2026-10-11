@@ -11,7 +11,8 @@ import {
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
-import { invokeNativeHookRelay, testing } from "./native-hook-relay.js";
+import { invokeNativeHookRelay } from "./native-hook-relay.js";
+import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
 
 const { createCodexNativeSpawnRelayForTest } = await loadBundledPluginFacade<{
   createCodexNativeSpawnRelayForTest: (params: {
@@ -24,7 +25,7 @@ const { createCodexNativeSpawnRelayForTest } = await loadBundledPluginFacade<{
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
   vi.useRealTimers();
 });
 
