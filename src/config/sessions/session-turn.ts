@@ -474,7 +474,7 @@ export async function appendSessionTurnInWorker(
         };
         return operation.run(
           async () => {
-            const hot = actor.snapshot(authority) ?? (await actor.read(authority));
+            const hot = inputActor.snapshot(authority) ?? (await actor.read(authority));
             const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
             if (replicaPreparation) {
               return replicaPreparation;
@@ -515,60 +515,64 @@ export async function appendSessionTurnInWorker(
             let candidate: SessionTurnCommitted | undefined;
             const actorOutcome = await runSessionActorCommand<
               SessionActorPhaseResults["acceptInput" | "adoptRun"]
-            >(actor, authority, async (snapshot) => {
-              const before = snapshot ?? (await actor.read(authority));
-              // Rebase the cache version, retaining the originally selected lifecycle.
-              expectedState ??= buildRestartRecoveryExpectedState(
-                before.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
-              );
-              const record = (turn: SessionTurnCommitted | undefined) => {
-                if (!turn) {
-                  throw new Error("Input actor omitted its committed turn");
-                }
-                candidate = turn;
-                try {
-                  operation.onAcknowledged(turn);
-                } finally {
-                  if (incognito) {
-                    publishIncognitoSessionEntry(
-                      incognito.actor,
-                      scope.sessionKey,
-                      before.entry,
-                      turn.result.sessionEntry,
-                    );
-                  } else if (turn.result.sessionEntry && inputActor.target.readSource) {
-                    publishCommittedSessionIdentity(
-                      scope.agentId,
-                      inputActor.target.readSource.databaseIdentity,
-                      new Map(before.entry ? [[scope.sessionKey, before.entry]] : []),
-                      new Map([[scope.sessionKey, turn.result.sessionEntry]]),
-                    );
+            >(
+              { ...actor, snapshot: (current) => inputActor.snapshot(current) },
+              authority,
+              async (snapshot) => {
+                const before = snapshot ?? (await actor.read(authority));
+                // Rebase the cache version, retaining the originally selected lifecycle.
+                expectedState ??= buildRestartRecoveryExpectedState(
+                  before.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
+                );
+                const record = (turn: SessionTurnCommitted | undefined) => {
+                  if (!turn) {
+                    throw new Error("Input actor omitted its committed turn");
                   }
-                }
-              };
-              const command = {
-                commandId: randomUUID(),
-                phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
-                expected: before.version,
-                expectedState,
-                lifecycle: {},
-                turn: plan,
-              };
-              return inputActor.phase === "acceptInput"
-                ? actor.acceptInput(command, authority, {
-                    committed: (commit) => record(commit.value.turn),
-                  })
-                : actor.adoptRun(
-                    {
-                      ...command,
-                      sessionId: options.expectedSessionId,
-                    },
-                    authority,
-                    {
-                      committed: (commit) => record(commit.value),
-                    },
-                  );
-            });
+                  candidate = turn;
+                  try {
+                    operation.onAcknowledged(turn);
+                  } finally {
+                    if (incognito) {
+                      publishIncognitoSessionEntry(
+                        incognito.actor,
+                        scope.sessionKey,
+                        before.entry,
+                        turn.result.sessionEntry,
+                      );
+                    } else if (turn.result.sessionEntry && inputActor.target.readSource) {
+                      publishCommittedSessionIdentity(
+                        scope.agentId,
+                        inputActor.target.readSource.databaseIdentity,
+                        new Map(before.entry ? [[scope.sessionKey, before.entry]] : []),
+                        new Map([[scope.sessionKey, turn.result.sessionEntry]]),
+                      );
+                    }
+                  }
+                };
+                const command = {
+                  commandId: randomUUID(),
+                  phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
+                  expected: before.version,
+                  expectedState,
+                  lifecycle: {},
+                  turn: plan,
+                };
+                return inputActor.phase === "acceptInput"
+                  ? actor.acceptInput(command, authority, {
+                      committed: (commit) => record(commit.value.turn),
+                    })
+                  : actor.adoptRun(
+                      {
+                        ...command,
+                        sessionId: options.expectedSessionId,
+                      },
+                      authority,
+                      {
+                        committed: (commit) => record(commit.value),
+                      },
+                    );
+              },
+            );
             if (actorOutcome.kind !== "committed") {
               throwSessionInputActorFailure(actorOutcome, authorityFailure);
             }
