@@ -239,7 +239,12 @@ Planning flags and the P tooling pin can change while saved checklist state is
 still `validated` with no run IDs and no retained `frv-request.json`. The helper
 reuses a saved publication tag only for the same P SHA. Once qualification is
 bound, keep the original flags and request; do not delete dispatch state to
-force a retry. Use a separate `--output-dir` only for a deliberately new request.
+force a retry. A repaired P that descends from the saved one (trusted `main`
+moves forward) rebinds the same `--output-dir`: bound FRV/npm runs are kept, a
+new publication tag is derived for the new P, and the move is recorded in
+`toolingRebinds`. A rollback, an unrelated P, or an unobserved retained
+`frv-request.json` is refused. Use a separate `--output-dir` only for a
+deliberately new request.
 If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
 and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
 evidence with Windows selected. A fresh checklist launch already admits the

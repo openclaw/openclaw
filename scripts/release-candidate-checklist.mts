@@ -516,6 +516,7 @@ export function buildReleaseCandidateState(
     telegramProviderMode: options.telegramProviderMode,
     fullReleaseRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
+    toolingRebinds: [] as Array<{ from: string; to: string }>,
   };
 }
 
@@ -530,10 +531,35 @@ function canUpdateReleaseCandidateState(saved: JsonRecord, hasRetainedRequest: b
   );
 }
 
+/**
+ * Bound state may follow repaired release tooling forward along trusted main.
+ * FRV and npm preflight evidence is authenticated independently of this
+ * coordinator, so only the tooling-bound publication tag is re-derived.
+ */
+export function assertReleaseCandidateToolingRebind(
+  saved: JsonRecord,
+  toolingSha: string,
+  hasRetainedRequest: boolean,
+  isAncestor: (ancestor: string, target: string) => boolean,
+) {
+  const savedToolingSha = String(saved.toolingSha);
+  if (hasRetainedRequest && !saved.fullReleaseRunId) {
+    throw new Error(
+      `release candidate state mismatch for toolingSha: saved=${savedToolingSha} current=${toolingSha}. An unobserved Full Release Validation request is retained; finish it with the saved tooling before switching tooling.`,
+    );
+  }
+  if (!/^[a-f0-9]{40}$/u.test(savedToolingSha) || !isAncestor(savedToolingSha, toolingSha)) {
+    throw new Error(
+      `release candidate state mismatch for toolingSha: saved=${savedToolingSha} current=${toolingSha}. Tooling may only move forward from the saved commit; rerun with the saved tooling, or use a fresh --output-dir for a deliberately new request.`,
+    );
+  }
+}
+
 export function reconcileReleaseCandidateState(
   saved: unknown,
   expected: CandidateState,
   hasRetainedRequest = false,
+  isAncestor: (ancestor: string, target: string) => boolean = gitIsAncestor,
 ) {
   if (!saved) {
     return expected;
@@ -546,8 +572,16 @@ export function reconcileReleaseCandidateState(
   if (!canUpdate && (saved.publicationRoute ?? "normal") !== expected.publicationRoute) {
     throw new Error("release candidate state mismatch for publicationRoute");
   }
+  const rebindsTooling = !canUpdate && saved.toolingSha !== expected.toolingSha;
+  if (rebindsTooling) {
+    assertReleaseCandidateToolingRebind(saved, expected.toolingSha, hasRetainedRequest, isAncestor);
+  }
   for (const key of RELEASE_CANDIDATE_STATE_KEYS) {
     if (canUpdate && key !== "repo" && key !== "tag" && key !== "targetSha") {
+      continue;
+    }
+    // The publication tag names its tooling SHA; the caller re-verifies the new one.
+    if (rebindsTooling && (key === "toolingSha" || key === "publishWorkflowRef")) {
       continue;
     }
     if (!isDeepStrictEqual(saved[key], expected[key])) {
@@ -561,8 +595,12 @@ export function reconcileReleaseCandidateState(
       throw new Error(`release candidate state mismatch for ${key}`);
     }
   }
+  const savedRebinds = Array.isArray(saved.toolingRebinds) ? saved.toolingRebinds : [];
   return {
     ...expected,
+    toolingRebinds: rebindsTooling
+      ? [...savedRebinds, { from: String(saved.toolingSha), to: expected.toolingSha }]
+      : savedRebinds,
     phase: typeof saved.phase === "string" ? saved.phase : expected.phase,
     fullReleaseRunId:
       expected.fullReleaseRunId ||
@@ -927,7 +965,12 @@ function savedPublishWorkflowRef(
   }
   if (saved.toolingSha !== toolingSha) {
     if (!canUpdateReleaseCandidateState(saved, hasRetainedRequest)) {
-      throw new Error("release candidate state mismatch for toolingSha");
+      assertReleaseCandidateToolingRebind(
+        saved,
+        toolingSha,
+        hasRetainedRequest,
+        (ancestor, target) => gitIsAncestor(ancestor, target, TOOLING_ROOT),
+      );
     }
     return "";
   }
@@ -2148,6 +2191,7 @@ async function main() {
     existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
     expectedState,
     hasRetainedRequest,
+    (ancestor, target) => gitIsAncestor(ancestor, target, TOOLING_ROOT),
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
