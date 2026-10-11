@@ -258,7 +258,10 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
   if (!location || location === ":memory:") {
     return undefined;
   }
-  const record = create ? pathAdmission(location) : state.registry.records.get(expected);
+  const record =
+    create && !database.isTransaction
+      ? pathAdmission(location)
+      : state.registry.records.get(expected);
   if (record && record.identity !== expected) {
     throw new Error("SQLite database changed identity before admission");
   }
@@ -303,6 +306,7 @@ export function getSqliteDatabaseAdmission<T>(
   if (!fact || !valid(record, fact)) {
     if (key.writer === "host") {
       if (
+        database.isTransaction ||
         threadId === 0 ||
         record.hostRevision ===
           Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
@@ -319,7 +323,7 @@ export function getSqliteDatabaseAdmission<T>(
     );
     const misses = state.misses.get(record) ?? new Map<string, number>();
     state.misses.set(record, misses);
-    if (misses.get(key.name) !== revision) {
+    if (!database.isTransaction && misses.get(key.name) !== revision) {
       exchange(record);
       fact = record.facts.get(key.name);
       misses.set(
@@ -391,7 +395,7 @@ function hasNativeAdmissionOperation(record: Admission): boolean {
 }
 
 function hasForeignSchemaWriter(database: DatabaseSync, record: Admission): boolean {
-  const active = activeWriters(record, 0, exchange);
+  const active = activeWriters(record, 0, database.isTransaction ? undefined : exchange);
   return active === undefined || active > (state.schemaWriters.get(database) === record ? 1 : 0);
 }
 
@@ -465,7 +469,12 @@ export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number 
       ? (state.localWriteRevisions.get(database) ?? 0)
       : undefined;
   }
-  return readWriteRevision(record, state.dataWriters.get(database) === record ? 1 : 0, exchange);
+  // Missing registrations stay unknown until the lock is released; refreshing waits for the host.
+  return readWriteRevision(
+    record,
+    state.dataWriters.get(database) === record ? 1 : 0,
+    database.isTransaction ? undefined : exchange,
+  );
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */

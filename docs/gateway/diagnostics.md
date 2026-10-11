@@ -162,6 +162,15 @@ otherwise they log at `debug`. Persistent Gateway degradation can warn even when
 no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
+The Gateway also emits an always-on `main-thread stall` warning after a synchronous
+callback blocks for more than one second. Each line names the longest-running
+known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+worker message handling, with elapsed and task milliseconds. Time awaiting I/O
+does not count as task execution. Unknown callbacks use `task=unattributed`;
+process suspension can also produce an unattributed delay. Reporting is bounded
+to eight pending stalls, with an omitted count if that limit is exceeded. This
+requires neither an inspector connection nor a sampling profiler.
+
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
 include concurrent work outside that phase; it is not exclusive attribution.
