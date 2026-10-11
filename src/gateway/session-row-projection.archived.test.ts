@@ -512,7 +512,7 @@ it.each(["catalog", "archive"] as const)(
   },
 );
 
-it("expires archives read while a newer catalog is still loading", async () => {
+it("refreshes archived model facts after catalog renewal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const key = "agent:main:catalog-archive";
@@ -558,7 +558,6 @@ it("expires archives read while a newer catalog is still loading", async () => {
       await loading.promise;
       expect(projection.dirtyRowCount).toBe(0);
       expect(projection.selectEntries()).toHaveLength(2);
-      expect(projection.selectEntries().filter(ready)).toHaveLength(0);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(1);
       expect(

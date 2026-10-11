@@ -1702,7 +1702,7 @@ describe("gateway hot reload model state", () => {
       hoisted.runtimeConfig.value = config;
       setRuntimeConfigSnapshot(config, config);
 
-      const scheduler = createTestGatewayScheduler();
+      const scheduler = createTestGatewayScheduler("fake-timers");
       try {
         const actualCron =
           await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
@@ -1761,21 +1761,28 @@ describe("gateway hot reload model state", () => {
 
         await withGatewayRestartSignal(async () => {
           await handlers.applyHotReload(createCronRestartPlan(), config);
-        });
 
-        expect(hoisted.buildGatewayCronService).toHaveBeenCalledWith(
-          expect.objectContaining({ resolveGatewayContext }),
-        );
-        expect(watchedRun.activity.resultSettled).toBe(false);
-        expect(await readFile(markerPath, "utf8")).toBe("run\n");
-        expect(spawn).toHaveBeenCalledOnce();
+          expect(hoisted.buildGatewayCronService).toHaveBeenCalledWith(
+            expect.objectContaining({ resolveGatewayContext }),
+          );
+          expect(watchedRun.activity.resultSettled).toBe(false);
+          expect(await readFile(markerPath, "utf8")).toBe("run\n");
+          expect(spawn).toHaveBeenCalledOnce();
 
-        await writeFile(releasePath, "release");
-        await waitForFast(() => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false), {
-          timeout: 10_000,
+          await writeFile(releasePath, "release");
+          await expect(withinTest(watchedRun.wait(), signal)).resolves.toMatchObject({
+            reason: "exit",
+            exitCode: 0,
+          });
+          await waitForFast(
+            () => expect(state?.cronState.cron.getJob(job.id)?.enabled).toBe(false),
+            {
+              timeout: 10_000,
+            },
+          );
+          expect(await readFile(markerPath, "utf8")).toBe("run\n");
+          expect(spawn).toHaveBeenCalledOnce();
         });
-        expect(await readFile(markerPath, "utf8")).toBe("run\n");
-        expect(spawn).toHaveBeenCalledOnce();
       } finally {
         await fixtureLifetime.verifyCleanup(async () => {
           hoisted.buildGatewayCronService.mockImplementation(previousCronFactory);
