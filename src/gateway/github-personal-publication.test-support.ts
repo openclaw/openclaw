@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -10,6 +10,7 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createPersonalGitHubOAuthLifecycle,
@@ -30,6 +31,20 @@ const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
+const profileCatalogs = new Set<Awaited<ReturnType<typeof prepareUserProfileCatalog>>>();
+afterEach(() => {
+  for (const catalog of profileCatalogs) {
+    catalog.release();
+  }
+  profileCatalogs.clear();
+});
+
+/** Gateway startup prepares profile authority again after database admission closes. */
+export async function preparePersonalPublicationProfileCatalog() {
+  const catalog = await prepareUserProfileCatalog();
+  profileCatalogs.add(catalog);
+  return catalog;
+}
 
 export function readPersonalPublicationFixtureStatus(
   fixture: Pick<
@@ -91,6 +106,7 @@ export async function expectPersonalPublicationReplay(
 export async function createPersonalPublicationFixture() {
   const owner = (await ensureCanonicalUserProfileForEmail("alice@example.test")).id;
   const otherOwner = (await ensureCanonicalUserProfileForEmail("bob@example.test")).id;
+  const profileCatalog = await preparePersonalPublicationProfileCatalog();
   const generation = randomUUID();
   const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(
@@ -177,6 +193,7 @@ export async function createPersonalPublicationFixture() {
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   return {
     owner,
+    profileCatalog,
     otherOwner,
     generation,
     runtime,
@@ -238,6 +255,8 @@ export async function restartPersonalPublicationFixture(
   const previous = fixture.placements;
   resetGatewayWorkAdmission();
   await closeOpenClawAgentDatabasesAsync();
+  fixture.profileCatalog.release();
+  fixture.profileCatalog = await preparePersonalPublicationProfileCatalog();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
   fixture.placements.clearLocalTurnClaimsAfterRestart();

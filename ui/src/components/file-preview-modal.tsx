@@ -21,7 +21,7 @@ export type FilePreviewModalFile = {
   contents: string;
   message?: string;
 };
-export type FilePreviewModalProps = {
+type FilePreviewModalProps = {
   files: FilePreviewModalFile[];
   activePath: string;
   query: string;
@@ -39,7 +39,7 @@ export type FilePreviewModalProps = {
   error: string;
   notice: string;
 };
-export type OpenClawFilePreviewModal = SolidBridgeElement<FilePreviewModalProps>;
+type OpenClawFilePreviewModal = SolidBridgeElement<FilePreviewModalProps>;
 
 function MarkdownContent(props: { contents: string; onClick: (event: MouseEvent) => void }) {
   let article!: HTMLElement;
@@ -415,30 +415,26 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   );
 }
 
-export const FilePreviewModal = defineSolidBridge<FilePreviewModalProps>(
-  "openclaw-file-preview-modal",
-  FilePreviewContent,
-  {
-    properties: {
-      files: { default: [], attribute: false },
-      activePath: { default: "" },
-      query: { default: "" },
-      label: { default: "" },
-      listLabel: { default: "" },
-      searchPlaceholder: { default: "" },
-      contextLabel: { default: "" },
-      emptyTitle: { default: "" },
-      emptySubtitle: { default: "" },
-      copyLabel: { default: "" },
-      layout: { default: "files" },
-      directories: { default: [], attribute: false },
-      loading: { default: false },
-      fileLoading: { default: false },
-      error: { default: "" },
-      notice: { default: "" },
-    },
+defineSolidBridge<FilePreviewModalProps>("openclaw-file-preview-modal", FilePreviewContent, {
+  properties: {
+    files: { default: [], attribute: false },
+    activePath: { default: "" },
+    query: { default: "" },
+    label: { default: "" },
+    listLabel: { default: "" },
+    searchPlaceholder: { default: "" },
+    contextLabel: { default: "" },
+    emptyTitle: { default: "" },
+    emptySubtitle: { default: "" },
+    copyLabel: { default: "" },
+    layout: { default: "files" },
+    directories: { default: [], attribute: false },
+    loading: { default: false },
+    fileLoading: { default: false },
+    error: { default: "" },
+    notice: { default: "" },
   },
-);
+});
 
 function chunkFileContents(contents: string): string[] {
   const lines = contents.split("\n");

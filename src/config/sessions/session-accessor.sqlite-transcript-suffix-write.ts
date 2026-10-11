@@ -1,8 +1,5 @@
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -15,10 +12,7 @@ import {
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  prepareSqliteTranscriptSuffixMutation,
-  replaceSqliteTranscriptSuffixInTransaction,
-} from "./session-accessor.sqlite-transcript-suffix.js";
+import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -41,18 +35,6 @@ export function replaceTranscriptSuffixEventsSync(
 ): boolean {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
-  const owner = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  assertSessionTranscriptHot(owner.db, resolved.sessionId);
-  const plan = prepareSqliteTranscriptSuffixMutation(
-    owner,
-    resolved,
-    expectedEvents,
-    nextEvents,
-    prefixLength,
-    expectedMutationAt,
-    eventsStartAtPersistedPrefix,
-    retainedCustomDataIds,
-  );
   let replaced = false;
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -63,7 +45,19 @@ export function replaceTranscriptSuffixEventsSync(
       if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
         return;
       }
-      replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan, projection);
+      replaceSqliteTranscriptSuffixInTransaction(
+        database,
+        resolved,
+        {
+          expectedEvents,
+          nextEvents,
+          persistedPrefixLength: prefixLength,
+          expectedMutationAt,
+          eventsStartAtPersistedPrefix,
+          retainedCustomDataIds,
+        },
+        projection,
+      );
       const committedVersion = readTranscriptContextVersionInTransaction(
         database,
         resolved.sessionId,

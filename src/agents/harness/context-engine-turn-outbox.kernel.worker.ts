@@ -3,7 +3,7 @@ import { sql } from "kysely";
 import {
   readClosedTranscriptTurnInDatabase,
   type ClosedTranscriptTurnReadResult,
-} from "../../config/sessions/session-accessor.transcript-range.js";
+} from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
 import {
   executeSqliteQuerySync,

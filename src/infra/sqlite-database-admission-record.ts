@@ -3,7 +3,10 @@ import type { BigIntStats } from "node:fs";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
+import {
+  readDatabaseIdentityBirthtime,
+  type DatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
 import { readWorkerAncestors, workerAncestors } from "./worker-ancestry.js";
 
 export function readSqliteDatabaseAdmissionIdentity(file: BigIntStats): string {
@@ -197,6 +200,11 @@ export function isSqliteDatabaseAdmissionFactCurrent(
   );
 }
 
+export function hasSqliteDatabaseSchemaAdmission(record: Admission | undefined): boolean {
+  const fact = record?.facts.get("sqlite-schema");
+  return Boolean(record && fact && isSqliteDatabaseAdmissionFactCurrent(record, fact));
+}
+
 export function readSqliteDatabaseFactRevision(
   record: Admission,
   schemaDependent: boolean | undefined,
@@ -351,6 +359,14 @@ export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
   private readonly published = new Map<string, Admission>();
   private revision = 0;
+
+  hasSchemaAdmissionForIdentity(physicalIdentity: DatabaseFileIdentity): boolean {
+    if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
+      return false;
+    }
+    const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
+    return hasSqliteDatabaseSchemaAdmission(this.records.get(key));
+  }
 
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
     const record: Admission = {
