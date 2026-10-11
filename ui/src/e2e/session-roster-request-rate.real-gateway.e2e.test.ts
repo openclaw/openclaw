@@ -112,9 +112,13 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor();
-        // Counts join background bootstrap after the visible row window.
+        // Profile counts join bootstrap after the separate navigation summary.
         await expect
-          .poll(() => lists.some(({ params }) => params.includeOwnerSessionCounts))
+          .poll(() =>
+            lists.some(
+              ({ params }) => params.includeOwnerSessionCounts && params.excludeSubagents === true,
+            ),
+          )
           .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await page.exposeFunction("recordRosterEvent", (label: string) => {

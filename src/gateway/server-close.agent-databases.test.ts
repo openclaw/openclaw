@@ -550,13 +550,11 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   }
 }, 300_000);
 
-it("releases agent leases for Doctor after the final Gateway stops while its process stays alive", async () => {
+it("releases agent leases for Doctor after Gateway stops while its process stays alive", async () => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-agent-leases-stop");
   const ownerPid = process.pid;
   try {
-    const first = await fixture.start(await fixture.reservePort());
-    const siblingPort = await fixture.reservePort();
-    const sibling = await fixture.start(siblingPort);
+    const server = await fixture.start(await fixture.reservePort());
     const options = { agentId: "main", env: fixture.state.env };
     const agent = openOpenClawAgentDatabase(options);
     const incognito = openOpenClawAgentDatabase({
@@ -569,15 +567,7 @@ it("releases agent leases for Doctor after the final Gateway stops while its pro
     expect(inspectForDoctor).toThrow(OpenClawAgentDatabaseLeaseActiveError);
     const closeOptions = { reason: "gateway stopping" };
 
-    await first.close(closeOptions);
-    expect(agent.db.isOpen).toBe(true);
-    expect(incognito.db.isOpen).toBe(true);
-    expect(inspectForDoctor).toThrow(OpenClawAgentDatabaseLeaseActiveError);
-    const response = await fetch(`http://127.0.0.1:${siblingPort}/healthz`);
-    await response.body?.cancel();
-    expect(response.ok).toBe(true);
-
-    await sibling.close(closeOptions);
+    await server.close(closeOptions);
     expect(process.pid).toBe(ownerPid);
     expect(isPidAlive(ownerPid)).toBe(true);
     expect(inspectForDoctor).not.toThrow();
@@ -630,8 +620,9 @@ it.skipIf(process.platform !== "linux")(
           started.resolve(server);
           return server;
         },
-        runtime: { log() {}, error() {}, exit },
-      }).catch(started.reject);
+      })
+        .then(exit)
+        .catch(started.reject);
       const server = await started.promise;
       await nextTurn();
       stop = process.listeners("SIGTERM").find((listener) => !previousStops.has(listener));

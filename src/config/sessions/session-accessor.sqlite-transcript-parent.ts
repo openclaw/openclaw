@@ -11,6 +11,7 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -252,6 +253,18 @@ function transcriptEntryIsAncestor(
   leafId: string,
   candidateId: string | null,
 ): boolean {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    let current = actor.transcript.identities.get(leafId);
+    for (let depth = 0; current && depth < PREPARED_ASSISTANT_MAX_ANCESTORS; depth++) {
+      if (current.parent_id === candidateId) {
+        return true;
+      }
+      current =
+        current.parent_id === null ? undefined : actor.transcript.identities.get(current.parent_id);
+    }
+    return false;
+  }
   const db = getSessionKysely(database.db);
   // Bound ancestry work even for malformed cycles or very deep metadata chains.
   // Keep dangling and null parents in the walk: they can be the requested ancestor.
@@ -295,6 +308,11 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
   sessionId: string,
   messageId: string,
 ): string | null {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const tree = scanSessionTranscriptTree(actor.transcript.navigation);
+    return selectSessionTranscriptTreePathNodes(tree, tree.leafId).at(-1)?.id ?? null;
+  }
   const db = getSessionKysely(database.db);
   const resolveFromNavigation = () => {
     const tree = scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId));
@@ -363,6 +381,10 @@ function readActiveTranscriptAppendParentId(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ): string | null {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return scanSessionTranscriptTree(actor.transcript.navigation).appendParentId;
+  }
   const db = getSessionKysely(database.db);
   const latest = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -446,6 +468,10 @@ function readTranscriptNavigationEvents(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ): unknown[] {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return structuredClone(actor.transcript.navigation);
+  }
   const db = getSessionKysely(database.db);
   return Array.from(
     iterateSqliteQuerySync(
@@ -465,6 +491,11 @@ function readTranscriptIdentityInTransaction(
   sessionId: string,
   eventId: string,
 ): { eventId: string; parentId: string | null; seq: number } | undefined {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const row = actor.transcript.identities.get(eventId);
+    return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+  }
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,

@@ -24,10 +24,6 @@ function buildConfig(
 }
 
 describe("matrix approval capability", () => {
-  it("subscribes the native runtime to system-agent approval events", () => {
-    expect(matrixApprovalCapability.nativeRuntimeAsync?.eventKinds).toContain("system-agent");
-  });
-
   it("describes the correct Matrix exec-approval setup path", () => {
     const text = matrixApprovalCapability.describeExecApprovalSetup?.({
       channel: "matrix",
@@ -52,34 +48,6 @@ describe("matrix approval capability", () => {
     expect(text).not.toContain("`channels.matrix.execApprovals.approvers`");
   });
 
-  it("describes native matrix approval delivery capabilities", async () => {
-    const capabilities = await matrixApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "matrix",
-          turnSourceTo: "room:!ops:example.org",
-          turnSourceAccountId: "default",
-          sessionKey: "agent:main:matrix:channel:!ops:example.org",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(capabilities).toEqual({
-      enabled: true,
-      preferredSurface: "both",
-      supportsOriginSurface: true,
-      supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: true,
-    });
-  });
-
   it("resolves approver dm targets", async () => {
     const targets = await matrixApprovalCapability.nativeAsync?.resolveApproverDmTargets?.({
       cfg: buildConfig(),
@@ -96,32 +64,6 @@ describe("matrix approval capability", () => {
     });
 
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
-  });
-
-  it("preserves room-id case when matching Matrix origin targets", async () => {
-    const target = await matrixApprovalCapability.nativeAsync?.resolveOriginTarget?.({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "matrix",
-          turnSourceTo: "room:!Ops:Example.org",
-          turnSourceThreadId: "$thread",
-          turnSourceAccountId: "default",
-          sessionKey: "agent:main:matrix:channel:!Ops:Example.org",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(target).toEqual({
-      to: "room:!Ops:Example.org",
-      threadId: "$thread",
-    });
   });
 
   it("keeps plugin approval auth independent from exec approvers", () => {

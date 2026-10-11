@@ -1,3 +1,4 @@
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
@@ -7,6 +8,8 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -20,8 +23,12 @@ import {
   prepareGatewaySkillLibraryTurn,
 } from "./skill-library-authoring.js";
 
+const catalogReleases: Array<() => void> = [];
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
     await closeStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
@@ -29,10 +36,11 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const content =
   "---\nname: ordinary\ndescription: An ordinary personal procedure\n---\n# Ordinary\nUse this procedure when asked.\n";
-function setup() {
+async function setup() {
   vi.stubEnv("OPENCLAW_STATE_DIR", temps.make("personal-authoring-"));
   const alice = ensureProfileForEmail("alice@example.test");
   const bob = ensureProfileForEmail("bob@example.test");
+  catalogReleases.push((await prepareUserProfileCatalog()).release);
   const request = (profileId: string): SkillLibraryRequestOwner => ({
     client: {
       authenticatedUserProfile: { profileId },
@@ -63,6 +71,7 @@ async function admitted(
     close: admission.close,
     invoke: (input: Parameters<typeof capability.invoke>[0]) =>
       withCaller(() => capability.invoke(input)),
+    assertWorkspaceCurrent: () => withCaller(() => capability.assertWorkspaceCurrent?.()),
     execute: (tool: ReturnType<typeof createLibrarySkillWorkshopTool>, input: unknown) =>
       withCaller(() => tool.execute("test", input)),
     context,
@@ -70,8 +79,44 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
+  it("checks workspace authority from committed profile facts without a main-thread read", async () => {
+    const { alice, request } = await setup();
+    const owner = request(alice.id);
+    owner.client!.connect.scopes = ["operator.admin"];
+    owner.context.getRuntimeConfig = () => ({
+      gateway: {
+        roles: {
+          default: "administrator",
+          definitions: {
+            administrator: {
+              scopes: ["operator.admin"],
+              agents: "*",
+              sessions: { others: "view" },
+            },
+            reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+          },
+        },
+      },
+    });
+    const run = await admitted(
+      (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
+    );
+    const { db } = openOpenClawStateDatabase();
+    try {
+      db.setAuthorizer(() => constants.SQLITE_DENY);
+      await expect(run.assertWorkspaceCurrent()).resolves.toBeUndefined();
+      db.setAuthorizer(null);
+      setUserProfileRole(alice.id, "reader");
+      db.setAuthorizer(() => constants.SQLITE_DENY);
+      await expect(run.assertWorkspaceCurrent()).rejects.toThrow("current administrator authority");
+    } finally {
+      db.setAuthorizer(null);
+      run.close();
+    }
+  });
+
   it("returns the actual slug and personal namespace edit permissions while retaining operator administration", async () => {
-    const { alice, bob, request } = setup();
+    const { alice, bob, request } = await setup();
     const owner = request(alice.id);
     owner.client!.connect.scopes = ["operator.admin"];
     const other = await saveSkillLibrary(libraryAuthority(request(bob.id)), {
@@ -133,7 +178,7 @@ describe("human personal namespace authority", () => {
     }
   });
   it("authors for the real requester inside another person's session and rejects a retained tool after close", async () => {
-    const { bob, request } = setup();
+    const { bob, request } = await setup();
     const owner = request(bob.id);
     const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     const run = await admitted(capability);
@@ -155,7 +200,7 @@ describe("human personal namespace authority", () => {
     }
   });
   it("preserves supporting bytes on ordinary updates and permits an explicit authorized transfer", async () => {
-    const { alice, request } = setup();
+    const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.client!.connect.scopes = ["operator.admin"];
     const run = await admitted(
@@ -202,7 +247,7 @@ describe("human personal namespace authority", () => {
     }
   });
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
-    const { alice, bob, request } = setup();
+    const { alice, bob, request } = await setup();
     const owner = request(alice.id);
     expect(await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
     expect(
@@ -234,7 +279,7 @@ describe("human personal namespace authority", () => {
   it.each(["profile", "scopes"] as const)(
     "refuses a prepared session after replacing requester %s",
     async (change) => {
-      const { alice, bob, request } = setup();
+      const { alice, bob, request } = await setup();
       const owner = request(alice.id);
       await expect(
         prepareGatewaySkillLibraryTurn(
@@ -257,7 +302,7 @@ describe("human personal namespace authority", () => {
     },
   );
   it("enforces current roles after session preparation and at publication after staging", async () => {
-    const { alice, request } = setup();
+    const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.context.getRuntimeConfig = () => ({
       gateway: {
@@ -293,7 +338,7 @@ describe("human personal namespace authority", () => {
     }
   });
   it("returns a whole bounded instruction or visible omission without embedding binary bundle data", async () => {
-    const { alice, request } = setup();
+    const { alice, request } = await setup();
     const owner = request(alice.id);
     const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     const run = await admitted(capability);
@@ -347,7 +392,7 @@ describe("human personal namespace authority", () => {
 });
 
 it("serves worker Workshop through the same Gateway capability and rejects a lost turn claim", async () => {
-  const { alice, request } = setup();
+  const { alice, request } = await setup();
   const capability = (await prepareGatewaySkillAuthoring(
     request(alice.id),
     "agent:main:shared",

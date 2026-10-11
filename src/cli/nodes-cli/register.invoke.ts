@@ -31,7 +31,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .requiredOption("--command <command>", "Command (e.g. canvas.navigate)")
       .option("--params <json>", "JSON object string for params", "{}")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
-      .option("--idempotency-key <key>", "Idempotency key (optional)")
+      .option("--idempotency-key <key>", "Key to avoid duplicate requests (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
           const nodeQuery = normalizeOptionalString(opts.node) ?? "";

@@ -301,6 +301,35 @@ export function renderSessionWorkspaceRail(
       </details>`,
     );
   };
+  const groups = [
+    renderGroup(
+      "changed",
+      t("chat.workspaceFiles.changed"),
+      changed.length,
+      true,
+      renderFileRows(changed),
+    ),
+    renderGroup("read", t("chat.workspaceFiles.read"), read.length, false, renderFileRows(read)),
+    renderGroup(
+      "artifacts",
+      t("chat.workspaceFiles.artifacts"),
+      matchingArtifacts.length,
+      false,
+      renderArtifactRows(),
+    ),
+    renderGroup(
+      null,
+      t("chat.workspaceFiles.browser"),
+      entries.length,
+      true,
+      browser || unavailableFolder ? renderBrowserRows() : nothing,
+    ),
+  ];
+  const emptySearch =
+    search &&
+    sessionWorkspace.list !== null &&
+    !sessionWorkspace.loading &&
+    groups.every((group) => group === nothing);
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       ${
@@ -355,10 +384,8 @@ export function renderSessionWorkspaceRail(
             ? renderPanelLoadingSkeleton("files", t("chat.workspaceFiles.loading"))
             : html`
                 <div class="chat-workspace-rail__scroll">
-                  ${renderGroup("changed", t("chat.workspaceFiles.changed"), changed.length, true, renderFileRows(changed))}
-                  ${renderGroup("read", t("chat.workspaceFiles.read"), read.length, false, renderFileRows(read))}
-                  ${renderGroup("artifacts", t("chat.workspaceFiles.artifacts"), matchingArtifacts.length, false, renderArtifactRows())}
-                  ${renderGroup(null, t("chat.workspaceFiles.browser"), entries.length, true, browser || unavailableFolder ? renderBrowserRows() : nothing)}
+                  ${groups}
+                  ${emptySearch ? html`<div class="chat-workspace-rail__state" role="status">${t("chat.workspaceFiles.noSearchResults")}</div>` : nothing}
                 </div>
               `
       }

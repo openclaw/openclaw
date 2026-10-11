@@ -116,14 +116,8 @@ describe("plugin state data-only comparison", () => {
         legacy.delete("counter");
       }
       const before = await store.observe("counter");
-      // Forward the original method with the intercepted worker as its receiver below.
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      const postMessage = Worker.prototype.postMessage;
-      const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-        this: Worker,
-        message,
-        transferList,
-      ) {
+      const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+      Worker.prototype.postMessage = function (this: Worker, message, transferList) {
         const request = asOptionalRecord(message);
         if (request?.type === "execute" && request.input instanceof Uint8Array) {
           const command = asOptionalRecord(deserialize(request.input));
@@ -133,8 +127,8 @@ describe("plugin state data-only comparison", () => {
             legacy.register("counter", { count: 2 });
           }
         }
-        return postMessage.call(this, message, transferList);
-      });
+        return dispatch.call(this, message, transferList);
+      };
       const result = await store.compareAndApply(
         "counter",
         before.comparison,

@@ -10,6 +10,7 @@ import type {
   ControlUiMockGatewayScenario,
   MockGatewayControls,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { chatToolScenes } from "./chat-tool-scenes.ts";
 import {
   fixedTime,
   sessionKey,
@@ -60,6 +61,7 @@ export type Scene = {
   prepare?: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   scrollTo?: string;
   loading?: boolean;
+  serviceWorkers?: "allow" | "block";
 };
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 function routeScene(route: RouteId): Scene {
@@ -132,8 +134,152 @@ const loadingRoutes: Array<{ route: RouteId; method: string; ready: string }> = 
     ready: "#settings-profile-identity .settings-loading-skeleton",
   },
 ];
+const modelSettingsScenario: ControlUiMockGatewayScenario = {
+  featureMethods: [
+    ...baseScenario.featureMethods!,
+    "codex.accountUsage",
+    "models.authLogin",
+    "wizard.next",
+    "openclaw.setup.detect",
+  ],
+  methodResponses: {
+    "models.authStatus": {
+      ts: fixedTime,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          profiles: [
+            {
+              profileId: "openai:parity",
+              type: "oauth",
+              status: "ok",
+              email: "demo@example.invalid",
+            },
+          ],
+        },
+      ],
+      providerCapabilities: [
+        {
+          provider: "openai",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          loginOptions: [
+            {
+              id: "openai-login",
+              brandId: "openai",
+              label: "Sign in with ChatGPT",
+              kind: "oauth",
+              featured: true,
+            },
+          ],
+        },
+      ],
+    },
+    "codex.accountUsage": {
+      updatedAt: fixedTime,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          plan: "Pro",
+          windows: [{ label: "5h", usedPercent: 25 }],
+        },
+      ],
+    },
+    "models.authLogin": { done: false, status: "running" },
+    "wizard.next": {
+      done: false,
+      status: "running",
+      step: {
+        id: "parity-code",
+        type: "text",
+        title: "Complete sign-in",
+        message: "Paste the code from the provider to finish signing in.",
+        sensitive: true,
+      },
+    },
+    "openclaw.setup.detect": {
+      candidates: [
+        {
+          kind: "codex-cli",
+          brandId: "openai",
+          label: "Codex",
+          detail: "Demo account",
+          modelRef: "openai/gpt-5.5",
+          credentials: true,
+          recommended: true,
+        },
+      ],
+      manualProviders: [
+        { id: "openai-api-key", brandId: "openai", groupLabel: "OpenAI", label: "OpenAI API key" },
+        { id: "apiKey", brandId: "anthropic", groupLabel: "Anthropic", label: "Anthropic API key" },
+      ],
+      prepareOptions: [
+        {
+          id: "ollama",
+          brandId: "ollama",
+          label: "Ollama",
+          hint: "Connect to a local Ollama server",
+          actionLabel: "Choose connection",
+        },
+      ],
+      authOptions: [],
+      setupComplete: false,
+      workspace: "/synthetic/workspace",
+    },
+  },
+};
+const modelSettingsPage: Scene = {
+  id: "models-configured",
+  label: "Models: configured defaults and provider",
+  path: "/settings/model-providers",
+  ready: "openclaw-model-providers-page",
+  scenario: modelSettingsScenario,
+  prepare: async (page) => {
+    await page.locator('[data-profile-id="openai:parity"]').waitFor();
+  },
+};
+const modelSetupPage: Scene = {
+  id: "model-setup-ready",
+  label: "Model Setup: detected and manual providers",
+  path: "/settings/model-setup?firstRun=explicit",
+  ready: "openclaw-model-setup-page",
+  scenario: modelSettingsScenario,
+  prepare: async (page) => {
+    await page.locator('[data-candidate-kind="codex-cli"]').waitFor();
+  },
+};
+
+const configuredMcpServers = {
+  mcp: {
+    servers: {
+      docs: { url: "https://mcp.example.com/mcp" },
+      workspace: { command: "node", args: ["workspace-tools.mjs"] },
+    },
+  },
+};
 export const scenes: Scene[] = [
+  ...chatToolScenes,
   ...APP_ROUTE_IDS.map(routeScene),
+  {
+    ...routeScene("mcp"),
+    id: "mcp-configured",
+    label: "MCP: local and remote servers",
+    ready: ".mcp-server-row",
+    scenario: {
+      methodResponses: {
+        "config.get": {
+          config: configuredMcpServers,
+          raw: JSON.stringify(configuredMcpServers),
+          hash: "parity-mcp-config",
+          valid: true,
+          issues: [],
+        },
+      },
+    },
+  },
   ...["status", "setup", "pat"].map((state): Scene =>
     Object.assign(routeScene("profile"), {
       id: `github-connections-${state}`,
@@ -155,6 +301,115 @@ export const scenes: Scene[] = [
       },
     }),
   ),
+  modelSettingsPage,
+  {
+    ...modelSettingsPage,
+    id: "models-account-usage",
+    label: "Models: account and quota",
+    scrollTo: '[data-profile-id="openai:parity"]',
+    prepare: async (page) => {
+      await page
+        .locator(".model-providers__account-usage")
+        .getByText("Pro", { exact: true })
+        .waitFor();
+    },
+  },
+  ...(["providers", "methods", "step"] as const).map((stage): Scene =>
+    Object.assign({}, modelSettingsPage, {
+      id: `models-login-${stage}`,
+      label: `Models: sign-in ${stage}`,
+      prepare: async (page: Page) => {
+        await page.locator("[data-models-connect]").click();
+        const dialog = page.locator(".model-provider-login");
+        await dialog.waitFor();
+        if (stage === "providers") {
+          return;
+        }
+        await dialog.locator('[data-models-login-provider="openai"]').click();
+        const method = dialog.locator("[data-models-login-choice] button").first();
+        await method.waitFor();
+        if (stage === "step") {
+          await method.click();
+          await page.locator('input[name="wizard-text"]').waitFor();
+        }
+      },
+    }),
+  ),
+  {
+    ...modelSettingsPage,
+    id: "models-empty",
+    label: "Models: no configured providers",
+    scenario: {
+      models: [],
+      agentModel: null,
+      methodResponses: {
+        "config.get": {
+          config: {},
+          sourceConfig: {},
+          hash: "parity-empty-models",
+          valid: true,
+          issues: [],
+        },
+        "models.list": { models: [] },
+        "models.authStatus": { ts: fixedTime, providers: [] },
+        "usage.status": { updatedAt: fixedTime, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    },
+    prepare: async (page) => {
+      await page.locator(".model-providers__provider-list .settings-empty").waitFor();
+    },
+  },
+  modelSetupPage,
+  {
+    ...modelSetupPage,
+    id: "model-setup-manual",
+    label: "Model Setup: manual API key",
+    scrollTo: ".model-setup__manual",
+    prepare: async (page) => {
+      await page.locator(".model-setup-provider-select__trigger").waitFor();
+    },
+  },
+  {
+    ...modelSetupPage,
+    id: "model-setup-provider-choices",
+    label: "Model Setup: provider choices",
+    scrollTo: ".model-setup__manual",
+    prepare: async (page) => {
+      await page.locator(".model-setup-provider-select__trigger").click();
+      await page.locator("[data-manual-provider]").first().waitFor();
+    },
+  },
+  {
+    ...modelSetupPage,
+    id: "model-setup-loading",
+    label: "Model Setup: discovery loading",
+    ready: ".model-setup__loading",
+    loading: true,
+    scenario: { ...modelSettingsScenario, heldMethods: ["openclaw.setup.detect"] },
+    prepare: undefined,
+  },
+  {
+    ...modelSetupPage,
+    id: "model-setup-error",
+    label: "Model Setup: recoverable discovery error",
+    scenario: {
+      ...modelSettingsScenario,
+      methodResponses: {
+        "openclaw.setup.detect": {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "Synthetic discovery unavailable. Retry the request.",
+          },
+        },
+      },
+    },
+    prepare: async (page) => {
+      await page
+        .getByText("Synthetic discovery unavailable. Retry the request.", { exact: false })
+        .waitFor();
+    },
+  },
   ...loadingRoutes.map(({ route, method, ready }): Scene =>
     Object.assign(routeScene(route), {
       id: `${route}-loading`,

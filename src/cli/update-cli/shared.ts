@@ -12,14 +12,6 @@ import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
-  normalizeUpdateFailureFacts,
-  type UpdateFailureFact,
-} from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
-import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
@@ -27,6 +19,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
@@ -38,15 +31,19 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
+export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
@@ -117,43 +114,6 @@ export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
   "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
 >;
-
-export class UpdatePreMutationError<Reason extends string = string> extends Error {
-  readonly origin?: "candidate-admission";
-  readonly nextAction?: string;
-  readonly recoverySteps?: readonly UpdateRecoveryStep[];
-  readonly failureFacts: UpdateFailureFact[];
-  readonly #stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-
-  get stepResult(): Pick<UpdateRunResult, "steps" | "failedStep"> | undefined {
-    return this.#stepResult;
-  }
-
-  constructor(
-    readonly reason: Reason,
-    message: string,
-    options?: ErrorOptions & {
-      failureFacts?: readonly UpdateFailureFact[];
-      stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-      recoverySteps?: readonly UpdateRecoveryStep[];
-      origin?: "candidate-admission";
-      nextAction?: string;
-    },
-  ) {
-    super(message, options);
-    this.name = "UpdatePreMutationError";
-    this.origin = options?.origin;
-    this.nextAction = options?.nextAction;
-    this.recoverySteps = options?.recoverySteps;
-    // Completed attempts are diagnostics, never recovery authority or enumerable error output.
-    this.#stepResult = options?.stepResult
-      ? { steps: options.stepResult.steps, failedStep: options.stepResult.failedStep }
-      : undefined;
-    this.failureFacts = normalizeUpdateFailureFacts(
-      options?.failureFacts ?? [{ check: reason, code: reason, message }],
-    );
-  }
-}
 
 /** Parse the shared timeout contract without exiting an owning operation. */
 export function parseUpdateTimeoutMs(
@@ -512,11 +472,11 @@ export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
   await (
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
   if (params.installKind !== "git") {
     if (await resolveBrewOpenClawPath(params.root)) {

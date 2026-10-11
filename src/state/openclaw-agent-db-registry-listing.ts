@@ -19,7 +19,6 @@ import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
-import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -102,7 +101,7 @@ type AgentDatabaseRegistryMemo = {
 // native discovery even when subsequent callers reuse the shared connection.
 const registry = resolveGlobalSingleton<{
   memo?: AgentDatabaseRegistryMemo;
-  pending: Map<symbol, RegistryTransition & { pathname: string; settled: Deferred }>;
+  pending: Map<symbol, RegistryTransition & { pathname: string }>;
   publications: WeakSet<SessionRowChange>;
 }>(Symbol.for("openclaw.agentDatabaseRegistryMemo"), () => ({
   pending: new Map(),
@@ -156,10 +155,9 @@ function advanceRegisteredAgentDatabasesMemo(
     registry.pending.set(transition.operation, {
       ...transition,
       pathname,
-      settled: createDeferredCore(),
     });
   } else if (transition?.phase === "finish") {
-    finishPendingRegistration(transition.operation);
+    registry.pending.delete(transition.operation);
   }
   const previous = registry.memo;
   if (previous?.pathname !== pathname) {
@@ -170,12 +168,6 @@ function advanceRegisteredAgentDatabasesMemo(
   previous.next = { memo, transition };
   registry.memo = memo;
   return { previous: previous.token, current: memo.token };
-}
-
-function finishPendingRegistration(operation: symbol): void {
-  const pending = registry.pending.get(operation);
-  registry.pending.delete(operation);
-  pending?.settled.resolve();
 }
 
 function captureRegistryMutation(
@@ -361,7 +353,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
           }
           throw error;
         } finally {
-          finishPendingRegistration(operation);
+          registry.pending.delete(operation);
         }
         if (active && !uncertain) {
           advance("finish");
@@ -437,12 +429,6 @@ export class AgentDatabaseRegistryChangedError extends Error {
   constructor(message = "Agent database registry changed during discovery; retry the read.") {
     super(message);
     this.name = "AgentDatabaseRegistryChangedError";
-  }
-}
-
-export class AgentDatabaseRegistryPendingError extends AgentDatabaseRegistryChangedError {
-  constructor(readonly waitForSettlement: () => Promise<void>) {
-    super("Agent database registry ownership is changing during discovery");
   }
 }
 
@@ -552,11 +538,9 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             )
           : [];
         if (pending.length > 0) {
-          throw new AgentDatabaseRegistryPendingError(async () => {
-            assertAdmissionCurrent();
-            await Promise.all(pending.map((entry) => entry.settled.promise));
-            assertAdmissionCurrent();
-          });
+          throw new AgentDatabaseRegistryChangedError(
+            "Agent database registry ownership is changing during discovery",
+          );
         }
         while (cursor !== current) {
           const next = cursor.next;

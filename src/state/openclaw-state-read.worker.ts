@@ -29,10 +29,7 @@ import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.js";
-import {
-  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
-  readRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.js";
 import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
@@ -484,12 +481,6 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
-              };
-            }
-            if (command.type === "githubRepository.request") {
-              return {
-                type: command.type,
-                row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
               };
             }
             if (

@@ -54,6 +54,10 @@ does not expose their questions or make them answerable. Secret, administrative,
 and sessionless questions keep their existing privileged access requirements.
 Answering a question does not grant the agent additional permissions.
 
+If a standalone question link cannot refresh after reconnecting, use **Retry**
+to load it again without losing the answer you typed in that page. A question
+that is no longer available remains unavailable.
+
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 

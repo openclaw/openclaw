@@ -28,7 +28,7 @@ exists.
 ## Output directory errors
 
 If an output fails with `Invalid path: must stay within output directory`, set
-the output directory to its real, canonical path. Browser outputs reject
+the output directory to its resolved path. Browser outputs reject
 user-created symlinks anywhere in the directory path, including when the final
 directory already exists. The macOS `/tmp` and `/var` system aliases remain
 supported.
@@ -67,7 +67,7 @@ How to read the results:
 
 Important behavior details:
 
-- Browser config defaults to a fail-closed SSRF policy object even when you do not configure `browser.ssrfPolicy`.
+- Browser config defaults to an SSRF policy object that blocks disallowed destinations even when you do not configure `browser.ssrfPolicy`.
 - For the local loopback `openclaw` managed profile, CDP health checks intentionally skip browser SSRF reachability enforcement for OpenClaw's own local control plane.
 - After launching a local managed browser, readiness checks allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays. The readiness retry window is eight seconds; checks near its end use shorter timeouts.
 - Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness checks; canceling one caller waiting for a shared start does not stop that shared launch.

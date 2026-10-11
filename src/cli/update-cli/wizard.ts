@@ -9,7 +9,7 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { reportHostOwnedUpdate } from "./host-owned.js";
@@ -135,6 +135,9 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       acceptCapabilities: opts.acceptCapabilities,
     });
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
   }

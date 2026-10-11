@@ -29,6 +29,7 @@ it("publishes every prepared-workspace transition before the awaited owner retur
         preparedManifestRef: `sha256:${"d".repeat(64)}`,
       });
       expect(states).toEqual(["available"]);
+      expect(await store.find(row.environment_id)).toEqual(row);
       const bound = await store.bind({
         action: "bind",
         preparationKey: row.preparation_key,

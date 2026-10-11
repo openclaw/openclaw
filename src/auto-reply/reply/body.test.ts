@@ -11,6 +11,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAbortMemory, setAbortMemory } from "./abort-primitives.js";
 import { applySessionHints } from "./body.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -52,8 +53,14 @@ describe("applySessionHints", () => {
     const body = await Promise.resolve(applySessionHints(prepared));
     expect(body).toContain("organize my sessions");
 
+    await using actor = createReplyRecoveryActorFixture({
+      agentId: "main",
+      ...scope,
+      getSessionId: () => sessionId,
+    });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "new-input",
       lifecycleGeneration,
       getEntry: () => entry,

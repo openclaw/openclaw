@@ -19,12 +19,6 @@ import {
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
-import {
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
-} from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { appendSessionCorpusLines } from "./session-ingestion.js";
@@ -944,16 +938,7 @@ describe("memory-core dreaming phases", () => {
           }),
         ]);
         expect(pendingContent).toContain(claim);
-        const publisherOwnsLock = await openMemoryCoreStateStore({
-          namespace: SHORT_TERM_LOCK_NAMESPACE,
-          maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-        }).lookup(memoryCoreWorkspaceStateKey(workspaceDir));
         forgotten = forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
-        // Finish deletion before a writer without a lease resumes. A serialized
-        // writer must finish first; this exercises both orders without sleeps.
-        if (!publisherOwnsLock) {
-          await forgotten;
-        }
         publish.resolve();
         await Promise.all([sweep, forgotten]);
         for (const file of [

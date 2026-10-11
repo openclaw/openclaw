@@ -19,40 +19,12 @@ export function createNativeWorkerResource(
   const sendTarget = port.postMessage.bind(port);
   sendOwner({ type: "constructed", brokerPid: process.pid });
   let attempts = 0;
-  let closePending = false;
   const permission = createDeferredCore();
-  const firstFailurePermission = createDeferredCore();
-  const custodyAck = createDeferredCore();
-  let acknowledgments = 0;
-  let fences = 0;
-  const gateFirstFailure = input.gateFirstFailure === true;
-  const requireCustodyAck = input.requireCustodyAck === true;
   const childWatchdogMs = input.lateAttachment === true ? 40_000 : 12_000;
   ownerPort.on("message", (message) => {
     assert.ok(isRecord(message));
     if (message.type === "permit-close") {
       permission.resolve();
-    }
-    if (message.type === "fail-first-close") {
-      firstFailurePermission.resolve();
-    }
-    if (message.type === "close-barrier") {
-      sendOwner({ type: "close-barrier", attempts, pending: closePending });
-    }
-    if (message.type === "custody-ack") {
-      sendOwner({ type: "custody-ack", count: ++acknowledgments });
-      custodyAck.resolve();
-    }
-    if (message.type === "fixture-fence") {
-      sendOwner({ type: "fixture-fence", count: ++fences });
-      throw Object.assign(
-        new RangeError("synthetic owner fence failure", {
-          cause: Object.assign(new TypeError("synthetic owner fence cause"), {
-            code: "E_NATIVE_FENCE_CAUSE",
-          }),
-        }),
-        { code: "E_NATIVE_FENCE" },
-      );
     }
   });
   const waitForPermission = async (gate: Deferred) => {
@@ -72,38 +44,23 @@ export function createNativeWorkerResource(
   void closed.promise.catch(() => undefined);
   const owner: NativeWorkerResourceOwner = {
     async close() {
-      closePending = true;
-      try {
-        sendOwner({ type: "close-attempt", attempt: ++attempts });
-        if (attempts === 1) {
-          if (gateFirstFailure) {
-            await waitForPermission(firstFailurePermission);
-          }
-          throw new Error("synthetic first resource close failure");
-        }
-        if (!child) {
-          return;
-        }
-        process.stderr.write(`native resource pid=${process.pid}: awaiting close permission\n`);
-        if (requireCustodyAck) {
-          await waitForPermission(custodyAck);
-        }
-        await waitForPermission(permission);
-        child.stdin.end("close\n");
-        await closed.promise;
-      } finally {
-        closePending = false;
+      sendOwner({ type: "close-attempt", attempt: ++attempts });
+      if (attempts === 1) {
+        throw new Error("synthetic first resource close failure");
       }
+      if (!child) {
+        return;
+      }
+      process.stderr.write(`native resource pid=${process.pid}: awaiting close permission\n`);
+      await waitForPermission(permission);
+      child.stdin.end("close\n");
+      await closed.promise;
     },
   };
 
   // The factory returns its owner before a queued target request can spawn native work.
   port.on("message", (message) => {
     assert.ok(isRecord(message));
-    if (message.type === "owner-reply-barrier") {
-      sendOwner({ type: "owner-reply-barrier", acknowledgments, fences });
-      return;
-    }
     assert.equal(child, undefined, "one native child belongs to this resource owner");
     const owned = spawn(
       process.execPath,

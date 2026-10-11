@@ -66,7 +66,6 @@ type AgentProjectionEntry =
   | { state: "ready"; projection: PreparedChatMetadataProjection };
 
 type PreparedMetadataGeneration = {
-  epoch: number;
   facts: PreparedGenerationFacts;
   modelLists: ReturnType<typeof createChatMetadataModelList>;
   agentsById: Map<string, Promise<PreparedAgentMetadata>>;
@@ -121,9 +120,7 @@ export function createGatewayChatMetadataRuntime(params: {
   let current: PreparedMetadataGeneration | undefined;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
-  let invalidationEpoch = 0;
-  let refreshVersion = 0;
-  let lastSettlement: PreparedMetadataGeneration | number | undefined;
+  let failed = false;
   let lastNotifiedFacts: PreparedGenerationFacts | undefined;
   const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
     const previous = lastNotifiedFacts;
@@ -140,10 +137,12 @@ export function createGatewayChatMetadataRuntime(params: {
         : {}),
     });
   };
-  let refreshTail: Promise<void> = Promise.resolve();
   let stoppedError: ChatMetadataSnapshotUnavailableError | undefined;
   const activeWork = new Set<Promise<unknown>>();
   const trackWork = <T>(work: Promise<T>): Promise<T> => {
+    if (activeWork.has(work)) {
+      return work;
+    }
     activeWork.add(work);
     const settled = () => activeWork.delete(work);
     void work.then(settled, settled);
@@ -154,14 +153,9 @@ export function createGatewayChatMetadataRuntime(params: {
       throw stoppedError;
     }
   };
-  let pending:
-    | {
-        facts: PreparedGenerationFacts;
-        promise: Promise<void>;
-        generationReady: Deferred;
-        notifyIfUnchanged: boolean;
-      }
-    | undefined;
+  let pending: Promise<void> | undefined;
+  let refreshRequested = false;
+  let notifyRefreshIfUnchanged = false;
 
   const projectAgent = async (
     generation: PreparedMetadataGeneration,
@@ -202,17 +196,7 @@ export function createGatewayChatMetadataRuntime(params: {
       if (await withCurrentReadAuthority(authority, () => prepared.isCurrent())) {
         return prepared;
       }
-      if (projections.get(key) === existing) {
-        projections.delete(key);
-      }
-      return projectAgent(
-        generation,
-        agent,
-        sessionEntry,
-        requesterProfileId,
-        authority,
-        useRequesterDefaults,
-      );
+      projections.delete(key);
     }
     const projection = deps
       .buildProjection({
@@ -229,23 +213,17 @@ export function createGatewayChatMetadataRuntime(params: {
             ...prepared,
             agent,
           };
-          // Only this pending entry may publish its settlement; eviction or invalidation
-          // must not let an obsolete completion replace a newer profile projection.
-          if (generation.epoch === invalidationEpoch && projections.get(key) === entry) {
-            projections.set(key, { state: "ready", projection: preparedProjection });
-          }
+          projections.set(key, { state: "ready", projection: preparedProjection });
+          pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
           return preparedProjection;
         }),
       )
       .catch((error: unknown) => {
-        if (projections.get(key) === entry) {
-          projections.delete(key);
-        }
+        projections.delete(key);
         throw error;
       });
     void trackWork(projection);
-    const entry: AgentProjectionEntry = { state: "pending", promise: projection };
-    projections.set(key, entry);
+    projections.set(key, { state: "pending", promise: projection });
     // Cold history reads omit evicted projections; canonical reads prepare them on demand.
     pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
     return projection;
@@ -280,9 +258,7 @@ export function createGatewayChatMetadataRuntime(params: {
             .digest("base64url"),
         };
       })().catch((error: unknown) => {
-        if (generation.agentsById.get(agentId) === preparing) {
-          generation.agentsById.delete(agentId);
-        }
+        generation.agentsById.delete(agentId);
         throw error;
       }),
     );
@@ -291,18 +267,12 @@ export function createGatewayChatMetadataRuntime(params: {
     return preparing;
   };
 
-  const runRefresh = async (version: number, facts: PreparedGenerationFacts) => {
-    if (version !== refreshVersion) {
-      return;
-    }
+  const runRefresh = async (options: ChatMetadataRefreshOptions) => {
     assertOpen();
-    try {
-      if (current && generationFactsMatch(current.facts, facts)) {
-        return;
-      }
+    const facts = captureGenerationFacts(deps);
+    if (!current || !generationFactsMatch(current.facts, facts)) {
       // Commands and session-specific projections stay on demand within the published owner facts.
-      current = {
-        epoch: invalidationEpoch,
+      const generation: PreparedMetadataGeneration = {
         facts,
         modelLists: createChatMetadataModelList({
           facts,
@@ -315,18 +285,21 @@ export function createGatewayChatMetadataRuntime(params: {
         sessionProjectionByKey: new Map(),
       };
       // Rebuild only variants clients already use, before the replacement becomes readable.
-      const { modelLists } = current;
+      const { modelLists } = generation;
       await Promise.allSettled(
         [...requestedModelLists.values()].map((request) => modelLists.prepare(request)),
       );
-    } catch (error) {
-      // Invalidation and stop revoke old preparation, including its failures.
-      // Only the current refresh may settle the replacement's readers.
-      if (version !== refreshVersion) {
-        return;
-      }
-      throw error;
+      assertOpen();
+      // Mid-refresh config changes are best effort; the next publication refreshes these facts.
+      current = generation;
+      notifyChanged(facts, options.notifyIfUnchanged);
+    } else if (options.notifyIfUnchanged) {
+      notifyChanged(facts, true);
     }
+    failed = false;
+    lastError = undefined;
+    replacement?.resolve();
+    replacement = undefined;
   };
 
   // Publication callbacks can carry a temporary startup admission borrow.
@@ -334,122 +307,59 @@ export function createGatewayChatMetadataRuntime(params: {
     if (stoppedError) {
       return Promise.reject(stoppedError);
     }
-    let facts: PreparedGenerationFacts;
-    try {
-      facts = captureGenerationFacts(deps);
-    } catch (error) {
-      const refreshError = error instanceof Error ? error : new Error(formatErrorMessage(error));
-      fail(refreshError);
-      return Promise.reject(refreshError);
+    refreshRequested = true;
+    notifyRefreshIfUnchanged ||= options.notifyIfUnchanged === true;
+    if (pending) {
+      return pending;
     }
-    if (current && generationFactsMatch(current.facts, facts)) {
-      // A settled attempt can clear progress cached by models.list or models.snapshot readers
-      // without changing any prepared model/command facts. Wake them without retiring the cache.
-      if (options.notifyIfUnchanged) {
-        notifyChanged(current.facts, true);
+    const promise = Promise.resolve().then(async () => {
+      while (refreshRequested) {
+        refreshRequested = false;
+        const notifyIfUnchanged = notifyRefreshIfUnchanged;
+        notifyRefreshIfUnchanged = false;
+        await runRefresh({ notifyIfUnchanged });
       }
-      return Promise.resolve();
-    }
-    if (pending && generationFactsMatch(pending.facts, facts)) {
-      pending.notifyIfUnchanged ||= options.notifyIfUnchanged === true;
-      return pending.promise;
-    }
-    if (current || pending) {
-      // Fence reads synchronously only after proving the published facts changed. A suspended
-      // session projection must not return its old success or failure while replacement builds.
-      invalidate(true);
-    }
-    const version = ++refreshVersion;
-    const promise = refreshTail.catch(() => {}).then(() => runRefresh(version, facts));
-    refreshTail = promise;
-    const generationReady = createDeferredCore();
-    pending = {
-      facts,
-      promise,
-      generationReady,
-      notifyIfUnchanged: options.notifyIfUnchanged === true,
-    };
+    });
+    pending = promise;
     void promise.then(
       () => {
-        generationReady.resolve();
-        if (pending?.promise !== promise) {
-          return;
-        }
-        const notifyIfUnchanged = pending.notifyIfUnchanged;
         pending = undefined;
-        // Only the current generation may settle its replacement wait.
-        if (current?.epoch !== invalidationEpoch) {
-          return;
-        }
-        lastError = undefined;
-        const committedReplacement = replacement;
-        replacement = undefined;
-        committedReplacement?.resolve();
-        if (lastSettlement !== current || notifyIfUnchanged) {
-          lastSettlement = current;
-          notifyChanged(current.facts, notifyIfUnchanged);
-        }
       },
       (error: unknown) => {
-        generationReady.resolve();
-        if (pending?.promise !== promise) {
-          return;
-        }
         pending = undefined;
+        refreshRequested = false;
+        notifyRefreshIfUnchanged = false;
         fail(error);
       },
     );
     return promise;
   });
 
-  const isCurrentGeneration = (generation: PreparedMetadataGeneration) =>
-    current === generation &&
-    generation.epoch === invalidationEpoch &&
-    authStoresCurrent(generation.facts, deps);
-
   const readCurrent = async <Result>(
     project: (generation: PreparedMetadataGeneration) => Promise<PreparedProjection<Result>>,
   ): Promise<Result> => {
-    for (;;) {
-      assertOpen();
-      const preparation = pending;
-      if (preparation) {
-        await preparation.generationReady.promise;
-        continue;
-      }
-      let generation = current;
-      const replacementPromise = replacement?.promise;
-      if (!generation && replacementPromise) {
-        await replacementPromise;
-        continue;
-      }
-      // Unavailable means the prepared owner was missing, not that publication failed.
-      // Retry capture so a later published owner is not hidden behind lastError.
-      const retryUnavailableOwner = lastError instanceof ChatMetadataSnapshotUnavailableError;
-      if (!generation && retryUnavailableOwner) {
-        await refresh();
-        generation = current;
-      }
-      if (!generation) {
-        throw lastError ?? new ChatMetadataSnapshotUnavailableError();
-      }
-      if (!authStoresCurrent(generation.facts, deps)) {
-        await refresh();
-        continue;
-      }
-      try {
-        const readProjection = await project(generation);
-        // Lazy projections may outlive their generation. Never return an obsolete success after
-        // invalidation; retry through the replacement gate so the caller sees one coherent epoch.
-        if (isCurrentGeneration(generation) && readProjection.isCurrent()) {
-          return readProjection.read();
-        }
-      } catch (error) {
-        if (isCurrentGeneration(generation)) {
-          throw error;
-        }
-      }
+    assertOpen();
+    await pending;
+    if (!current && replacement) {
+      await replacement.promise;
     }
+    // A missing owner may have published since the previous request.
+    if (
+      (!current && lastError instanceof ChatMetadataSnapshotUnavailableError) ||
+      (current && !authStoresCurrent(current.facts, deps))
+    ) {
+      await refresh();
+    }
+    const generation = current;
+    if (!generation) {
+      throw lastError ?? new ChatMetadataSnapshotUnavailableError();
+    }
+    const readProjection = await project(generation);
+    assertOpen();
+    if (!readProjection.isCurrent()) {
+      throw new ChatMetadataSnapshotUnavailableError();
+    }
+    return readProjection.read();
   };
 
   const readModelsList = async (
@@ -638,7 +548,7 @@ export function createGatewayChatMetadataRuntime(params: {
     const generation = current;
     // Optional reads consume only settled exact-profile facts. Never start preparation
     // or wait for a lifecycle replacement just to decorate an available transcript.
-    if (!generation || replacement || pending || !isCurrentGeneration(generation)) {
+    if (!generation || replacement || pending || !authStoresCurrent(generation.facts, deps)) {
       return undefined;
     }
     const agentId = normalizeAgentId(readParams.agentId);
@@ -662,30 +572,15 @@ export function createGatewayChatMetadataRuntime(params: {
       ...readParams,
       config: deps.getConfig(),
     });
-    if (
-      replacement ||
-      pending ||
-      !isCurrentGeneration(generation) ||
-      !neutral.projection.isCurrent() ||
-      !session.projection.isCurrent()
-    ) {
-      return undefined;
-    }
     return assemble(neutral.projection, session.projection, acpMeta, runtimeOwnership);
   };
 
-  const invalidate = (retainNotifiedFacts = false) => {
+  const invalidate = () => {
     if (stoppedError) {
       return;
     }
     // External owner replacement can change materializations without changing snapshot identity.
-    if (!retainNotifiedFacts) {
-      lastNotifiedFacts = undefined;
-    }
-    invalidationEpoch += 1;
-    refreshVersion += 1;
-    pending?.generationReady.resolve();
-    pending = undefined;
+    lastNotifiedFacts = undefined;
     current = undefined;
     lastError = undefined;
     if (!replacement) {
@@ -697,18 +592,14 @@ export function createGatewayChatMetadataRuntime(params: {
 
   const fail = (error: unknown) => {
     const replacementError = error instanceof Error ? error : new Error(formatErrorMessage(error));
-    refreshVersion += 1;
-    pending?.generationReady.resolve();
-    pending = undefined;
     current = undefined;
     lastError = replacementError;
     const failedReplacement = replacement;
     replacement = undefined;
     failedReplacement?.reject(replacementError);
-    // Unavailable reads may retry capture. Notify once for the failed epoch, not once per reader.
-    // A later ready generation is a different settlement even without another invalidation.
-    if (!stoppedError && lastSettlement !== invalidationEpoch) {
-      lastSettlement = invalidationEpoch;
+    // Failed reads retry capture without repeating the unavailable notification.
+    if (!stoppedError && !failed) {
+      failed = true;
       notifyChanged();
     }
   };
@@ -718,7 +609,6 @@ export function createGatewayChatMetadataRuntime(params: {
       stoppedError = new ChatMetadataSnapshotUnavailableError(
         "gateway chat metadata runtime is stopped",
       );
-      invalidationEpoch += 1;
       fail(stoppedError);
       requestedModelLists.clear();
     }
