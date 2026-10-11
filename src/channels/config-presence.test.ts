@@ -8,6 +8,7 @@ import {
   hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
+  listPotentialConfiguredChannelPresenceSignalsAsync,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
 import * as persistedAuthState from "./plugins/persisted-auth-state.js";
@@ -22,6 +23,10 @@ beforeEach(() => {
   ]);
   vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthState").mockImplementation(
     ({ channelId, env }) =>
+      channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
+  );
+  vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthStateAsync").mockImplementation(
+    async ({ channelId, env }) =>
       channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
   );
 });
@@ -116,7 +121,7 @@ describe("config presence", () => {
     { channelIds: [], expectedIds: [] },
   ])(
     "scopes persisted credentials without hiding env signals: $channelIds",
-    ({ channelIds, expectedIds }) => {
+    async ({ channelIds, expectedIds }) => {
       const stateDir = makeTempStateDir();
       const env = { OPENCLAW_STATE_DIR: stateDir, MATTERMOST_BOT_TOKEN: "test-token" };
 
@@ -125,6 +130,13 @@ describe("config presence", () => {
           persistedAuthChannelIds: channelIds && new Set(channelIds),
         }),
       ).toEqual(["mattermost", ...expectedIds]);
+      vi.mocked(persistedAuthState.hasBundledChannelPersistedAuthState).mockImplementation(() => {
+        throw new Error("runtime discovery must not invoke the synchronous checker");
+      });
+      const signals = await listPotentialConfiguredChannelPresenceSignalsAsync({}, env, {
+        persistedAuthChannelIds: channelIds && new Set(channelIds),
+      });
+      expect(signals.map((signal) => signal.channelId)).toEqual(["mattermost", ...expectedIds]);
     },
   );
 });

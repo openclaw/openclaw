@@ -122,18 +122,12 @@ export function getElement<T extends Element>(
 }
 
 export function selectSegmented(control: HTMLElement) {
-  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
-  expect(group).not.toBeNull();
-  if (!group) {
-    return;
-  }
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {
   return (
-    Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find((toggle) =>
+    Array.from(container.querySelectorAll(".settings-toggle")).find((toggle) =>
       toggle.textContent?.includes(label),
     ) ?? null
   );

@@ -166,7 +166,7 @@ export async function writeConfigFileFromContext(
     persistCanonicalAgentRoster,
     preserveLegacyAgentRoster,
     cronOwner,
-  } = prepareConfigWriteTopology({
+  } = await prepareConfigWriteTopology({
     ...snapshotRead,
     nextConfig: configForWrite,
     options,

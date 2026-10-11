@@ -208,12 +208,12 @@ it("resolves runtime targets through an admitted reader without freshness probes
   });
 });
 
-it("reads session projections in the worker and observes the next foreign commit", async () => {
+it("reads session projections in the worker and observes the next sibling commit", async () => {
   await withOpenClawTestState({ label: "readonly-entry-projection-boundary" }, async ({ env }) => {
     const { database, scope } = createEntryFixture(env);
     const before = await readSessionEntryReadOnlyInWorker(scope);
     expect(before).toMatchObject({ sessionId: "original" });
-    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+    const peer = nodeSqlite.openNodeSqliteDatabase(database.path);
     try {
       peer
         .prepare(
@@ -221,13 +221,13 @@ it("reads session projections in the worker and observes the next foreign commit
            (session_key, identity_namespace, actor_id, contribution_count)
            VALUES (?, ?, ?, 1)`,
         )
-        .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "foreign-participant");
+        .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "sibling-participant");
       const sql = observeHostDataSql();
       try {
         const after = await readSessionEntryReadOnlyInWorker(scope);
         expect(after).toMatchObject({
           sessionId: "original",
-          participants: [{ identity: { type: "profile", id: "foreign-participant" } }],
+          participants: [{ identity: { type: "profile", id: "sibling-participant" } }],
           participantCount: 1,
         });
         expect(before?.participants).toBeUndefined();

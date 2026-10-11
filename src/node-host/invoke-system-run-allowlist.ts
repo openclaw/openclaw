@@ -212,7 +212,7 @@ function replacePosixShellInlineCommand(params: {
     return null;
   }
   const absoluteValueIndex = transportStart + match.valueTokenIndex;
-  const token = params.argv[absoluteValueIndex];
+  const token = params.argv[absoluteValueIndex]?.trimEnd();
   if (token === undefined) {
     return null;
   }
