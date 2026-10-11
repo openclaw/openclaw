@@ -10,14 +10,14 @@ read_when:
 ## Release profiles
 
 `release_profile` controls live/provider breadth inside release checks. The
-bounded canonical beta gate described in [Extended-stable and changelog-only
+bounded standard beta gate described in [Extended-stable and changelog-only
 validation](/reference/full-release-validation/extended-stable) also selects npm-focused CI and
 defers performance and Telegram confidence. Plugin Prerelease, install smoke,
 package acceptance, and QA parity remain selected. Stable and full profiles always run exhaustive
 repo/live E2E, Docker release-path, and QA-live soak coverage. The beta profile
 adds those lanes only with `run_release_soak=true`, an explicit `qa-live`
 controller retry, or the direct child's manual `qa` aggregate. Package
-Acceptance supplies the canonical package Telegram E2E when selected; beta
+Acceptance supplies the standard package Telegram E2E when selected; beta
 `all` without soak defers it to confidence work.
 
 | Profile  | Intended use                      | Included live/provider coverage                                                                                                                                                                            |
@@ -61,19 +61,19 @@ stop/start.
 
 Use `rerun_group` to avoid repeating unrelated release boxes:
 
-| Handle              | Scope                                                                                                                                               |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`               | Profile-selected qualification; canonical beta without soak uses `npm-beta-v1`; regular stable uses `npm-stable-v1`, which defers native apps only. |
-| `ci`                | Manual full CI child only.                                                                                                                          |
-| `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                       |
-| `install-smoke`     | Install Smoke through release checks.                                                                                                               |
-| `cross-os`          | Cross-OS release checks.                                                                                                                            |
-| `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                   |
-| `package`           | Package Acceptance.                                                                                                                                 |
-| `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                         |
-| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.                                                      |
-| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`.                                                     |
-| `performance`       | Product performance evidence only.                                                                                                                  |
+| Handle              | Scope                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `all`               | Profile-selected qualification; standard beta without soak uses `npm-beta-v1`; regular stable uses `npm-stable-v1`, which defers native apps only. |
+| `ci`                | Manual full CI child only.                                                                                                                         |
+| `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                      |
+| `install-smoke`     | Install Smoke through release checks.                                                                                                              |
+| `cross-os`          | Cross-OS release checks.                                                                                                                           |
+| `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                  |
+| `package`           | Package Acceptance.                                                                                                                                |
+| `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                        |
+| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.                                                     |
+| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`.                                                    |
+| `performance`       | Product performance evidence only.                                                                                                                 |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
 The former `release-checks` aggregate retry handle is invalid. It silently
@@ -92,7 +92,7 @@ Valid filter ids are defined in the reusable live/E2E workflow, including
 `live-codex-harness-docker`.
 
 For a focused QA transport rerun, set `rerun_group=qa-live` and use the
-canonical selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
+standard selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
 `qa-live-discord`, `qa-live-whatsapp`, or `qa-live-slack`.
 
 The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its

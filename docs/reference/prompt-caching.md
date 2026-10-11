@@ -70,7 +70,7 @@ The Gateway retains these facts with the admitted turn, rather than accepting a
 worker-provided cache key or deriving one from trimmed replay history.
 
 Delivered worker skills use stable session-scoped, content-addressed paths and a
-deterministic catalog order. Unchanged skills therefore keep the system prompt
+fixed catalog order. Unchanged skills therefore keep the system prompt
 prefix stable between turns. Skill refreshes still deliver current verified bytes;
 a content change intentionally changes that skill's path. Worker and local prompts
 remain different in scope: workers load bounded workspace `AGENTS.md` and the
@@ -313,7 +313,7 @@ separate transient carrier; they do not become permanent first-message context.
 - Subagent completion turns reuse the session's generic conversation metadata and direct/group guidance, so native Ollama does not lose the tools-and-history prefix just because the turn arrived through an announcement. Channel formatting follows the resolved delivery account and is omitted for turns without channel delivery. Custom channel-supplied group instructions, changed delivery policy, and explicit lightweight bootstrap contexts can still produce different prompts.
 - User-message metadata stays intact when an active turn becomes history, including conversation context and reply targets. Timestamping uses the message's recorded time so subsequent requests replay the same text.
 - Prompt-hook prepend/append context and model-prompt replacements are captured on their original user transcript record before dispatch. Later requests and reopened sessions replay those bytes while user-visible history keeps the original text. Legacy rows without a recorded projection retain their previous replay behavior; see [stored projection compatibility](/reference/database-schemas/layout#user-turn-model-prompt-projections).
-- Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
+- Bundled MCP tool catalogs are sorted by server name, then tool name before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
 - Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.
 - Native Ollama requests sort tools by name so discovery order changes do not churn the tools prefix.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
