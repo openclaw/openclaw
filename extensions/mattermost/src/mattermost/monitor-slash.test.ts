@@ -11,6 +11,7 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Keep skill discovery and database workers outside slash-registration tests.
 vi.mock("./runtime-api.js", () => ({
   prepareSkillCommandsForAgents,
 }));
