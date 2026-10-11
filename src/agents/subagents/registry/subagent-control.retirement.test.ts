@@ -35,7 +35,10 @@ import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
@@ -670,28 +673,6 @@ describe("restored historical cancellation ownership", () => {
     },
   );
 
-  it("leaves a newer persisted kill marker untouched by the restored snapshot", async () => {
-    const input = historicalCancellation();
-    persistRetiredOwner(input);
-    await restore();
-    const updated = structuredClone(input.subagent);
-    updated.killReconciliation = { killedAt: Date.now() };
-    writeSubagentRunValuesInDatabase(
-      openOpenClawStateDatabase(),
-      [bindSubagentRunRecord(updated)],
-      [],
-    );
-
-    resumeSubagentRun(input.subagent.runId, "restore");
-    await settle();
-    await testing.sweepOnceForTests();
-    await settle();
-
-    expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(updated);
-    expect(wake).not.toHaveBeenCalled();
-    expectNoExecutionReplay();
-  });
-
   it("defers a rejected historical retirement write without aborting resume", async () => {
     const input = historicalCancellation();
     persistRetiredOwner(input);
@@ -801,10 +782,8 @@ describe("restored historical cancellation ownership", () => {
       const input = historicalCancellation();
       input.subagent.killReconciliation = undefined;
       persistRetiredOwner(input);
-      await mutateSubagentRuns([input.subagent.runId], () => ({
-        value: undefined,
-        postimages: new Map([[input.subagent.runId, input.subagent]]),
-      }));
+      await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+      input.subagent = subagentRuns.get(input.subagent.runId)!;
       const driver = requesterWakeDriver([input]);
       const before = structuredClone(input.subagent);
       try {

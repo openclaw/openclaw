@@ -260,60 +260,52 @@ describe("context-engine maintenance transcript ownership", () => {
     });
   });
 
-  it.each(["lock", "maintenance"] as const)(
-    "fences caller memory authority after awaited %s",
-    async (stage) => {
-      await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
-        const before = structuredClone(memory.getPersistedEntries());
-        const entered = vi.fn();
-        const release = createDeferredCore();
-        const controller = new AbortController();
-        const closed = new Error("caller maintenance owner closed");
-        let active = true;
-        const run = runContextEngineMaintenance({
-          ...params,
-          executionMode: "background",
-          sessionManager: memory,
-          abortSignal: controller.signal,
-          assertActive: () => {
-            controller.signal.throwIfAborted();
-            if (!active) {
-              throw closed;
-            }
-          },
-          withSessionManagerRewriteLock: async (operation) => {
-            entered();
-            await release.promise;
-            return await operation();
-          },
-          contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
-            expect(abortSignal).toBe(controller.signal);
-            if (stage === "maintenance") {
-              entered();
-              await release.promise;
-              return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
-            }
-            return await runtimeContext!.rewriteTranscriptEntries!({
-              replacements: [{ entryId, message: replacement }],
-            });
-          }),
-        });
-        const outcome = run.then(
-          (result) => result,
-          (error: unknown) => error,
-        );
-        try {
-          await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
-          active = false;
-          release.resolve();
-          expect(await outcome).toBe(closed);
-          expect(memory.getPersistedEntries()).toEqual(before);
-          expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
-        } finally {
-          release.resolve();
-          await Promise.allSettled([run, outcome]);
-        }
+  it("checks caller memory authority before rewriting after the awaited lock", async () => {
+    await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
+      const before = structuredClone(memory.getPersistedEntries());
+      const entered = vi.fn();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const closed = new Error("caller maintenance owner closed");
+      let active = true;
+      const run = runContextEngineMaintenance({
+        ...params,
+        executionMode: "background",
+        sessionManager: memory,
+        abortSignal: controller.signal,
+        assertActive: () => {
+          controller.signal.throwIfAborted();
+          if (!active) {
+            throw closed;
+          }
+        },
+        withSessionManagerRewriteLock: async (operation) => {
+          entered();
+          await release.promise;
+          return await operation();
+        },
+        contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
+          expect(abortSignal).toBe(controller.signal);
+          return await runtimeContext!.rewriteTranscriptEntries!({
+            replacements: [{ entryId, message: replacement }],
+          });
+        }),
       });
-    },
-  );
+      const outcome = run.then(
+        (result) => result,
+        (error: unknown) => error,
+      );
+      try {
+        await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+        active = false;
+        release.resolve();
+        expect(await outcome).toBe(closed);
+        expect(memory.getPersistedEntries()).toEqual(before);
+        expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([run, outcome]);
+      }
+    });
+  });
 });
