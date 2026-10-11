@@ -186,6 +186,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "security-runtime": 1,
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
+  // Released synchronous conversation inspection and binding APIs remain until the next SDK major.
+  "conversation-binding-inspection-runtime": 1,
+  "conversation-runtime": 3,
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
@@ -218,7 +221,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
-      3656,
+      // +12: approved async command authorization and approval companions (#168482).
+      // +4: approved async conversation inspection and V2 binding exports (#168483).
+      3672,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -235,7 +240,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
-      2122,
+      // +8: approved async command authorization and approval companions (#168482).
+      // +3: approved async conversation inspection and V2 binding functions (#168483).
+      2133,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -244,7 +251,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
       // +1: synchronous session entry getter remains until the next Plugin SDK major.
       // +6: released session callbacks and provider replay contracts during async migration.
-      154,
+      // +4: released synchronous conversation APIs during the approved V2 binding migration (#168483).
+      158,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

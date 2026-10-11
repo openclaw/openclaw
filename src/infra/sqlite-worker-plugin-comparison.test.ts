@@ -92,6 +92,7 @@ describe("plugin state data-only comparison", () => {
         legacy.delete("counter");
       }
       const before = await store.observe("counter");
+      // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
       const postMessage = Worker.prototype.postMessage;
       const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
         this: Worker,
