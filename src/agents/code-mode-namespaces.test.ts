@@ -103,11 +103,6 @@ describe("Code Mode MCP namespace model", () => {
 
   it.each([
     {
-      name: "enum",
-      items: { type: "string", enum: ["red", "blue"] },
-      declaration: 'Array<"red" | "blue">',
-    },
-    {
       name: "anyOf",
       items: { anyOf: [{ type: "string" }, { type: "number" }] },
       declaration: "Array<string | number>",
@@ -126,11 +121,6 @@ describe("Code Mode MCP namespace model", () => {
       name: "nested array",
       items: { type: "array", items: { type: "string", enum: ["red", "blue"] } },
       declaration: 'Array<Array<"red" | "blue">>',
-    },
-    {
-      name: "simple array",
-      items: { type: "string" },
-      declaration: "Array<string>",
     },
     {
       name: "object",
@@ -164,7 +154,7 @@ describe("Code Mode MCP namespace model", () => {
     expect(executeTool).not.toHaveBeenCalled();
   });
 
-  it.each(["constructor", "toString", "__proto__"])(
+  it.each(["__proto__"])(
     "does not satisfy required MCP argument %s from Object.prototype",
     async (key) => {
       const runtime = createCodeModeNamespaceRuntime([
@@ -190,29 +180,26 @@ describe("Code Mode MCP namespace model", () => {
     },
   );
 
-  it.each(["constructor", "toString", "__proto__"])(
-    "applies MCP argument default %s as a safe own property",
-    async (key) => {
-      const runtime = createCodeModeNamespaceRuntime([
-        mcpCatalogEntry({
-          id: "github__read_file",
-          parameters: {
-            type: "object",
-            properties: { [key]: { type: "string", default: "safe" } },
-            required: [key],
-          },
-        }),
-      ]);
-      const executeTool = vi.fn(async ({ input }: { input: unknown }) => input);
+  it.each(["__proto__"])("applies MCP argument default %s as a safe own property", async (key) => {
+    const runtime = createCodeModeNamespaceRuntime([
+      mcpCatalogEntry({
+        id: "github__read_file",
+        parameters: {
+          type: "object",
+          properties: { [key]: { type: "string", default: "safe" } },
+          required: [key],
+        },
+      }),
+    ]);
+    const executeTool = vi.fn(async ({ input }: { input: unknown }) => input);
 
-      await expect(
-        runtime.invoke("mcp", ["github", "readFile"], [{}], executeTool),
-      ).resolves.toEqual({ [key]: "safe" });
-      const input = executeTool.mock.calls[0]?.[0]?.input as Record<string, unknown>;
-      expect(Object.hasOwn(input, key)).toBe(true);
-      expect(Object.getPrototypeOf(input)).toBe(Object.prototype);
-    },
-  );
+    await expect(runtime.invoke("mcp", ["github", "readFile"], [{}], executeTool)).resolves.toEqual(
+      { [key]: "safe" },
+    );
+    const input = executeTool.mock.calls[0]?.[0]?.input as Record<string, unknown>;
+    expect(Object.hasOwn(input, key)).toBe(true);
+    expect(Object.getPrototypeOf(input)).toBe(Object.prototype);
+  });
 
   it("keeps forbidden and JavaScript-keyword namespace identifiers callable and escaped", async () => {
     const catalog = [

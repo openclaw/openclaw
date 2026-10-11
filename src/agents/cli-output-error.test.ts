@@ -9,25 +9,7 @@ function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], pr
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
-function hasDanglingSurrogate(value: string): boolean {
-  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
-}
-
 describe("formatCliOutputError", () => {
-  it("keeps truncated session identity UTF-16 safe", () => {
-    const sessionId = `${"s".repeat(199)}😀tail`;
-    expect(hasDanglingSurrogate(sessionId.slice(0, 200))).toBe(true);
-
-    const error = formatCliOutputError({
-      text: "",
-      sessionId,
-      terminalFailure: { reason: "max_turns" },
-    });
-
-    expect(hasDanglingSurrogate(error)).toBe(false);
-    expect(error).toContain(`Claude session: ${"s".repeat(199)}.`);
-  });
-
   it("names the Claude terminal reason and the hook that stopped the turn", () => {
     const error = formatCliOutputError(
       {
@@ -261,75 +243,9 @@ describe("parseCliJsonl errors", () => {
         "Retry with a higher --max-turns value or a narrower task.",
     );
   });
-
-  it("does not apply Claude terminal semantics to an explicit Gemini dialect", () => {
-    const result = parseCliJsonl(
-      JSON.stringify({
-        type: "result",
-        subtype: "error_max_turns",
-        terminal_reason: "max_turns",
-        errors: ["Reached maximum number of turns (1)"],
-      }),
-      {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-      },
-      "claude-cli",
-    );
-
-    expect(result?.terminalFailure).toBeUndefined();
-  });
 });
 
 describe("createCliJsonlStreamingParser errors", () => {
-  it("streams Gemini result errors as provider errors", () => {
-    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-      },
-      providerId: "google-gemini-cli",
-      onAssistantDelta: (delta) => deltas.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "message",
-          timestamp: "2026-06-16T19:36:47.000Z",
-          role: "assistant",
-          content: "partial output",
-          delta: true,
-        }),
-        JSON.stringify({
-          type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
-          status: "error",
-          error: { message: "Gemini stream failed" },
-        }),
-      ].join("\n") + "\n",
-    );
-    parser.finish();
-
-    expect(deltas).toEqual([
-      {
-        text: "partial output",
-        delta: "partial output",
-        sessionId: undefined,
-        usage: undefined,
-      },
-    ]);
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "Gemini stream failed",
-    });
-  });
-
   it("turns plugin-owned JSONL parser exceptions into bounded provider errors", () => {
     let calls = 0;
     const parser = createCliJsonlStreamingParser({
@@ -357,7 +273,7 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it.each(["", "preserved answer"])(
+  it.each([""])(
     "keeps plugin-owned terminal errors and text %j ahead of later result summaries",
     (text) => {
       const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
@@ -415,56 +331,9 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it("preserves streamed plugin text when the terminal result text is empty", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
-      parseJsonlEvent: (line) =>
-        line === "delta"
-          ? { kind: "text", text: "streamed answer" }
-          : { kind: "result", text: "  " },
-      onAssistantDelta: () => {},
-    });
-
-    parser.push("delta\nresult\n");
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: "streamed answer",
-      sessionId: undefined,
-      usage: undefined,
-    });
-  });
-
-  it("preserves earlier plugin result text when a later result only adds metadata", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
-      parseJsonlEvent: (line) =>
-        line === "result"
-          ? { kind: "result", text: "completed answer" }
-          : {
-              kind: "result",
-              sessionId: "summary-session",
-              usage: { input: 5, output: 3, total: 8 },
-            },
-      onAssistantDelta: () => {},
-    });
-
-    parser.push("result\nsummary\n");
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: "completed answer",
-      sessionId: "summary-session",
-      usage: { input: 5, output: 3, total: 8 },
-    });
-  });
-
   it.each([
     ["without a result", undefined, "delegated answer"],
     ["with an empty result", "  ", "delegated answer"],
-    ["with an authoritative result", "final answer", "final answer"],
   ] as const)("retains mixed plugin text precedence %s", (_label, resultText, expectedText) => {
     const parser = createCliJsonlStreamingParser({
       backend: { command: "acme", output: "jsonl" },

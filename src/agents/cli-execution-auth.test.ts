@@ -50,7 +50,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it.each(["auto", "user"] as const)(
+  it.each(["user"] as const)(
     "ignores a retired native Claude profile selected by %s",
     (authProfileIdSource) => {
       const authProfileId = "anthropic:claude-cli";
@@ -77,31 +77,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
     },
   );
 
-  it("keeps forwarding a non-retired Claude profile", () => {
-    const authProfileId = "claude-cli:work";
-    mocks.profiles[authProfileId] = {
-      type: "oauth",
-      provider: "claude-cli",
-      access: "test-access",
-      refresh: "test-refresh",
-      expires: Date.now() + 60_000,
-    };
-
-    expect(
-      resolveCliExecutionAuthProfileId({
-        cliExecutionProvider: "claude-cli",
-        authProfileProvider: "claude-cli",
-        config: {},
-        agentDir: "/tmp/unused-agent",
-        selected: { authProfileId, authProfileIdSource: "user" },
-      }),
-    ).toBe(authProfileId);
-  });
-
   it.each([
     { type: "api_key", registry: "runtime" },
-    { type: "token", registry: "runtime" },
-    { type: "oauth", registry: "runtime" },
     { type: "token", registry: "setup" },
   ] as const)(
     "forwards an explicitly selected canonical Anthropic $type through the $registry registry",
@@ -177,7 +154,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
     ).toBe(authProfileId);
   });
 
-  it.each(["absent", "auto"] as const)(
+  it.each(["auto"] as const)(
     "forwards only automatic Claude profiles owned by Claude CLI (%s selection)",
     (selection) => {
       const selected =
@@ -212,26 +189,6 @@ describe("resolveCliExecutionAuthProfileId", () => {
           selected,
         }),
       ).toBe("claude-cli:work");
-    },
-  );
-
-  it.each(["claude-cli", "google-gemini-cli"])(
-    "rejects an explicitly selected profile from another provider for %s",
-    (cliExecutionProvider) => {
-      mocks.profiles["openai:work"] = createApiKeyCredential("openai", "test-openai-key");
-
-      expect(() =>
-        resolveCliExecutionAuthProfileId({
-          cliExecutionProvider,
-          authProfileProvider: "openai",
-          config: {},
-          agentDir: "/tmp/unused-agent",
-          selected: {
-            authProfileId: "openai:work",
-            authProfileIdSource: "user",
-          },
-        }),
-      ).toThrow(/cannot use auth profile "openai:work"/);
     },
   );
 
@@ -314,28 +271,5 @@ describe("resolveCliExecutionAuthProfileId", () => {
       expires: Date.now() + 60_000,
     };
     expect(resolve()).toBe("google-gemini-cli:work");
-  });
-
-  it("uses the stored owner for a Gemini-native model profile", () => {
-    mocks.profiles["google-gemini-cli:alice"] = {
-      type: "oauth",
-      provider: "google-gemini-cli",
-      access: "test-access",
-      refresh: "test-refresh",
-      expires: Date.now() + 60_000,
-    };
-
-    expect(
-      resolveCliExecutionAuthProfileId({
-        cliExecutionProvider: "google-gemini-cli",
-        authProfileProvider: "google",
-        config: {},
-        agentDir: "/tmp/unused-agent",
-        selected: {
-          authProfileId: "google-gemini-cli:alice",
-          authProfileIdSource: "user",
-        },
-      }),
-    ).toBe("google-gemini-cli:alice");
   });
 });

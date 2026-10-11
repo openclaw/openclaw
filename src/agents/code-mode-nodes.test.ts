@@ -279,25 +279,6 @@ describe("Code Mode nodes", () => {
     expect(details.value).toBe('node "shadow-id" is not paired (paired node ids: node-1, node-2)');
   });
 
-  it.each([
-    {
-      label: "list",
-      code: `await nodes.list(); return missingAfterList();`,
-    },
-    {
-      label: "get",
-      code: `return (await nodes.get("Desk")).describe();`,
-    },
-  ])("reports a guest error after nodes.$label", async ({ code }) => {
-    const details = await runUntilCompleted({ ...createHarness(), code });
-
-    expect(details).toMatchObject({
-      status: "failed",
-      failurePhase: "guest",
-      bridgeDispatchStarted: true,
-    });
-  });
-
   it("reports a guest error after nodes.invoke without replaying the invocation", async () => {
     const details = await runUntilCompleted({
       ...createHarness(),

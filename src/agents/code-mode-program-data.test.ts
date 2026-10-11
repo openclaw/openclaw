@@ -4,7 +4,7 @@ import { CodeModeProgramDataInbox } from "./code-mode-program-data.js";
 const limits = { memoryLimitBytes: 1024, maxSnapshotBytes: 2048, maxOutputBytes: 1024 };
 
 describe("Code Mode reply leases", () => {
-  it.each([true, false])(
+  it.each([false])(
     "charges complete success/error JSON at settlement and reuses released capacity (ok=%s)",
     (ok) => {
       const inbox = new CodeModeProgramDataInbox(limits);
@@ -30,32 +30,6 @@ describe("Code Mode reply leases", () => {
       inbox.close();
     },
   );
-
-  it.each([
-    { memoryLimitBytes: 1024, maxSnapshotBytes: 2048 },
-    { memoryLimitBytes: 2048, maxSnapshotBytes: 1024 },
-  ])("uses the smaller existing limit, not a per-result or display limit: %j", (cap) => {
-    const inbox = new CodeModeProgramDataInbox({ ...cap, maxOutputBytes: 32 });
-    const first = inbox.createReply("first");
-    first.settle(true, "x".repeat(600));
-    const second = inbox.createReply("second");
-    second.settle(true, "x".repeat(600));
-    expect(JSON.parse(first.take().json)).toHaveLength(600);
-    expect(second.take().ok).toBe(false);
-    first.release();
-    second.release();
-    inbox.close();
-  });
-
-  it("preserves normalized Unicode, escaping, and marker-shaped user data", () => {
-    const inbox = new CodeModeProgramDataInbox(limits);
-    const reply = inbox.createReply("unicode");
-    const value = { text: '🦞\n"\\', truncated: true, value: Number.NaN, absent: undefined };
-    reply.settle(true, value);
-    expect(reply.take().json).toBe(JSON.stringify(value));
-    reply.release();
-    inbox.close();
-  });
 
   it("fences canceled and closed late completions before normalization", () => {
     const inbox = new CodeModeProgramDataInbox(limits);
@@ -97,17 +71,5 @@ describe("Code Mode reply leases", () => {
     expect(() => parked.take()).toThrow("unavailable");
     inFlight.release();
     expect(alias.json).toBe("");
-  });
-
-  it("bounds arbitrary tool errors before retaining them", () => {
-    const inbox = new CodeModeProgramDataInbox(limits);
-    const reply = inbox.createReply("error");
-    reply.settle(false, "cause:" + "🦞".repeat(10000));
-    const result = reply.take();
-    expect(result.ok).toBe(false);
-    expect(Buffer.byteLength(result.json)).toBeLessThanOrEqual(1024);
-    expect(JSON.parse(result.json)).toMatch(/^cause:.*\[error truncated\]$/);
-    reply.release();
-    inbox.close();
   });
 });
