@@ -37,7 +37,7 @@ function CatalogIcon(props: { server: McpAppDiscoveredServer; entry: McpAppDisco
   return (
     <Show when={icon()} fallback={<Icon name="puzzle" />}>
       {(image) => (
-        <img class="mcp-app-icon" src={image().src} alt="" referrerPolicy="no-referrer" />
+        <img class="mcp-app-icon" src={image().src} alt="" referrerpolicy="no-referrer" />
       )}
     </Show>
   );

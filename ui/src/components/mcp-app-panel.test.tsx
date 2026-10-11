@@ -68,7 +68,7 @@ it("retains the old app and its launch target until teardown finishes", async ()
   expect(Reflect.get(first, "deepLink")).toBe("/second");
   expect(Reflect.get(first, "title")).toBe("Updated first app");
   expect(request).toHaveBeenCalledOnce();
-  const retirement = createDeferred<void>();
+  const retirement = createDeferred();
   const teardown = vi.fn(() => retirement.promise);
   Object.assign(first, { teardown, restartAfterTeardown: vi.fn() });
   setLaunch(launchFor("second"));

@@ -4,6 +4,7 @@ import {
   PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
 import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
@@ -38,7 +39,7 @@ type McpAppViewPayload = {
   html: string;
   csp?: McpAppHostSandboxCsp;
   toolInput: unknown;
-  toolResult: unknown;
+  toolResult: Parameters<OpenClawAppBridge["sendToolResult"]>[0];
   messageSupported?: boolean;
   updateModelContextSupported?: boolean;
   richModelContextSupported?: boolean;
@@ -245,12 +246,12 @@ export class McpAppViewController {
     }
   }
 
-  private async request(
+  private async request<T = unknown>(
     binding: McpAppBinding,
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
-  ): Promise<unknown> {
+  ): Promise<T> {
     try {
       const { agentId: _untrustedAgent, ...operationParams } = params;
       const requestParams = {
@@ -260,8 +261,8 @@ export class McpAppViewController {
         ...(binding.agentId ? { agentId: binding.agentId } : {}),
       };
       return await (signal
-        ? binding.client.request(method, requestParams, { signal })
-        : binding.client.request(method, requestParams));
+        ? binding.client.request<T>(method, requestParams, { signal })
+        : binding.client.request<T>(method, requestParams));
     } catch (error) {
       if (
         isMcpAppViewExpiredError(error) &&
@@ -404,12 +405,7 @@ export class McpAppViewController {
     const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
     try {
-      const payload = (await this.request(
-        binding,
-        "mcp.app.view",
-        {},
-        signal,
-      )) as McpAppViewPayload;
+      const payload = await this.request<McpAppViewPayload>(binding, "mcp.app.view", {}, signal);
       const mount = this.mount;
       signal.throwIfAborted();
       this.inactive = payload.messageSupported === false ? "reconstructed" : null;
@@ -530,8 +526,8 @@ export class McpAppViewController {
         { hostContext: buildHostContext() },
       );
       createdResources.bridge = bridge;
-      const request = (method: string, params: Record<string, unknown>) =>
-        this.request(binding, method, params);
+      const request = <T = unknown>(method: string, params: Record<string, unknown>) =>
+        this.request<T>(binding, method, params);
       const isCurrent = () => this.isCurrentBinding(binding, createdResources, signal);
       const confirm = (text: string, kind: "message" | "file") =>
         this.confirmation.request({
@@ -558,8 +554,8 @@ export class McpAppViewController {
           publish(null);
           return undefined;
         }
-        return request("mcp.app.modelContext", {})
-          .then((response) => (response as { state: McpAppContextState }).state)
+        return request<{ state: McpAppContextState }>("mcp.app.modelContext", {})
+          .then((response) => response.state)
           .catch(() => null)
           .then(publish);
       };
@@ -586,9 +582,12 @@ export class McpAppViewController {
       }
       if (payload.updateModelContextSupported === true) {
         bridge.setUpdateModelContextHandler(async (params) => {
-          const result = await request("mcp.app.updateModelContext", { ...params });
+          const result = await request<{ _meta?: Record<string, unknown> }>(
+            "mcp.app.updateModelContext",
+            { ...params },
+          );
           await refreshModelContext();
-          return result as { _meta?: Record<string, unknown> };
+          return result;
         });
       }
       const startNotifications = bindMcpAppResourceHandlers({
@@ -693,14 +692,9 @@ export class McpAppViewController {
       await waitForMcpAppHandlerRegistration();
       signal.throwIfAborted();
       await bridge.sendToolInput({
-        arguments:
-          payload.toolInput &&
-          typeof payload.toolInput === "object" &&
-          !Array.isArray(payload.toolInput)
-            ? (payload.toolInput as Record<string, unknown>)
-            : {},
+        arguments: asOptionalRecord(payload.toolInput) ?? {},
       });
-      await bridge.sendToolResult(payload.toolResult as never);
+      await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
       return createdResources;
     } catch (error) {

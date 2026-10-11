@@ -28,7 +28,7 @@ export function McpAppRetirement(props: {
   const gate = new McpAppUnmountGate<JSX.Element>({
     requestUpdate: () => setRevision((value) => value + 1),
   });
-  return createMemo(() => {
+  const content = createMemo(() => {
     revision();
     const identity = props.identity;
     return gate.render(
@@ -47,4 +47,5 @@ export function McpAppRetirement(props: {
       { retainRenderedValue: true },
     );
   });
+  return <>{content()}</>;
 }

@@ -62,7 +62,11 @@ function McpServersCardContent(props: McpServersCardProps) {
     equality: "revision",
   });
   // Admission reads the same synchronous presentation state that the view projects.
-  const state = { busy: false, message: null as McpServerMessage | null, formOpen: false };
+  const state: { busy: boolean; message: McpServerMessage | null; formOpen: boolean } = {
+    busy: false,
+    message: null,
+    formOpen: false,
+  };
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const invalidate = () => setRevision((value) => value + 1);
   const view = () => {
@@ -253,96 +257,98 @@ function McpServersCardContent(props: McpServersCardProps) {
                 }
               >
                 <For each={servers()} keyed={(server) => server.name}>
-                  {(server) => (
-                    <div class="settings-row mcp-server-row" data-mcp-name={server().name}>
-                      <div class="settings-row__text">
-                        <span class="settings-row__title">{server().name}</span>
-                        <span class="settings-row__desc mcp-server-row__launch">
-                          {server().target || t("mcpServers.missingTransport")}
-                        </span>
-                        <span class="settings-row__desc">
-                          {[
-                            server().transport,
-                            server().auth,
-                            server().toolFilter ? t("mcpPage.toolFilter") : null,
-                            server().parallel ? t("mcpPage.parallel") : null,
-                            tlsLabel(server().tls),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                      </div>
-                      <div class="settings-row__control">
-                        <SettingsStatus
-                          kind={server().enabled ? "ok" : "muted"}
-                          label={server().enabled ? t("common.enabled") : t("common.disabled")}
-                        />
-                        <Show
-                          when={server().signIn === "profile"}
-                          fallback={
-                            <Show
-                              when={server().signIn === "requester"}
-                              fallback={
-                                <code>{`openclaw mcp ${server().auth === "oauth" ? "login" : "probe"} ${quoteShellArg(server().name)}`}</code>
-                              }
+                  {(server) => {
+                    const command = () =>
+                      `openclaw mcp ${server().auth === "oauth" ? "login" : "probe"} ${quoteShellArg(server().name)}`;
+                    return (
+                      <div class="settings-row mcp-server-row" data-mcp-name={server().name}>
+                        <div class="settings-row__text">
+                          <span class="settings-row__title">{server().name}</span>
+                          <span class="settings-row__desc mcp-server-row__launch">
+                            {server().target || t("mcpServers.missingTransport")}
+                          </span>
+                          <span class="settings-row__desc">
+                            {[
+                              server().transport,
+                              server().auth,
+                              server().toolFilter ? t("mcpPage.toolFilter") : null,
+                              server().parallel ? t("mcpPage.parallel") : null,
+                              tlsLabel(server().tls),
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                        </div>
+                        <div class="settings-row__control">
+                          <SettingsStatus
+                            kind={server().enabled ? "ok" : "muted"}
+                            label={server().enabled ? t("common.enabled") : t("common.disabled")}
+                          />
+                          <Show
+                            when={server().signIn === "profile"}
+                            fallback={
+                              <Show
+                                when={server().signIn === "requester"}
+                                fallback={<code>{command()}</code>}
+                              >
+                                <span class="settings-row__desc">
+                                  {t("mcpServers.requesterSignIn")}
+                                </span>
+                              </Show>
+                            }
+                          >
+                            <span class="settings-row__desc">{t("mcpServers.profileSignIn")}</span>
+                          </Show>
+                          <Show
+                            when={
+                              server().enabled &&
+                              server().signIn === "operator" &&
+                              canCallGatewayMethod(
+                                gateway.read().snapshot,
+                                "mcp.authLogin",
+                                "operator.admin",
+                              )
+                            }
+                          >
+                            <button
+                              type="button"
+                              class="btn btn--sm"
+                              disabled={disabled()}
+                              onClick={() => signIn(server())}
                             >
-                              <span class="settings-row__desc">
-                                {t("mcpServers.requesterSignIn")}
-                              </span>
-                            </Show>
-                          }
-                        >
-                          <span class="settings-row__desc">{t("mcpServers.profileSignIn")}</span>
-                        </Show>
-                        <Show
-                          when={
-                            server().enabled &&
-                            server().signIn === "operator" &&
-                            canCallGatewayMethod(
-                              gateway.read().snapshot,
-                              "mcp.authLogin",
-                              "operator.admin",
-                            )
-                          }
-                        >
+                              {t("mcpServers.signIn")}
+                            </button>
+                          </Show>
                           <button
                             type="button"
                             class="btn btn--sm"
+                            title={mutationBlockedReason() ?? ""}
                             disabled={disabled()}
-                            onClick={() => signIn(server())}
+                            onClick={() => void toggleServer(server().name, !server().enabled)}
                           >
-                            {t("mcpServers.signIn")}
+                            {view().busy
+                              ? t("mcpServers.working")
+                              : server().enabled
+                                ? t("mcpServers.disable")
+                                : t("mcpServers.enable")}
                           </button>
-                        </Show>
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          title={mutationBlockedReason() ?? ""}
-                          disabled={disabled()}
-                          onClick={() => void toggleServer(server().name, !server().enabled)}
-                        >
-                          {view().busy
-                            ? t("mcpServers.working")
-                            : server().enabled
-                              ? t("mcpServers.disable")
-                              : t("mcpServers.enable")}
-                        </button>
-                        <button
-                          type="button"
-                          class="btn btn--sm btn--icon mcp-server-remove"
-                          aria-label={t("mcpServers.removeNamed", { name: server().name })}
-                          title={
-                            mutationBlockedReason() ??
-                            t("mcpServers.removeNamed", { name: server().name })
-                          }
-                          disabled={disabled()}
-                          onClick={() => void removeServer(server().name)}
-                        >
-                          <Icon name="trash" />
-                        </button>
+                          <button
+                            type="button"
+                            class="btn btn--sm btn--icon mcp-server-remove"
+                            aria-label={t("mcpServers.removeNamed", { name: server().name })}
+                            title={
+                              mutationBlockedReason() ??
+                              t("mcpServers.removeNamed", { name: server().name })
+                            }
+                            disabled={disabled()}
+                            onClick={() => void removeServer(server().name)}
+                          >
+                            <Icon name="trash" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  }}
                 </For>
               </Show>
             )}

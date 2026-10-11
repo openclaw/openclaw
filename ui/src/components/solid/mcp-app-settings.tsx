@@ -23,41 +23,32 @@ export function McpAppSettingsForm(props: McpAppSettingsView) {
         group.items.flatMap((item) => (item.kind === "property" ? [item.property] : [])),
       ),
     );
-  const field = (key: string) => {
-    const schema = () => props.settings.schema.properties[key];
-    const stringSchema = () => {
-      const current = schema();
-      return current.type === "string" ? current : undefined;
-    };
-    const numberSchema = () => {
-      const current = schema();
-      return current.type === "number" || current.type === "integer" ? current : undefined;
-    };
-    const value = () => props.values[key];
-    const required = () => props.settings.schema.required?.includes(key) ?? false;
-    return (
-      <Show when={schema()}>
-        {(current) => (
+  const field = (key: string) => (
+    <Show when={props.settings.schema.properties[key]} keyed>
+      {(schema) => {
+        const value = () => props.values[key];
+        const required = () => props.settings.schema.required?.includes(key) ?? false;
+        return (
           <label class="mcp-app-settings__field">
-            <span>{current().title}</span>
-            <Show when={schema().description}>
-              <small class="muted">{schema().description}</small>
+            <span>{schema.title}</span>
+            <Show when={schema.description}>
+              <small class="muted">{schema.description}</small>
             </Show>
-            {schema().type === "boolean" ? (
+            {schema.type === "boolean" ? (
               <input
                 type="checkbox"
                 checked={value() === true}
                 disabled={props.busy}
                 onChange={(event) => props.onChange(key, event.currentTarget.checked)}
               />
-            ) : stringSchema()?.enum ? (
+            ) : schema.type === "string" && schema.enum ? (
               <select
                 value={String(value() ?? "")}
                 required={required()}
                 disabled={props.busy}
                 onChange={(event) => props.onChange(key, event.currentTarget.value)}
               >
-                <For each={stringSchema()?.enum}>
+                <For each={schema.enum}>
                   {(option) => (
                     <option value={option} selected={option === value()}>
                       {option}
@@ -66,40 +57,36 @@ export function McpAppSettingsForm(props: McpAppSettingsView) {
                 </For>
               </select>
             ) : (
-              <Show when={schema().type === "string" ? "text" : "number"} keyed>
-                {(type) => (
-                  <input
-                    type={type}
-                    value={String(value() ?? "")}
-                    required={required()}
-                    disabled={props.busy}
-                    minLength={stringSchema()?.minLength}
-                    maxLength={stringSchema()?.maxLength}
-                    pattern={stringSchema()?.pattern}
-                    min={numberSchema()?.minimum}
-                    max={numberSchema()?.maximum}
-                    step={
-                      schema().type === "string"
-                        ? undefined
-                        : (numberSchema()?.multipleOf ?? (schema().type === "integer" ? 1 : "any"))
-                    }
-                    onInput={(event) => {
-                      const input = event.currentTarget;
-                      if (schema().type === "string") {
-                        props.onChange(key, input.value);
-                      } else if (Number.isFinite(input.valueAsNumber)) {
-                        props.onChange(key, input.valueAsNumber);
-                      }
-                    }}
-                  />
-                )}
-              </Show>
+              <input
+                type={schema.type === "string" ? "text" : "number"}
+                value={String(value() ?? "")}
+                required={required()}
+                disabled={props.busy}
+                minlength={schema.type === "string" ? schema.minLength : undefined}
+                maxlength={schema.type === "string" ? schema.maxLength : undefined}
+                pattern={schema.type === "string" ? schema.pattern : undefined}
+                min={schema.type !== "string" ? schema.minimum : undefined}
+                max={schema.type !== "string" ? schema.maximum : undefined}
+                step={
+                  schema.type === "string"
+                    ? undefined
+                    : (schema.multipleOf ?? (schema.type === "integer" ? 1 : "any"))
+                }
+                onInput={(event) => {
+                  const input = event.currentTarget;
+                  if (schema.type === "string") {
+                    props.onChange(key, input.value);
+                  } else if (Number.isFinite(input.valueAsNumber)) {
+                    props.onChange(key, input.valueAsNumber);
+                  }
+                }}
+              />
             )}
           </label>
-        )}
-      </Show>
-    );
-  };
+        );
+      }}
+    </Show>
+  );
   return (
     <form
       class="mcp-app-settings"

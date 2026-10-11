@@ -164,7 +164,7 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
                         <img
                           src={thumbnail}
                           alt={title()}
-                          referrerPolicy="no-referrer"
+                          referrerpolicy="no-referrer"
                           loading="lazy"
                         />
                       ) : (

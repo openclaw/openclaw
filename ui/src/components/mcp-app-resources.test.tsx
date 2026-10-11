@@ -21,8 +21,9 @@ function mountResources() {
   const request = vi.spyOn(client, "request").mockResolvedValue({
     servers: [{ serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" }],
   });
-  const { gateway, publish, publishEvent } = createApplicationGateway();
-  publish({
+  const gatewayControl = createApplicationGateway();
+  const { gateway, publishEvent } = gatewayControl;
+  gatewayControl.publish({
     ...gateway.snapshot,
     client,
     phase: "connected",

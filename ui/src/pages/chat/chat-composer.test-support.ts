@@ -1,6 +1,11 @@
 import { render } from "lit";
 import { expect, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
@@ -33,10 +38,18 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
 }
 
 export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const props = createComposerProps(overrides);
   render(renderChatComposer(props), container);
   return { container, props };
+}
+
+export function createComposerContainer() {
+  // SAFETY: Disconnected composer fixtures only read Gateway and agent selection; MCP discovery is unavailable.
+  return createApplicationContextProvider({
+    gateway: createApplicationGateway().gateway,
+    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+  } as ApplicationContext);
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {
