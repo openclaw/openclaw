@@ -236,7 +236,12 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.compile", WRITE_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    await syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+      ...(signal ? { signal } : {}),
+    });
     return await compileMemoryWikiVault(config, signal ? { signal } : undefined);
   });
 
@@ -254,7 +259,12 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.lint", WRITE_SCOPE, async (requestParams) => {
     const { appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    await syncMemoryWikiImportedSources({
+      config,
+      appConfig,
+      deferIndexRefresh: true,
+      ...(signal ? { signal } : {}),
+    });
     return await lintMemoryWikiVault(config, signal ? { signal } : undefined);
   });
 

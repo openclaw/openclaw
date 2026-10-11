@@ -730,6 +730,23 @@ cli note
     ).resolves.toStrictEqual([]);
   });
 
+  it.each(["compile", "lint"])(
+    "runs one compile cycle when `wiki %s` finds indexes missing after its source import",
+    async (command) => {
+      const { rootDir, config } = await createCliVault({ initialize: true });
+      await fs.rm(path.join(rootDir, "index.md"), { force: true });
+
+      const output = await runRegisteredWikiCommand(config, [command, "--json"]);
+
+      const log = await fs.readFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "utf8");
+      const cycles = log.split("\n").filter((line) => line.includes('"pageCounts"')).length;
+      expect(cycles).toBe(1);
+      if (command === "compile") {
+        expect(JSON.parse(output).updatedFiles).toContain(path.join(rootDir, "index.md"));
+      }
+    },
+  );
+
   it("preserves a user save after compile before the import run record is written", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);
