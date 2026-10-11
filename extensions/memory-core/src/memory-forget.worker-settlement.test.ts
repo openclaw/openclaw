@@ -151,20 +151,19 @@ describe("memory forget worker settlement", () => {
       const requests: string[] = [];
       let transactions = 0;
       let refused = false;
-      const sources: Array<Parameters<typeof sqliteRuntime.openOpenClawAgentSqliteWorkerStore>[1]> =
-        [];
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+      const paths: Array<string | undefined> = [];
+      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
       const observer = vi
-        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
         .mockImplementation((options, source, worker) => {
           if (
-            source !== state.db ||
+            options.path !== state.db.location() ||
             worker.moduleUrl.href !==
               resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins).href
           ) {
             return open(options, source, worker);
           }
-          sources.push(source);
+          paths.push(options.path);
           return open(options, source, {
             ...worker,
             assertAdmission(request) {
@@ -200,8 +199,7 @@ describe("memory forget worker settlement", () => {
         } else {
           await expect(forgetMemoryEntries(state.params)).rejects.toThrow(originalError.message);
         }
-        expect(sources).toHaveLength(1);
-        expect(sources[0] === state.db).toBe(true);
+        expect(paths).toEqual([state.db.location()]);
         expect(refused).toBe(true);
         expect(requests).toEqual(
           refusal === "schema commit"

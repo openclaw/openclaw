@@ -47,6 +47,7 @@ export class SessionOrganizerController {
   sessionDropTarget: string | null = null;
   sidebarSectionDropTarget: SidebarSectionDropTarget | null = null;
   draggingSidebarEntry: string | null = null;
+  sidebarZoneDragActive = false;
   sidebarZoneDropTarget: {
     entry: string;
     position: "before" | "after";
@@ -192,6 +193,7 @@ export class SessionOrganizerController {
     const serialized = serializeSidebarEntry(entry);
     writeSidebarRouteDragData(event.dataTransfer, serialized);
     this.draggingSidebarEntry = serialized;
+    this.sidebarZoneDragActive = this.isSidebarZoneDragCompatible(event.dataTransfer);
     this.host.requestUpdate();
   }
 
@@ -201,6 +203,7 @@ export class SessionOrganizerController {
     }
     writeSidebarRouteDragData(event.dataTransfer, route);
     this.draggingSidebarEntry = serializeSidebarEntry({ type: "route", route });
+    this.sidebarZoneDragActive = true;
     this.host.requestUpdate();
   }
 
@@ -211,6 +214,7 @@ export class SessionOrganizerController {
     const entry = serializeSidebarEntry({ type: "plugin", key });
     writeSidebarRouteDragData(event.dataTransfer, entry);
     this.draggingSidebarEntry = entry;
+    this.sidebarZoneDragActive = true;
     this.host.requestUpdate();
   }
 
@@ -218,6 +222,7 @@ export class SessionOrganizerController {
     this.draggingSidebarEntry = null;
     this.draggingSessionKey = null;
     this.sidebarZoneDropTarget = null;
+    this.sidebarZoneDragActive = false;
     this.sessionListRemovalDrop = false;
     this.host.requestUpdate();
   }
@@ -234,6 +239,7 @@ export class SessionOrganizerController {
     this.draggingSidebarEntry = this.isPersonalSessionPin(session.key)
       ? `session:${session.key}`
       : null;
+    this.sidebarZoneDragActive = session.pinnable;
     this.host.requestUpdate();
   }
 
@@ -272,8 +278,25 @@ export class SessionOrganizerController {
     return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
   }
 
+  private isSidebarZoneDragCompatible(dataTransfer: DataTransfer | null): boolean {
+    const entry = this.draggingSidebarEntry
+      ? parseSidebarEntry(this.draggingSidebarEntry)
+      : this.draggedSidebarNavigation(dataTransfer);
+    // During dragover browsers protect payload reads, so use the source's key.
+    const sessionKey =
+      entry?.type === "session"
+        ? entry.key
+        : (this.draggingSessionKey ?? readSessionDragData(dataTransfer));
+    if (sessionKey) {
+      return this.host.findSidebarMenuSessionByKey(sessionKey)?.pinnable !== false;
+    }
+    return Boolean(
+      entry || sidebarRouteDragActive(dataTransfer) || sessionDragActive(dataTransfer),
+    );
+  }
+
   handleSidebarZoneDragOver(event: DragEvent, targetEntry?: string) {
-    if (!sidebarRouteDragActive(event.dataTransfer) && !sessionDragActive(event.dataTransfer)) {
+    if (!this.isSidebarZoneDragCompatible(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -281,6 +304,7 @@ export class SessionOrganizerController {
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = "move";
     }
+    this.sidebarZoneDragActive = true;
     if (!targetEntry) {
       this.sidebarZoneDropTarget = null;
       this.host.requestUpdate();
@@ -301,6 +325,7 @@ export class SessionOrganizerController {
       return;
     }
     this.sidebarZoneDropTarget = null;
+    this.sidebarZoneDragActive = this.isSidebarZoneDragCompatible(null);
     this.host.requestUpdate();
   }
 
@@ -333,8 +358,11 @@ export class SessionOrganizerController {
       return;
     }
     const position = this.sidebarZoneDropTarget?.position;
-    const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    const parsedEntry = parseSidebarEntry(entry);
+    const session =
+      parsedEntry?.type === "session"
+        ? this.host.findSidebarMenuSessionByKey(parsedEntry.key)
+        : undefined;
     if (session && !session.pinnable) {
       this.finishSidebarEntryDrag();
       return;

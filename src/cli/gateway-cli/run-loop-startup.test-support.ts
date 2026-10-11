@@ -369,7 +369,6 @@ export function registerGatewayStartupFailureTests(
             : kind === "message-only error"
               ? new Error(stopped.message)
               : new GatewayStartupCleanupError(stopped, new Error("cleanup failed"));
-        const { runtime } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
         const { runGatewayLoop } = await import("./run-loop.js");
         await expect(
@@ -377,7 +376,6 @@ export function registerGatewayStartupFailureTests(
             start: vi.fn(async () => {
               throw failure;
             }),
-            runtime,
             completeBoot,
           }),
         ).rejects.toBe(failure);

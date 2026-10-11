@@ -17,6 +17,13 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+Update checks, candidate rehearsal, activation Doctor, and verification inherit
+the managed Gateway's Node heap controls from its effective service command and
+`NODE_OPTIONS`. Command-line heap controls take precedence. An empty service
+`NODE_OPTIONS` preserves heap controls supplied by the invoking shell while still
+clearing inherited preload and debugger flags. This requires the fix in the
+installed updater; an older updater cannot inherit it from the candidate it stages.
+
 On Windows, update checks the Gateway Scheduled Task's principal and run level
 before staging or changing state. A per-user `LeastPrivilege` task for the current
 account can be updated from a non-elevated terminal, including a UAC-filtered
@@ -36,6 +43,15 @@ if Task Scheduler denies access. OpenClaw prints this alternative; it does not
 run it automatically. Per-user Startup-folder installations do not require
 elevation for this check. An older installed updater keeps its previous behavior
 until replaced; use the elevated or manual path for that first upgrade.
+
+Installations owned by a system package manager skip OpenClaw-managed updates
+before npm staging or Gateway shutdown. If ownership inspection fails, the
+update continues with a warning; only a confirmed ownership match skips replacement. For pacman (including Arch-based
+distributions), update with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
+use the owning pkg or Ports deployment. Then restart the Gateway through its
+service owner.
+Older updaters must receive this fix through that system package manager first;
+a candidate cannot repair an updater that fails before staging it.
 
 Custom npm prefixes such as `~/.npm-global` are recognized from npm's configured
 prefix and the installed OpenClaw launcher. A prefix configured in `~/.npmrc`

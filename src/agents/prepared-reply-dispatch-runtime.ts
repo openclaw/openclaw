@@ -105,11 +105,7 @@ export class PreparedReplyDispatchPublicationOwner {
   }
 
   rebuild(owners: Iterable<PreparedModelRuntimeOwner>): void {
-    this.#publish(
-      this.host.isGatewayLifecycleActive()
-        ? buildReplyDispatchPublication(owners)
-        : EMPTY_REPLY_DISPATCH_PUBLICATION,
-    );
+    this.stage(owners)();
   }
 
   stage(owners: Iterable<PreparedModelRuntimeOwner>): () => void {
@@ -176,17 +172,13 @@ export class PreparedReplyDispatchPublicationOwner {
         assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
       }
       if (!demandPrepared) {
-        // Demand can join recovery, so preserve admission before that first wait.
         await this.host.ensureReady(params);
         demandPrepared = true;
         continue;
       }
-      if (replacement) {
-        await racePromiseWithAbortSignal(replacement, abortSignal);
-        continue;
-      }
-      if (pendingOwner?.pending) {
-        await racePromiseWithAbortSignal(pendingOwner.pending, abortSignal);
+      const pending = replacement ?? pendingOwner?.pending;
+      if (pending) {
+        await racePromiseWithAbortSignal<void | PreparedModelRuntimeSnapshot>(pending, abortSignal);
         continue;
       }
       const runtime = this.#publication.find((candidate) => candidate.agentId === agentId);

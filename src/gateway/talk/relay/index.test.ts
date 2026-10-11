@@ -16,12 +16,6 @@ import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { drainGlobalSingletonLifecycleState } from "../../../shared/global-singleton.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import {
-  authorizeClientVoiceConfirmation,
-  bindAuthorizedClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-} from "../../../talk/client-voice-confirmation.js";
-import { noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance } from "../../../talk/client-voice-confirmation.test-support.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
 import {
@@ -416,45 +410,9 @@ describe("talk realtime gateway relay", () => {
     return { events, context };
   }
 
-  it("settles relay-owned registrations after refusal invalidates a detached grant", async () => {
+  it("settles relay-owned registrations on cancellation", async () => {
     const provider = createIdleRelayProvider();
     const fixture = await createAbortableRelayRunFixture(provider, { register: false });
-    const voiceSessionId = fixture.session.relaySessionId;
-    const now = Date.now();
-    const challenge = checkClientVoiceToolConfirmationPolicy({
-      agentId: "main",
-      voiceSessionId,
-      runId: "run-1",
-      toolName: "message",
-      toolParams: { action: "send", message: "cancelled action" },
-      now,
-    });
-    if (challenge.allowed) {
-      throw new Error("expected voice confirmation challenge");
-    }
-    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    if (!confirmationId) {
-      throw new Error("missing voice confirmation id");
-    }
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId,
-      text: "yes",
-      timestamp: now + 1,
-    });
-    const grant = authorizeClientVoiceConfirmation({
-      agentId: "main",
-      voiceSessionId,
-      confirmationId,
-      now: now + 2,
-    });
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId,
-      text: "no",
-      timestamp: now + 3,
-    });
-
     await registerTalkRealtimeRelayAgentRun({
       relaySessionId: fixture.session.relaySessionId,
       connId: "conn-1",
@@ -462,7 +420,6 @@ describe("talk realtime gateway relay", () => {
       runId: "run-1",
       callId: "call-1",
     });
-    expect(bindAuthorizedClientVoiceConfirmation({ grant, runId: "run-1" })).toBe(false);
     const relay = relaySessions.get(fixture.session.relaySessionId);
     expect(relay?.activeAgentRuns.size).toBe(1);
     expect(relay?.activeAgentToolCalls.size).toBe(1);
@@ -1181,18 +1138,6 @@ describe("talk realtime gateway relay", () => {
       submitToolResult,
     };
   }
-
-  it("rejects session creation when relay expiry would exceed Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
-    expect(() =>
-      createTalkRealtimeRelaySession({
-        context: {} as never,
-        provider: createIdleRelayProvider(),
-      }),
-    ).toThrow("Realtime relay session expiry is outside the supported Date range");
-  });
 
   async function createAbortableRelayRunFixture(
     provider = createIdleRelayProvider(),

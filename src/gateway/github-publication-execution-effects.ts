@@ -10,61 +10,91 @@ type GitHubPublicationMutableFacts = {
   effect_state?: string | null;
 };
 
-/** A receipt's execution closure records effects even when their awaited response outlives admission. */
-export function createGitHubPublicationExecutionEffects<Row>(params: {
-  write: (facts: GitHubPublicationMutableFacts, requireAction: boolean) => Row;
-  interruptedStatus: "requested" | "needs_confirmation";
-}) {
-  const { write } = params;
-  return {
-    updateHead(headCommit: string): Row {
-      return write({ head_commit: headCommit }, true);
-    },
-    complete(result: SessionGitHubPublicationResult): Row {
+export type GitHubPublicationEffectTransition =
+  | { operation: "updateHead"; headCommit: string }
+  | { operation: "complete"; result: SessionGitHubPublicationResult }
+  | {
+      operation: "recordEffect";
+      effect: "push" | "pull_request";
+      observed?: { headCommit?: string; url?: string };
+    }
+  | { operation: "interrupt" };
+
+/** Effect observations retain custody but never restore permission for another action. */
+export function githubPublicationEffectFacts(
+  transition: GitHubPublicationEffectTransition,
+  interruptedStatus: "requested" | "needs_confirmation",
+): { values: GitHubPublicationMutableFacts; requireAction: boolean } {
+  switch (transition.operation) {
+    case "updateHead":
+      return { values: { head_commit: transition.headCommit }, requireAction: true };
+    case "complete": {
+      const { result } = transition;
       if (result.status === "published") {
-        return write(
-          {
+        return {
+          values: {
             status: "published",
             head_commit: result.headCommit,
             pull_request_url: result.url,
             error_code: null,
             next_action: null,
           },
-          // This execution owns the accepted result even when its initiating action has ended.
-          false,
-        );
+          requireAction: false,
+        };
       }
       if (result.status !== "failed") {
         throw new Error("GitHub publication result is not terminal.");
       }
-      return write(
-        { status: "failed", error_code: result.code, next_action: result.nextAction },
-        // Shared requests can retire their original requester under execution custody.
-        // Personal identity changes still belong to the explicit confirmation owner.
-        result.code !== "session_changed" &&
-          (result.code !== "identity_changed" || params.interruptedStatus === "needs_confirmation"),
-      );
-    },
-    recordEffect(
-      effect: "push" | "pull_request",
-      observed?: { headCommit?: string; url?: string },
-    ): void {
-      // Recording an observation grants no further action after revocation.
-      write(
-        {
+      return {
+        values: { status: "failed", error_code: result.code, next_action: result.nextAction },
+        requireAction:
+          result.code !== "session_changed" &&
+          (result.code !== "identity_changed" || interruptedStatus === "needs_confirmation"),
+      };
+    }
+    case "recordEffect": {
+      const { effect, observed } = transition;
+      return {
+        values: {
           last_effect: effect,
           effect_state: observed?.headCommit || observed?.url ? "observed" : "dispatched",
           ...(observed?.headCommit ? { head_commit: observed.headCommit } : {}),
           ...(observed?.url ? { pull_request_url: observed.url } : {}),
         },
-        !observed,
-      );
+        requireAction: !observed,
+      };
+    }
+    case "interrupt":
+      return {
+        values: { status: interruptedStatus, error_code: null, next_action: null },
+        requireAction: false,
+      };
+  }
+  throw new Error("Unknown GitHub publication effect transition.");
+}
+
+/** Released synchronous adapters and worker transitions share the same effect reducer. */
+export function createGitHubPublicationExecutionEffects<Row>(params: {
+  write: (facts: GitHubPublicationMutableFacts, requireAction: boolean) => Row;
+  interruptedStatus: "requested" | "needs_confirmation";
+}) {
+  const apply = (transition: GitHubPublicationEffectTransition) => {
+    const { values, requireAction } = githubPublicationEffectFacts(
+      transition,
+      params.interruptedStatus,
+    );
+    return params.write(values, requireAction);
+  };
+  return {
+    updateHead: (headCommit: string): Row => apply({ operation: "updateHead", headCommit }),
+    complete: (result: SessionGitHubPublicationResult): Row =>
+      apply({ operation: "complete", result }),
+    recordEffect(
+      effect: "push" | "pull_request",
+      observed?: { headCommit?: string; url?: string },
+    ): void {
+      apply({ operation: "recordEffect", effect, observed });
     },
-    interrupt(): Row {
-      return write(
-        { status: params.interruptedStatus, error_code: null, next_action: null },
-        false,
-      );
-    },
+    interrupt: (): Row => apply({ operation: "interrupt" }),
   };
 }

@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { render, type ReactiveElement } from "lit";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import "../test-helpers/app-sidebar-suite.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.ts";
-import { renderAppSidebarBrand, type AppSidebarRenderHost } from "./app-sidebar-render.ts";
+import { renderSidebarAgentCard, type AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderRecentSession, type SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
@@ -22,8 +22,6 @@ const emptySnapshot: SidebarSnapshotModel = {
   roster: null,
   mode: "chip",
   navigationView: "sessions",
-  navigationScope: "all",
-  scopesEquivalent: false,
   pages: [],
   pageScopeId: null,
   pinnedSessions: [],
@@ -68,15 +66,17 @@ it("renders the saved chip identity before agent discovery without reviving anot
     ...emptySnapshot,
     brand: { ...emptySnapshot.brand, agentId: "main", name: "Harbor", textAvatar: "⚓" },
   });
-  render(renderAppSidebarBrand(host), container);
+  render(renderSidebarAgentCard(host), container);
   const card = container.querySelector<ReactiveElement>("openclaw-sidebar-agent-card");
   expect(card).not.toBeNull();
   await card!.updateComplete;
   expect(container.querySelector(".sidebar-workspace-header")).toBeNull();
-  expect(card!.querySelector(".sidebar-agent-card__name")?.textContent).toContain("Harbor");
+  expect(card!.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label")).toContain(
+    "Harbor",
+  );
   expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   host.sessionKey = "agent:other:thread";
-  render(renderAppSidebarBrand(host), container);
+  render(renderSidebarAgentCard(host), container);
   expect(container.querySelector("openclaw-sidebar-agent-card")).toBeNull();
   expect(container.querySelector(".sidebar-workspace-header")).not.toBeNull();
 });
@@ -180,16 +180,25 @@ it.each([false, true])(
     update();
     const facepile = container.querySelector("openclaw-viewer-facepile")!;
     await facepile.updateComplete;
-    const updates = vi.spyOn(facepile, "performUpdate");
+    const updates: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => updates.push(...records));
+    observer.observe(facepile, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    onTestFinished(() => observer.disconnect());
 
     update();
     await facepile.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
 
     host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
     update();
     await facepile.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
+    expect(updates.length).toBeGreaterThan(0);
+    updates.length = 0;
     expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
       withOwner ? undefined : "ada",
     );
@@ -199,7 +208,7 @@ it.each([false, true])(
     };
     update();
     await facepile.updateComplete;
-    expect(updates).toHaveBeenCalledTimes(2);
+    expect(updates.length > 0).toBe(withOwner);
     expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
   },
 );
@@ -219,21 +228,30 @@ it("keeps Online facepiles idle until presence or time-sensitive ordering change
   update();
   const facepile = container.querySelector("openclaw-viewer-facepile")!;
   await facepile.updateComplete;
-  const updates = vi.spyOn(facepile, "performUpdate");
+  const updates: MutationRecord[] = [];
+  const observer = new MutationObserver((records) => updates.push(...records));
+  observer.observe(facepile, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  });
+  onTestFinished(() => observer.disconnect());
 
   update();
   await facepile.updateComplete;
-  expect(updates).not.toHaveBeenCalled();
+  expect(updates).toHaveLength(0);
 
   vi.setSystemTime(now + 2);
   update();
   await facepile.updateComplete;
-  expect(updates).toHaveBeenCalledOnce();
+  expect(updates.length).toBeGreaterThan(0);
+  updates.length = 0;
   expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("zoe, ada");
 
   host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
   update();
   await facepile.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(2);
+  expect(updates.length).toBeGreaterThan(0);
   expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
 });

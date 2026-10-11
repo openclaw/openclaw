@@ -234,8 +234,9 @@ or renaming that file before retrying.
 Sibling reindex locks, captures, and SQLite sidecars are not separate agent stores.
 Current-layout database sidecars still preserve evidence of a missing main database.
 Previously recorded coordination-file holds remain preserved in recovery receipts
-but do not produce held-agent warnings. The reindex lock file can remain after
-its SQLite lease is released; its presence does not mean an agent was deleted.
+but do not produce held-agent warnings. Legacy reindex lock files can remain
+after an upgrade; current reindex coordination is in-process, and a lock file's
+presence does not mean an agent was deleted.
 Session SQLite import and recovery hold existing agent databases and their sidecars
 when deletion history is unavailable, preserving legacy sources without importing
 or archiving them. Recorded deletion and reconstruction holds and retained plugin

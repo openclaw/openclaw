@@ -94,9 +94,16 @@ describe("routed CLI prompts in chat history", () => {
     });
   });
 
-  it.each(["string", "text block"])(
-    "matches literal routed %s content before removing generated-looking decorations",
-    async (shape) => {
+  it.each(
+    ["string", "text block"].flatMap((shape) =>
+      ["resume", "requester guidance", "requester frame"].map((decoration) => ({
+        shape,
+        decoration,
+      })),
+    ),
+  )(
+    "matches literal routed $shape $decoration before removing generated-looking decorations",
+    async ({ shape, decoration }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
         const provenance: InputProvenance = {
           kind: "inter_session",
@@ -105,10 +112,27 @@ describe("routed CLI prompts in chat history", () => {
         };
         const envelope = buildInterSessionPromptContext(provenance).text;
         const body = `${envelope}\nPlease check the build.`;
-        const raw = `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`;
+        const hint =
+          'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+        const frame =
+          'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n';
+        const quoted = `${decoration === "requester frame" ? frame : ""}${hint}\n\nPlease check the build.`;
+        const raw =
+          decoration === "resume"
+            ? `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`
+            : `${envelope}\n${quoted}`;
         const content = shape === "string" ? raw : [{ type: "text", text: raw }];
-        const plain = { ...user(body), provenance };
-        const literal = { ...user(content), provenance };
+        const plain = {
+          ...user(decoration === "resume" ? body : "Please check the build."),
+          provenance,
+        };
+        const literalContent =
+          decoration === "resume"
+            ? content
+            : shape === "string"
+              ? quoted
+              : [{ type: "text", text: quoted }];
+        const literal = { ...user(literalContent), provenance };
         await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-literal" })]);
 
         const imported = await readMessages();
@@ -125,6 +149,54 @@ describe("routed CLI prompts in chat history", () => {
       });
     },
   );
+
+  it("keeps routed quotation identities from advancing the plain-body floor on reload", () => {
+    const provenance: InputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:ops:main",
+      sourceTool: "sessions_send",
+    };
+    const envelope = buildInterSessionPromptContext(provenance).text;
+    const quoted =
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n' +
+      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nhello';
+    const plain = { ...user("hello"), provenance };
+    const literal = { ...user(quoted, undefined, cliMeta("literal")), provenance };
+    const imports = [
+      user(`${envelope}\n${quoted}`, undefined, cliMeta("literal")),
+      user(`${envelope}\nhello`, undefined, cliMeta("plain")),
+    ];
+
+    expect(
+      mergeImportedChatHistoryMessages({
+        localMessages: [plain, literal],
+        importedMessages: imports,
+      }),
+    ).toEqual([{ ...plain, __openclaw: cliMeta("plain") }, literal]);
+  });
+
+  it("matches repeated ordinary turns in order across different generated context", async () => {
+    await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
+      const context =
+        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}\n```\n\n';
+      const first = user(`${context}hello`);
+      const second = user("hello");
+      await writeClaudeEntries(filePath, [
+        claudeUser(`${DRIFT_NOTE}\n\nhello`, { uuid: "first" }),
+        claudeUser("hello", { uuid: "second" }),
+      ]);
+
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [first, second],
+          importedMessages: await readMessages(),
+        }),
+      ).toEqual([
+        { ...first, __openclaw: cliMeta("first", sessionId) },
+        { ...second, __openclaw: cliMeta("second", sessionId) },
+      ]);
+    });
+  });
 
   it("dedupes routed prompts whose drift note sits under the inter-session envelope", () => {
     const envelope = buildInterSessionPromptContext({

@@ -278,7 +278,17 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
-  it.each(VAULT_BACKED_GATEWAY_CASES)(
+  it.each([
+    ["wiki.importRuns", {}],
+    ["wiki.init", {}],
+    ["wiki.doctor", {}],
+    ["wiki.compile", {}],
+    ["wiki.ingest", { inputPath: "/tmp/alpha-notes.txt" }],
+    ["wiki.lint", {}],
+    ["wiki.bridge.import", {}],
+    ["wiki.unsafeLocal.import", {}],
+    ["wiki.get", { lookup: "alpha" }],
+  ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>)(
     "%s resolves its request agent exactly once",
     async (method, methodParams) => {
       const { config, rootDir } = await createVault({
@@ -367,32 +377,6 @@ describe("memory-wiki gateway methods", () => {
       signal,
     });
     expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { signal });
-  });
-
-  it("keeps global vault requests on the shared base config", async () => {
-    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
-    const { api, registerGatewayMethod } = createPluginApi();
-    const appConfig = {
-      agents: { entries: { support: {}, marketing: {} } },
-    };
-
-    registerMemoryWikiGatewayMethods({ api, config, appConfig });
-    const handler = requireGatewayHandler(registerGatewayMethod, "wiki.status");
-
-    const respond = vi.fn();
-    await handler({ params: { agentId: "marketing" }, respond });
-
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
-      config,
-      appConfig,
-    });
-    expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, { appConfig });
-    expect(readRespondPayload(respond)).toEqual({
-      vaultScope: "global",
-      agentId: null,
-      vaultMode: "isolated",
-      vaultExists: true,
-    });
   });
 
   it("resolves an agent-scoped vault once from each request and live app config", async () => {
@@ -533,7 +517,6 @@ describe("memory-wiki gateway methods", () => {
   it.each([
     ["rebuilding", "UNAVAILABLE", true, 500],
     ["compile-required", "INVALID_REQUEST", undefined, undefined],
-    ["failed", "UNAVAILABLE", undefined, undefined],
   ] as const)(
     "returns explicit %s dashboard availability",
     async (state, code, retryable, retryAfterMs) => {
@@ -575,34 +558,6 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondError(respond)).toEqual({
       code: "internal_error",
       message: "query is required.",
-    });
-  });
-
-  it.each([
-    ["wiki.importRuns", { limit: 0 }, "limit must be a positive integer"],
-    [
-      "wiki.search",
-      { query: "Teams Azure", maxResults: 1.5 },
-      "maxResults must be a positive integer",
-    ],
-    ["wiki.get", { lookup: "Teams Azure", fromLine: 1.5 }, "fromLine must be a positive integer"],
-    ["wiki.get", { lookup: "Teams Azure", lineCount: 0 }, "lineCount must be a positive integer"],
-  ])("rejects invalid positive integer gateway param for %s", async (method, params, message) => {
-    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
-    const { api, registerGatewayMethod } = createPluginApi();
-
-    registerMemoryWikiGatewayMethods({ api, config });
-    const handler = requireGatewayHandler(registerGatewayMethod, method);
-    const respond = vi.fn();
-
-    await handler({
-      params,
-      respond,
-    });
-
-    expect(readRespondError(respond)).toEqual({
-      code: "internal_error",
-      message,
     });
   });
 

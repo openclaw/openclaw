@@ -138,7 +138,7 @@ const focusedCases = [
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
-    modulePath: "ui/src/components/terminal/terminal-panel-registration.ts",
+    modulePath: "ui/src/components/terminal/terminal-panel-registration.tsx",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
       methodResponses: {
@@ -850,7 +850,7 @@ suite.define(() => {
         try {
           const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
           expect(response?.status()).toBe(200);
-          await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+          await page.locator(".sidebar-rail").waitFor({ state: "attached" });
           await held.request;
           const element = page.locator("openclaw-macos-titlebar-controls");
           expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
@@ -914,7 +914,7 @@ suite.define(() => {
           waitUntil: "domcontentloaded",
         });
         expect(response?.status()).toBe(200);
-        await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+        await page.locator(".sidebar-rail").waitFor({ state: "attached" });
         const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
         await expect.poll(failure.headCount).toBe(1);
         expect(failure.chunkRequestCount()).toBe(1);

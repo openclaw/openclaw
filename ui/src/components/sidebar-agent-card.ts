@@ -12,6 +12,7 @@ import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
     agent menu (switcher + utilities) — the conversation itself lives on the
     Home page row, so this row carries profile semantics only. */
 class SidebarAgentCard extends OpenClawLightDomContentsElement {
+  @property({ type: Boolean }) compact = false;
   @property({ attribute: false }) agentId = "";
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
@@ -42,7 +43,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
     return html`
-      <div class="sidebar-agent-card ${this.menuOpen ? "sidebar-agent-card--open" : ""}">
+      <div
+        class="sidebar-agent-card ${this.menuOpen ? "sidebar-agent-card--open" : ""} ${this.compact ? "sidebar-agent-card--rail" : ""}"
+      >
         <button
           type="button"
           class="sidebar-agent-card__main"

@@ -218,16 +218,32 @@ moving it or silently changing qualification identity.
 Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
 completes package/install proof and prints the selected route's next command; do not dispatch
 another equivalent validation. Its `npm-beta-v1` Telegram package result is
-`deferred-postpublish`, never passed. Other policies retain their check.
-Parallels and Telegram package proof belong to postpublish confidence on every
-track. A final version never records `npm-beta-v1`, so the helper runs both
-for stable unless you pass `--skip-parallels --skip-telegram`; use
-`--run-parallels` only on explicit operator direction. Optional
+`deferred-postpublish`, never passed. Stable `npm-stable-v1` and admitted stable/full
+coverage reuse authenticated mock-provider package Telegram proof for the exact
+FRV-qualified tarball, without a Telegram waiver. Separately packed historical
+tarballs and explicit live-provider checks require supplemental Telegram proof
+from the retained, verified `release-ci/*` ref at Q=C with `harness_ref` pinned
+to C; missing or moved transport refs require newly bound candidate evidence,
+never main's harness. Keep supplemental run IDs in candidate evidence; do not
+forward them as the publisher's optional postpublish diagnostic input.
+Stable Parallels runs use the candidate checkout's harness and dependency graph;
+beta still defers Parallels unless explicitly selected. Use `--run-parallels`
+only on explicit operator direction. Optional
 `--windows-node-tag <exact-source-tag>` records its approved installer digest
 map; stable candidates do not require Windows asset publication. Stable
 candidates require stable/full evidence with soak and blocking performance.
 The embedded preflight enforces these requirements; no publication waiver can
 bypass them.
+
+Planning flags and the P tooling pin can change while saved checklist state is
+still `validated` with no run IDs and no retained `frv-request.json`. The helper
+reuses a saved publication tag only for the same P SHA. Once qualification is
+bound, keep the original flags and request; do not delete dispatch state to
+force a retry. Use a separate `--output-dir` only for a deliberately new request.
+If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
+and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
+evidence with Windows selected. A fresh checklist launch already admits the
+selected Windows tag and installer digests through FRV.
 
 For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.

@@ -91,6 +91,15 @@ adds no public capability or deprecation. Plugins must still use the owning
 runtime operation and its live authority checks: a prior receipt or cached row
 does not certify raw-handle writers, foreign changes, or a later effect.
 
+The Gateway context's GitHub publication service has V2 request methods with
+required host-owned requester capabilities, plus awaited deferral and reporting
+methods. Forward those capabilities intact and await committed results before
+releasing request resources. Released opaque-requester and synchronous lifecycle
+methods remain deprecated compatibility routes; actual use shares one warning
+budget per plugin and publication family. See
+[GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
+for the method mapping, callback ordering, and next-major removal contract.
+
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
 <Steps>
@@ -317,6 +326,12 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+SQLite worker backends set connection lock-wait policy with
+`setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
+temporary changes. The connection owner retains the current timeout, skips
+unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
+connection would bypass that policy.
+
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
 issuing SQL or a worker request. Retained row caches may reuse results only when
@@ -326,14 +341,15 @@ deny an ordinary read or grant effect authority. A changed token invalidates eve
 derived cache that depends on that database, including caches in sibling plugin
 instances. The helper does not observe writes by other processes.
 
-First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
-same subpath to admit cold agent storage in its existing executor before
-receiving a native handle. The operation callback still runs on the caller;
-dispatch its database work through the existing store worker. Its authority
-callback runs inside worker grants and must not read the same database or do
-blocking work. Put same-database predicates in the worker transaction. The
-released `withOpenClawAgentDatabaseAsync` retains native admission for arbitrary
-synchronous SDK guards, including its post-integrity, pre-repair checkpoint.
+First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
+same subpath to admit cold agent storage without receiving a writable native
+handle. Its required live authority runs inside worker grants and must not read
+the same database or do blocking work. Put same-database predicates in the paired
+worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
+missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+`withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
+ordering, including the latter's post-integrity, pre-repair checkpoint, until
+the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.
 
 Transcript assertion composition preserves prepared source checks independently
 of opaque SDK callbacks. Cold restoration can recheck those prepared components

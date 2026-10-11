@@ -13,12 +13,13 @@ import {
   registerOwnedNativeHookRelay,
   testing,
 } from "./native-hook-relay.js";
+import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
 
 describe("dedicated native hook callback", () => {

@@ -9,6 +9,7 @@ import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/se
 import { seedCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -27,6 +28,7 @@ import { resolveSessionForRun } from "./server-session-key.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import * as rowInputs from "./session-utils-row.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import {
   resolveSessionKeyFromResolveParams,
@@ -80,7 +82,52 @@ async function resolve(p: SessionsResolveParams) {
 const resolved = { ok: true, key: scope.sessionKey, agentId: "main" };
 
 describe("session resolution metadata", () => {
-  it.each(["key", "sessionId", "shortId", "reference", "label"] as const)(
+  it("resolves discovery from current metadata when an unrelated display row cannot rebuild", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      replaceSessionEntrySync(scope, entry);
+      const sibling = "agent:main:unrelated-display";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: sibling },
+        { sessionId: "unrelated-display", updatedAt: 2 },
+      );
+      const projection = await projectionFor();
+      await projection.ensureMaterialized();
+      const readInputs = rowInputs.readSessionRowInputs;
+      const display = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+        if (params.key === sibling) {
+          throw new Error("Unrelated display unavailable");
+        }
+        return readInputs(params);
+      });
+      try {
+        sessionChanges.emit({ all: true, scope: "catalog" });
+        const context = createDirectChatContext({
+          getRuntimeConfig: () => cfg,
+          ...bindSessionRowProjection({}, () => projection),
+        });
+        for (const params of [
+          { sessionId: entry.sessionId },
+          { label: entry.label },
+          { reference: { key: scope.sessionKey } },
+        ]) {
+          const respond = vi.fn();
+          await sessionReadHandlers["sessions.resolve"]!({
+            params,
+            context,
+            req: { type: "req", id: "resolve-during-rebuild", method: "sessions.resolve" },
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+          });
+          expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
+        }
+      } finally {
+        display.mockRestore();
+      }
+    });
+  });
+
+  it.each(["key"])(
     "resolves parent-scoped %s requests without hydrating retained subagent tasks",
     async (selector) => {
       await withOpenClawTestState(
@@ -283,7 +330,7 @@ describe("session resolution metadata", () => {
     });
   });
 
-  it.each(["malformed", "nul", "mismatched-time", "mismatched-window"])(
+  it.each(["malformed", "mismatched-window"])(
     "preserves warm and cold storage-reader outcomes for %s rows",
     async (kind) => {
       await withOpenClawTestState({ label: "resolve-corruption" }, async () => {

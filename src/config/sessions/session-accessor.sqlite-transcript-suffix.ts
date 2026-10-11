@@ -12,7 +12,6 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   readEventTimestamp,
   readTranscriptEventId,
-  readTranscriptStorageRows,
   type SqliteTranscriptStorageRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -55,7 +54,6 @@ type SqliteTranscriptSuffixMutationPlan = {
   expectedRows: readonly SqliteTranscriptStorageRow[];
   retainedCustomDataIds?: readonly string[];
   incremental?: {
-    expectedMutationAt: number | null;
     projectionWasHealthy: boolean;
     removedMessageIds: readonly string[];
     retainedActiveCount: number;
@@ -94,22 +92,6 @@ function readTranscriptSuffixStorageRows(
       .orderBy("seq", "asc")
       .limit(expectedRows + 1),
   ).rows.map((row) => ({ createdAt: row.created_at, eventJson: row.event_json, seq: row.seq }));
-}
-
-// Preserve the raw suffix mutation when an exact incremental projection update is unsafe.
-function verifyIncrementalPlanningFence(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  expectedMutationAt: number | null,
-): void {
-  if (
-    readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt !==
-    expectedMutationAt
-  ) {
-    throw new Error(
-      `SQLite transcript changed while planning suffix removal for ${resolved.sessionId}`,
-    );
-  }
 }
 
 function prepareIncrementalTranscriptSuffixMutation(
@@ -158,11 +140,11 @@ function prepareIncrementalTranscriptSuffixMutation(
     );
   }
 
-  const currentMutationAt = readTranscriptMutationStateInTransaction(
-    database,
-    resolved.sessionId,
-  ).updatedAt;
-  if (expectedMutationAt !== undefined && currentMutationAt !== expectedMutationAt) {
+  if (
+    expectedMutationAt !== undefined &&
+    readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt !==
+      expectedMutationAt
+  ) {
     throw new Error(
       `SQLite transcript changed while preparing suffix removal for ${resolved.sessionId}`,
     );
@@ -216,11 +198,9 @@ function prepareIncrementalTranscriptSuffixMutation(
   );
   const suffix = { expectedRows, next, nextCreatedAt, prefixLength: 0, startSeq };
   const prepareReconciledMutation = (): SqliteTranscriptSuffixMutationPlan => {
-    verifyIncrementalPlanningFence(database, resolved, currentMutationAt);
     return {
       ...suffix,
       incremental: {
-        expectedMutationAt: currentMutationAt,
         projectionWasHealthy: false,
         removedMessageIds: [],
         retainedActiveCount: 0,
@@ -345,11 +325,9 @@ function prepareIncrementalTranscriptSuffixMutation(
     });
   }
   const addedMessages = activeRows.filter((row) => row.messagePosition !== null).length;
-  verifyIncrementalPlanningFence(database, resolved, currentMutationAt);
   return {
     ...suffix,
     incremental: {
-      expectedMutationAt: currentMutationAt,
       projectionWasHealthy,
       removedMessageIds,
       retainedActiveCount,
@@ -364,8 +342,7 @@ function prepareIncrementalTranscriptSuffixMutation(
   };
 }
 
-/** Plans bounded suffix work before the synchronous SQLite write transaction. */
-export function prepareSqliteTranscriptSuffixMutation(
+function prepareSqliteTranscriptSuffixMutation(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   expectedEvents: readonly TranscriptEvent[],
@@ -395,54 +372,39 @@ export function prepareSqliteTranscriptSuffixMutation(
 export function replaceSqliteTranscriptSuffixInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
-  plan: SqliteTranscriptSuffixMutationPlan,
+  input: {
+    expectedEvents: readonly TranscriptEvent[];
+    nextEvents: readonly TranscriptEvent[];
+    persistedPrefixLength?: number;
+    expectedMutationAt?: number | null;
+    eventsStartAtPersistedPrefix?: boolean;
+    retainedCustomDataIds?: readonly string[];
+  },
   projection: {
     scheduleProjectionReconcile?: boolean;
     onProjectionReconcileNeeded?: () => void;
   } = {},
 ): void {
   const db = getSessionKysely(database.db);
-  if (
-    plan.incremental &&
-    readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt !==
-      plan.incremental.expectedMutationAt
-  ) {
-    throw new Error(
-      `SQLite transcript changed while preparing suffix removal for ${resolved.sessionId}`,
-    );
-  }
+  // Planning and mutation share the writer transaction; there is no yield or second writer
+  // between the exact source read and its replacement.
+  const plan = prepareSqliteTranscriptSuffixMutation(
+    database,
+    resolved,
+    input.expectedEvents,
+    input.nextEvents,
+    input.persistedPrefixLength,
+    input.expectedMutationAt,
+    input.eventsStartAtPersistedPrefix,
+    input.retainedCustomDataIds,
+  );
   const retainedCustomDataIds = plan.retainedCustomDataIds ?? [];
-  const storedRows = plan.incremental
-    ? readTranscriptSuffixStorageRows(
-        database,
-        resolved.sessionId,
-        plan.startSeq,
-        plan.expectedRows.length,
-        retainedCustomDataIds,
-      )
-    : readTranscriptStorageRows(database, resolved.sessionId);
-  if (
-    storedRows.length !== plan.expectedRows.length ||
-    storedRows.some((row, index) => {
-      const expected = plan.expectedRows[index];
-      return (
-        expected === undefined ||
-        row.seq !== expected.seq ||
-        row.createdAt !== expected.createdAt ||
-        row.eventJson !== expected.eventJson
-      );
-    })
-  ) {
-    throw new Error(
-      `SQLite transcript changed while preparing suffix removal for ${resolved.sessionId}`,
-    );
-  }
   if (plan.expectedRows.length === 0 && plan.next.length === 0) {
     return;
   }
 
   const projectionIsHealthy =
-    plan.incremental?.projectionWasHealthy !== false &&
+    plan.incremental?.projectionWasHealthy ??
     !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId);
   const suffixIdentityKeys = new Map(
     plan.incremental?.suffixIdentityKeys ??

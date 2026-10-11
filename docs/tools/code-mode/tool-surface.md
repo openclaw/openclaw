@@ -10,9 +10,15 @@ read_when:
 
 ## Model-visible tools
 
-When code mode is active, the model sees `exec`, `wait`, and any required
-direct-only tool. Every other enabled tool is hidden from the model-facing
-tool list and registered in the code-mode catalog.
+When code mode is active, the model sees `exec`, `wait`, the enabled `message`
+tool, and any required direct-only tool. Keeping `message` visible across reply
+delivery modes preserves the conversation's tool prefix. Every other enabled
+tool is hidden from the model-facing tool list and registered in the code-mode
+catalog.
+
+Execution-restricted background runs retain the admitted catalog descriptions
+for prompt reuse. Their execution permissions still apply to every call;
+restricted Swarm globals are not installed in the guest.
 
 Use `exec` for tool orchestration, data joining, loops, parallel nested calls,
 and structured transforms. Use `wait` only when `exec` returns a resumable

@@ -186,7 +186,7 @@ suite.define(() => {
                   sidebarAgentsMode: "roster",
                   sidebarEntries: pins,
                   navigationByProfile: {
-                    riley: { sidebarEntries: pins, navigationScope: "all" },
+                    riley: { sidebarEntries: pins },
                   },
                 }),
               );
@@ -433,7 +433,9 @@ suite.define(() => {
           message: "Synthetic plugin catalog temporarily unavailable",
         });
         await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-        await sidebar.locator(".sidebar-brand__new-thread:enabled").waitFor();
+        await sidebar
+          .locator(".sidebar-session-toolbar button.sidebar-new-session:enabled")
+          .waitFor();
         const pluginPin = sidebar.locator(
           '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
         );
@@ -454,8 +456,12 @@ suite.define(() => {
           }
           await context.plugins.refresh();
         });
-        await pluginPin.locator("button:disabled").waitFor();
-        expect(await pluginPin.count()).toBe(1);
+        await expect.poll(() => pluginPin.count()).toBe(0);
+        const savedPins = await page.evaluate((settingsKey) => {
+          const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}");
+          return settings.navigationByProfile?.riley?.sidebarEntries;
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+        expect(savedPins).toContain("plugin:reports/overview");
         await waitForSavedSidebar(page);
 
         await page.reload();
@@ -469,7 +475,9 @@ suite.define(() => {
         });
         await gateway.resolveDeferred("connect");
         await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-        await sidebar.locator(".sidebar-brand__new-thread:enabled").waitFor();
+        await sidebar
+          .locator(".sidebar-session-toolbar button.sidebar-new-session:enabled")
+          .waitFor();
         expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
       },
     );

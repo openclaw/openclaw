@@ -1,8 +1,13 @@
 // Covers model runtime policy precedence and private QA runtime overrides.
 import * as modelCatalogRefs from "@openclaw/model-catalog-core/model-catalog-refs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -155,11 +160,84 @@ function makeProviderRuntimeConfig(runtime: string): OpenClawConfig {
 }
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   restoreEnv("OPENCLAW_BUILD_PRIVATE_QA", ORIGINAL_BUILD_PRIVATE_QA);
   restoreEnv("OPENCLAW_QA_FORCE_RUNTIME", ORIGINAL_QA_FORCE_RUNTIME);
 });
 
 describe("resolveModelRuntimePolicy", () => {
+  it.each(["immutable", "published"])(
+    "prepares each %s agent model policy inventory once and observes replacement",
+    (owner) => {
+      const models = Object.fromEntries(
+        Array.from({ length: 24 }, (_, index) => [
+          `fixture/model-${index}`,
+          { agentRuntime: { id: "first-runtime" } },
+        ]),
+      );
+      const prepare = (config: OpenClawConfig) => {
+        if (owner === "immutable") {
+          return freezeJsonSnapshot(config);
+        }
+        setRuntimeConfigSnapshot(config);
+        return config;
+      };
+      const config = prepare({ agents: { defaults: { models } } });
+      using parse = vi.spyOn(modelCatalogRefs, "parseModelCatalogRef");
+      for (const modelId of ["model-23", "model-0", "model-12"]) {
+        expect(resolveModelRuntimePolicyBase({ config, provider: "fixture", modelId })).toEqual({
+          policy: { id: "first-runtime" },
+          source: "model",
+          matchedProvider: "fixture",
+        });
+      }
+      expect(parse.mock.calls.length).toBeLessThanOrEqual(Object.keys(models).length + 6);
+
+      if (owner === "published") {
+        for (const restart of [false, true]) {
+          if (restart) {
+            clearRuntimeConfigSnapshot();
+          }
+          models["fixture/model-23"] = {
+            agentRuntime: { id: restart ? "restarted" : "republished" },
+          };
+          prepare(config);
+          expect(
+            resolveModelRuntimePolicyBase({ config, provider: "fixture", modelId: "model-23" })
+              .policy?.id,
+          ).toBe(restart ? "restarted" : "republished");
+        }
+      }
+
+      const replacement: OpenClawConfig = {
+        agents: {
+          defaults: { models: { "fixture/model-23": { agentRuntime: { id: "next-runtime" } } } },
+        },
+      };
+      expect(
+        resolveModelRuntimePolicyBase({
+          config: prepare(replacement),
+          provider: "fixture",
+          modelId: "model-23",
+        }),
+      ).toEqual({ policy: { id: "next-runtime" }, source: "model", matchedProvider: "fixture" });
+
+      const mutablePolicy = { id: "mutable-runtime" };
+      const mutable: OpenClawConfig = {
+        agents: { defaults: { models: { "fixture/model-23": { agentRuntime: mutablePolicy } } } },
+      };
+      expect(
+        resolveModelRuntimePolicyBase({ config: mutable, provider: "fixture", modelId: "model-23" })
+          .policy?.id,
+      ).toBe("mutable-runtime");
+      mutablePolicy.id = "edited-runtime";
+      expect(
+        resolveModelRuntimePolicyBase({ config: mutable, provider: "fixture", modelId: "model-23" })
+          .policy?.id,
+      ).toBe("edited-runtime");
+    },
+  );
+
   it("bounds reference parsing when resolving a large provider catalog", () => {
     const models = Array.from({ length: 500 }, (_, index) =>
       createModelConfig("openclaw", `ollama/org/model-${String(index).padStart(4, "0")}`),

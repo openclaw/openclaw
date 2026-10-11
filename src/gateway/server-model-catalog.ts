@@ -248,12 +248,11 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     getPendingPreparedModelRuntimeReplacement,
     materializePreparedModelCatalogOwner,
   } = await import("../agents/prepared-model-catalog.js");
-  const config = (params?.getConfig ?? getRuntimeConfig)();
   const replacement = getPendingPreparedModelRuntimeReplacement();
   if (replacement) {
     await replacement;
-    return readPreparedGatewayModelCatalogOwnerSnapshot(params);
   }
+  const config = (params?.getConfig ?? getRuntimeConfig)();
   const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),

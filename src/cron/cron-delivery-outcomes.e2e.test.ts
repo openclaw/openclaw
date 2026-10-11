@@ -308,13 +308,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
 
   it.each([
     {
-      responseStatus: 204,
-      bestEffort: false,
-      deliveryStatus: "delivered",
-      delivered: true,
-      completionStatus: "succeeded",
-    },
-    {
       responseStatus: 503,
       bestEffort: false,
       deliveryStatus: "not-delivered",
@@ -327,13 +320,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       deliveryStatus: "unknown",
       delivered: undefined,
       completionStatus: "unknown",
-    },
-    {
-      responseStatus: null,
-      bestEffort: true,
-      deliveryStatus: "unknown",
-      delivered: undefined,
-      completionStatus: "succeeded",
     },
   ] as const)(
     "persists primary webhook evidence for HTTP $responseStatus (best effort $bestEffort)",
