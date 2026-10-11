@@ -1526,7 +1526,6 @@ src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	1
-src/auto-reply/reply/directive-handling.impl.ts	1
 src/auto-reply/reply/directive-handling.levels.ts	9
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directives.ts	2
@@ -2288,7 +2287,6 @@ src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
-src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	1
 src/node-host/invoke-agent-cli-claude.ts	1

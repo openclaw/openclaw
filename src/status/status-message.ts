@@ -111,6 +111,7 @@ type StatusArgs = {
   sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  requestedThink?: ThinkLevel;
   resolvedFast?: FastMode;
   resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
@@ -780,10 +781,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const pluginStatusLines = verboseLevel !== "off" ? resolveSessionPluginStatusLines(entry) : [];
   const pluginTraceLines =
     traceLevel === "on" || traceLevel === "raw" ? resolveSessionPluginTraceLines(entry) : [];
-  const pluginStatusLine =
-    pluginStatusLines.length > 0 || pluginTraceLines.length > 0
-      ? [...pluginStatusLines, ...pluginTraceLines].join(" · ")
-      : null;
+  const pluginStatusLine = [...pluginStatusLines, ...pluginTraceLines].join(" · ") || null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
@@ -804,7 +802,9 @@ export function buildStatusMessageParts(args: StatusArgs) {
   // Mode switches are individually tiny; one shared line keeps them scannable
   // in both the plain body and the presentation table.
   const modesValue = [
-    `think ${thinkLevel}`,
+    args.requestedThink && args.requestedThink !== thinkLevel
+      ? `think ${thinkLevel} (requested ${args.requestedThink}; clamped)`
+      : `think ${thinkLevel}`,
     `fast ${fastModeValue}`,
     textVerbosity ? `text ${textVerbosity}` : null,
     reasoningLevel !== "off" ? `reasoning ${reasoningLevel}` : null,

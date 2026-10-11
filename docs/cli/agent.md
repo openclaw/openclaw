@@ -337,6 +337,13 @@ These are observations, not statistical speed guarantees.
 - `--timeout <seconds>`: override the execution budget for each model attempt (default 600, or `agents.defaults.timeoutSeconds`); each configured fallback gets a fresh budget, and `0` disables the attempt deadline. The Gateway client waits for the run's terminal result across fallback attempts, with cancellation and connection failures still applying. The 600-second default belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours per attempt.
 - `--json`: output JSON
 
+Model switches preserve the session's requested thinking level. If the selected
+model cannot support an inherited level, the run uses a supported level and prints
+a clamp notice. JSON output includes the effective level in
+`result.meta.requestShaping.thinking` and the notice in `thinkingClamp` (`meta`
+at the top level for `--local`). The saved preference remains available when you
+switch back to a supporting model.
+
 Gateway commands using OpenClaw's managed agent loop return their completed reply before optional memory
 flushing and compaction. That work has its own session owner and uses the command's
 remaining time. A new turn in the same session cancels and settles it before

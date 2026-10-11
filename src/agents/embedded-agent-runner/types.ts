@@ -230,6 +230,7 @@ export type EmbeddedAgentRunMeta = {
   requestShaping?: {
     authMode?: string;
     thinking?: string;
+    thinkingClamp?: string;
     reasoning?: string;
     verbose?: string;
     trace?: string;

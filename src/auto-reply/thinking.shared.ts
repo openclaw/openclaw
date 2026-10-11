@@ -65,6 +65,18 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   ultra: 80,
 };
 
+export function formatThinkingLevelClampNotice(params: {
+  requested?: ThinkLevel;
+  effective?: string;
+  provider: string;
+  model: string;
+}): string | undefined {
+  if (!params.requested || !params.effective || params.requested === params.effective) {
+    return undefined;
+  }
+  return `Thinking level clamped to ${params.effective} for ${params.provider}/${params.model} (requested ${params.requested}; preference retained).`;
+}
+
 /** Normalizes user-provided thinking level strings to the canonical enum. */
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   const key = normalizeOptionalLowercaseString(raw);

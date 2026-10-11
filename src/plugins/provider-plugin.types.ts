@@ -484,8 +484,8 @@ export type ProviderPlugin = {
    *
    * Prefer this over the individual thinking capability hooks when a provider
    * or model exposes a custom set of thinking levels. OpenClaw stores the
-   * canonical `id`, shows `label` when provided, and downgrades stale stored
-   * values by profile rank.
+   * canonical `id`, shows `label` when provided, and clamps execution by profile
+   * rank without replacing the stored preference.
    */
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
