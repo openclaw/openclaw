@@ -7,6 +7,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
 import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { formatErrorMessage } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   completePackageActivationCustody,
@@ -20,6 +21,7 @@ import {
   isPackageActivationComplete,
   assertPackageActivationLayout,
   resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
   resolvePackageActivationHelper,
   packageActivationIdentity,
   resolvePackageActivationAnchor,
@@ -53,6 +55,8 @@ export type PackageActivationPreparation = {
   onCustody?: (retained: boolean) => void;
   launchers: Array<{ name: string; previous: string | null }>;
 };
+
+export class PackageActivationArchiveError extends Error {}
 
 function packageActivationRecoveryCommand(
   node: string,
@@ -192,14 +196,38 @@ export async function preparePackageActivationJournal(
   // A completed receipt may be replaced only by this new, genuinely admitted
   // operation under its current fence. Legacy/incomplete artifacts refuse.
   assertPackageActivationLayout(anchor);
-  const priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
+  let priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
     throwIfNoEntry: false,
   })
     ? openPackageActivationJournal(anchor)
     : undefined;
-  const prior = priorJournal?.read();
+  let prior = priorJournal?.read();
   if (prior && !isPackageActivationComplete(anchor, prior)) {
-    throw new Error("An unresolved package operation already owns this installation.");
+    throw new Error(
+      "An unresolved package operation already owns this installation. Run openclaw update repair before retrying.",
+    );
+  }
+  if (
+    priorJournal &&
+    prior &&
+    (prior.phase === "superseded" ||
+      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
+      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false }))
+  ) {
+    try {
+      priorJournal.archiveSettled(prior, assertCurrent);
+    } catch (error) {
+      assertCurrent();
+      if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+        priorJournal.assertCurrent(prior);
+      }
+      throw new PackageActivationArchiveError(
+        `Completed package recovery evidence retained; standalone publication repair is unavailable for this update: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    priorJournal = undefined;
+    prior = undefined;
   }
   const preparation: PackageActivationDescriptor["preparation"] = [
     { name: "candidate" as const, source: stageRoot, identity: candidate.identity },

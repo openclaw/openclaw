@@ -89,7 +89,10 @@ import {
   admitMutableUpdateSignalRun,
   retireMutableUpdateSignalRun,
 } from "./update-command-mutable-signals.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import {
+  assertUpdatePackageActivationAdmission,
+  prepareUpdatePackageActivationAdmission,
+} from "./update-command-package-activation.js";
 import { admitUpdatePreviewSignalRun } from "./update-command-preview-signals.js";
 import {
   resolveOwnedManagedUpdateEnv,
@@ -563,7 +566,16 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   await pkgOwnership.assertUnowned(discoveredRoot);
   // A post-core marker cannot bypass pending recovery without the live original
   // owner. Check both roots before config/autostart preparation or history.
-  assertUpdatePackageActivationAdmission(discoveredRoot, {
+  const admitPackageActivation = async (
+    options: Parameters<typeof assertUpdatePackageActivationAdmission>[1],
+  ) => {
+    if (postCoreUpdateResume) {
+      assertUpdatePackageActivationAdmission(discoveredRoot, options);
+    } else {
+      await prepareUpdatePackageActivationAdmission(discoveredRoot, options);
+    }
+  };
+  await admitPackageActivation({
     continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
   });
   const servicePlan =
@@ -578,7 +590,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
     serviceRoot: servicePlan?.serviceRoot ?? servicePlan?.rootRedirect?.root,
   };
-  assertUpdatePackageActivationAdmission(discoveredRoot, packageAdmission);
+  await admitPackageActivation(packageAdmission);
   opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
     await assertOpenClawStateWriteAllowedAtPath({

@@ -9,7 +9,6 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
-import { formatErrorMessage } from "./errors.js";
 import { resolveExecutablePath } from "./executable-path.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -22,7 +21,6 @@ import {
   assertPackageActivationLayout,
   resolvePackageActivationControl,
   resolvePackageActivationJournalPath,
-  resolvePackageActivationHelper,
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
   packageActivationIdentity,
@@ -30,6 +28,7 @@ import {
 } from "./package-update-activation-journal.js";
 import {
   preparePackageActivationJournal,
+  PackageActivationArchiveError,
   resolvePackageActivationRecoveryCommand as recoveryCommand,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
@@ -146,33 +145,17 @@ export async function preparePackageActivation(
     );
     return undefined;
   }
-  const anchor = resolvePackageActivationAnchor(params.liveRoot);
-  if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
-    const journal = openPackageActivationJournal(anchor);
-    const prior = journal.read();
-    if (
-      isPackageActivationComplete(anchor, prior) &&
-      (prior.phase === "superseded" ||
-        fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
-        fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false }))
-    ) {
-      try {
-        journal.archiveSettled(prior, assertOriginal);
-      } catch (error) {
-        assertOriginal();
-        if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
-          journal.assertCurrent(prior);
-        }
-        // A closed slot cannot regain rollback authority. Keep inaccessible
-        // evidence and use the existing non-journaled package-swap owner.
-        options.onUnavailable?.(
-          `Completed package recovery evidence retained; standalone publication repair is unavailable for this update: ${formatErrorMessage(error)}`,
-        );
-        return undefined;
-      }
+  let prepared;
+  try {
+    prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
+  } catch (error) {
+    if (!(error instanceof PackageActivationArchiveError)) {
+      throw error;
     }
+    // Closed evidence cannot regain rollback authority; use ordinary package swap.
+    options.onUnavailable?.(error.message);
+    return undefined;
   }
-  const prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
   const owner = createPublicationOwner(
     prepared.anchor,
     prepared.journal,
@@ -222,6 +205,7 @@ export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
+  options?: { onlyStaleLease: boolean },
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
@@ -231,6 +215,9 @@ export async function settlePendingPackageActivation(
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   const complete = isPackageActivationComplete(anchor, initial);
+  if (options?.onlyStaleLease && complete) {
+    return undefined;
+  }
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
     throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
   }
@@ -251,6 +238,15 @@ export async function settlePendingPackageActivation(
         }
       : undefined;
   const originalAuthority = initial.descriptor.authority;
+  const replacementIdentity = packageActivationIdentity(installKey, true);
+  if (
+    options?.onlyStaleLease &&
+    ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
+      replacementIdentity,
+    )
+  ) {
+    return undefined;
+  }
   let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
   // A recreated file can reuse the lost inode. Keep the recorded loss when
   // resuming an interrupted custody transfer.
@@ -277,12 +273,14 @@ export async function settlePendingPackageActivation(
     currentDatabase.databasePath !== originalAuthority.databasePath ||
     currentDatabase.databaseIdentity !== originalAuthority.databaseIdentity ||
     currentDatabase.parentIdentity !== originalAuthority.parentIdentity;
+  if (options?.onlyStaleLease && !leaseIdentityChanged) {
+    return undefined;
+  }
   const reason = leaseWasMissing
     ? "recovery-lease-missing"
     : leaseIdentityChanged
       ? "recovery-lease-identity-changed"
       : "superseded-by-manual-install";
-  const replacementIdentity = packageActivationIdentity(installKey, true);
   const externalPublication =
     replacementIdentity === initial.descriptor.candidate.identity &&
     (initial.phase === "prepared" ||
@@ -301,7 +299,13 @@ export async function settlePendingPackageActivation(
     !complete &&
     !publicationNotStarted &&
     !externalPublication &&
-    !(leaseIdentityChanged && (unusedPreparation || initial.phase === "superseded")) &&
+    !(
+      leaseIdentityChanged &&
+      (unusedPreparation ||
+        (initial.phase === "publication-complete" &&
+          replacementIdentity === initial.descriptor.previous.identity) ||
+        initial.phase === "superseded")
+    ) &&
     [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
     )
