@@ -14,7 +14,6 @@ import {
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
 import { createOwnedWorkerTaskPool, WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import { assertOpenClawAgentWriterReleased } from "../../state/openclaw-agent-write-admission-state.js";
 import type {
   SessionHistoryWorkerInput,
   SessionTranscriptWorkerInput,
@@ -43,7 +42,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
 export function createSessionTranscriptHistoryPool(
   maxWorkers = resolveWorkerPoolSize("singleton"),
 ) {
-  const generations = new Set<{ canCloseNativeResources: boolean }>();
+  let canCloseNativeResources: boolean | undefined;
   const pool = createOwnedWorkerTaskPool<
     SessionHistoryWorkerInput,
     SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
@@ -54,26 +53,19 @@ export function createSessionTranscriptHistoryPool(
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
-      // The worker inherits this same fact at creation; later admission cannot upgrade it.
-      const current = { canCloseNativeResources: captureSqliteWorkerClosePolicy() };
-      generations.add(current);
-      return {
-        options: {},
-        async releaseResources() {
-          generations.delete(current);
-        },
-      };
-    },
-    onRetirementFailure() {
-      for (const generation of generations) {
-        generation.canCloseNativeResources = false;
-      }
+      // Early workers stay conservative if native-close qualification was still pending.
+      canCloseNativeResources =
+        captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
+      return { options: {} };
     },
   });
   return {
     ...pool,
-    canCloseNativeResources: () =>
-      generations.size > 0 && [...generations].every((entry) => entry.canCloseNativeResources),
+    canCloseNativeResources: () => canCloseNativeResources === true,
+    async rotate() {
+      await pool.rotate();
+      canCloseNativeResources = undefined;
+    },
   };
 }
 
@@ -147,32 +139,6 @@ export function createSessionTranscriptWorkerLanes() {
     createUsageCostPool("refresh"),
   );
 
-  const independentHistoryLanes = [
-    historyLane,
-    transcriptSearchLane,
-    projectionLane,
-    maintenanceLane,
-  ];
-
-  // Install only in development: production dispatch/cleanup has no context check.
-  // Target discovery is reserved with the writer; its cold-read host callbacks
-  // reenter that reservation. Other pools can wait on an independent writer.
-  if (process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development") {
-    for (const lane of [...independentHistoryLanes, costReadLane, costRefreshLane]) {
-      const rotate = lane.pool.rotate.bind(lane.pool);
-      lane.pool.rotate = () => {
-        assertOpenClawAgentWriterReleased(`drain the ${lane.name} reader pool`);
-        return rotate();
-      };
-    }
-    for (const lane of independentHistoryLanes) {
-      const close = lane.pool.closeResources;
-      lane.pool.closeResources = (key) => {
-        assertOpenClawAgentWriterReleased(`close the ${lane.name} reader pool`);
-        return close(key);
-      };
-    }
-  }
   return {
     historyLane,
     transcriptSearchLane,
