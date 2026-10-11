@@ -5,7 +5,7 @@ import type { InternalRealtimeVoiceProviderApi } from "./provider-internal.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveConfiguredRealtimeVoiceProviderAsync,
-  resolveRealtimeVoiceProviderCapabilities,
+  resolveRealtimeVoiceProviderCapabilitiesAsync,
 } from "./provider-resolver.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
@@ -462,7 +462,7 @@ describe("realtime voice provider resolver", () => {
     ).toThrow("No configured realtime voice provider registered");
   });
 
-  it("resolves config-specific provider capabilities", () => {
+  it("resolves config-specific provider capabilities", async () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "dynamic",
       label: "Dynamic",
@@ -489,14 +489,16 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(
-      resolveRealtimeVoiceProviderCapabilities({
-        provider,
-        providerConfig: { authMode: "native" },
-        model: "gpt-live-1",
-        surface: "browser-session",
-      })?.supportsVideoFrames,
+      (
+        await resolveRealtimeVoiceProviderCapabilitiesAsync({
+          provider,
+          providerConfig: { authMode: "native" },
+          model: "gpt-live-1",
+          surface: "browser-session",
+        })
+      )?.supportsVideoFrames,
     ).toBe(false);
-    const scopedCapabilities = resolveRealtimeVoiceProviderCapabilities({
+    const scopedCapabilities = await resolveRealtimeVoiceProviderCapabilitiesAsync({
       provider,
       providerConfig: { authMode: "oauth" },
       agentId: "molty",
@@ -506,12 +508,14 @@ describe("realtime voice provider resolver", () => {
     expect(scopedCapabilities?.supportsVideoFrames).toBe(true);
     expect(scopedCapabilities?.supportsGatewayControl).toBe(true);
     expect(
-      resolveRealtimeVoiceProviderCapabilities({
-        provider,
-        providerConfig: { authMode: "oauth" },
-        model: "gpt-live-1",
-        surface: "browser-session",
-      })?.supportsGatewayControl,
+      (
+        await resolveRealtimeVoiceProviderCapabilitiesAsync({
+          provider,
+          providerConfig: { authMode: "oauth" },
+          model: "gpt-live-1",
+          surface: "browser-session",
+        })
+      )?.supportsGatewayControl,
     ).toBe(false);
   });
 });
