@@ -152,7 +152,7 @@ const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|tsx?)|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
@@ -609,7 +609,7 @@ export function createChangedCheckPlan(
                     "tsx",
                     "scripts/run-stylelint.mts",
                     "ui/src/**/*.css",
-                    "ui/src/**/*.ts",
+                    "ui/src/**/*.{ts,tsx}",
                     "ui/public/themes/*.css",
                   ],
                 },
@@ -765,6 +765,12 @@ export function createChangedCheckPlan(
   if (result.paths.some((file) => /^(?:src|extensions|packages|scripts)\//u.test(file))) {
     add("SQLite worker ratchet", [
       "check:database-worker-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+    add("SQLite dialect ratchet", [
+      "check:database-dialect-ratchet",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.base ?? (options.staged ? "HEAD" : "origin/main"),

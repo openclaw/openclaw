@@ -26,6 +26,7 @@ import { GitHubPublicationController } from "../../lib/sessions/github-publicati
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
+import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
@@ -47,6 +48,7 @@ import {
   chatSubmitState,
   dismissChatError,
   resolveChatPaneFollowUpMode,
+  projectChatPaneTranscript,
 } from "./chat-pane-state.ts";
 import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
@@ -74,8 +76,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     () => this.state ?? undefined,
   );
   private presentationUserId: string | null = null;
-  // Stable absent inputs let catalog renders reuse the transcript cache.
-  private readonly emptyTranscriptItems: [] = [];
   private readonly retrySessionPlacementStartup = () => {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {
@@ -437,7 +437,6 @@ export class ChatPane extends ChatPaneLayoutRender {
           composerAvailability.canSend && !catalogKey && !suggestionViewer && state.connected,
         isCurrent: () => this.state === state,
       }),
-      messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         historyHasMore || this.loadingOlder
           ? {
@@ -446,13 +445,11 @@ export class ChatPane extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      toolMessages: catalogKey ? this.emptyTranscriptItems : state.chatToolMessages,
-      guardianNotices: catalogKey ? this.emptyTranscriptItems : state.guardianNotices,
-      streamSegments: catalogKey ? this.emptyTranscriptItems : state.chatStreamSegments,
-      stream: catalogKey ? null : state.chatStream,
-      streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
-      runId: catalogKey ? null : projectionRunId,
-      runUsageById: catalogKey ? undefined : state.chatRunUsageById,
+      ...projectChatPaneTranscript(
+        state,
+        catalogKey ? this.catalogMessages : null,
+        projectionRunId,
+      ),
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -685,6 +682,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      chatBubbleMode: isChatBubbleMode(state.settings, state.sessionKey),
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
       resolveArtifactDownload: (params, signal) =>

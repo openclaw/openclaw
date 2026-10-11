@@ -11,6 +11,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -44,8 +45,14 @@ describe("restart recovery claim successors", () => {
       const before = loadSessionEntry(scope);
       let didSetEntry = false;
       let replacement: ReturnType<typeof updateSessionEntry> | undefined;
+      await using actor = createReplyRecoveryActorFixture({
+        agentId: "main",
+        ...scope,
+        getSessionId: () => entry.sessionId,
+      });
       const controller = createReplyRestartRecoveryClaimController({
         agentId: "main",
+        acquireSessionActor: () => actor.acquireSessionActor(),
         admissionRunId: "queued-run",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         getEntry: () => entry,
@@ -129,8 +136,15 @@ describe("restart recovery claim successors", () => {
       },
       updateMode: "none",
     });
+    await using actor = createReplyRecoveryActorFixture({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      getSessionId: () => sessionId,
+    });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: sourceTurnId,
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,

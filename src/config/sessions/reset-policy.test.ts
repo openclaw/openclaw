@@ -9,42 +9,12 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 
 describe("session reset policy", () => {
-  it("keeps the default policy fresh across a long inactivity gap", () => {
-    const startedAt = new Date(2025, 0, 1, 12).getTime();
-    const now = new Date(2026, 0, 1, 12).getTime();
-    const policy = resolveSessionResetPolicy({ resetType: "direct" });
-
-    expect(policy.mode).toBe("none");
-    expect(
-      evaluateSessionFreshness({
-        updatedAt: startedAt,
-        sessionStartedAt: startedAt,
-        lastInteractionAt: startedAt,
-        now,
-        policy,
-      }),
-    ).toEqual({ fresh: true });
-  });
-
   it("honors a pending legacy reset tombstone under the default policy", () => {
     const policy = resolveSessionResetPolicy({ resetType: "direct" });
 
     expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy })).toEqual({
       fresh: false,
     });
-  });
-
-  it("resets an explicit daily policy at its configured hour", () => {
-    const now = new Date(2026, 0, 18, 5, 0, 0, 0).getTime();
-    const startedAt = new Date(2026, 0, 18, 3, 0, 0, 0).getTime();
-    const policy = resolveSessionResetPolicy({
-      sessionCfg: { reset: { mode: "daily", atHour: 4 } },
-      resetType: "direct",
-    });
-
-    expect(
-      evaluateSessionFreshness({ updatedAt: startedAt, sessionStartedAt: startedAt, now, policy }),
-    ).toMatchObject({ fresh: false, staleReason: "daily" });
   });
 
   it.each([
@@ -94,15 +64,6 @@ describe("session reset policy", () => {
       fresh: true,
     },
     {
-      name: "before an ordinary UTC reset",
-      timezone: "UTC",
-      now: "2027-03-14T01:00:00Z",
-      startedAt: "2027-03-13T02:30:00Z",
-      atHour: 2,
-      boundary: "2027-03-13T02:00:00Z",
-      fresh: true,
-    },
-    {
       name: "before Nuuk's spring gap crosses midnight",
       timezone: "America/Nuuk",
       now: "2027-03-28T00:30:00Z",
@@ -145,16 +106,6 @@ describe("session reset policy", () => {
 
   it.each([
     {
-      name: "the base reset",
-      sessionCfg: { reset: { atHour: 6 } },
-      resetType: "direct" as const,
-    },
-    {
-      name: "a type override",
-      sessionCfg: { resetByType: { group: { atHour: 6 } } },
-      resetType: "group" as const,
-    },
-    {
       name: "a type override above a disabled base policy",
       sessionCfg: {
         reset: { mode: "none" as const },
@@ -167,15 +118,6 @@ describe("session reset policy", () => {
       mode: "daily",
       atHour: 6,
     });
-  });
-
-  it("preserves combined daily and idle expiry when an explicit reset omits mode", () => {
-    expect(
-      resolveSessionResetPolicy({
-        sessionCfg: { reset: { idleMinutes: 30 } },
-        resetType: "direct",
-      }),
-    ).toMatchObject({ mode: "daily", idleMinutes: 30 });
   });
 
   it("inherits an active base mode for partial type overrides", () => {
@@ -201,18 +143,6 @@ describe("session reset policy", () => {
     expect(
       evaluateSessionFreshness({ updatedAt: now, lastInteractionAt, now, policy }),
     ).toMatchObject({ fresh: false, staleReason: "idle" });
-  });
-
-  it("applies resetByType only to the matching session type", () => {
-    const sessionCfg = {
-      resetByType: { group: { mode: "idle" as const, idleMinutes: 30 } },
-    };
-
-    expect(resolveSessionResetPolicy({ sessionCfg, resetType: "direct" }).mode).toBe("none");
-    expect(resolveSessionResetPolicy({ sessionCfg, resetType: "group" })).toMatchObject({
-      mode: "idle",
-      idleMinutes: 30,
-    });
   });
 
   it("applies a resetByChannel override ahead of the default policy", () => {

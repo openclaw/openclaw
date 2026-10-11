@@ -109,20 +109,22 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
 
   constructor() {
     super();
-    void new SubscriptionsController(this).effect(
-      () => this.context?.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          const state = this.state;
-          if (!state || !modelAuthEventInvalidates(event)) {
-            return;
-          }
-          state.modelAuthStatusResult = null;
-          state.modelAuthStatusError = null;
-          this.requestUpdate();
-          void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
-        }),
-    );
+    void new SubscriptionsController(this)
+      .watchStore(() => this.context?.navigation)
+      .effect(
+        () => this.context?.gateway,
+        (gateway) =>
+          gateway.subscribeEvents((event) => {
+            const state = this.state;
+            if (!state || !modelAuthEventInvalidates(event)) {
+              return;
+            }
+            state.modelAuthStatusResult = null;
+            state.modelAuthStatusError = null;
+            this.requestUpdate();
+            void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
+          }),
+      );
   }
 
   protected placementComposerPresentation(
@@ -527,9 +529,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (readsResumed && !sourceChanged && this.presented) {
       this.markSessionRead(selectedChatSessionRow(state));
     }
-    if (wasConnected && !state.connected) {
-      // Only the connected->disconnected transition may reshape loading state;
-      // repeated disconnected snapshots must stay no-ops for pane ownership.
+    if (!state.connected && (wasConnected || sourceChanged)) {
+      // The first client can arrive after startup is already waiting for it.
+      // Preserve that loading intent; repeated disconnected snapshots stay no-ops.
       state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
     }
     const resumedHistory =

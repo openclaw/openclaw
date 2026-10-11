@@ -64,6 +64,7 @@ import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
@@ -111,13 +112,16 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
-import { buildSideRunAttemptParams } from "./side-question-run-params.js";
+import {
+  applySideQuestionModelSelection,
+  buildSideRunAttemptParams,
+} from "./side-question-run-params.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerThreadModelSelection,
@@ -283,39 +287,24 @@ export async function runCodexAppServerSideQuestion(
     fallbackCwd: agentWorkspaceDir,
   });
   const runId = params.opts?.runId ?? randomUUID();
-  // Side runs inherit private-binding capabilities, not outer model metadata.
-  const effectiveParams: AgentHarnessSideQuestionParamsV2 = supervisionModelSelection
-    ? {
-        ...params,
-        provider: supervisionModelSelection.modelProvider,
-        model: supervisionModelSelection.model,
-        runtimeModel: {
-          id: supervisionModelSelection.model,
-          name: supervisionModelSelection.model,
-          provider: supervisionModelSelection.modelProvider,
-          api: "openai-chatgpt-responses",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>,
-      }
-    : params;
+  const effectiveParams = applySideQuestionModelSelection(params, supervisionModelSelection);
   const sideRunParams = buildSideRunAttemptParams(effectiveParams, {
     cwd,
     authProfileId,
     runId,
     timeoutMs: appServer.requestTimeoutMs,
+    permissionPolicy: sessionPermissionPolicy,
   });
-  sideRunParams.permissionMode = sessionPermissionPolicy?.mode;
-  sideRunParams.sessionRoot = sessionPermissionPolicy?.root;
-  sideRunParams.execOverrides = sessionPermissionPolicy && {
-    mode: sessionPermissionPolicy.execMode,
-  };
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, params.sandbox);
+  const nativeExecutionPolicy = await prepareCodexNativeExecutionPolicyForRun(sideRunParams, {
+    agentId: sideRunParams.agentId,
+    sandbox: params.sandbox,
+  });
+  assertCurrent();
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     sideRunParams,
     params.sandbox ?? undefined,
-    { agentId: sideRunParams.agentId, sandboxExecServerEnabled },
+    { agentId: sideRunParams.agentId, sandboxExecServerEnabled, nativeExecutionPolicy },
   );
   const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
     sandbox: params.sandbox ?? undefined,
@@ -327,6 +316,7 @@ export async function runCodexAppServerSideQuestion(
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
     sessionId: sideRunParams.sessionId,
     agentId: sideRunParams.agentId,
+    executionPolicy: nativeExecutionPolicy.policy,
     sandbox: params.sandbox,
     sandboxEnvironmentSelected: sandboxEnvironmentRequired,
     surface: "/btw side-question mode",
@@ -341,7 +331,10 @@ export async function runCodexAppServerSideQuestion(
   }
   const clientOptions = {
     // Existing synchronous process startup admission.
-    assertCurrent: authority.assertLegacyCurrent,
+    assertCurrent: () => {
+      authority.assertLegacyCurrent();
+      nativeExecutionPolicy.assertCurrent();
+    },
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
@@ -352,7 +345,7 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     ...(params.opts?.abortSignal ? { abandonSignal: params.opts.abortSignal } : {}),
   } satisfies CodexAppServerClientOptions;
-  let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+  const client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
   let collector: CodexEphemeralTurn | undefined;
   const runAbortController = new AbortController();
@@ -445,6 +438,7 @@ export async function runCodexAppServerSideQuestion(
       sandboxSessionKey,
       sandbox,
       nativeToolSurfaceEnabled,
+      nativeExecutionPolicy,
       nativeProviderWebSearchSupport,
       sessionPermissionPolicy,
       runAbortController,
@@ -473,6 +467,7 @@ export async function runCodexAppServerSideQuestion(
     );
     return {
       toolBridge: createCodexDynamicToolBridge({
+        assertCurrent: nativeExecutionPolicy.assertCurrent,
         tools: exposedTools,
         signal: runAbortController.signal,
         loading: resolveCodexDynamicToolsLoading(pluginConfig),
@@ -656,7 +651,10 @@ export async function runCodexAppServerSideQuestion(
         }),
         signal: runAbortController.signal,
         runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
-        assertActive: authority.assertLegacyCurrent,
+        assertActive: () => {
+          authority.assertLegacyCurrent();
+          nativeExecutionPolicy.assertCurrent();
+        },
         onPreToolUseFailure: (failure) => {
           if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
             nativeToolLifecycleProjector.recordPreToolUseFailure(
@@ -686,7 +684,7 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-    const sideThreadId = await withLeasedCodexAppServerClientStartSelectionRetry({
+    const sideThreadId = await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: clientOptions,
       signal: runAbortController.signal,
@@ -840,9 +838,6 @@ export async function runCodexAppServerSideQuestion(
           },
           { assertCurrent, authority },
         ),
-      onClientChange: (nextClient) => {
-        client = nextClient;
-      },
     });
 
     const effort = usesSupervisionConnection

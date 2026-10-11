@@ -41,6 +41,9 @@ vi.mock("../session-utils.js", async (importOriginal) => ({
 }));
 
 const expectedSystemRequester = {
+  version: 2,
+  signal: expect.any(AbortSignal),
+  prepareSource: expect.any(Function),
   snapshot: {
     version: 1,
     actor: { kind: "system" },
@@ -261,6 +264,9 @@ describe("sessions.github.publish", () => {
           idempotencyKey: "operator-publication-1",
           agentId: "main",
           requester: {
+            version: 2,
+            signal: expect.any(AbortSignal),
+            prepareSource: expect.any(Function),
             snapshot: {
               version: 1,
               actor: { kind: "operator", profileId: profile.id },

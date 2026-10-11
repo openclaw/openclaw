@@ -2511,10 +2511,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ]);
     state.loadProviderScopedThinkingCatalogMock.mockImplementation(async (params: unknown) => {
       const { provider } = params as { provider?: string };
-      if (provider !== "openai") {
-        throw new Error(`unexpected scoped thinking hydration for ${provider}`);
-      }
-      return [structuredClone(nativeModel)];
+      return provider === "openai" ? [structuredClone(nativeModel)] : [];
     });
     state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
       const { provider, catalog } = args as {
@@ -2548,14 +2545,23 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "gpt-5.4",
       resolvedThinkLevel: "xhigh",
     });
-    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledTimes(2);
-    for (const [scope] of state.loadProviderScopedThinkingCatalogMock.mock.calls) {
-      expectRecordFields(scope, {
+    expect(state.loadProviderScopedThinkingCatalogMock.mock.calls.map(([scope]) => scope)).toEqual([
+      expect.objectContaining({
         provider: "openai",
         model: "gpt-5.6-sol",
         agentRuntime: "codex",
-      });
-    }
+      }),
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        agentRuntime: "codex",
+      }),
+      expect.objectContaining({
+        provider: "gmn",
+        model: "gpt-5.4",
+        agentRuntime: "openclaw",
+      }),
+    ]);
   });
 
   registerAgentCommandRecoveryCases(getAgentCommandRecoveryFixture);

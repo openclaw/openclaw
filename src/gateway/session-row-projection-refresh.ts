@@ -7,9 +7,9 @@ import {
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
+import { withSessionRowDatabaseFacts } from "./session-row-database-facts.js";
 import { isColdArchivedSessionRow as isCold } from "./session-row-projection-archive.js";
 import { createSessionRowMaterializer } from "./session-row-projection-materialize.js";
-import { withSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 
@@ -180,6 +180,7 @@ export function createSessionRowRefresh(
         selected,
         revision,
         prepareRegistryFacts: owner.prepareRegistryFacts,
+        cfg: owner.state().cfg,
         env: owner.env,
       },
       {
@@ -203,7 +204,12 @@ export function createSessionRowRefresh(
     }
     // Accepted database facts already own selection metadata, even while display is dirty.
     for (const id of owner.dirty) {
-      if (!records.isPreparedSessionRowDatabaseFacts(owner.rows.get(id)?.retainedDatabaseFacts)) {
+      const row = owner.rows.get(id);
+      const facts = row?.retainedDatabaseFacts;
+      if (
+        !records.isPreparedSessionRowDatabaseFacts(facts) ||
+        (!records.canRetainSessionRowRuntimeOwnership(facts) && !row?.pendingDatabaseFacts)
+      ) {
         return true;
       }
     }

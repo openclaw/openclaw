@@ -16,12 +16,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
+import { convertToOllamaMessages } from "./stream-messages.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
-  convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
 } from "./stream.runtime.js";

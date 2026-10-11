@@ -136,7 +136,7 @@ export class ChatComposerCapabilityHost {
       this.effectiveToolsKeys(context, state, agentId).cacheKey === cacheKey;
     this.effectiveToolsErrorKey = null;
     this.notify();
-    void loadToolsEffective(loader, { agentId, sessionKey }, { isCurrent })
+    void loadToolsEffective(loader, { agentId, sessionKey })
       .then(() => {
         if (!isCurrent()) {
           return;

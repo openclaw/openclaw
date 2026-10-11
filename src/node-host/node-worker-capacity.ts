@@ -4,17 +4,13 @@ import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/wo
 import { toErrorObject } from "../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
-import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchClaim,
   type NodeWorkerLaunchClaimResult,
   type NodeWorkerLaunchReceipt,
 } from "./node-worker-launch-store.js";
-import {
-  inspectNodeWorkerProcessIdentity,
-  type NodeWorkerProcessIdentity,
-} from "./node-worker-process-identity.js";
+import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
 const DEFAULT_CAPACITY_WAIT_MS = 10_000;
 const CAPACITY_POLL_MS = 100;
@@ -80,23 +76,6 @@ export class NodeWorkerCapacity {
   ): Promise<void> {
     this.onCapacityChanged?.(this.publishedCapacity);
     for (const receipt of await this.store.listNonterminal()) {
-      if (receipt.state === "pending") {
-        const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
-        if (supervisorState === "dead" || supervisorState === "reused") {
-          await this.finish(
-            {
-              launchId: receipt.launchId,
-              planHash: receipt.planHash,
-              supervisor: receipt.supervisor,
-              worker: null,
-              state: "interrupted",
-              errorText: "node host stopped before the worker launch started",
-            },
-            false,
-          );
-        }
-        continue;
-      }
       await recoverRunning(receipt);
     }
     await this.update(async () => {
@@ -146,10 +125,9 @@ export class NodeWorkerCapacity {
   async finish(
     params: Parameters<NodeWorkerLaunchStore["finish"]>[0],
     notify = true,
-    authority?: NodeWorkerJournalAuthority,
   ): Promise<NodeWorkerLaunchReceipt> {
     return this.update(async () => {
-      const receipt = await this.store.finish(params, authority);
+      const receipt = await this.store.finish(params);
       if (notify && receipt.state !== "pending" && receipt.state !== "running") {
         await this.changed();
       }

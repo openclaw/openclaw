@@ -211,7 +211,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           });
         }
         expect(sequence(siblingKey)).toBe(siblingSequence);
-        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([parentKey]);
+        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([]);
       }
       parent.modelOverrideSource = "user";
       replaceSessionEntrySync(scope, { ...parent });
@@ -252,7 +252,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
         children[0],
       ]);
       expect(moved.sessions.find((row) => row.key === children[0])?.model).toBe("default");
-      expect.soft(reads, "Unchanged parents after a child moves").toEqual([childScope.sessionKey]);
+      expect.soft(reads, "Unchanged parents after a child moves").toEqual([]);
       reads.length = 0;
       await deleteSessionEntryLifecycle({
         ...scope,

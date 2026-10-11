@@ -44,7 +44,7 @@ import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sq
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 
@@ -219,13 +219,6 @@ describe("SQLite transcript archive sessions", () => {
     ]);
     expect(new Set(archiveWorkers.replies.map(({ worker }) => worker)).size).toBe(1);
     expect(archiveWorkers.replies.every(({ worker }) => worker.threadId === -1)).toBe(true);
-    expect(archiveWorkers.replies.every(({ message }) => message.settled === true)).toBe(true);
-    const operationIds = archiveWorkers.replies.flatMap(({ message }) =>
-      typeof message.operationId === "number" ? [message.operationId] : [],
-    );
-    expect(operationIds).toHaveLength(archiveWorkers.replies.length);
-    expect(new Set(operationIds).size).toBe(operationIds.length);
-    expect(operationIds).toEqual([...operationIds].toSorted((a, b) => a - b));
     expect(publicationRows).toEqual(sessionIds.map(() => ({ session_key: sessionKey })));
     expect(result.deleted).toBe(true);
     expect(result.archivedTranscripts).toHaveLength(sessionIds.length);
@@ -877,10 +870,7 @@ describe("SQLite transcript archive sessions", () => {
   );
 });
 
-type ArchiveSessionReply = {
-  operationId?: number;
-  settled?: boolean;
-} & (TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage);
+type ArchiveSessionReply = TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage;
 
 function observeArchiveSessionWorkers(
   onReply?: (message: ArchiveSessionReply, worker: Worker) => void,

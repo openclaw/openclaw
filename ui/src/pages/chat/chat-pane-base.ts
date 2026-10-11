@@ -72,7 +72,7 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import {
@@ -455,6 +455,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
+      subagentSessionsPending: Boolean(target && this.swarmHydrator?.pendingChildRead),
       subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target

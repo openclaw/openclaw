@@ -30,12 +30,13 @@ import {
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  resolveUiTypeScriptPath,
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
-import { controlUiSolidPlugin } from "./vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -133,7 +134,7 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-overflow.browser.test.ts",
   "src/pages/chat/components/chat-effort-picker.browser.test.ts",
   "src/pages/chat/components/chat-model-picker.browser.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file, here));
 
 export function createUiBrowserVitestConfig(
   env = process.env,
@@ -142,11 +143,7 @@ export function createUiBrowserVitestConfig(
   const include = includeUiTests(
     browser === "webkit"
       ? webkitTestFiles
-      : [
-          "src/**/*.browser.test.ts",
-          "src/**/*.browser.test.tsx",
-          "../extensions/*/browser/**/*.browser.test.ts",
-        ],
+      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -205,8 +202,11 @@ export function createUiBrowserVitestConfig(
         "@awesome.me/webawesome/dist/components/switch/switch.js",
         "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
+        "@codemirror/language",
+        "@codemirror/language-data",
         "@codemirror/state",
         "@codemirror/view",
+        "@lezer/highlight",
         "@lit/context",
         "@lit/task",
         "@noble/ed25519",
@@ -216,6 +216,7 @@ export function createUiBrowserVitestConfig(
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
         "@panzoom/panzoom",
+        "@solidjs/testing-library",
         "@tanstack/lit-virtual",
         "@tanstack/virtual-core",
         "dompurify",
@@ -354,18 +355,16 @@ export default defineConfig({
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
           include: includeUiTests([
-            "src/**/*.test.ts",
-            "src/**/*.test.tsx",
-            "../extensions/*/browser/**/*.test.ts",
+            "src/**/*.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.test.{ts,tsx}",
           ]),
           exclude: [
             "src/**/*.browser.test.{ts,tsx}",
             "src/**/*.e2e.test.{ts,tsx}",
-            "src/**/*.node.test.ts",
-            "src/**/*.node.test.tsx",
-            "../extensions/*/browser/**/*.browser.test.ts",
-            "../extensions/*/browser/**/*.e2e.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.browser.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
@@ -413,9 +412,8 @@ export default defineConfig({
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
-            "src/**/*.node.test.ts",
-            "src/**/*.node.test.tsx",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...nodeDrivenBrowserLayoutTests,
           ]),
           environment: "jsdom",

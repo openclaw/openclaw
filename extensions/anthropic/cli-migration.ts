@@ -6,11 +6,7 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   splitTrailingModelAuthProfile,
 } from "./claude-model-refs.js";
-import {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
-  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-} from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
@@ -128,9 +124,6 @@ function seedClaudeCliAllowlist(
 ): NonNullable<AgentDefaultsModels> {
   const next = { ...models };
   const runtimeRefs = new Set([
-    ...CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map(
-      (ref) => resolveClaudeCliAnthropicModelRefs(ref)?.rewriteRef ?? ref,
-    ),
     ...selectedRefs,
     // Native login leaves no auth profile that could route other Claude IDs at
     // run time, so cover IDs published after sign-in and typed IDs too.
@@ -155,12 +148,13 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
   const existingModels = (rewrittenModels.value ??
     defaults?.models ??
     {}) as NonNullable<AgentDefaultsModels>;
+  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const nextModels = seedClaudeCliAllowlist(existingModels, [
     ...rewrittenModel.runtimeRefs,
+    defaultModel,
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
 
   return {
     profiles: [],

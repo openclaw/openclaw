@@ -44,6 +44,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { getSessionInputActor } from "./session-input-actor.js";
 import {
   withCurrentPendingInputAuthority,
   type SessionPendingInputAuthority,
@@ -193,6 +194,7 @@ export function bindSessionPendingInputSources(
 }
 
 type PendingInputStageOptions = PendingInputRequest & {
+  onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
   assertCurrent: () => void;
@@ -215,19 +217,23 @@ export function stageSessionPendingInput(
   };
   const preparedRequest = preparePendingInputRequest(options);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const admission = resolveSqliteWriteAdmissionScope(captured);
-  const stage = async () => {
-    const store = await preparePendingInputStore(
-      captured,
-      options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-    );
-    return store.withAdmission(
-      () =>
-        stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store),
-      admission !== undefined,
-    );
-  };
-  return admission ? runOpenClawAgentWriteAdmission(toDatabaseOptions(admission), stage) : stage();
+  return getSessionInputActor(captured).then((inputActor) => {
+    const admission = inputActor ? undefined : resolveSqliteWriteAdmissionScope(captured);
+    const stage = async () => {
+      const store = await preparePendingInputStore(
+        captured,
+        options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
+      );
+      const accept = () =>
+        stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
+      // Actor commands own the physical FIFO and revalidate the prepared snapshot.
+      // Holding the legacy reservation here would make native acceptance queue behind itself.
+      return inputActor ? accept() : store.withAdmission(accept, admission !== undefined);
+    };
+    return admission
+      ? runOpenClawAgentWriteAdmission(toDatabaseOptions(admission), stage)
+      : stage();
+  });
 }
 
 async function stagePreparedPendingInput(
@@ -507,29 +513,6 @@ async function stagePreparedPendingInput(
     }
     const inputId = existing?.input_id ?? randomUUID();
     const assertAdmittedCurrent = options.assertAdmittedCurrent ?? options.assertCurrent;
-    owner = {
-      agentId: scope.agentId,
-      databaseAgentId: store.databaseAgentId,
-      inputId,
-      transcriptInputId: inputId,
-      sessionId: scope.sessionId,
-      sessionKey: store.sessionKey,
-      databasePath: store.path,
-      workerDatabasePath: store.workerDatabasePath,
-      idempotencyKey: identity.idempotencyKey,
-      lifecycleGeneration,
-      messageJson,
-      config: options.config,
-      assertCurrent: () => {
-        store.assertCurrent();
-        scope.incognito?.actor.assertCurrent();
-        scope.incognito?.authority.assertCurrent();
-        assertAdmittedCurrent();
-      },
-      authority: options.authority,
-      ...(existing ? { restartRecovered: true as const } : {}),
-      finish,
-    };
     await store.mutate(
       {
         ...settlementIdentity(),
@@ -547,17 +530,54 @@ async function stagePreparedPendingInput(
         });
       },
       (facts, assertSourceCurrent) => {
+        const staged = facts?.receipt.stagedInput;
+        if (!staged) {
+          throw new SessionPendingInputCustodyError(
+            "Pending input omitted its committed postimage",
+          );
+        }
+        owner = {
+          agentId: scope.agentId,
+          databaseAgentId: store.databaseAgentId,
+          inputId: staged.input_id,
+          transcriptInputId: staged.input_id,
+          sessionId: scope.sessionId,
+          sessionKey: store.sessionKey,
+          databasePath: store.path,
+          workerDatabasePath: store.workerDatabasePath,
+          idempotencyKey: identity.idempotencyKey,
+          lifecycleGeneration,
+          messageJson: staged.message_json,
+          config: options.config,
+          assertCurrent: () => {
+            store.assertCurrent();
+            scope.incognito?.actor.assertCurrent();
+            scope.incognito?.authority.assertCurrent();
+            assertAdmittedCurrent();
+          },
+          authority: options.authority,
+          ...(existing ? { restartRecovered: true as const } : {}),
+          finish,
+        };
+        // COMMIT already accepted this custody. Preserve it before fallible publication.
+        registerSessionPendingInputOwner(owner);
+        retained = true;
+        options.onCommitted?.(Object.assign(ownerReceipt(owner), completionMethods));
         assertPrepared(
           facts,
           () => {
             options.assertCurrent();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            registerSessionPendingInputOwner(owner!);
           },
           assertSourceCurrent,
         );
       },
     );
+    if (!owner) {
+      throw new SessionPendingInputCustodyError(
+        "Pending input did not publish its committed owner",
+      );
+    }
     retained = true;
     return Object.assign(ownerReceipt(owner), completionMethods);
   } finally {

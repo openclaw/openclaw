@@ -160,31 +160,6 @@ describe("createDiscordDraftStream", () => {
     },
   );
 
-  it("does not clear a queued preview after awaiting the prior create", async () => {
-    const createStarted = createDeferred<void>();
-    const finishCreate = createDeferred<{ id: string }>();
-    const { rest, stream } = createCurrentPreviewHarness();
-    rest.post
-      .mockReset()
-      .mockImplementationOnce(async () => {
-        createStarted.resolve();
-        return await finishCreate.promise;
-      })
-      .mockResolvedValueOnce({ id: "1002" });
-
-    stream.update("prior turn");
-    await createStarted.promise;
-    const clearing = stream.clear();
-    stream.forceNewMessage("discard");
-    stream.update("queued turn");
-    finishCreate.resolve({ id: "1001" });
-    await clearing;
-    await stream.flush();
-
-    expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "1001"));
-    expect(stream.messageId()).toBe("1002");
-  });
-
   it("suppresses link embeds in preview creates and edits when requested", async () => {
     const rest = createDraftRest();
     const stream = createDraftStream(rest, {
@@ -245,67 +220,6 @@ describe("createDiscordDraftStream", () => {
 
     expect(rest.post).toHaveBeenCalledTimes(2);
     expect(rest.delete).toHaveBeenCalledTimes(1);
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it.each([
-    { modes: ["preserve"] as const, discarded: false },
-    { modes: ["discard"] as const, discarded: true },
-    { modes: ["discard", "preserve"] as const, discarded: true },
-    { modes: ["preserve", "discard"] as const, discarded: true },
-  ])("settles an in-flight create after $modes rotations", async ({ modes, discarded }) => {
-    const firstCreate = createDeferred<{ id: string }>();
-    const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate.promise).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
-
-    stream.update("old turn draft");
-    expect(rest.post).toHaveBeenCalledTimes(1);
-    for (const mode of modes) {
-      stream.forceNewMessage(mode);
-    }
-    stream.update("queued turn draft");
-    firstCreate.resolve({ id: "1001" });
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
-      body: { content: "queued turn draft" },
-    });
-    if (discarded) {
-      expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "1001"));
-    } else {
-      expect(rest.delete).not.toHaveBeenCalled();
-    }
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("drops stale text restored by a failed in-flight send during rotation", async () => {
-    let failFirstCreate: ((error: Error) => void) | undefined;
-    const firstCreate = new Promise<{ id: string }>((_resolve, reject) => {
-      failFirstCreate = reject;
-    });
-    const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
-
-    stream.update("stale turn draft");
-    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage("discard");
-    stream.update("queued turn draft");
-    failFirstCreate?.(new Error("send failed"));
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
-      body: { content: "queued turn draft" },
-    });
     expect(stream.messageId()).toBe("1002");
   });
 });

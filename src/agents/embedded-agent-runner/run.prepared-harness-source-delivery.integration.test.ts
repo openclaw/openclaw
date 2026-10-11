@@ -21,7 +21,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "../../auto-reply/reply/dispatch-from-config.test-harness.js";
+} from "../../auto-reply/reply/dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { buildSourceConversationContext } from "../../auto-reply/reply/groups.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";

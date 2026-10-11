@@ -22,6 +22,10 @@ import {
   resolveNativeHookRelayDeferredToolApproval,
   testing,
 } from "./native-hook-relay.js";
+import {
+  clearNativeHookRelayBridgeRecordsForTests,
+  clearNativeHookRelaysForTests,
+} from "./native-hook-relay.test-support.js";
 
 function relayParams(runId: string, sessionId = runId) {
   return { provider: "codex", sessionId, runId } satisfies Parameters<
@@ -84,7 +88,7 @@ function bridgeInvocation({ relayId, generation }: RelayIdentity) {
 }
 
 afterEach(async () => {
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
@@ -416,7 +420,7 @@ it("joins unregister when listener startup has not completed", async () => {
 
 it("renews logical invocation beyond its original expiry when the listener is unavailable", async () => {
   await withOpenClawTestState({ label: "relay-logical-renewal" }, async () => {
-    await store.clearNativeHookRelayBridgeRecordsForTests();
+    clearNativeHookRelayBridgeRecordsForTests();
     const failure = new Error("fixture listener failed");
     vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server) {
       queueMicrotask(() => this.emit("error", failure));
@@ -584,13 +588,13 @@ it("rejects oversized direct bridge responses", async () => {
       });
 
       // Cold locator startup must not consume this byte-limit fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(relay))).rejects.toThrow(
           "native hook relay bridge response too large",
         );
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       await new Promise<void>((resolve) => {
@@ -624,14 +628,14 @@ it("binds direct bridge tokens to the relay they were issued for", async () => {
         record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
       });
       // Cold locator startup must not consume this token-binding fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(second))).rejects.toThrow(
           "native hook relay bridge target mismatch",
         );
         expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       first.unregister();
@@ -656,8 +660,8 @@ it("does not start transport when locator lookup consumes the caller deadline", 
         return record;
       },
     );
-    const startedAt = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const startedAt = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({
       provider: "codex",
       relayId: relay.relayId,
@@ -783,7 +787,7 @@ it("does not restore an old locator when renewal finishes after unregister", asy
     } finally {
       resume.resolve();
       relay.unregister();
-      await testing.clearNativeHookRelaysForTests();
+      await clearNativeHookRelaysForTests();
     }
   });
 });

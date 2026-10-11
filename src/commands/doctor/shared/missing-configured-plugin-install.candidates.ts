@@ -24,16 +24,16 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import {
+  CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
+  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+} from "../../../plugins/official-runtime-plugins.js";
 import { safeRealpathSync } from "../../../plugins/path-safety.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
-import {
-  CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
-  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
-} from "./configured-runtime-plugin-installs.js";
 import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import { collectEffectiveConfiguredChannelOwnerPluginIds } from "./missing-configured-plugin-install.ids.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";

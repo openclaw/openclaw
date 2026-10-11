@@ -21,7 +21,8 @@ const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("../../../infra/windows-encoding.js", () => ({
+vi.mock("../../../infra/windows-encoding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/windows-encoding.js")>()),
   decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
 }));
 
@@ -247,6 +248,19 @@ describe("read tool", () => {
     const result = await executeRead(tool, { path: "empty.txt" });
 
     expect(textContent(result)).toBe("File is empty (0 bytes).");
+  });
+
+  it("reads later lines from isolated files larger than 16 MiB", async () => {
+    const tempDir = tempDirs.make("openclaw-read-large-");
+    const filePath = path.join(tempDir, "large.sqlite");
+    await fs.writeFile(filePath, `${"x".repeat(17 * 1024 * 1024)}\nlast line\n`);
+
+    const result = await executeRead(createReadToolDefinition(tempDir), {
+      path: filePath,
+      offset: 2,
+    });
+
+    expect(textContent(result)).toBe("last line\n");
   });
 
   it("reports the byte count when a BOM-only file decodes to empty text", async () => {

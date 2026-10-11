@@ -44,7 +44,6 @@ import {
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
-import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { publishCommittedSessionEntryRemoval } from "./session-accessor.sqlite-identity.js";
@@ -73,13 +72,11 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import {
-  captureIncognitoSessionOperation,
-  captureIncognitoSessionSource,
-} from "./session-incognito-binding.js";
-import { deleteIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
+  deleteCapturedIncognitoSession,
+  deleteIncognitoSessionLifecycle,
+} from "./session-incognito-lifecycle-operations.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
-import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: reset, guarded delete, and trusted rollback.
@@ -579,78 +576,6 @@ export async function deleteSessionEntryLifecycle(
   );
 }
 
-function deleteCapturedIncognitoSession(
-  params: DeleteSessionEntryLifecycleParams,
-  expectedPluginOwnerId?: string,
-): Promise<DeleteSessionEntryLifecycleResult> | undefined {
-  const source = captureIncognitoSessionSource({
-    ...params,
-    sessionKey: params.target.canonicalKey,
-  });
-  if (source && "kind" in source) {
-    params.commitGuard?.();
-    source.assertCurrent();
-    return Promise.resolve({
-      deleted: false,
-      archivedTranscripts: [],
-      ...((params.expectedEntry ||
-        params.expectedSessionId != null ||
-        params.expectedLifecycleRevision !== undefined ||
-        params.expectedUpdatedAt !== undefined) && { expectedEntryMismatch: true as const }),
-    });
-  }
-  const binding = captureIncognitoSessionOperation({
-    ...params,
-    sessionKey: params.target.canonicalKey,
-  });
-  if (binding) {
-    const captured = {
-      ...params,
-      target: structuredClone(params.target),
-      expectedEntry: params.expectedEntry && structuredClone(params.expectedEntry),
-      env: captureSessionTranscriptStorageEnvironment(params.env ?? process.env),
-    };
-    const authority = {
-      assertCurrent() {
-        binding.authority.assertCurrent();
-        captured.commitGuard?.();
-      },
-    };
-    return binding.actor.sessions.withSharedState(async () => {
-      const { entry } = await binding.actor.sessions.read(
-        authority,
-        { sessionKey: captured.target.canonicalKey },
-        binding.admissionSignal,
-      );
-      if (
-        (captured.expectedEntry && !sqliteSessionEntriesEqual(entry, captured.expectedEntry)) ||
-        (captured.expectedSessionId !== undefined &&
-          (entry?.sessionId ?? null) !== captured.expectedSessionId) ||
-        (captured.expectedLifecycleRevision !== undefined &&
-          entry?.lifecycleRevision !== captured.expectedLifecycleRevision) ||
-        (captured.expectedUpdatedAt !== undefined &&
-          entry?.updatedAt !== captured.expectedUpdatedAt)
-      ) {
-        return { deleted: false, archivedTranscripts: [], expectedEntryMismatch: true as const };
-      }
-      if (!entry) {
-        return { deleted: false, archivedTranscripts: [] };
-      }
-      binding.admissionSignal?.throwIfAborted();
-      return deleteIncognitoSessionLifecycle({
-        actor: binding.actor,
-        authority,
-        env: captured.env ?? process.env,
-        ownerStorePath: captured.storePath,
-        target: { sessionKey: captured.target.canonicalKey, entry },
-        reason: "deleted",
-        expectedPluginOwnerId,
-      });
-    });
-  }
-  return undefined;
-}
-
 /** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
 export async function deleteDiskBudgetSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
@@ -699,7 +624,10 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
   ) {
     throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSqliteSessionEntryLifecycleInternal(params, true);
+  return (
+    deleteCapturedIncognitoSession(params, undefined, params.expectedEntry.agentHarnessId) ??
+    deleteSqliteSessionEntryLifecycleInternal(params, true)
+  );
 }
 
 /** Rolls back one exact locked CLI row created by a failed plugin initializer. */

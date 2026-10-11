@@ -7,6 +7,7 @@
   },
   "include": [
     "../../ui/src/main.ts",
+    "../../ui/src/main.tsx",
     "../../ui/src/api/**/*.test.ts",
     "../../ui/src/api/**/*.test.tsx",
     "../../ui/src/pages/chat/**/*.test.ts",

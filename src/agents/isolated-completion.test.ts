@@ -117,20 +117,7 @@ it.each([false, true])(
       timeoutMs: 1_000,
     };
 
-    if (auth) {
-      expect(prepared).not.toHaveProperty("agentHarnessRuntimeOverride");
-      await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
-        text: "Utility result",
-      });
-      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "anthropic", modelId: "claude-haiku-4-5" }),
-        expect.anything(),
-      );
-      expect(dispatch).toHaveBeenCalledOnce();
-      expect(mocks.runCliAgent).not.toHaveBeenCalled();
-      return;
-    }
+    expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
 
     await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
       text: "Utility result",
@@ -149,13 +136,15 @@ it.each([false, true])(
       }),
     );
 
-    // Without the borrowed owner, the same credentialless request reproduces #138789.
-    await expect(
-      runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
-    ).rejects.toThrow('No API key found for provider "anthropic"');
-    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+    if (!auth) {
+      // Without the borrowed owner, the same credentialless request reproduces #138789.
+      await expect(
+        runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
+      ).rejects.toThrow('No API key found for provider "anthropic"');
+      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+    }
   },
 );
 

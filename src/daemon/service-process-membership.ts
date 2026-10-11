@@ -17,15 +17,16 @@ declare const SEALED_RUNTIME_BUILD: boolean;
 // child: a crash only loses the observation. Coalition IDs are kernel facts; the job name
 // comes from launchd and may be unavailable.
 const NATIVE_COALITION_SCRIPT = String.raw`
+function probe() {
 const koffi = require(process.argv[1]);
 const pid = Number(process.argv[2]);
 const libproc = koffi.load('/usr/lib/libproc.dylib');
 const pidinfo = libproc.func('int proc_pidinfo(int pid, int flavor, uint64_t arg, _Out_ void *buffer, int buffersize)');
 // PROC_PIDCOALITIONINFO: resource and jetsam coalition IDs, then three reserved uint64s.
 const info = Buffer.alloc(40);
-if (pidinfo(pid, 20, 0, info, info.length) !== info.length) process.exit(1);
+if (pidinfo(pid, 20, 0, info, info.length) !== info.length) { process.exitCode = 1; return; }
 const id = info.readBigUInt64LE(0);
-if (!id) process.exit(1);
+if (!id) { process.exitCode = 1; return; }
 let name;
 try {
   const xpc = koffi.load('/usr/lib/system/libxpc.dylib');
@@ -49,6 +50,8 @@ try {
   }
 } catch {}
 process.stdout.write(JSON.stringify({ id: String(id), name }));
+}
+probe();
 `;
 
 function readNativeResourceCoalition(pid: number): ResourceCoalition | undefined {

@@ -42,7 +42,6 @@ import {
   BOARD_SIZE_PRESETS,
   closeBoardWidgetMenu,
   renderBoardDisabledPlugin,
-  renderBoardWidgetActionError,
   renderBoardWidgetError,
   renderBoardWidgetMenu,
   renderBoardWidgetRejected,
@@ -76,6 +75,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   @property({ attribute: false }) widget?: BoardWidget;
+  @property({ type: Number }) boardRevision = 0;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ type: Boolean }) fitAutoContent = false;
@@ -134,9 +134,18 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   }
 
   override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("boardRevision")) {
+      this.actionError = "";
+    }
     const previousWidget = changed.get("widget");
     if (previousWidget && previousWidget !== this.widget) {
-      this.actionError = "";
+      if (
+        previousWidget.name !== this.widget?.name ||
+        previousWidget.instanceId !== this.widget?.instanceId ||
+        previousWidget.revision !== this.widget?.revision
+      ) {
+        this.actionError = "";
+      }
       this.frame.widgetChanged(previousWidget, this.widget);
     }
     this.appView.update(this.widget, this.callbacks);
@@ -264,7 +273,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             disabled: this.busy || this.actionPending || !this.canGrant,
             onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
             ...(this.actionError
-              ? { error: renderBoardWidgetActionError(this.actionError, true) }
+              ? { error: renderBoardWidgetError(this.actionError, { action: true, inline: true }) }
               : {}),
           })
         : widget.grantState === "rejected"
@@ -351,7 +360,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           (entry) => entry.pluginId === pluginId || entry.pluginId === "host",
         );
         if (error) {
-          return renderBoardWidgetError(error.message, () => void runtime.refresh());
+          return renderBoardWidgetError(error.message, { onRetry: () => void runtime.refresh() });
         }
       }
       return renderBoardDisabledPlugin({
@@ -525,7 +534,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           ${
             this.actionError && widget.grantState !== "pending"
               ? html`<div class="board-widget__error-overlay">
-                  ${renderBoardWidgetActionError(this.actionError)}
+                  ${renderBoardWidgetError(this.actionError, { action: true })}
                 </div>`
               : nothing
           }

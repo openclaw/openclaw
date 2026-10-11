@@ -1,6 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /* Shared jsdom harness for the Cloud workers snapshot suites. Keep DOM-only helpers
    here; the e2e suite imports the plain fixture module instead. */
-import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -8,10 +9,11 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { snapshotListFixture } from "./cloud-worker-snapshots.test-support.ts";
-import "./cloud-workers-page.ts";
+import { CloudWorkersPage } from "./cloud-workers-page.tsx";
 
 export function button(container: Element, label: string) {
   return expectDefined(
@@ -122,17 +124,25 @@ export function mountPage(
     runtimeConfig,
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-cloud-workers-page");
-  provider.append(page);
-  document.body.append(provider);
+  const mounted = mountSolid(() =>
+    createComponent(ApplicationProvider, {
+      value: context,
+      get children() {
+        return createComponent(CloudWorkersPage, {});
+      },
+    }),
+  );
+  const page = expectDefined(
+    mounted.container.querySelector("openclaw-cloud-workers-page"),
+    "Cloud workers page",
+  );
   return {
     page,
     request,
     harness,
     client,
     dispose: () => {
-      provider.remove();
+      mounted.unmount();
       runtimeConfig.dispose();
     },
   };

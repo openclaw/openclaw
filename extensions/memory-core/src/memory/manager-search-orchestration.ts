@@ -19,7 +19,10 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
-import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import {
+  createMemoryEmbeddingOperationError,
+  isMemoryEmbeddingOperationError,
+} from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -155,7 +158,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
-        fuseRecallMetadata,
       );
       assertReadOwner();
       preparedKeyword = undefined;
@@ -463,6 +465,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               semanticProviderRuntime,
               opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
             );
+            const dimensions = indexState.meta?.vectorDims;
+            if (dimensions !== undefined && queryVec.length !== dimensions) {
+              throw createMemoryEmbeddingOperationError({
+                operation: "query",
+                providerId: semanticProvider.id,
+                cause: new Error(
+                  `query embedding has ${queryVec.length} dimensions, but the memory index expects ${dimensions}; rebuild with openclaw memory index --force --agent ${this.agentId}`,
+                ),
+              });
+            }
             break;
           } catch (err) {
             releaseProvider();
@@ -521,17 +533,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const vectorResults = vector.results;
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
+        const eligible = applyRetrievalRanking(vectorResults, activeProjects).filter(
+          (entry) => entry.score >= minScore,
+        );
         const decayed = await applyTemporalDecayToHybridResults({
-          results: vectorResults,
+          results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
-        // Decay and importance can reverse the order returned by vector retrieval.
-        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyRetrievalRanking(decayed, activeProjects)
-          .filter((entry) => entry.score >= minScore)
+        // Recency reorders eligible hits without changing their membership.
+        return decayed
           .toSorted(
             (left, right) =>
               right.score - left.score ||
@@ -641,7 +655,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       vectorTable: VECTOR_TABLE,
       ...query,
       signal,
-      ensureVectorReady: async (dimensions) => {
+      ensureVectorReady: async () => {
         if (!this.vector.enabled) {
           return false;
         }
@@ -652,10 +666,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           this.markConfiguredSourcesForFullReindex();
           return false;
         }
-        return (
-          indexState.vectorState.state === "complete" &&
-          (indexState.meta?.vectorDims === undefined || indexState.meta.vectorDims === dimensions)
-        );
+        return indexState.vectorState.state === "complete";
       },
       runFallback: readVectorRows,
       runVectorKnn: async (request, knnSignal) => {

@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
 import { sharedVitestConfig } from "../test/vitest/vitest.shared.config.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
-import { controlUiSolidPlugin } from "./vite.config.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 
 // Node-only tests for pure logic (no Playwright/browser dependency).
 export default defineConfig({
@@ -19,10 +19,9 @@ export default defineConfig({
     pool: "threads",
     testTimeout: 120_000,
     include: [
-      "src/**/*.node.test.ts",
-      "src/**/*.node.test.tsx",
-      "src/pages/chat/chat-responsive.browser.test.ts",
-      "src/pages/chat/chat-footer-layout.browser.test.ts",
+      "src/**/*.node.test.{ts,tsx}",
+      "src/pages/chat/chat-responsive.browser.test.{ts,tsx}",
+      "src/pages/chat/chat-footer-layout.browser.test.{ts,tsx}",
     ],
     environment: "node",
   },

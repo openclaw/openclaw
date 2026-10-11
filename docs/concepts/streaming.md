@@ -88,8 +88,12 @@ replies until the phase is known. Chat Completions and native Ollama (`api:
 A long tool-free answer therefore produces no durable chunks during generation.
 
 Ordinary final answers and length-limited partial answers remain deliverable.
-The independent live assistant/preview stream can still update while generating
-when enabled and supported by the channel.
+The independent live assistant/preview stream updates while generating when
+enabled and supported by the channel. Visible Chat Completions text streams as
+it arrives, including after initial or resumed reasoning. A live preview can
+briefly show text that a later tool call or reasoning continuation classifies as
+commentary. The final reply payload excludes that commentary and contains the
+confirmed answer, even when the earlier text appeared in a live preview.
 
 ### Media delivery with block streaming
 

@@ -122,8 +122,8 @@ import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { loadSessionEntry } from "./session-utils.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import {
   resolveSessionWorkerPlacementMutationError,
@@ -558,6 +558,39 @@ export async function performGatewaySessionReset(params: {
   if (!resetTarget.ok) {
     return resetTarget;
   }
+  const lookup = {
+    cfg: resetTarget.cfg,
+    key: params.key,
+    agentId: resetTarget.requestedAgentId,
+    excludeInternalEffects: true,
+  };
+  return withGatewaySessionEntryReadOnly(lookup, async ({ entry }) =>
+    performPreparedGatewaySessionReset({
+      params,
+      resetTarget,
+      worktreeContext,
+      worktreeEnv,
+      lookup,
+      initialResetEntry: entry,
+    }),
+  );
+}
+
+async function performPreparedGatewaySessionReset({
+  params,
+  resetTarget,
+  worktreeContext,
+  worktreeEnv,
+  lookup,
+  initialResetEntry,
+}: {
+  params: Parameters<typeof performGatewaySessionReset>[0];
+  resetTarget: Extract<Awaited<ReturnType<typeof resolveSessionResetTarget>>, { ok: true }>;
+  worktreeContext: ReturnType<typeof captureWorktreeRunEndContext>;
+  worktreeEnv: NodeJS.ProcessEnv;
+  lookup: Parameters<typeof withGatewaySessionEntryReadOnly>[0];
+  initialResetEntry: SessionEntry | undefined;
+}): ReturnType<typeof performGatewaySessionReset> {
   const authorizeResetCreation = () =>
     authorizeGatewaySessionCreation({
       cfg: resetTarget.cfg,
@@ -573,12 +606,15 @@ export async function performGatewaySessionReset(params: {
     }
     logVerbose(`session lifecycle resource cleanup failed: ${String(error)}`);
   };
-  const loadResetSession = () =>
-    loadSessionEntry(
-      params.key,
-      resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
-    );
-  const initialResetEntry = loadResetSession().entry;
+  const assertReadAuthorized = () => {
+    params.assertCurrent?.();
+    params.assertAuthorizedInstance?.();
+  };
+  const loadResetSession = (assertReadCurrent?: () => void) =>
+    withGatewaySessionEntryReadOnly(lookup, async (current) => {
+      assertReadCurrent?.();
+      return current;
+    });
   const expectedSessionMatches = (entry: SessionEntry | undefined): boolean =>
     params.expectedSessionId === undefined || entry?.sessionId === params.expectedSessionId;
   const sessionChangedError = () =>
@@ -698,9 +734,9 @@ export async function performGatewaySessionReset(params: {
     // Mark the mutation first, then interrupt outside the identity lock. This
     // lets aborted runs finish admission cleanup without deadlocking reset.
     prepare: async () => {
-      params.assertCurrent?.();
-      params.assertAuthorizedInstance?.();
-      const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadResetSession();
+      assertReadAuthorized();
+      const { entry: currentEntry, canonicalKey: currentCanonicalKey } =
+        await loadResetSession(assertReadAuthorized);
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
       resetPreparationError =
@@ -743,7 +779,7 @@ export async function performGatewaySessionReset(params: {
       }
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const { entry, legacyKey, canonicalKey } = loadResetSession();
+      const { entry, legacyKey, canonicalKey } = await loadResetSession(assertReadAuthorized);
       if (normalizeOptionalString(entry?.sessionId) !== preparedResetSessionId) {
         return params.expectedSessionId === undefined
           ? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`)
@@ -761,11 +797,12 @@ export async function performGatewaySessionReset(params: {
       // Drain first so a legitimate local turn can release its claim. Retire only
       // after every non-destructive guard is rechecked; a placement race must abort
       // before hooks, runtime cleanup, or session mutation begins.
-      const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
+      const placementRetirementError = await retireSessionWorkerPlacementBeforeMutation({
         action: "reset",
         context: workerPlacementContext,
         key: params.key,
         sessionId: normalizeOptionalString(entry?.sessionId),
+        assertCurrent: assertReadAuthorized,
       });
       if (placementRetirementError) {
         return invalidSessionRequest(placementRetirementError.message);
@@ -1006,7 +1043,7 @@ export async function performGatewaySessionReset(params: {
 
       let createdNewEntry = false;
       assertCompletionAuthorized?.();
-      const boundaryEntry = loadResetSession().entry;
+      const boundaryEntry = (await loadResetSession(assertCompletionAuthorized)).entry;
       if (boundaryEntry?.sessionId !== entry?.sessionId) {
         params.assertCurrent?.();
         throw new Error(`Session ${params.key} changed before reset boundary append.`);

@@ -34,7 +34,6 @@ import type {
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
@@ -71,6 +70,7 @@ import type {
   GitHubSessionReceiptGeneration,
   GitHubSessionReceiptIdentities,
 } from "./github-publication-read.types.js";
+import type { GitHubPublicationSourceOperations } from "./github-publication-source-contract.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
@@ -80,6 +80,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  GitHubPublicationSourceOperations &
   RestartLifecycleWorkerOperations &
   SandboxRegistryOperations &
   WorktreeTemplateWorkerOperations &
@@ -234,7 +235,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
 
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
-  "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
   "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };
 

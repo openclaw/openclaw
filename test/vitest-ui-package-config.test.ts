@@ -387,11 +387,15 @@ describe("ui package vitest config", () => {
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
     vi.stubEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", runtimeIncludeFile);
     vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", includeFile);
-    const probe = vi.fn(() => ({ status: 0 }));
-    vi.doMock("node:child_process", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("node:child_process")>()),
-      spawnSync: probe,
-    }));
+    const probe = vi.fn((..._args: unknown[]) => ({ status: 0 }));
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const childProcess = await importOriginal<typeof import("node:child_process")>();
+      return {
+        ...childProcess,
+        spawnSync: (...args: Parameters<typeof childProcess.spawnSync>) =>
+          args[0] === includeFile ? probe(...args) : childProcess.spawnSync(...args),
+      };
+    });
     vi.resetModules();
     const { default: config, createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
     expect(probe).not.toHaveBeenCalled();

@@ -32,6 +32,7 @@ export async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
     compact?: boolean;
+    involvingMeContext?: boolean;
     navigationAllowed?: boolean;
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
@@ -76,6 +77,7 @@ export async function mountMenu(
     html`<openclaw-session-menu
       .session=${session}
       .compact=${options.compact ?? false}
+      .involvingMeContext=${options.involvingMeContext ?? false}
       .navigationAllowed=${options.navigationAllowed ?? true}
       .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
       .splitAllowed=${options.splitAllowed ?? false}

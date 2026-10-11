@@ -31,11 +31,13 @@ const tempRoots: string[] = [];
 const workerDeployArtifactNames = [
   "code-mode-node.worker.mjs",
   "file-tool-planning.worker.mjs",
+  "file-tool-read.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",
   "openclaw-state-read.worker.mjs",
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
+  "sqlite-source-revision.worker.mjs",
   "sqlite-store.worker.mjs",
   "worker-native-lifecycle.worker.mjs",
   "worker.mjs",

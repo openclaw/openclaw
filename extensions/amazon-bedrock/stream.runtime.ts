@@ -86,6 +86,7 @@ import {
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
   resolveBedrockCachePoint,
+  resolveBedrockCacheRetention,
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
@@ -228,8 +229,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     try {
       options.signal?.throwIfAborted();
       client = new BedrockRuntimeClient(config);
-      const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
-      const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
+      const cachePolicy = resolveBedrockPromptCachePolicy(model);
+      const cacheRetention = resolveBedrockCacheRetention(cachePolicy, options.cacheRetention);
+      const cachePoint = resolveBedrockCachePoint(cachePolicy, cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
         ?.thinking;
@@ -780,26 +782,6 @@ function mapThinkingLevelToEffort(
 }
 
 /**
- * Resolve cache retention preference.
- * Nova requires explicit opt-in; other models retain the existing env/default policy.
- */
-function resolveCacheRetention(
-  model: Model<"bedrock-converse-stream">,
-  cacheRetention?: CacheRetention,
-): CacheRetention {
-  if (cacheRetention) {
-    return cacheRetention;
-  }
-  if (resolveBedrockPromptCachePolicy(model) === "nova") {
-    return "none";
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
-
-/**
  * Check if the model is an Anthropic Claude model on Bedrock.
  * Checks both model ID and model name to support application inference profiles
  * whose ARNs don't contain the model name.
@@ -1058,13 +1040,16 @@ function convertMessages(
 
   // Cache points include their entire prefix, so none may follow transient runtime context.
   if (cachePoint && result.at(-1)?.role === ConversationRole.USER) {
-    const cacheAnchor = result.findLast(
-      (message, index) =>
-        message.role === ConversationRole.USER &&
-        (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
-    );
-    if (cacheAnchor?.content) {
-      cacheAnchor.content.push({ cachePoint });
+    // Keep the prior checkpoint reachable when a new turn exceeds AWS's 20-block lookback.
+    let remaining = 2;
+    for (let index = (firstVolatileMessageIndex ?? result.length) - 1; index >= 0; index--) {
+      const message = result[index];
+      if (message?.role === ConversationRole.USER && message.content) {
+        message.content.push({ cachePoint });
+        if (--remaining === 0) {
+          break;
+        }
+      }
     }
   }
 

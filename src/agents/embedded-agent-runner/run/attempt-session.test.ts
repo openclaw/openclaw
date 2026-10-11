@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -10,6 +13,14 @@ import { registerMemoryPromptPreparation } from "../../../plugins/memory-state.j
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  createAnthropicModelFixture,
+  createCompactionEvent,
+  expectCompactionResult,
+  runCompactionScenario,
+  structuredSummary,
+  testing as safeguardTesting,
+} from "../../agent-hooks/compaction-safeguard.test-support.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
@@ -81,6 +92,8 @@ vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -190,6 +203,7 @@ function createInput(options?: { activationError?: Error }) {
         deferredDirectoryToolsCallable: false,
       } as never,
       effectiveCwd: "/workspace",
+      effectiveWorkspace: "/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       initialSystemPrompt: "system prompt",
       markStage: (stage: string) => events.push(`stage:${stage}`),
@@ -269,6 +283,49 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
+    const fixture = createInput();
+    const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");
+    await writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "## Compaction fixture\nWORKSPACE_RULE_MARKER\n",
+    );
+    fixture.input.effectiveWorkspace = workspaceDir;
+    fixture.input.effectiveCwd = "/sandbox";
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      model: createAnthropicModelFixture(),
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              postCompactionSections: ["Compaction fixture"],
+              recentTurnsPreserve: 0,
+              qualityGuard: { enabled: false },
+            },
+          },
+        },
+      },
+    };
+    const { buildEmbeddedExtensionFactories } =
+      await vi.importActual<typeof import("../extensions.js")>("../extensions.js");
+    hoisted.buildEmbeddedExtensionFactories.mockImplementation(buildEmbeddedExtensionFactories);
+    safeguardTesting.setSummarizeCompactionHistoryForTest(async () => structuredSummary());
+    try {
+      await prepareEmbeddedAttemptAgentSession(fixture.input);
+      const { result } = await runCompactionScenario(
+        fixture.input.sessionManager,
+        createCompactionEvent(),
+      );
+      expect(expectCompactionResult(result).summary).toContain(
+        "<workspace-critical-rules>\n## Compaction fixture\nWORKSPACE_RULE_MARKER\n</workspace-critical-rules>",
+      );
+    } finally {
+      safeguardTesting.setSummarizeCompactionHistoryForTest();
+    }
+  });
+
   it("cancels a hydrated directory tool's approval with its captured permission generation", async () => {
     const fixture = createInput();
     const generation = new AbortController();

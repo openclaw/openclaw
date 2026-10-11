@@ -23,7 +23,7 @@ import {
 } from "../state/user-profile-writes.worker.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
@@ -279,7 +279,7 @@ describe("shared GitHub publication requester alias bindings", () => {
 
         await linkCanonicalUserProfileEmail(later, f.guestProfile);
         const controller = new AbortController();
-        const retry = await captureGitHubPublicationRequester(
+        const retry = await prepareGitHubPublicationRequesterV2(
           {
             client: original.client,
             context: original.context,

@@ -6,6 +6,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
@@ -59,7 +60,15 @@ export const configureMemoryCoreDreamingState = dreamingState.setRuntime;
 export function openMemoryCoreStateStore<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateKeyedStore<T> {
-  return dreamingState.getRuntime()<T>(options);
+  const store = dreamingState.getRuntime()<T>(options);
+  const assertCurrent = captureMemoryMutationAuthority();
+  if (!assertCurrent) {
+    return store;
+  }
+  if (!store.withCurrent) {
+    throw new Error("Memory mutations require a host with action-bound SQLite stores");
+  }
+  return store.withCurrent({ assertCurrent });
 }
 
 export function normalizeMemoryCoreWorkspaceKey(workspaceDir: string): string {

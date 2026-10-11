@@ -1,9 +1,9 @@
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
-import "./chat-audio-player.ts";
-import "./chat-svg-attachment.ts";
-import "./chat-video-player.ts";
+import "./chat-audio-player.tsx";
+import "./chat-svg-attachment.tsx";
+import "./chat-video-player.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,

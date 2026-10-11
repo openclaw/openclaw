@@ -134,6 +134,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
+    reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
     stream: string | null;
     streamStartedAt: number | null;
     /** Browser-local active run identity, retained across transient disconnects. */
@@ -142,6 +143,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     queue: ChatQueueItem[];
     initialTurnId?: string;
     pendingInputs?: ChatPendingInputsPage["items"];
+    chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
     persistCommentary?: boolean;

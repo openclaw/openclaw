@@ -13,6 +13,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
@@ -30,6 +31,7 @@ import {
 } from "./queue.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
 import {
   isReplyOperationStalledBeforeOutput,
   STALLED_TURN_NOTICE_TEXT,
@@ -159,6 +161,7 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
       operation = turn.operation;
+      retainReplyOperationUntilComplete(operation);
       const execution = await executeFollowupTurn({
         turn,
         defaults,
@@ -202,19 +205,42 @@ export function createFollowupRunner(
       ) {
         await defaults.opts?.onObservedReplyDelivery?.();
       }
-      const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
         ...defaults.opts,
         sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution: execution.execution,
-        accounting,
-        opts: deliveryOpts,
-      });
+      const decision = await withAgentTurnCompletion(
+        {
+          agentId: turn.queued.run.agentId,
+          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+          sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+          entry: turn.session.current(),
+          writer:
+            execution.execution.outcome.kind === "settled"
+              ? execution.execution.outcome.sessionWriter
+              : undefined,
+          operation: turn.operation,
+          publish: (entry) => turn.session.publish(entry),
+        },
+        async (turnCompletion) => {
+          const accounting = await accountFollowupTurn({
+            turn,
+            defaults,
+            execution,
+            completion: turnCompletion,
+          });
+          const resolved = await resolveFollowupDeliveryDecision({
+            turn,
+            execution: execution.execution,
+            accounting,
+            opts: deliveryOpts,
+          });
+          await turnCompletion?.complete();
+          return resolved;
+        },
+      );
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
           progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;

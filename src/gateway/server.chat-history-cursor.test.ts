@@ -9,9 +9,9 @@ import { clearConfigCache } from "../config/config.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {

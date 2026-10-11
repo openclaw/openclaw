@@ -11,10 +11,12 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
+import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createPersonalGitHubPublicationCoordinator } from "./github-personal-publication.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -22,6 +24,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -36,24 +39,25 @@ import {
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
+import {
+  digestGitHubPublicationRequest as digestRequest,
+  projectGitHubPublicationResult as publicationResult,
+} from "./github-publication-receipt.js";
 import { readGitHubPublicationRequestInWorker } from "./github-publication-recovery.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   claimGitHubPublicationExecution as claimExecution,
   createGitHubPublicationExecutionStore,
   deferGitHubPublicationRequests as deferRequests,
-  digestGitHubPublicationRequest as digestRequest,
   insertGitHubPublicationRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
   isGitHubPublicationExecutionOwner as ownsExecution,
   listGitHubPublicationsForClaim,
-  projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { createRepositoryGitHubPublicationCoordinator } from "./github-repository-publication.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -136,6 +140,9 @@ export function createGitHubPublicationCoordinator(params: {
   getCommittedRuntimeConfig: () => OpenClawConfig;
 }) {
   const instanceId = params.placements.workspaceResultInstanceId();
+  const scope = createGitHubPublicationWorkerScope(captureOpenClawStateWorkerContext());
+  const assertCurrent = scope.assertCurrent;
+  const signal = scope.signal;
 
   const readById = (requestId: string): PublicationRow | undefined => {
     ensureSchema();
@@ -524,10 +531,19 @@ export function createGitHubPublicationCoordinator(params: {
     deferRequests(rows.map((row) => row.request_id));
   };
 
-  const repository = createRepositoryGitHubPublicationCoordinator(params);
-  const personal = createPersonalGitHubPublicationCoordinator(params.placements);
+  const repository = createRepositoryGitHubPublicationCoordinator({
+    ...params,
+    assertCurrent,
+    signal,
+  });
+  const personal = createPersonalGitHubPublicationCoordinator(
+    params.placements,
+    assertCurrent,
+    signal,
+  );
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
+    assertCurrent,
     readById,
     requestForClaim,
     sameWorktree,
@@ -555,7 +571,7 @@ export function createGitHubPublicationCoordinator(params: {
       repository.deferClaimPreparation(claim);
     },
     requestForSession(input: Parameters<typeof methods.requestForSession>[0]) {
-      const loaded = loadGatewaySessionEntryReadOnly(input.sessionKey!, { agentId: input.agentId });
+      const loaded = readGitHubPublicationSession(input.sessionKey!, { agentId: input.agentId });
       return loaded.entry?.repositoryWorkspaceId
         ? repository.requestForSession(input)
         : methods.requestForSession(input);

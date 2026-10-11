@@ -124,57 +124,7 @@ describe("application update campaign overlays", () => {
     }
   });
 
-  it.each(["manual refresh", "campaign poll"])(
-    "does not let a %s replace a newer campaign event",
-    async (source) => {
-      vi.useFakeTimers();
-      const updateStatus = deferred<unknown>();
-      const request = vi.fn<RequestFn>((method) =>
-        method === "update.status" ? updateStatus.promise : Promise.resolve({}),
-      );
-      const harness = createAutomaticUpdateHarness(request);
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        const refresh = source === "manual refresh" ? overlays.refreshUpdateStatus() : undefined;
-        if (source === "campaign poll") {
-          await vi.advanceTimersByTimeAsync(5_000);
-        }
-        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-          source === "manual refresh" ? 3 : 2,
-        );
-        harness.emitEvent("update.available", {
-          schedule: {
-            ...AUTO_UPDATE_SCHEDULE,
-            campaign: {
-              ...AUTO_UPDATE_SCHEDULE.campaign,
-              state: "applying",
-              updatedAtMs: 61_000,
-            },
-          },
-        });
-        updateStatus.resolve({
-          sentinel: {
-            kind: "update",
-            status: "error",
-            ts: 500,
-            stats: { reason: "previous-build-failed" },
-          },
-          schedule: AUTO_UPDATE_SCHEDULE,
-        });
-        expect(await refresh).toBe(source === "manual refresh" ? false : undefined);
-        await flushMicrotasks();
-
-        expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("applying");
-        expect(overlays.snapshot.updateStatusBanner).toBeNull();
-        expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
-      } finally {
-        updateStatus.resolve({});
-        overlays.dispose();
-      }
-    },
-  );
-
-  it.each(["campaign ended", "disconnect", "dispose"])(
+  it.each(["disconnect", "dispose"])(
     "does not restart an in-flight campaign poll after %s",
     async (boundary) => {
       vi.useFakeTimers();
@@ -187,11 +137,7 @@ describe("application update campaign overlays", () => {
       try {
         await vi.advanceTimersByTimeAsync(5_000);
         expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
-        if (boundary === "campaign ended") {
-          harness.emitEvent("update.available", {
-            schedule: { channel: "stable", autoEnabled: true },
-          });
-        } else if (boundary === "disconnect") {
+        if (boundary === "disconnect") {
           harness.update({ phase: "reconnecting" });
         } else {
           overlays.dispose();

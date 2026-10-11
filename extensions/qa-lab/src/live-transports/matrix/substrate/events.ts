@@ -123,20 +123,9 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
 }
 
 function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  switch (msgtype) {
-    case "m.audio":
-      return "audio" as const;
-    case "m.file":
-      return "file" as const;
-    case "m.image":
-      return "image" as const;
-    case "m.sticker":
-      return "sticker" as const;
-    case "m.video":
-      return "video" as const;
-    default:
-      return undefined;
-  }
+  return (["audio", "file", "image", "sticker", "video"] as const).find(
+    (kind) => msgtype === `m.${kind}`,
+  );
 }
 
 function isLikelyMatrixQaFilenameBody(value: string) {

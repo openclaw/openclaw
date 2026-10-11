@@ -158,8 +158,13 @@ describe("Windows Gateway task supervisor", () => {
       return {
         cancel: vi.fn(),
         wait: async () => result,
-        waitForExtinction: async () => {},
+        waitForExtinction: async () => {
+          expect(process.exitCode).toBeUndefined();
+        },
       };
+    });
+    flushLogger.mockImplementationOnce(async () => {
+      expect(process.exitCode).toBeUndefined();
     });
 
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");

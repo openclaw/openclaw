@@ -1,9 +1,6 @@
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   openOpenClawStateDatabase,
@@ -13,7 +10,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { saveCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
-import { finalizeCronRunsInWorker, reserveCronRunsInWorker } from "./run-admission.worker.js";
+import { reserveCronRunsInWorker } from "./run-admission.worker.js";
+import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
 import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
@@ -53,18 +51,6 @@ it.each(["confirmed", "aborted-open"] as const)(
         observed: receipt,
       });
       const database = openOpenClawStateDatabase();
-      const admission = vi
-        .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
-        .mockImplementation((request) => {
-          expect(request.stage).toBe("transaction");
-          if (!isRecord(request.facts) || !(request.facts.preparationPort instanceof MessagePort)) {
-            throw new Error("Reservation did not request host preparation");
-          }
-          request.facts.preparationPort.postMessage(
-            { defaultAgentId: "main", claims: [candidate], replacements: [] },
-            [],
-          );
-        });
       const exec = database.db.exec.bind(database.db);
       let rollbackFailed = false;
       const statement = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
@@ -86,7 +72,6 @@ it.each(["confirmed", "aborted-open"] as const)(
           { environment: { OPENCLAW_STATE_DIR: fixture.stateDir } },
           () =>
             reserveCronRunsInWorker(database, {
-              nonce: "conflict-rollback",
               storeKey: cronStoreKey(storePath),
               proposals: [
                 {
@@ -101,12 +86,17 @@ it.each(["confirmed", "aborted-open"] as const)(
               preserveSchedule: false,
               scheduleOwnershipAtMs: now + 1,
               onExit: false,
+              snapshot: {
+                defaultAgentId: "main",
+                claims: [candidate],
+                locallyOwnedReceiptIds: [receipt.receiptId],
+                replacements: [],
+              },
             }),
         );
       try {
         if (rollback === "confirmed") {
           expect(reserve()).toMatchObject({
-            nonce: "conflict-rollback",
             conflict: { receiptId: receipt.receiptId },
           });
           expect(() => assertTransactionUsable(database.db)).not.toThrow();
@@ -121,7 +111,6 @@ it.each(["confirmed", "aborted-open"] as const)(
           { receipt_id: receipt.receiptId },
         ]);
       } finally {
-        admission.mockRestore();
         statement.mockRestore();
         close?.mockRestore();
         releaseLocalCronRunReceiptOwnership(receipt);
@@ -166,23 +155,6 @@ it.each(["confirmed", "aborted-open"] as const)(
       });
       const before = snapshot();
       expect(before.receipt).toMatchObject({ status: "running" });
-      const admission = vi
-        .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
-        .mockImplementation((request) => {
-          expect(request.stage).toBe("transaction");
-          if (!isRecord(request.facts) || !(request.facts.preparationPort instanceof MessagePort)) {
-            throw new Error("Finalization did not request host preparation");
-          }
-          request.facts.preparationPort.postMessage(
-            {
-              defaultAgentId: "main",
-              jobs: [{ ...job, state: { lastRunStatus: "ok" } }],
-              deletedJobIds: [],
-              deferredReceiptIds: [],
-            },
-            [],
-          );
-        });
       const exec = database.db.exec.bind(database.db);
       let rollbackFailed = false;
       const statement = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
@@ -204,21 +176,39 @@ it.each(["confirmed", "aborted-open"] as const)(
           { environment: { OPENCLAW_STATE_DIR: fixture.stateDir } },
           () =>
             finalizeCronRunsInWorker(database, {
-              nonce: "finalization-rollback",
               storeKey: cronStoreKey(storePath),
               jobIds: [job.id],
               receipts: [
                 {
                   terminal: { handle: receipt, status: "ok", finishedAtMs: now + 1 },
                   allowMissingJob: false,
+                  allowUnavailable: false,
                 },
               ],
+              snapshot: {
+                nowMs: now + 1,
+                defaultAgentId: "main",
+                outcomes: [
+                  {
+                    jobId: job.id,
+                    job,
+                    status: "ok",
+                    completionStatus: "succeeded",
+                    deliveryState: {
+                      status: "not-requested",
+                      failureNotification: { status: "not-requested" },
+                    },
+                    startedAt: now,
+                    endedAt: now + 1,
+                  },
+                ],
+                deferredReceiptIds: [],
+              },
             }),
         );
       try {
         if (rollback === "confirmed") {
           expect(finalize()).toEqual({
-            nonce: "finalization-rollback",
             receiptRevision: {
               receiptId: receipt.receiptId,
               message: "cron run configuration changed",
@@ -251,7 +241,6 @@ it.each(["confirmed", "aborted-open"] as const)(
         expect(database.db.isTransaction).toBe(false);
         expect(snapshot()).toEqual(before);
       } finally {
-        admission.mockRestore();
         statement.mockRestore();
         close?.mockRestore();
         releaseLocalCronRunReceiptOwnership(receipt);

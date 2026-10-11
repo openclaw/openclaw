@@ -333,6 +333,7 @@ export async function handleChatHistoryRequest({
                 ...selectedSession,
                 key: canonicalKey,
                 preparedAcpMeta: unsavedAcpMeta ?? null,
+                preparedRuntimeOwnership: null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),

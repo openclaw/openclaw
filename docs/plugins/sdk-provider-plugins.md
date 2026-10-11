@@ -330,6 +330,11 @@ a saved policy is not proof that the running Gateway applied it.
     timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
     that govern deprecated surfaces named on this page and its child pages.
 
+    `createProviderApiKeyAuthMethod` accepts an optional `validateApiKey` callback.
+    Return an error message to reject a resolved key before any auth profile is
+    returned or saved. The check runs for interactive input, resolved SecretRefs,
+    and non-interactive flag, environment, or saved-profile credentials.
+
     Bundled custom API-key methods can use `captureProviderApiKey` and
     `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
     when vendor prompts or validation need to stay between auth steps.

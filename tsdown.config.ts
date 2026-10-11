@@ -949,10 +949,16 @@ const configs: UserConfig[] = [
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
   workerDeployBuildConfig({
+    "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/sqlite-source-revision.worker": "src/worker/worker-deploy-sqlite-source-revision.ts",
   }),
   workerDeployBuildConfig({
     "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",

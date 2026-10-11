@@ -63,7 +63,6 @@ import { isChatRunWorking, renderChatComposer } from "./components/chat-composer
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import "./components/chat-details.ts";
 import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
@@ -496,7 +495,9 @@ export function renderChat(props: ChatProps) {
       : html`<div
           class="chat-gutter-stack ${props.detailsEnabled ? "chat-gutter-stack--details" : ""}"
         >
-          ${props.detailsEnabled ? html`<div class="chat-gutter-header">${renderChatTopbarNotices(props)}<openclaw-chat-details .props=${props} .presented=${livePresentation(props.transcriptVisible ?? props.progressCardVisibility ?? props.presented ?? true)}></openclaw-chat-details></div>` : nothing}
+          <div class="chat-gutter-header" ?hidden=${!props.detailsEnabled}>
+            ${props.detailsEnabled ? renderChatTopbarNotices(props) : nothing}
+          </div>
           ${taskSuggestionTray}
         </div>`;
   // Keep the affordance mounted so visibility changes can finish their exit transition.
@@ -559,7 +560,7 @@ export function renderChat(props: ChatProps) {
 
   return html`
     <section
-      class="chat"
+      class="chat ${props.chatBubbleMode ? "chat--bubbles" : ""}"
       style=${styleMap(
         props.chatMessageMaxWidth
           ? {
@@ -623,7 +624,7 @@ export function renderChat(props: ChatProps) {
                 <div class="chat-main__conversation-frame">
                   <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
                   <div
-                    class="chat-main__conversation ${props.detailsEnabled ? "chat-main__conversation--details" : ""}"
+                    class="chat-main__conversation"
                     .onwheel=${(event: WheelEvent) =>
                       forwardChatWheelToTranscript(event, props.transcript.scrollElement)}
                   >

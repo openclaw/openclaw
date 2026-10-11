@@ -39,6 +39,11 @@ export { createOperatorApprovalsGatewayClient } from "../gateway/operator-approv
 export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
 
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+export {
+  captureLocalStateMutationGuard,
+  runWithLocalStateMutationOwner,
+} from "../gateway/server-methods/local-state-owner.js";
+export { isImplicitLocalGatewayTargetFromCli } from "../cli/gateway-rpc.js";
 
 export {
   channelBlockedPatch,
@@ -47,3 +52,5 @@ export {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "../gateway/channel-status-patches.js";
+
+export { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";

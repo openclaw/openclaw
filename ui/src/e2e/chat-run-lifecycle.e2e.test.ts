@@ -771,7 +771,7 @@ suite.define(() => {
       const runId = params.idempotencyKey as string;
 
       await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-      const mainSession = currentPage.locator(".nav-item--home");
+      const mainSession = currentPage.locator(".sidebar-footer-bar__home");
       // Home mirrors session rows: active-run state rings the leading glyph.
       const mainSessionRunIndicator = mainSession
         .locator(".session-glyph")
@@ -818,7 +818,9 @@ suite.define(() => {
           });
           await currentPage.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
           await mainSession.locator('[data-session-attention="error"]').waitFor();
-          expect(await mainSession.getAttribute("aria-label")).toContain(diagnostic);
+          expect(
+            await mainSession.locator("[data-session-attention=error]").getAttribute("aria-label"),
+          ).toContain(diagnostic);
           expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(
             0,
           );
@@ -971,7 +973,7 @@ suite.define(() => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".nav-item--home");
+    const mainSession = currentPage.locator(".sidebar-footer-bar__home");
     // Home mirrors session rows: active-run state rings the leading glyph.
     const mainSessionRunIndicator = mainSession
       .locator(".session-glyph")

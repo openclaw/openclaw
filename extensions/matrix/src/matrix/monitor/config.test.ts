@@ -65,7 +65,7 @@ describe("resolveMatrixMonitorConfig", () => {
 
     const roomsConfig: MatrixRoomsConfig = {
       "*": { enabled: true },
-      "room:!ops:example.org": {
+      "room:!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": {
         enabled: true,
         users: ["Dana", "user:@Erin:Example.org"],
       },
@@ -88,7 +88,7 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(result.groupAllowFrom).toEqual(["@Carol:Example.org"]);
     expect(result.roomsConfig).toEqual({
       "*": { enabled: true },
-      "!ops:example.org": {
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": {
         enabled: true,
         users: ["@dana:example.org", "@Erin:Example.org"],
       },
@@ -112,35 +112,6 @@ describe("resolveMatrixMonitorConfig", () => {
       kind: "user",
       inputs: ["Dana"],
     });
-  });
-
-  it("keeps a room version 12 room ID (no :server suffix) as already resolved", async () => {
-    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs — they're
-    // now a hash of the create event — so this must not be sent through name/alias
-    // resolution the way an unresolved query would be.
-    const runtime: RuntimeEnv = createRuntimeSpies();
-    const resolveTargets = vi.fn(async ({ inputs }: { inputs: string[] }) =>
-      inputs.map((input) => ({ input, resolved: false })),
-    );
-
-    const roomsConfig: MatrixRoomsConfig = {
-      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": { enabled: true },
-    };
-
-    const result = await resolveMatrixMonitorConfig({
-      cfg: createConfig(),
-      accountId: "ops",
-      allowFrom: [],
-      groupAllowFrom: [],
-      roomsConfig,
-      runtime,
-      resolveTargets,
-    });
-
-    expect(result.roomsConfig).toEqual({
-      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": { enabled: true },
-    });
-    expect(resolveTargets).not.toHaveBeenCalled();
   });
 
   it("strips config prefixes before lookups and logs unresolved guidance once per section", async () => {

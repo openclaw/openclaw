@@ -53,15 +53,12 @@ export async function writeTsdownDeclarations(
         JSON.stringify([name, process.env[name] ?? ""]),
       );
       const generatorInputs = resolveTsdownDeclarationGeneratorInputs(root, generatorEntry);
-      const snapshot = () =>
-        new CompilerInputSnapshot(root, {
-          toolchainFiles: resolveTsdownCompilerFiles(),
-          generatorInputs,
-          isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
-        });
-      // All groups share the same before/after reads of configuration, topology,
-      // tools and overlapping sources. Only compiler membership differs.
-      const before = snapshot();
+      // All groups share configuration, topology, tools and overlapping source reads.
+      const before = new CompilerInputSnapshot(root, {
+        toolchainFiles: resolveTsdownCompilerFiles(),
+        generatorInputs,
+        isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+      });
       const liveDist = path.join(root, "dist");
       const prepared = groups.map((name) => {
         const config = configs.find((candidate: { name?: string }) => candidate.name === name);
@@ -159,7 +156,6 @@ export async function writeTsdownDeclarations(
       if (!required.length) {
         throw new Error("Canonical declaration selection is empty");
       }
-      const startedAt = Date.now();
       for (const group of prepared) {
         if (group.state?.fresh && !restoreBuildStepCacheOutputs(group.state, group.params)) {
           throw new Error("Declaration cache changed before restoration; rerun the build");
@@ -178,22 +174,16 @@ export async function writeTsdownDeclarations(
         required,
         previousOutputs(root).map((file) => portableRelativePath(liveDist, file)),
         () => {
-          const after = snapshot();
           for (const group of prepared) {
-            const sealed = after.seal(
-              "tsconfig.json",
-              group.identity,
-              readDeclarationInputs(group.output, group.name),
-              before,
-              startedAt,
-              liveDist,
-            );
-            if (group.state?.fresh && sealed.signature !== group.state.signature) {
-              throw new Error(`Cached declaration membership changed: ${group.name}`);
-            }
+            const inputs = readDeclarationInputs(group.output, group.name);
             if (group.state) {
-              group.state.signature = sealed.signature;
-              group.state.consumedInputs = sealed.inputs;
+              group.state.signature = before.signature(
+                "tsconfig.json",
+                group.identity,
+                inputs,
+                liveDist,
+              );
+              group.state.consumedInputs = inputs;
             }
           }
         },

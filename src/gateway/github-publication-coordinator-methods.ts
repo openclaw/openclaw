@@ -20,24 +20,30 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
-import type { GitHubPublicationRequester } from "./github-publication-requester.js";
+import {
+  digestGitHubPublicationRequest as digestRequest,
+  projectGitHubPublicationResult as publicationResult,
+} from "./github-publication-receipt.js";
+import type {
+  GitHubPublicationRequester,
+  GitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
+import { deferGitHubPublicationRequestsAsync } from "./github-publication-store-async.js";
 import {
   deferGitHubPublicationRequests as deferRequests,
-  digestGitHubPublicationRequest as digestRequest,
   insertGitHubPublicationRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
   hasGitHubPublicationStore as schemaExists,
   listGitHubPublicationsForClaim,
   markGitHubPublicationReported,
-  projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -61,6 +67,14 @@ export type GitHubPublicationSessionRequest = SessionGitHubPublishParams & {
   expectedRunId?: string;
   requester: GitHubPublicationRequester;
 };
+
+export type GitHubPublicationClaimRequestV2 = Omit<GitHubPublicationClaimRequest, "requester"> & {
+  requester: GitHubPublicationRequesterV2;
+};
+export type GitHubPublicationSessionRequestV2 = Omit<
+  GitHubPublicationSessionRequest,
+  "requester"
+> & { requester: GitHubPublicationRequesterV2 };
 
 export function exactClaimForPlacement(
   placement: NonNullable<ReturnType<WorkerSessionPlacementStore["get"]>>,
@@ -127,6 +141,7 @@ export function createSharedGitHubPublicationReadMethods(
 
 export function createGitHubPublicationCoordinatorMethods(params: {
   placements: WorkerSessionPlacementStore;
+  assertCurrent: () => void;
   readById: (requestId: string) => PublicationRow | undefined;
   requestForClaim: (
     request: GitHubPublicationClaimRequest,
@@ -185,7 +200,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         throw new Error("GitHub publication requires an authoritative session.");
       }
       assertRequester();
-      const initialLoaded = loadGatewaySessionEntryReadOnly(input.sessionKey, {
+      const initialLoaded = readGitHubPublicationSession(input.sessionKey, {
         agentId: input.agentId,
       });
       const sessionId = initialLoaded.entry?.sessionId;
@@ -481,12 +496,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     },
 
     async deferOrphanedRequestsAsync(): Promise<void> {
-      if (!schemaExists()) {
-        return;
-      }
-      deferOrphanedRequestsWithPendingResults(
-        await params.placements.listPendingWorkspaceResultsAsync(),
-      );
+      await deferGitHubPublicationRequestsAsync({ kind: "orphaned" }, params.assertCurrent);
     },
 
     listUnreportedResults(): Array<{

@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import {
@@ -76,7 +76,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       if (kind === "managed transaction") {
         runSqliteDeferredTransactionSync(db, migrateWhileReading);
       } else {
-        runSqlitePinnedReadSnapshotSync(db, migrateWhileReading);
+        runSqliteSchemaReadSnapshotSync(db, migrateWhileReading);
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {

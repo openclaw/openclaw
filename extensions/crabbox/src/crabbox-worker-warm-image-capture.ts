@@ -76,6 +76,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
       forkedCheckpointId?: string;
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
+      onCaptureStart?: () => void;
     },
     prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
@@ -225,6 +226,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (!claimed) {
           return;
         }
+        context.onCaptureStart?.();
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);

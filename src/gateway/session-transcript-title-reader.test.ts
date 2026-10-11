@@ -6,9 +6,9 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
-  replaceTranscriptEvents,
   type SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
   restoreSessionColdTranscript,

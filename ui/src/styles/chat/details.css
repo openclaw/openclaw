@@ -3,13 +3,7 @@ openclaw-chat-details {
   min-width: 0;
 }
 
-.chat-main__conversation--details > :is(.chat-thread, .chat-thread-viewport) {
-  /* Reserve the header outside the scroll viewport so transcript actions cannot
-     slide beneath Details, without shrinking the footer's query container. */
-  margin-top: calc(var(--chat-mobile-pane-header-height, 0px) + 50px);
-}
-
-/* One gutter owns notices, Details, and suggestions so their controls never overlap. */
+/* Notices and suggestions share the gutter; Details lives in the pane header. */
 .chat-gutter-stack--details {
   width: calc(100% - 28px);
   max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
@@ -18,16 +12,14 @@ openclaw-chat-details {
 
 .chat-gutter-stack--details .chat-gutter-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 8px;
   width: 100%;
   pointer-events: none;
 }
 
-.chat-gutter-header openclaw-chat-details {
-  grid-column: 2;
-  pointer-events: auto;
+.chat-gutter-header[hidden] {
+  display: none;
 }
 
 .chat-gutter-header .chat-topbar-notices {
@@ -45,6 +37,20 @@ openclaw-chat-details {
 .chat-gutter-stack--details .task-suggestion {
   max-height: 100%;
 }
+
+.chat-pane__header-trailing > openclaw-chat-details {
+  flex: none;
+  /* Pane activation reveals actions without moving this click target. */
+  order: 1;
+}
+
+@container (max-width: 400px) {
+  .chat-pane__header-trailing .chat-details-toggle {
+    min-height: 24px;
+    padding-block: 2px;
+  }
+}
+
 openclaw-chat-details-session,
 openclaw-chat-details-progress {
   display: block;

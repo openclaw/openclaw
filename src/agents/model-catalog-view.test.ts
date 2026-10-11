@@ -333,6 +333,19 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
+  it("keeps native readiness unknown before the first discovery", () => {
+    const logical = row("custom", "native-model");
+    const view = prepareModelCatalogView({
+      ...facts({}),
+      snapshot: snapshot([logical]),
+      pluginRegistry: nativeRegistry(() => undefined),
+    });
+    expect(view.evaluateNative(logical, host, "native-test")).toMatchObject({
+      availability: undefined,
+      runtimeAuth: { id: "native-test", source: "native" },
+    });
+  });
+
   it.each([
     {
       name: "another runtime",
@@ -368,10 +381,20 @@ describe("prepared native catalog readiness", () => {
     expect(decision.availabilityAuthoritative).toBe(true);
   });
 
-  it("observes revoked login and generation without retaining prior readiness", () => {
+  it("reuses captured host configuration while observing native readiness and selection", () => {
     let ready = true;
     let current = true;
-    const cfg: OpenClawConfig = {};
+    const enumerateProviders = vi.fn((target: Record<string, ModelProviderConfig>) =>
+      Reflect.ownKeys(target),
+    );
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: new Proxy(
+          { custom: { baseUrl: "", models: [model("native-model"), model("other-model")] } },
+          { ownKeys: enumerateProviders },
+        ),
+      },
+    };
     const view = prepareModelCatalogView({
       ...facts(cfg),
       snapshot: snapshot([nativeEntry]),
@@ -386,6 +409,30 @@ describe("prepared native catalog readiness", () => {
       runtimeAuth: { id: "native-test", source: "native" },
       selectedAuthMode: "oauth",
     });
+    const preparedEnumerations = enumerateProviders.mock.calls.length;
+    expect(preparedEnumerations).toBeGreaterThan(0);
+    expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
+      availability: true,
+      selectedAuthMode: "oauth",
+    });
+    expect(view.evaluateNative(nativeEntry, host, "openclaw")).toEqual(host);
+    expect(
+      view.evaluateNative(nativeEntry, { ...host, requestedRuntimeId: "native-test" }),
+    ).toMatchObject({
+      availability: true,
+      requestedRuntimeId: "native-test",
+      runtimeAuth: { id: "native-test", source: "native" },
+    });
+    const credentialedHost: ModelAuthAvailabilityEvaluation = {
+      ...host,
+      availability: true,
+      evidence: "profile",
+      selectedProfileId: "custom:host",
+      selectedAuthMode: "api_key",
+    };
+    expect(view.evaluateNative(nativeEntry, credentialedHost, "native-test")).toEqual(
+      credentialedHost,
+    );
     ready = false;
     expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
       availability: false,
@@ -395,6 +442,7 @@ describe("prepared native catalog readiness", () => {
     expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
       availability: false,
     });
+    expect(enumerateProviders).toHaveBeenCalledTimes(preparedEnumerations);
   });
 
   it.each([

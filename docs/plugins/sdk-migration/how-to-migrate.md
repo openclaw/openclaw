@@ -9,6 +9,178 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Replace native SQLite runtime writes
+
+Plugins using the internal `sqlite-runtime` facade should send data-only commands
+through `openOpenClawAgentSqliteWorkerStoreV2`. Its required `{ version: 2,
+assertCurrent }` capability stays bound to the store's lifetime. The host prepares
+inputs; the paired worker backend rereads predicates and commits in a synchronous
+transaction. Await completion before publishing results or releasing authority.
+
+```ts
+// Before: this callback executes on the host even though admission is awaited.
+await withOpenClawAgentDatabaseWrite(options, ({ db }) => updateRows(db, input));
+
+// After: the paired backend owns updateRows and its transaction.
+const store = await openOpenClawAgentSqliteWorkerStoreV2(
+  options,
+  { version: 2, assertCurrent: owner.assertCurrent },
+  { moduleUrl: workerUrl, input: backendOptions },
+);
+try {
+  await store.prepare(); // Explicit creation/admission, when the flow requires it.
+  await store.execute({ type: "updateRows", input }, owner.assertCurrent);
+} finally {
+  await store.close();
+}
+```
+
+`execute` and `executeExisting` admit one transaction across backend binding and
+the command. If binding commits independent schema initialization, use
+`store.run((scope) => scope.execute(command), owner.assertCurrent)` to keep
+binding and the command in separate admissions. This callback sequences worker
+commands; it never receives a native database handle.
+
+`executeExisting` preserves absence and never creates a missing database. Store
+closure refuses new work and joins accepted operations. Completion includes the
+owning domain's committed-fact installation; an unknown outcome never permits a
+native fallback or automatic replay. There is no universal async raw-SQL callback
+replacement. Host closures are not serialized, and arbitrary transaction-local
+callback visibility is not promised by data-only commands.
+
+Writable raw open/borrow helpers, native query helpers, and opaque
+`withOpenClawAgentDatabaseAsync`, `withOpenClawAgentDatabaseRuntime`,
+`withOpenClawAgentDatabaseWrite`, `runOpenClawAgentWriteAdmission`, and transaction
+callbacks retain their released signatures and ordering during compatibility.
+Synchronous writes still commit before returning. Their `sqlite-runtime` exports
+are deprecated and will be removed in the next Plugin SDK major. Actual legacy
+use emits one warning per plugin and capability family; unscoped imports share
+one SDK warning. Importing a module alone does not warn.
+
+Worker backends use `sqlite-worker-runtime` primitives. External-database reads
+must explicitly open with `readOnly: true`; Doctor/import/reset writes require
+offline maintenance custody while the Gateway is stopped. Test-labeled SQLite
+and state barrels are fixture/QA inspection contracts, not runtime write APIs.
+These exceptions do not authorize writable handles in ordinary plugin handlers.
+There is no schema, stored-byte, retention, or update migration.
+
+## Use worker-owned approval requests
+
+Use host-bound `api.runtime.gateway.request` for approval requests, reads,
+history, grant operations, resolution, and waiting. Reads that expire rows are
+worker operations too. The host's method classification does not enlarge the
+internal principal's allowed methods. A released opaque approval commit guard
+selects its native compatibility adapter before execution, preserving its
+transaction-local visibility; worker failure never selects that adapter.
+The adapter remains deprecated until the next Plugin SDK major.
+
+The shared warning budget is per plugin and capability family, on legacy use.
+Current effect-time authority checks remain synchronous. Schemas, stored bytes,
+permissions, and update behavior are unchanged.
+
+## Await plugin state and conversation bindings
+
+Use `api.runtime.state.openKeyedStoreV2<T>(options)` for a data-only store bound
+to the plugin runtime's lifetime. For an individual revocable action, pass its
+`assertCurrent` authority as the second argument. Deferred code with an explicit
+owner can use `createPluginStateKeyedStoreV2(pluginId, options, authority)` from
+`openclaw/plugin-sdk/plugin-state-store-runtime`. Keep that import lazy.
+
+The opener returns synchronously; await every operation before publishing its
+result or releasing its owner. Reads and writes execute in the existing workers.
+Mutation completion includes native commit and installation of committed facts.
+Atomic `consume` and `registerIfAbsent` remain single worker operations.
+
+Replace transaction-local JavaScript callbacks with observation and conditional
+application:
+
+```typescript
+// Legacy: the callback executes inside a native transaction on the host.
+await legacyStore.update("counter", (value) => (value ?? 0) + 1);
+
+// Worker-owned: prepare outside the transaction and handle an explicit conflict.
+const observed = await store.observe("counter");
+const result = await store.compareAndApply("counter", observed.comparison, {
+  operation: "update",
+  action: "set",
+  value: (observed.value ?? 0) + 1,
+});
+if (result.status === "conflict") {
+  // Recompute from current observations or report the conflict to the caller.
+}
+```
+
+Comparisons bind stored content and metadata, not permission or a unique binding
+incarnation. The optional fourth argument accepts same-plugin conditions on
+other namespace/key observations. The worker checks every condition and the
+destination inside one transaction. On conflict, prepare every dependent input
+again; the returned `current` describes only the destination. Never retry a
+transport error, an unknown write, or an arbitrary callback. The new API does
+not serialize closures or preserve transaction-local reads made by old callbacks.
+For transcript callbacks, use the separate
+[transcript preparation contract](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation),
+which checks duplicates before preparation and supports explicit suppression.
+
+For account-scoped conversation bindings, use
+`createAccountScopedConversationBindingManagerV2` from
+`openclaw/plugin-sdk/thread-bindings-runtime`. Await bind, touch, unbind, and
+lookup methods, including lookups that expire bindings. Register custom adapters
+with `registerSessionBindingAdapterV2`; the V2 interface requires asynchronous
+readers and current-owner checks. The service exposes `listBySessionAsync`,
+`resolveByConversationAsync`, and `touchAsync`. An async failure never selects a
+synchronous fallback. External adapters remain responsible for their own
+storage, currentness, and committed publication.
+
+The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
+binding managers, and adapter registrations remain compatibility APIs. They
+preserve synchronous commit-before-return and callback ordering, and are
+**removed in the next Plugin SDK major** after the approved compatibility window.
+Actual legacy use emits one diagnostic per plugin and capability family per
+Gateway process; importing a module does not warn. Diagnostics contain the method,
+replacement, and compatibility promise, without paths or stored values.
+
+This migration changes no schema, stored format, retention, or update behavior.
+
+When state-backed reads feed a channel, migrate its config and security adapters
+to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
+through wrapper and setup adapters while keeping existing synchronous signatures
+for older hosts.
+
+## Migrate inspection, authorization, and approval factories
+
+Use these async replacements when inspection or channel eligibility reads
+worker-owned state:
+
+| SDK subpath                               | Synchronous API                                    | Replacement                                             |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `conversation-binding-inspection-runtime` | `inspectConversationBinding`                       | `inspectConversationBindingAsync`                       |
+| `command-auth-native`                     | `resolveCommandAuthorization`                      | `resolveCommandAuthorizationAsync`                      |
+| `approval-delivery-runtime`               | `createApproverRestrictedNativeApprovalCapability` | `createApproverRestrictedNativeApprovalCapabilityAsync` |
+| `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
+| `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
+
+Await inspection and command authorization before consuming their results. The
+approval factories still return adapters synchronously; their async eligibility
+callbacks are awaited by the host. The original APIs preserve their synchronous
+contracts through the next Plugin SDK major compatibility window. Use the narrow
+subpaths above for new imports; broad compatibility barrels retain existing APIs
+without duplicating the replacements.
+
+## Await Gateway approval publication
+
+Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
+subscriber eligibility before publishing. If an older host supplies only
+`publishRequested`, select that synchronous callback before dispatch; never retry
+a failed async publication through the old callback.
+
+`publishRequested(kind, request)` retains its synchronous numeric result for
+synchronous subscribers. It is deprecated and **removed in the next Plugin SDK
+major**. If any subscriber requires asynchronous eligibility, the old method
+throws a migration error before sending the request to any subscriber. Use the
+async method for bundled native approval runtimes, whose route selection can
+prepare account state in workers. Legacy publisher objects need not implement
+the optional async companion.
+
 ## Workspace mutation guards
 
 Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
@@ -57,7 +229,7 @@ their existing owners and settle before Gateway worker shutdown.
 The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
 remain synchronous third-party adapters until the next Plugin SDK major and
 explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
-deprecation warning once per plugin and method per process; calls outside a
+deprecation warning once per plugin and capability family per process; calls outside a
 plugin invocation warn once per method. Existing return values and completion
 timing stay intact, including recording before an immediate synchronous list.
 Notifications publish after the enclosing transaction commits and are discarded
@@ -90,18 +262,33 @@ fall back to its synchronous counterpart.
 The synchronous methods shipped in 2026.9.8 retain their arguments, immediate
 return values, and completion timing until the next Plugin SDK major and
 explicit breaking-release approval. Each emits one `DEP_SESSION_PERSISTENCE`
-warning per plugin and method per process, including across plugin reloads;
+warning per plugin and capability family per process, including across plugin reloads;
 unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
-`retireSessionPlacementAsync`. Await their results before using placement facts,
+Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,
+`listAsync`, `listForReconcileAsync`, and `retireSessionPlacementAsync`.
+Await their results before using placement facts,
 starting dependent work, or releasing request resources. Their synchronous
 counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
 compatibility methods until the next Plugin SDK major.
+
+Placement activation callbacks receive the committed active placement directly.
+Use that result for maintenance scheduling instead of reading it again. Native
+readers remain available for final synchronous execution or disclosure guards;
+prepared placement facts do not replace those checks. Legacy placement reads
+warn once per plugin and capability family.
+
+Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
+state-directory lock, before admitting turns. The placement worker clears stale
+local claims and publishes the returned records after success. An uncertain result
+fails startup; the next boot can safely repeat the cleanup. Legacy synchronous retirement and
+restart cleanup warn once per plugin and capability family. Bundled reset and
+deletion paths await retirement; released custom Gateway contexts retain a
+separately selected synchronous adapter through the compatibility window.
 
 Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
 `retainAsync` for node-grant preparation. `resolveAsync` combines binding and
@@ -245,11 +432,87 @@ deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
 
+## Prepare session entry changes
+
+Use `prepareSessionEntryPatch` or `applySessionEntryPatch` from
+`openclaw/plugin-sdk/session-store-runtime`. The agent runtime exposes
+`api.runtime.agent.session.prepareSessionEntryPatch` with the calling plugin's
+lifetime and session ownership checks bound by the host.
+
+```ts
+// Legacy callback adapter: retained with its original transaction guard.
+await patchSessionEntry({
+  ...target,
+  update: async (entry) => ({ displayName: await chooseTitle(entry) }),
+  assertCommitAllowed: assertLegacyOwner,
+});
+
+// Prepare outside SQLite; commit only if the captured entry is unchanged.
+await prepareSessionEntryPatch({
+  ...target,
+  prepare: async (entry) => ({ displayName: await chooseTitle(entry) }),
+  authority: { kind: "host", assertCurrent: assertLiveOwner },
+});
+
+// Already prepared data needs only one worker mutation command.
+await applySessionEntryPatch({
+  ...target,
+  expected: { sessionId, lifecycleRevision },
+  patch: { displayName: title },
+  preserveActivity: true,
+});
+```
+
+Preparation runs once outside the database transaction. Returning `null`
+suppresses the write and retains the existing result behavior. The worker checks
+the exact captured entry before committing; a conflict rejects without replaying
+the callback. `applySessionEntryPatch` checks its optional expected session and
+lifecycle in the committing transaction; `expected: null` requires absence.
+Use `fallbackEntry` when creating an absent row, and `replaceEntry: true` only
+when the supplied patch is a complete replacement.
+
+A `host` authority checks live ownership or cancellation without database access.
+It is rechecked after preparation and at worker admission and commit. Pass an
+existing host-provided source assertion as
+`authority: { kind: "source", source }` when storage predicates are involved;
+wrapping it in a database-reading callback loses its prepared-source contract.
+Ordinary direct SDK CRUD retains its existing optional-authority contract.
+
+`patchSessionEntry`, `updateSessionStoreEntry`, and the
+`updateLastRoute.assertCommitAllowed` option are deprecated and will be removed
+in the next Plugin SDK major. Use `updateLastRouteWithAuthority` for guarded
+route updates. Legacy guards retain their original native transaction visibility.
+New preparation does not serialize closures or promise that visibility. The
+shared warning budget is once per plugin and session-store family per process.
+
+`upsertSessionEntry` and `updateAmbientTranscriptWatermark` keep their names and
+results; their existing reducers now execute in the owning worker. Awaited
+completion includes committed-fact installation. No schema, stored-byte,
+retention, or update migration is introduced.
+
+Unbound incognito sessions retain their native owner until the incognito actor
+cutover. Cross-store source assertions retain their existing native
+adapter until the typed cross-store entry writer is available. These explicit
+routes are not worker-only; neither route retries a failed worker mutation.
+
 ## Await locked transcript preparation
 
 Replace `withSessionTranscriptWriteLock` with `withSessionTranscriptWrite` from
 `openclaw/plugin-sdk/session-transcript-runtime`. Pass message preparation and
-the host's prepared source authority in `preparation`:
+the host's prepared source authority in `preparation`.
+
+The legacy form runs opaque preparation inside the native transaction:
+
+```ts
+await withSessionTranscriptWriteLock(target, async (transcript) => {
+  await transcript.appendMessage({
+    message,
+    prepareMessageAfterIdempotencyCheck: redactMessageSync,
+  });
+});
+```
+
+The replacement awaits preparation outside that transaction:
 
 ```ts
 await withSessionTranscriptWrite(target, async (transcript) => {
@@ -483,7 +746,7 @@ The old methods retain their synchronous `void` contract for third-party
 extensions. `extension-session-sync-persistence` records their deprecation and
 next-Plugin-SDK-major removal gate. The added methods preserve existing source
 contracts while allowing the host to await persistence failures and committed
-state before continuing. Deprecated calls emit the same once-per-method
+state before continuing. Deprecated calls emit the same once-per-family
 `DEP_SESSION_PERSISTENCE` warning.
 
 Custom extension hosts should supply `ExtensionActionsV2` through
@@ -512,7 +775,7 @@ The synchronous `sanitizeGoogleGeminiReplayHistory`, legacy
 remain third-party compatibility adapters. The original context types keep their
 signatures; the V2 types add the required awaited capability. These surfaces are
 recorded as `provider-replay-sync-persistence` for removal at the next Plugin SDK
-major. Deprecated calls emit the same once-per-method
+major. Deprecated calls emit the same once-per-family
 `DEP_SESSION_PERSISTENCE` warning. The family builder retains its
 legacy hook for supported older consumers. The awaited Gemini helper propagates
 metadata write failures; the legacy adapter retains its historical best-effort

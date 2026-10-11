@@ -60,6 +60,8 @@ type DispatchInboundDirectDmParams = {
   channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
+  /** Recheck channel-owned live authority after preparation and at effect initiation. */
+  assertAuthority?: () => void;
   bodyForAgent?: string;
   commandBody?: string;
   provider?: string;
@@ -179,6 +181,7 @@ function buildDirectDmTurnPlan(
     accountId: route.accountId ?? params.accountId,
     route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
+    assertAuthority: params.assertAuthority,
     record: {
       onRecordError: params.onRecordError,
     },

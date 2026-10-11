@@ -108,6 +108,7 @@ describe("memory hybrid helpers", () => {
       source: "memory",
       snippet: "overlapping vector and keyword match",
       score: 0.2,
+      eligibilityScore: 0.2,
       vectorScore: 0.1,
       textScore: 0.5,
     };
@@ -120,8 +121,48 @@ describe("memory hybrid helpers", () => {
       minScore: 0.35,
     });
 
-    expect(selected).toEqual([overlapping]);
+    expect(selected).toEqual([expect.objectContaining({ path: overlapping.path, score: 0.2 })]);
+    expect(selected[0]).not.toHaveProperty("eligibilityScore");
   });
+
+  it.each([false, true])(
+    "keeps relevant old notes eligible with MMR enabled=%s",
+    async (enabled) => {
+      const oldPath = "memory/records/2026-08-11-quartz.md";
+      const vector = [
+        vectorHit("old", 0.9, { path: oldPath }),
+        vectorHit("recent", 0.9, { path: "memory/records/2026-10-10-quartz.md" }),
+        vectorHit("evergreen", 0.8),
+        vectorHit("weak", 0.2),
+      ];
+      const keyword = [keywordHit("old", 0.8, { path: oldPath })];
+      const merged = await mergeHybridResults({
+        vector,
+        keyword,
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        mmr: { enabled, lambda: 0.7 },
+        nowMs: Date.UTC(2026, 9, 10),
+      });
+      const selected = selectHybridSearchResults({
+        merged,
+        keyword,
+        vectorCandidates: vector,
+        maxResults: 4,
+        minScore: 0.35,
+      });
+
+      expect(selected.map((entry) => entry.path)).toEqual([
+        "memory/records/2026-10-10-quartz.md",
+        "memory/evergreen.md",
+        oldPath,
+      ]);
+      expect(selected[2]?.score).toBeCloseTo(0.2175);
+      expect(selected[2]?.vectorScore).toBe(0.9);
+      expect(selected[2]?.textScore).toBe(0.8);
+    },
+  );
 
   it.each([
     { vectorScore: -0.5, expectedPaths: ["memory/strict.md"] },
@@ -529,7 +570,11 @@ describe("memory hybrid helpers", () => {
         maxResults: 2,
         minScore: 0,
       });
-      expect(selected).toEqual(vectorScore !== null && vectorScore < 0 ? [] : merged);
+      expect(selected).toEqual(
+        vectorScore !== null && vectorScore < 0
+          ? []
+          : merged.map(({ eligibilityScore: _eligibilityScore, ...entry }) => entry),
+      );
     },
   );
 

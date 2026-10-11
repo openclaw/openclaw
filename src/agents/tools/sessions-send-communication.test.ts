@@ -247,6 +247,7 @@ describe("sessions_send communication boundary", () => {
       ...operation(endpoint("source"), missing),
       ensureTarget: async (assertCurrent) => {
         assertCurrent();
+        sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
         return endpoint("target");
       },
     });

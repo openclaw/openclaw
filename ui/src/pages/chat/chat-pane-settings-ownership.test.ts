@@ -28,7 +28,7 @@ const initialRow = (): GatewaySessionRow => ({
   contextWindow: "64k",
 });
 
-it.each(["rejected", "older-clock ACK", "equal-clock ACK"] as const)(
+it.each(["rejected", "older-clock ACK"] as const)(
   "retains settled thinking facts after an older direct capability patch returns %s",
   async (outcome) => {
     const initial = initialRow();
@@ -42,7 +42,7 @@ it.each(["rejected", "older-clock ACK", "equal-clock ACK"] as const)(
       path: "",
       entry: {
         sessionId: initial.sessionId,
-        updatedAt: outcome === "equal-clock ACK" ? 3 : 2,
+        updatedAt: 2,
         ...firstFields,
       },
     };

@@ -17,9 +17,9 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
+import { readSqliteFileGenerationSync } from "../infra/sqlite-file-generation-worker.js";
 import {
   parseSqliteFileGeneration,
-  readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
@@ -520,7 +520,7 @@ function readQuarantineDecision(
       throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
     }
     try {
-      const currentGeneration = readStableSqliteFileGeneration(path.resolve(pathname));
+      const currentGeneration = readSqliteFileGenerationSync(path.resolve(pathname));
       if (!sameSqliteFileGeneration(verifiedGeneration, currentGeneration)) {
         return undefined;
       }
