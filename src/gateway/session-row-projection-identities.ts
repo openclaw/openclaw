@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -67,7 +67,7 @@ export function createSessionRowCreatorIndex() {
       selectPaths: () => ReadonlyMap<string, number>,
       matching: (query: { key: string }) => Row[],
     ) {
-      const memory = captureSessionActorStorageOwner({});
+      const memory = getSessionActorStorageBinding({});
       const binding = memory ? undefined : captureIncognitoSessionBinding();
       return inOwner(() => {
         const selectedPaths = selectPaths();
@@ -127,11 +127,11 @@ export function createSessionRowCreatorIndex() {
         return [
           ...Array.from(resolved.values(), ({ type, id, label }) => ({ type, id, label })),
           ...(memory
-            ? (memory.owner
-                ?.listSessions(memory.authority)
+            ? memory.actor.storage
+                .readCurrent({ type: "session.entries.read", input: {} }, memory.authority)
                 .flatMap(({ entry }) =>
-                  entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
-                ) ?? [])
+                  entry.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
+                )
             : listOpenIncognitoSessionCreators(binding)),
         ];
       });

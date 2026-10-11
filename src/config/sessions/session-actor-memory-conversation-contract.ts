@@ -25,14 +25,6 @@ export type SessionActorMemoryConversationOwner = {
   catalog: Map<string, SessionActorMemoryConversationAddress>;
   deliveries: Map<string, ConversationDeliveryRecord>;
 };
-export function createSessionActorMemoryConversations(): SessionActorMemoryConversationOwner {
-  return { catalog: new Map(), deliveries: new Map() };
-}
-export function cloneSessionActorMemoryConversations(
-  state: SessionActorMemoryConversationOwner,
-): SessionActorMemoryConversationOwner {
-  return { catalog: new Map(state.catalog), deliveries: new Map(state.deliveries) };
-}
 export type SessionActorMemoryConversationReads = {
   "session.conversation.read": { input: ConversationReadQuery; output: ConversationRecord[] };
   "session.conversation.authority": {

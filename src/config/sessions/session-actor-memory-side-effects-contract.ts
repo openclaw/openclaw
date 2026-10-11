@@ -85,19 +85,3 @@ export type SessionActorMemorySideEffectsState = {
   messageToolOutcomes: Array<MessageToolRunOutcomeInsert & { id: number }>;
   trajectory: Map<string, SessionActorMemoryTrajectoryRow[]>;
 };
-
-export function createSessionActorMemorySideEffects(): SessionActorMemorySideEffectsState {
-  return { outbox: new Map(), messageToolOutcomes: [], trajectory: new Map() };
-}
-
-/** Rows are immutable; commands replace them instead of mutating shared preimages. */
-export function cloneSessionActorMemorySideEffects(
-  state: SessionActorMemorySideEffectsState,
-): SessionActorMemorySideEffectsState {
-  return {
-    outbox: new Map(state.outbox),
-    heartbeatOutcome: state.heartbeatOutcome,
-    messageToolOutcomes: [...state.messageToolOutcomes],
-    trajectory: new Map(state.trajectory),
-  };
-}
