@@ -1,9 +1,11 @@
 import { serialize } from "node:v8";
 import {
-  applySessionDirectMessageInTransaction,
-  applySessionMetadataAppendInTransaction,
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
+} from "../../agents/sessions/session-manager-append-codec.js";
+import {
+  applySessionDirectMessageInTransaction,
+  applySessionMetadataAppendInTransaction,
 } from "../../agents/sessions/session-manager-append.kernel.js";
 import {
   runWithMetadataMessageAdmission,

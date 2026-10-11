@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -30,10 +29,13 @@ import {
 import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
-import { cacheSnapshot } from "./usage/usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage/usage-page.ts";
+import {
+  cacheSnapshot,
+  cleanupUsagePageTest,
+  createPage as createUsagePage,
+} from "./usage/usage-page.test-support.ts";
+import type { UsageRouteData } from "./usage/usage-page.tsx";
 import "./model-providers/model-providers-page.tsx";
-import "./usage/usage-page.ts";
 
 // Mirrors the module-private default usage TTL asserted below.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
@@ -188,13 +190,6 @@ function contextWithMutableGateway(
   };
 }
 
-function createPage(tagName: string, context: ApplicationContext): TestPage {
-  const page = document.createElement(tagName) as TestPage;
-  page.context = context;
-  page.render = () => nothing;
-  return page;
-}
-
 async function replaceContext(
   page: TestPage,
   replacementClient: GatewayBrowserClient,
@@ -313,6 +308,7 @@ function linkedSkillReport() {
 }
 
 afterEach(() => {
+  cleanupUsagePageTest();
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
@@ -329,7 +325,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
     const staleResult = usageResult("stale");
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
+    const page = (await createUsagePage(client, false, context)) as TestPage & {
       routeData: UsageRouteData;
       usageResult: UsageRouteData["result"];
     };
@@ -357,7 +353,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
+    const page = (await createUsagePage(client, false, context)) as TestPage & {
       routeData: UsageRouteData;
       usageResult: UsageRouteData["result"];
       gateway: TestGatewayController;
@@ -400,7 +396,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = contextWithMutableGateway(client);
     const result = usageResult();
-    const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
+    const page = (await createUsagePage(client, false, harness.context)) as TestPage & {
       routeData: UsageRouteData;
       readonly usageResult: UsageRouteData["result"];
       readonly usageLoading: boolean;
@@ -683,10 +679,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const page = createPage(
-      "openclaw-usage-page",
+    const page = (await createUsagePage(
+      client,
+      false,
       contextWithClient(client, { connected: true }),
-    ) as TestPage & {
+    )) as TestPage & {
       loadUsage: () => Promise<void>;
       readonly usageResult: UsageRouteData["result"];
       readonly usageCostSummary: UsageRouteData["costSummary"];

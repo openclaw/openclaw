@@ -1,29 +1,54 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { nothing } from "lit";
+import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsUsageResult } from "../../api/types.ts";
+import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageDetailsController } from "./detail-controller.ts";
+import type { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { page as usageRoute } from "./route.ts";
 import type { UsageSessionEntry } from "./types.ts";
-import type { UsageRouteData } from "./usage-page.ts";
-import "./usage-page.ts";
+import { UsagePageModel, type UsageRouteData } from "./usage-page-model.ts";
 
 export type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
   routeData: UsageRouteData;
   usageError: string | null;
+  readonly usageResult: SessionsUsageResult | null;
+  readonly usageCostSummary: CostUsageSummary | null;
+  readonly usageLoading: boolean;
   usageSelectedSessions: string[];
   details: UsageDetailsController;
   providerUsageStalled: boolean;
   providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
+  readonly refreshPolicy: UsageRefreshPolicy;
+  readonly gateway: {
+    applySnapshot: (
+      snapshot: ApplicationGatewaySnapshot,
+      binding: { initial: boolean; sourceChanged: boolean },
+    ) => void;
+  };
   loadUsage: () => Promise<void>;
   requestUpdate: () => void;
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
+
+type InspectedUsagePageModel = Pick<
+  TestUsagePage,
+  | "details"
+  | "loadUsage"
+  | "providerUsageSummary"
+  | "usageSelectedSessions"
+  | "usageCostSummary"
+  | "refreshPolicy"
+  | "gateway"
+>;
+
+const pageCleanups = new Set<() => void>();
 
 type UsagePublicationFixture = {
   agentId?: string;
@@ -117,12 +142,105 @@ export async function createPage(
   renderView = false,
   context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
-  const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-  page.context = context;
-  if (!renderView) {
-    page.render = () => nothing;
-  }
+  const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
+  const page = document.createElement("div") as TestUsagePage;
+  const [revision, setRevision] = createSignal(0);
+  const notify = () => setRevision((value) => value + 1);
+  let model = new UsagePageModel(context, notify);
+  let disposeView: (() => void) | undefined;
+  let disposed = false;
+  const inspect = () => model as unknown as InspectedUsagePageModel;
+  const mount = () => {
+    model.connect();
+    if (content) {
+      disposeView = mountSolid(
+        () => {
+          const state = createMemo(() => {
+            revision();
+            return model.read();
+          });
+          return content({
+            get state() {
+              return state();
+            },
+            context: model.context,
+            get result() {
+              revision();
+              return model.usageResult;
+            },
+          });
+        },
+        { container: page },
+      ).unmount;
+    }
+  };
+  const cleanup = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    disposeView?.();
+    model.dispose();
+    pageCleanups.delete(cleanup);
+  };
+  Object.defineProperties(page, {
+    context: {
+      get: () => model.context,
+      set: (next: ApplicationContext) => {
+        const routeData = model.routeData;
+        disposeView?.();
+        model.dispose();
+        model = new UsagePageModel(next, notify);
+        disposed = false;
+        pageCleanups.add(cleanup);
+        mount();
+        if (routeData) {
+          model.setRouteData(routeData);
+        }
+        notify();
+      },
+    },
+    routeData: {
+      get: () => model.routeData,
+      set: (data: UsageRouteData) => model.setRouteData(data),
+    },
+    usageError: { get: () => model.read().data.error },
+    usageResult: { get: () => model.usageResult },
+    usageCostSummary: { get: () => inspect().usageCostSummary },
+    usageLoading: { get: () => model.read().data.loading },
+    usageSelectedSessions: {
+      get: () => model.read().filters.selectedSessions,
+      set: (sessions: string[]) => {
+        inspect().usageSelectedSessions = sessions;
+        notify();
+      },
+    },
+    details: { get: () => inspect().details },
+    providerUsageStalled: { get: () => model.read().data.providerUsageStalled },
+    providerUsageSummary: { get: () => inspect().providerUsageSummary },
+    providerUsageUnavailable: { get: () => model.read().data.providerUsageUnavailable },
+    refreshPolicy: { get: () => inspect().refreshPolicy },
+    gateway: { get: () => inspect().gateway },
+    loadUsage: { value: () => inspect().loadUsage() },
+    requestUpdate: { value: notify },
+    render: { value: () => undefined },
+    updateComplete: {
+      get: async () => {
+        await Promise.resolve();
+        flush();
+        return true;
+      },
+    },
+    remove: {
+      value: () => {
+        cleanup();
+        HTMLElement.prototype.remove.call(page);
+      },
+    },
+  });
   document.body.append(page);
+  pageCleanups.add(cleanup);
+  mount();
   await page.updateComplete;
   return page;
 }
@@ -155,6 +273,9 @@ export function createPendingUsageRouteData(
 }
 
 export function cleanupUsagePageTest(): void {
+  for (const cleanup of pageCleanups) {
+    cleanup();
+  }
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
