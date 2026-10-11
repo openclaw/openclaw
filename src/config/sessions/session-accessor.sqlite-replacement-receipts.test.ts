@@ -105,6 +105,43 @@ it("sheds aggregate optional snapshots while committing every required receipt r
   });
 });
 
+it.each(["autocommit", "transaction"] as const)(
+  "seals native metadata before observers for %s",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionKey = "agent:main:native-metadata-seal";
+      let published: ReturnType<typeof readPreparedSessionEntryChange>;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          published = readPreparedSessionEntryChange(change, sessionKey);
+        }
+      });
+      const write = () => {
+        writeSessionEntry(database, sessionKey, {
+          sessionId: "native-metadata-seal",
+          updatedAt: 1,
+          verboseLevel: "full",
+        });
+      };
+      try {
+        if (mode === "autocommit") {
+          write();
+        } else {
+          runOpenClawAgentWriteTransaction(write, { agentId: "main", path: database.path });
+        }
+        expect(published?.entry?.verboseLevel).toBe("full");
+        expect(published?.source.writeToken).toBeTypeOf("string");
+        expect(published?.source.writeToken).toBe(
+          readSqliteDatabaseWriteTokenForPath(database.path),
+        );
+      } finally {
+        stop();
+      }
+    });
+  },
+);
+
 it("withholds metadata certification after a later write in its native transaction", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });

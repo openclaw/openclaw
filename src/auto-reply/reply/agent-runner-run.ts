@@ -459,10 +459,8 @@ export async function runReplyAgent(
     verboseLevelOverride: followupRun.run.verboseLevelOverride,
   };
   const baseShouldEmitToolResult = createShouldEmitToolResult(toolResultOptions);
-  const channelProgressCanConsumeToolResults =
-    Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
   const shouldEmitToolResult = () =>
-    channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
+    Boolean(opts?.forceToolResultProgress && opts?.onToolResult) || baseShouldEmitToolResult();
   const shouldEmitToolOutput = createShouldEmitToolOutput(toolResultOptions);
 
   const replyToChannel = resolveOriginMessageProvider({
