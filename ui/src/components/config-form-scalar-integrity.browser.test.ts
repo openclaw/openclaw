@@ -642,7 +642,6 @@ describe("config form scalar integrity", () => {
   );
 });
 
-type EnumControl = HTMLElement & { value: string; updateComplete?: Promise<unknown> };
 const containers: HTMLElement[] = [];
 afterEach(() => {
   for (const container of containers.splice(0)) {
@@ -692,7 +691,7 @@ function fixture(
     });
   }
   draw();
-  const control = container.querySelector<EnumControl>("wa-radio-group, select");
+  const control = container.querySelector<HTMLElement>('[role="radiogroup"], select');
   if (!control) {
     throw new Error("Missing analyzed enum control");
   }
@@ -700,13 +699,14 @@ function fixture(
     container,
     control,
     onPatch,
-    async settle() {
-      await control.updateComplete;
+    value() {
+      return control instanceof HTMLSelectElement
+        ? control.value
+        : control.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;
     },
-    async setValue(value: unknown) {
+    setValue(value: unknown) {
       current = value;
       draw();
-      await control.updateComplete;
     },
     async select(index: number | string) {
       const { userEvent } = await import("vitest/browser");
@@ -717,12 +717,13 @@ function fixture(
         }
         await userEvent.selectOptions(control, option);
       } else {
-        const radio = control.querySelector<HTMLElement>(`wa-radio[value="${index}"]`);
+        const radio = control.querySelector<HTMLInputElement>(
+          `input[type="radio"][value="${index}"]`,
+        );
         if (!radio) {
           throw new Error("Missing enum radio");
         }
         await userEvent.click(radio);
-        await control.updateComplete;
       }
     },
   };
@@ -746,11 +747,10 @@ const cases = [
 ];
 
 describe("typed config enum selection through analyzed forms", () => {
-  it.each(cases)("initially selects the typed member: $name", async ({ options, typed }) => {
+  it.each(cases)("initially selects the typed member: $name", ({ options, typed }) => {
     const view = fixture(options, typed);
-    await view.settle();
-    expect(view.control.tagName).toBe(options.length <= 5 ? "WA-RADIO-GROUP" : "SELECT");
-    expect(view.control.value).toBe("2");
+    expect(view.control.tagName).toBe(options.length <= 5 ? "DIV" : "SELECT");
+    expect(view.value()).toBe("2");
     expect(view.onPatch).not.toHaveBeenCalled();
   });
 
@@ -758,16 +758,15 @@ describe("typed config enum selection through analyzed forms", () => {
     "preserves type through callbacks and rerenders: $name",
     async ({ options, typed, primitive }) => {
       const view = fixture(options, primitive);
-      await view.settle();
-      expect(view.control.value).toBe("0");
+      expect(view.value()).toBe("0");
       await view.select(2);
       expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], typed);
-      expect(view.control.value).toBe("2");
+      expect(view.value()).toBe("2");
       await view.select(0);
       expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
-      expect(view.control.value).toBe("0");
-      await view.setValue(typed);
-      expect(view.control.value).toBe("2");
+      expect(view.value()).toBe("0");
+      view.setValue(typed);
+      expect(view.value()).toBe("2");
     },
   );
 
@@ -775,10 +774,9 @@ describe("typed config enum selection through analyzed forms", () => {
     "restores the typed member after a rejected selection: $name",
     async ({ options, typed }) => {
       const view = fixture(options, typed, false);
-      await view.settle();
       await view.select(0);
       expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], options[0]);
-      expect(view.control.value).toBe("2");
+      expect(view.value()).toBe("2");
     },
   );
 
@@ -786,34 +784,31 @@ describe("typed config enum selection through analyzed forms", () => {
     "keeps the typed default without creating an override: $name",
     async ({ options, typed, primitive }) => {
       const view = fixture(options, undefined, true, { default: typed });
-      await view.settle();
-      expect(view.control.value).toBe(options.length <= 5 ? "2" : "__unset__");
+      expect(view.value()).toBe(options.length <= 5 ? "2" : "__unset__");
       expect(view.onPatch).not.toHaveBeenCalled();
       await view.select(0);
       expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
-      expect(view.control.value).toBe("0");
+      expect(view.value()).toBe("0");
     },
   );
 
   it("keeps null, unset and a typed string distinct in a nullable enum", async () => {
     const view = fixture([true, false, "true", null], null);
-    await view.settle();
-    expect(view.control.value).toBe("__null__");
+    expect(view.value()).toBe("__null__");
     await view.select(2);
     expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], "true");
-    expect(view.control.value).toBe("2");
+    expect(view.value()).toBe("2");
     await view.select("__unset__");
     expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], undefined);
-    expect(view.control.value).toBe("__unset__");
+    expect(view.value()).toBe("__unset__");
     await view.select("__null__");
     expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], null);
-    expect(view.control.value).toBe("__null__");
+    expect(view.value()).toBe("__null__");
   });
 
   it("keeps required nullable enums from clearing an explicit typed member", async () => {
     const view = fixture([true, false, "true", null], "true", true, { required: true });
-    await view.settle();
-    expect(view.control.value).toBe("2");
+    expect(view.value()).toBe("2");
     expect(
       view.control.querySelector<HTMLOptionElement>('option[value="__unset__"]')?.disabled,
     ).toBe(true);

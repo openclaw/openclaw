@@ -9,6 +9,7 @@ import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpo
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import * as processIdentity from "./node-worker-process-identity.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import {
   createNodeWorkerContainerFixture,
@@ -429,25 +430,36 @@ describe("node worker supervisor container isolation", () => {
     expect(fixture.events().some((event) => event.argv.includes(foreign.id))).toBe(false);
   });
 
-  it("preserves a live foreign supervisor's pending container during reconciliation", async () => {
-    await using fixture = containerFixture();
-    const launchId = "container-live-pending";
-    const container = fixture.seed({ id: "e".repeat(64), launchId });
-    const input = testWorkerLaunchInput(fixture.workspaceDir, launchId, "wait");
-    const identity = testNodeWorkerLaunchIdentity(input);
-    const { store } = fixture;
-    await store.claim(
-      { ...identity, gatewayNamespace: input.gatewayNamespace },
-      requireNodeWorkerProcessIdentity(process.pid),
-      8,
-    );
+  it.each([false, true])(
+    "reconciles a pending container with live PIDs and reboot=%s",
+    async (rebooted) => {
+      await using fixture = containerFixture();
+      const launchId = "container-live-pending";
+      const container = fixture.seed({ id: "e".repeat(64), launchId });
+      const input = testWorkerLaunchInput(fixture.workspaceDir, launchId, "wait");
+      const identity = testNodeWorkerLaunchIdentity(input);
+      const { store } = fixture;
+      const boot = vi.spyOn(processIdentity, "getNodeWorkerBootIdentity").mockReturnValue("boot-a");
+      try {
+        await store.claim(
+          { ...identity, gatewayNamespace: input.gatewayNamespace },
+          requireNodeWorkerProcessIdentity(process.pid),
+          8,
+        );
 
-    await fixture.supervisor.initialize();
+        boot.mockReturnValue(rebooted ? "boot-b" : "boot-a");
+        await fixture.supervisor.initialize();
 
-    expect(await store.get(launchId)).toMatchObject({ state: "pending" });
-    expect(fixture.exists(container.id)).toBe(true);
-    expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(false);
-  });
+        expect(await store.get(launchId)).toMatchObject({
+          state: rebooted ? "interrupted" : "pending",
+        });
+        expect(fixture.exists(container.id)).toBe(!rebooted);
+        expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(rebooted);
+      } finally {
+        boot.mockRestore();
+      }
+    },
+  );
 
   it("interrupts a stale running journal after verifying its dead container identity", async () => {
     await using fixture = containerFixture();

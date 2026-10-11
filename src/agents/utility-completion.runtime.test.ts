@@ -115,7 +115,7 @@ describe("resolveUtilityCompletionRuntimeForAgent", () => {
 
 describe("automatic utility runtime prepared-generation composition", () => {
   it.each([false, true])(
-    "uses only prepared API credential availability (%s)",
+    "keeps the primary runtime regardless of prepared API credentials (%s)",
     async (hasApiCredential) => {
       const params = prepared();
       params.cfg.models = undefined;
@@ -145,11 +145,7 @@ describe("automatic utility runtime prepared-generation composition", () => {
       const credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
       try {
         const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
-        expect(runtime).toEqual(
-          hasApiCredential
-            ? { id: "openclaw", kind: "api", label: "OpenClaw Default" }
-            : { id: "claude-cli", kind: "cli", label: "Claude CLI" },
-        );
+        expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
         expect(credentialLookup).not.toHaveBeenCalled();
       } finally {
         credentialLookup.mockRestore();

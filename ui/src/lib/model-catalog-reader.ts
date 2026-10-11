@@ -1,7 +1,6 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import {
   modelCatalogKey,
   modelCatalogParams,
@@ -22,7 +21,6 @@ export class ModelCatalogReader {
     gateway: ApplicationGateway;
     client: NonNullable<ApplicationGateway["snapshot"]["client"]>;
     scope: ModelCatalogReadScope;
-    presentationKey: number;
   };
   private controller?: AbortController;
   private unsubscribe?: () => void;
@@ -66,7 +64,6 @@ export class ModelCatalogReader {
       gateway,
       client,
       scope,
-      presentationKey: gatewayPresentationScope(gateway).key,
     };
     this.binding = binding;
     const unwatchCache = subscribeModelCatalogCache(client, () => {
@@ -100,8 +97,7 @@ export class ModelCatalogReader {
     return (
       this.binding === binding &&
       binding.gateway.snapshot.client === binding.client &&
-      binding.gateway.snapshot.phase === "connected" &&
-      gatewayPresentationScope(binding.gateway).key === binding.presentationKey
+      binding.gateway.snapshot.phase === "connected"
     );
   }
 

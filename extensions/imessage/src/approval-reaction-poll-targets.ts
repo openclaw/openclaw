@@ -82,7 +82,7 @@ const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
 );
 
 let pendingReactionPollTargetStore:
-  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget>
+  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget, 2>
   | undefined;
 let pendingReactionPollTargetStoreDisabled = false;
 
@@ -93,7 +93,7 @@ function disablePendingReactionPollTargetStore(error: unknown): void {
 }
 
 function getPendingReactionPollTargetStore():
-  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget>
+  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget, 2>
   | undefined {
   if (pendingReactionPollTargetStoreDisabled) {
     return undefined;
@@ -103,7 +103,7 @@ function getPendingReactionPollTargetStore():
   }
   try {
     pendingReactionPollTargetStore =
-      getOptionalIMessageRuntime()?.state.openKeyedStore<PendingIMessageApprovalReactionPollTarget>(
+      getOptionalIMessageRuntime()?.state.openKeyedStoreV2<PendingIMessageApprovalReactionPollTarget>(
         {
           namespace: PERSISTENT_POLL_TARGET_NAMESPACE,
           maxEntries: PERSISTENT_MAX_ENTRIES,

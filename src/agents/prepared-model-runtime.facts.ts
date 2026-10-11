@@ -443,15 +443,16 @@ export async function prepareWorkspaceBuildGroup(
       });
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
-          (facts.input.config.models?.mode === "replace" ? [] : facts.providerIds).flatMap(
-            (provider) => {
-              const pluginId = resolvePluginModelCatalogOwnerPluginId({
-                providerId: provider,
-                pluginMetadataSnapshot,
-              });
-              return pluginId ? [pluginId] : [];
-            },
-          ),
+          (facts.input.config.models?.mode === "replace"
+            ? []
+            : [...facts.providerIds, ...Object.keys(facts.credentials).map(normalizeProviderId)]
+          ).flatMap((provider) => {
+            const pluginId = resolvePluginModelCatalogOwnerPluginId({
+              providerId: provider,
+              pluginMetadataSnapshot,
+            });
+            return pluginId ? [pluginId] : [];
+          }),
         ),
       ].toSorted((left, right) => left.localeCompare(right));
       agentFacts.push({
