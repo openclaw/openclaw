@@ -24,7 +24,7 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
-import { isCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
+import { resolveCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
 import {
   createDiagnosticTraceContext,
   formatDiagnosticTraceparent,
@@ -306,7 +306,7 @@ describe("diagnostic-events", () => {
     const events: Array<{ coreSemantic: boolean; type: string }> = [];
     onInternalDiagnosticEvent((event, metadata) => {
       events.push({
-        coreSemantic: isCoreSemanticRunProgressDiagnosticMetadata(metadata),
+        coreSemantic: resolveCoreSemanticRunProgressDiagnosticMetadata(metadata) !== undefined,
         type: event.type,
       });
     });

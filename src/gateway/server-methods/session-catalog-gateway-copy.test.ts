@@ -244,7 +244,7 @@ describe("copySessionCatalogToGateway", () => {
         error: { code: "UNAVAILABLE", retryable: true },
       });
       expect(mocks.importSessionCatalogHistory).not.toHaveBeenCalled();
-      expect(mocks.recordSessionStateEventAsync).not.toHaveBeenCalled();
+      expect(mocks.recordSessionStateEvent).not.toHaveBeenCalled();
     } finally {
       assessment.resolve({ models: [] });
       await copying;
@@ -282,7 +282,7 @@ describe("copySessionCatalogToGateway", () => {
         error: { code: "UNAVAILABLE", retryable: true },
       });
       expect(mocks.importSessionCatalogHistory).not.toHaveBeenCalled();
-      expect(mocks.recordSessionStateEventAsync).not.toHaveBeenCalled();
+      expect(mocks.recordSessionStateEvent).not.toHaveBeenCalled();
     } finally {
       assessment.resolve({ models: [] });
       createRead.resolve({ entries: [], routeVariants: [] });
@@ -342,7 +342,7 @@ describe("copySessionCatalogToGateway", () => {
     });
     expect(mocks.createGatewaySession).toHaveBeenCalledOnce();
     expect(mocks.importSessionCatalogHistory).toHaveBeenCalledOnce();
-    expect(mocks.recordSessionStateEventAsync).toHaveBeenCalledOnce();
+    expect(mocks.recordSessionStateEvent).toHaveBeenCalledOnce();
   });
 
   it("preserves configured-model fallback for ordinary availability errors", async () => {
