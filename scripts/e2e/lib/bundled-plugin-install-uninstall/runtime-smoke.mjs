@@ -1142,6 +1142,10 @@ function assertSpeechProviderVisible(payload, provider, label) {
 
 async function runWatchdog(options) {
   const readyOffset = findReadyLogOffset(options.logPath);
+  // Read-only install discovery is deferred until ready and can still own a
+  // package-manager root probe. Join it through the status owner before checking
+  // for leaked processes, retaining the original ready offset for install work.
+  await retryRpcCall("update.status", { refreshCheckout: true }, options);
   await delay(WATCHDOG_MS);
   if (hasChildExited(options.child)) {
     throw new Error(
