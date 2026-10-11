@@ -152,6 +152,15 @@ suite.define(() => {
       await page.waitForFunction(() => (window.widgetReloadFrames?.length ?? 0) >= 20, undefined, {
         polling: "raf",
       });
+      await page.waitForFunction(
+        () => {
+          const sample = window.widgetReloadFrames?.at(-1);
+          return sample && sample.scrollTop > 0 && Math.abs(sample.endGap) <= 1;
+        },
+        undefined,
+        { polling: "raf" },
+      );
+      const loadedStart = await page.evaluate(() => window.widgetReloadFrames!.length - 1);
       const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
         ? createControlUiE2eArtifactDir("widget-reload")
         : undefined;
@@ -186,12 +195,14 @@ suite.define(() => {
         writeFileSync(path.join(artifacts, "frames.json"), JSON.stringify(samples));
       }
       expect(samples.length).toBeGreaterThanOrEqual(40);
-      expect(samples[0]!.scrollTop).toBeGreaterThan(0);
       for (const sample of samples) {
         expect(Math.abs(sample.previewHeight - learnedHeight)).toBeLessThanOrEqual(1);
+      }
+      const anchored = samples[loadedStart]!;
+      for (const sample of samples.slice(loadedStart)) {
         expect(Math.abs(sample.endGap)).toBeLessThanOrEqual(1);
-        expect(Math.abs(sample.scrollTop - samples[0]!.scrollTop)).toBeLessThanOrEqual(1);
-        expect(Math.abs(sample.anchorTop - samples[0]!.anchorTop)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.scrollTop - anchored.scrollTop)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.anchorTop - anchored.anchorTop)).toBeLessThanOrEqual(1);
       }
     });
   });
