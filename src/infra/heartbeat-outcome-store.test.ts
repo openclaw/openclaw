@@ -33,6 +33,7 @@ import {
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
 } from "./heartbeat-outcome-store.js";
+import { readSqliteDatabaseWriteTokenForPath } from "./sqlite-database-admission.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -312,6 +313,9 @@ it("queues captured outcomes off-thread and claims once per run until the next h
   const env = await createEnv();
   const target = { agentId: "main", sessionKey: "agent:main:main", env };
   const db = openOpenClawAgentDatabase(target).db;
+  const databasePath = resolveOpenClawAgentSqlitePath(target);
+  const initialWriteToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+  expect(initialWriteToken).toBeTypeOf("string");
   const prepare = db.prepare.bind(db);
   vi.spyOn(db, "prepare").mockImplementation((sql) => {
     if (sql.includes('"heartbeat_outcomes"')) {
@@ -354,6 +358,7 @@ it("queues captured outcomes off-thread and claims once per run until the next h
   expect(await retry).toMatchObject({ summary: "captured" });
   expect(await alreadyClaimed).toBeUndefined();
   expect(await claimedSecond).toMatchObject({ summary: "second" });
+  expect(readSqliteDatabaseWriteTokenForPath(databasePath)).not.toBe(initialWriteToken);
   expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "third-run" })).toBeUndefined();
   db.prepare("UPDATE heartbeat_outcomes SET context_claimed_at = 123 WHERE session_key = ?").run(
     target.sessionKey,

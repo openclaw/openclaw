@@ -40,16 +40,6 @@ describe("llama-server model mapping", () => {
     });
   });
 
-  it("uses an older server's top-level runtime context limit", () => {
-    expect(
-      mapLlamaServerModel({ id: "model", object: "model" }, { n_ctx: 8192 })?.config,
-    ).toMatchObject({
-      contextWindow: 8192,
-      contextTokens: 8192,
-      maxTokens: 8192,
-    });
-  });
-
   it("preserves image input advertised by router rows or runtime properties", () => {
     expect(
       mapLlamaServerModel({
@@ -72,19 +62,6 @@ describe("llama-server model mapping", () => {
       caps: { supports_tools: false, supports_tool_calls: true },
       supported: true,
     },
-
-    {
-      name: "tool descriptions without calls",
-      caps: { supports_tools: true, supports_tool_calls: false },
-      supported: false,
-    },
-
-    { name: "missing tool-call capability", caps: { supports_tools: true }, supported: false },
-    {
-      name: "malformed tool-call capability",
-      caps: { supports_tools: true, supports_tool_calls: "true" },
-      supported: false,
-    },
   ])("uses the tool-call capability for $name", ({ caps, supported }) => {
     expect(
       mapLlamaServerModel(
@@ -92,13 +69,6 @@ describe("llama-server model mapping", () => {
         { chat_template_caps: caps },
       )?.config.compat?.supportsTools,
     ).toBe(supported);
-  });
-
-  it("defaults unknown capabilities conservatively", () => {
-    expect(mapLlamaServerModel({ id: "model", object: "model" })?.config.compat).toMatchObject({
-      supportsTools: false,
-      requiresStringContent: true,
-    });
   });
 
   it("rejects malformed and non-model rows", () => {

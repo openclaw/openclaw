@@ -16,6 +16,7 @@ import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import {
   transcriptListParams,
   transcriptRouteSearch,
@@ -542,6 +543,10 @@ class MeetingsPage extends OpenClawLightDomElement {
       onSummaryRetry: () => void this.generateMissingSummary(true),
       exportState: this.exportState,
       onNavigate: (patch) => this.navigate(patch),
+      onOpenCaptureSettings: () => {
+        const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
+        this.context.navigate(target.routeId, { search: target.search, hash: target.hash });
+      },
       onRefresh: () => this.refresh(),
       onReaderRetry: () => {
         if (!this.readerPages.length) {

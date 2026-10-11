@@ -26,6 +26,17 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Cold session creation uses the existing session-entry worker for requested-key
+and parent lookups. Personal default selection reads profile links and its selected
+credential through the existing shared-state and auth-store readers; credential
+authority still applies at the creation effect. Default cron loads resolve their
+saved partition in the same worker operation that loads the jobs. A queued load
+uses the committed partition when that operation starts, without host recapture.
+Memory initialization and status consume source invalidation and vector completeness
+from the index-facts postimage. The publication worker owns vector extension loading
+and retirement, while the retrieval worker owns read-only capability probing.
+These paths add no schema, retention, or update contract.
+
 Managed outgoing media cleanup uses the same retained session reader as media
 serving. Durable session discovery and entry reads execute in the existing
 read workers; bound incognito reads use their actor. Cleanup distinguishes an
@@ -360,6 +371,18 @@ notification failure cannot undo a committed write or suppress later notificatio
 Failed fact installation retires the affected scope before notification. If its
 owner cannot fence that failure, the batch suppresses public notification and
 reports the failure without replaying the mutation.
+
+Worker backends can use `runSqliteSingleStatementSync` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` for one complete synchronous statement.
+It uses SQLite autocommit while retaining the post-commit publication scope;
+inside an existing transaction it retains the savepoint and outer publication
+owner. Prepare inputs before calling and do no fallible work after the native
+statement in its callback. The native write observer advances the managed write
+token on settlement, without an extra SQL query. Memory source refresh, index
+metadata, and worker-owned heartbeat outcome writes use this path; compound
+writes retain their transactions. Heartbeat claims remain one conditional update,
+so competing runs cannot claim the same outcome.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
 
 Private receipt envelopes identify the operation, physical source and connection
 incarnation, domain, and exact affected keys. Each key contains a postimage,

@@ -57,14 +57,7 @@ export async function runEmbeddedAttemptPromptPhase(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   promptState: EmbeddedAttemptPromptState,
 ): Promise<{ promptStartedAt: number; transcriptLeafId: string | null }> {
-  const {
-    attempt,
-    activeContextEngine,
-    isRawModelRun,
-    prepared,
-    preparedStreamRuntime,
-    runAbortController,
-  } = input;
+  const { attempt, isRawModelRun, prepared, preparedStreamRuntime, runAbortController } = input;
   const { sessionRuntime, promptToolPolicy } = prepared;
   const {
     agentSession: { activeSession, hookRunner, setActiveSessionSystemPrompt, settingsManager },
@@ -92,11 +85,7 @@ export async function runEmbeddedAttemptPromptPhase(
   } = sessionRuntime;
   const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
   const {
-    history: {
-      contextEngineAssemblySucceeded,
-      contextEnginePromptAuthority,
-      unwindowedContextEngineMessagesForPrecheck,
-    },
+    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
     promptActiveSession,
     stream: { stopAcceptingSteerMessages },
   } = preparedStreamRuntime;
@@ -375,7 +364,6 @@ export async function runEmbeddedAttemptPromptPhase(
     state = await prepareEmbeddedAttemptPromptPreflight({
       appendOnlyRuntimeContext,
       compactionReplayEnabled,
-      contextEngineAssemblySucceeded,
       contextEnginePromptAuthority,
       includeBoundaryTimestamp,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
@@ -383,7 +371,6 @@ export async function runEmbeddedAttemptPromptPhase(
         ? { unwindowedContextEngineMessagesForPrecheck }
         : {}),
       attempt,
-      ...(activeContextEngine ? { activeContextEngine } : {}),
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,

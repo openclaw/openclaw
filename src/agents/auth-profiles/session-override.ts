@@ -13,7 +13,7 @@ import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.
 import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
+import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
 import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -35,7 +35,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
-import { ensureAuthProfileStore } from "./store-runtime.js";
+import { ensureAuthProfileStore, loadAuthProfileStoreForRuntimeAsync } from "./store-runtime.js";
 
 // Read-only auth resolution must not import session persistence.
 const sessionAccessorLoader = createLazyImportLoader(
@@ -215,25 +215,28 @@ function uniqueProviders(provider: string, acceptedProviderIds?: readonly string
 }
 
 /** Resolve a person's new-session default through the canonical credential store. */
-export function resolveUserLinkedAuthProfile(params: {
+export async function resolveUserLinkedAuthProfile(params: {
   cfg: OpenClawConfig;
   agentDir: string;
   provider: string;
   requesterProfileId: string;
   acceptedProviderIds?: readonly string[];
   store?: ReturnType<typeof ensureAuthProfileStore>;
-}): { profileId: string; store: ReturnType<typeof ensureAuthProfileStore> } | undefined {
+}): Promise<{ profileId: string; store: ReturnType<typeof ensureAuthProfileStore> } | undefined> {
   const providers = uniqueProviders(params.provider, params.acceptedProviderIds);
-  const profileId = resolveUserProfileAuthLink({
-    profileId: params.requesterProfileId,
-    providers,
-  });
+  const links = await listUserProfileAuthLinksAsync(params.requesterProfileId);
+  const profileId = providers
+    .map((provider) => links.find((link) => link.provider === provider)?.authProfileId)
+    .find((id) => id !== undefined);
   if (!profileId) {
     return undefined;
   }
   const store =
     !params.store || isUserModelAuthProfileId(profileId)
-      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false, profileId })
+      ? await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+          allowKeychainPrompt: false,
+          profileId,
+        })
       : params.store;
   return isProfileForProvider({ cfg: params.cfg, providers, profileId, store })
     ? { profileId, store }
@@ -410,7 +413,7 @@ async function resolveSessionAuthProfileOverride(params: {
   // New-session defaults must not repin an existing unpinned/shared session.
   // Person-linked pins stay sticky across participants and unlinking.
   if (params.requesterProfileId && isNewSession) {
-    const linked = resolveUserLinkedAuthProfile({
+    const linked = await resolveUserLinkedAuthProfile({
       cfg,
       agentDir,
       provider,

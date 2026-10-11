@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { Context } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
@@ -26,8 +27,33 @@ const { installEmbeddedAttemptStreamGuards } =
 
 registerAgentSessionLoopTestLifecycle();
 
-describe("mid-turn provider admission", () => {
+describe("provider request admission", () => {
   it.each([
+    {
+      name: "owning engine cannot submit oversized assembled history on its first request",
+      usage: 15_000,
+      chars: 12_000,
+      cap: 16_000,
+      fits: false,
+      ownsCompaction: true,
+      oversizedAssembly: true,
+    },
+    {
+      name: "owning engine admits fitting requests despite an exaggerated engine estimate",
+      usage: 15_000,
+      chars: 12_000,
+      cap: 16_000,
+      fits: true,
+      ownsCompaction: true,
+    },
+    {
+      name: "owning engine blocks an oversized measured continuation without opt-in",
+      usage: 23_000,
+      chars: 12_000,
+      cap: 16_000,
+      fits: false,
+      ownsCompaction: true,
+    },
     { name: "measured unchanged prefix", usage: 15_000, chars: 12_000, cap: 16_000, fits: true },
     {
       name: "counts measured visible completion once",
@@ -126,6 +152,8 @@ describe("mid-turn provider admission", () => {
       assistantChars,
       asyncFragments,
       syntheticAssistant,
+      ownsCompaction,
+      oversizedAssembly,
     }) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const model = {
@@ -171,8 +199,24 @@ describe("mid-turn provider admission", () => {
               ]
             : messages;
       }
+      const activeContextEngine: ContextEngine | undefined = ownsCompaction
+        ? {
+            info: { id: "fixture", name: "Fixture", ownsCompaction: true },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({
+              messages: oversizedAssembly
+                ? [{ role: "user", content: "history ".repeat(40_000), timestamp: 1 }, ...messages]
+                : messages,
+              estimatedTokens: oversizedAssembly ? 1 : 1_000_000,
+            }),
+            compact: async () => ({ ok: false, compacted: false }),
+          }
+        : undefined;
+      fixture.input.activeContextEngine = activeContextEngine;
       Object.assign(fixture.input.attempt, {
-        config: { agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } } },
+        config: ownsCompaction
+          ? {}
+          : { agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } } },
         contextTokenBudget: model.contextWindow,
         model,
         modelId: model.id,
@@ -181,6 +225,7 @@ describe("mid-turn provider admission", () => {
       });
       const projectionState = createToolResultPromptProjectionState();
       const guards = installEmbeddedAttemptContextGuards({
+        activeContextEngine,
         activeSession: session,
         agentDir: "/fixture/agent",
         attempt: fixture.input.attempt,
@@ -321,7 +366,9 @@ describe("mid-turn provider admission", () => {
             })),
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
-        expect(requests, session.agent.state.errorMessage).toHaveLength(fits ? 2 : 1);
+        expect(requests, session.agent.state.errorMessage).toHaveLength(
+          oversizedAssembly ? 0 : fits ? 2 : 1,
+        );
         expect(guards.takePendingMidTurnPrecheckRequest() !== null).toBe(!fits);
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");

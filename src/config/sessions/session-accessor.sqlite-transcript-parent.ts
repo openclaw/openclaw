@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptEvent,
@@ -15,7 +16,6 @@ import { readSessionActorTransactionState } from "./session-actor-transaction.js
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { resolveSessionTranscriptQuestionAnswer } from "./session-transcript-read-fence.js";
 import {
   PREPARED_ASSISTANT_MAX_NEWER_MESSAGES,
   PREPARED_ASSISTANT_MAX_NEWER_BYTES,
@@ -38,6 +38,7 @@ export function canRebasePreparedAssistantInTransaction(
   sessionId: string,
   preparedParentId: string | null,
   admittedUserId?: string,
+  questionAnswers: readonly UserTurnTranscriptAdmissionReceipt[] = [],
 ): boolean {
   const tailId = readActiveTranscriptAppendParentId(database, sessionId);
   if (tailId !== preparedParentId) {
@@ -174,12 +175,7 @@ export function canRebasePreparedAssistantInTransaction(
     ),
   );
   return preparedAssistantMessagesPreserveTurn(newerRoles, admittedUserId, (row) => {
-    const answer = resolveSessionTranscriptQuestionAnswer(
-      database,
-      sessionId,
-      row.event_id,
-      admittedUserId,
-    );
+    const answer = questionAnswers.find((input) => input.entryId === row.event_id);
     return (
       answer !== undefined &&
       answer.rawSeq === row.seq &&

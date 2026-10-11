@@ -194,6 +194,8 @@ coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
+Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
+to preserve memory headroom across the three native shards.
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured
 costs from the pinned `workflow_sha` checkout. Test discovery and execution still

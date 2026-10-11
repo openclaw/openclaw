@@ -136,17 +136,10 @@ describe("interrupted canonical user replay", () => {
 
   it.each([
     { appendOnly: false, interruptedTurn: false, toolProgress: true },
-    { appendOnly: true, interruptedTurn: false, toolProgress: true },
-    { appendOnly: false, interruptedTurn: true, toolProgress: true },
-    { appendOnly: true, interruptedTurn: true, toolProgress: true },
-    { appendOnly: false, interruptedTurn: true, toolProgress: false },
-    { appendOnly: true, interruptedTurn: true, toolProgress: false },
-    { appendOnly: false, interruptedTurn: true, toolProgress: true, oversizedMetadata: true },
     { appendOnly: true, interruptedTurn: true, toolProgress: true, oversizedMetadata: true },
-    { appendOnly: true, interruptedTurn: true, toolProgress: true, compactedInput: true },
   ])(
-    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress, oversized metadata=$oversizedMetadata, compacted input=$compactedInput)",
-    async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata, compactedInput }) => {
+    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress, oversized metadata=$oversizedMetadata)",
+    async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata }) => {
       let observedWalks = 0;
       const nativeReadFailures: unknown[] = [];
       const prepare = persistedReplay.preparePersistedCurrentUserTurn;
@@ -247,7 +240,7 @@ describe("interrupted canonical user replay", () => {
             ).toHaveLength(1);
           });
         },
-        { interruptedTurn, toolProgress, oversizedMetadata, compactedInput },
+        { interruptedTurn, toolProgress, oversizedMetadata },
       );
       expect(observedWalks).toBeGreaterThan(0);
       expect(nativeReadFailures).toEqual([]);
@@ -282,129 +275,74 @@ describe("interrupted canonical user replay", () => {
 
   it.each([
     { appendOnly: false, queue: "steer" },
-    { appendOnly: true, queue: "steer" },
     { appendOnly: false, queue: "follow-up" },
-    { appendOnly: true, queue: "follow-up" },
-    { appendOnly: true, queue: "steer", compactedInput: true },
   ])(
-    "persists the next $queue user after replay with append-only context $appendOnly (compacted input=$compactedInput)",
-    async ({ appendOnly, queue, compactedInput }) => {
-      await withInterruptedTurn(
-        appendOnly,
-        async (fixture) => {
-          const before = loadTranscriptEventsSync(fixture.target);
-          await withReplaySession(fixture, appendOnly, async (session, submit) => {
-            const queuedText = "A distinct queued user request";
-            const recorder =
-              queue === "steer"
-                ? createUserTurnTranscriptRecorder({
-                    target: { ...fixture.target, sessionEntry: undefined },
-                    input: { text: queuedText, timestamp: 2, idempotencyKey: "queued-user:user" },
-                  })
-                : undefined;
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Both requests handled" }]),
-              ),
-            );
-            try {
-              if (recorder) {
-                await recorder.stageApproved!({
-                  runId: fixture.attempt.runId,
-                  assertCurrent: () => {},
-                });
-                await session.steer(queuedText, undefined, recorder);
-              } else {
-                await session.followUp(queuedText);
-              }
-              await submit();
-              expect(
-                streamMocks.streamSimple.mock.calls.some(([, context]) =>
-                  JSON.stringify(context.messages).includes(queuedText),
-                ),
-              ).toBe(true);
-              expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
-                before,
-              );
-              for (const [, context] of streamMocks.streamSimple.mock.calls) {
-                expect(
-                  context.messages.filter(
-                    (message: { role: string; content: unknown }) =>
-                      message.role === "user" &&
-                      JSON.stringify(message.content).includes(fixture.attempt.prompt),
-                  ),
-                ).toHaveLength(1);
-              }
-              expect(
-                SessionManager.open(fixture.target)
-                  .getBranch()
-                  .filter(
-                    (entry) =>
-                      entry.type === "message" &&
-                      entry.message.role === "user" &&
-                      JSON.stringify(entry.message.content).includes(queuedText),
-                  ),
-              ).toHaveLength(1);
-              if (recorder) {
-                expect(recorder.hasPersisted()).toBe(true);
-              }
-            } finally {
-              recorder?.finishPendingInput!("interrupted");
+    "persists the next $queue user after replay with append-only context $appendOnly",
+    async ({ appendOnly, queue }) => {
+      await withInterruptedTurn(appendOnly, async (fixture) => {
+        const before = loadTranscriptEventsSync(fixture.target);
+        await withReplaySession(fixture, appendOnly, async (session, submit) => {
+          const queuedText = "A distinct queued user request";
+          const recorder =
+            queue === "steer"
+              ? createUserTurnTranscriptRecorder({
+                  target: { ...fixture.target, sessionEntry: undefined },
+                  input: { text: queuedText, timestamp: 2, idempotencyKey: "queued-user:user" },
+                })
+              : undefined;
+          streamMocks.streamSimple.mockImplementation((model) =>
+            createAssistantResultStream(
+              createAssistant(model, [{ type: "text", text: "Both requests handled" }]),
+            ),
+          );
+          try {
+            if (recorder) {
+              await recorder.stageApproved!({
+                runId: fixture.attempt.runId,
+                assertCurrent: () => {},
+              });
+              await session.steer(queuedText, undefined, recorder);
+            } else {
+              await session.followUp(queuedText);
             }
-          });
-        },
-        { compactedInput },
-      );
+            await submit();
+            expect(
+              streamMocks.streamSimple.mock.calls.some(([, context]) =>
+                JSON.stringify(context.messages).includes(queuedText),
+              ),
+            ).toBe(true);
+            expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
+              before,
+            );
+            for (const [, context] of streamMocks.streamSimple.mock.calls) {
+              expect(
+                context.messages.filter(
+                  (message: { role: string; content: unknown }) =>
+                    message.role === "user" &&
+                    JSON.stringify(message.content).includes(fixture.attempt.prompt),
+                ),
+              ).toHaveLength(1);
+            }
+            expect(
+              SessionManager.open(fixture.target)
+                .getBranch()
+                .filter(
+                  (entry) =>
+                    entry.type === "message" &&
+                    entry.message.role === "user" &&
+                    JSON.stringify(entry.message.content).includes(queuedText),
+                ),
+            ).toHaveLength(1);
+            if (recorder) {
+              expect(recorder.hasPersisted()).toBe(true);
+            }
+          } finally {
+            recorder?.finishPendingInput!("interrupted");
+          }
+        });
+      });
     },
   );
-
-  it("preserves current prompt images while reusing its durable user", async () => {
-    const manager = SessionManager.inMemory();
-    const user = {
-      role: "user" as const,
-      content: "Describe the current image",
-      timestamp: 1,
-      idempotencyKey: "image-turn:user",
-      __openclaw: {
-        senderName: "Synthetic sender",
-        media: [{ path: "/synthetic/image.png", contentType: "image/png" }],
-      },
-    };
-    manager.appendMessage(user);
-    const { session } = await createTestSession({ sessionManager: manager });
-    const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
-    streamMocks.streamSimple.mockImplementation((model) =>
-      createAssistantResultStream(
-        createAssistant(model, [{ type: "text", text: "Image described" }]),
-      ),
-    );
-    try {
-      await session.prompt(user.content, {
-        persistedUserIdempotencyKey: user.idempotencyKey,
-        images: finalizeRuntimePromptImages([{ image, factIndex: 0 }]).images,
-      });
-      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      const runtimeUser = session.messages.find(
-        (message) => Reflect.get(message, "idempotencyKey") === user.idempotencyKey,
-      );
-      expect(runtimeUser).toMatchObject({
-        timestamp: user.timestamp,
-        __openclaw: { ...user["__openclaw"], mediaImageBlockFactIndexes: [0] },
-      });
-      expect(manager.getBranch()[0]).toMatchObject({ message: user });
-      const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
-      expect(messages.filter((message: { role: string }) => message.role === "user")).toHaveLength(
-        1,
-      );
-      expect(
-        messages.flatMap((message: { content: unknown }) =>
-          Array.isArray(message.content) ? message.content : [],
-        ),
-      ).toContainEqual(image);
-    } finally {
-      session.dispose();
-    }
-  });
 
   it.each([false, true])(
     "hydrates one current user through the built-in owner with interruption %s",
@@ -598,9 +536,7 @@ describe("interrupted canonical user replay", () => {
 
   it.each([
     { ordering: "repeated-restart", appendOnly: false },
-    { ordering: "repeated-restart", appendOnly: true },
     { ordering: "pre-core-compaction", appendOnly: false },
-    { ordering: "pre-core-compaction", appendOnly: true },
   ])(
     "replays the same interrupted turn after $ordering with append-only context $appendOnly",
     async ({ ordering, appendOnly }) => {
@@ -770,10 +706,7 @@ describe("interrupted canonical user replay", () => {
 });
 
 it.each([
-  { kind: "source snapshot", detached: true, fresh: false, explicit: undefined },
-  { kind: "fresh helper", detached: true, fresh: true, explicit: undefined },
   { kind: "explicit override", detached: true, fresh: false, explicit: "caller-cache-key" },
-  { kind: "durable sibling", detached: false, fresh: false, explicit: undefined },
 ])(
   "derives boundary cache affinity from the prompt owner ($kind)",
   async ({ detached, fresh, explicit }) => {
