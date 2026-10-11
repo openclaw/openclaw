@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
 import "./modal-dialog.ts";
@@ -86,6 +87,124 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it("retains presentation through native exit transitions after closing during opening", async () => {
+    vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
+    let occluded = false;
+    const unsubscribe = subscribeNativeOverlayOcclusion(
+      (value) => {
+        occluded = value;
+      },
+      () => null,
+    );
+    const originalOverflow = getComputedStyle(document.body).overflow;
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.manual = true;
+    modal.label = "Animated dialog";
+    modal.textContent = "Opening content";
+    modal.style.setProperty("--openclaw-modal-show-duration", "1000ms");
+    modal.style.setProperty("--openclaw-modal-hide-duration", "1000ms");
+    container.append(modal);
+    await modal.updateComplete;
+    const dialog = modalDialog(modal);
+    // Keep the exit measurable even in engines that immediately remove top-layer display.
+    dialog.style.display = "flex";
+    try {
+      modal.show();
+      const opening = dialog
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition);
+      expect(opening.length).toBeGreaterThan(0);
+      for (const animation of opening) {
+        animation.pause();
+        animation.currentTime = 500;
+      }
+      expect(dialog.dataset.phase).toBe("opening");
+      let completions = 0;
+      modal.addEventListener("wa-after-hide", () => {
+        completions += 1;
+      });
+      const hidden = afterModalPhase(modal, "closed");
+      modal.hide();
+      expect(modal.open).toBe(false);
+      expect(dialog.open).toBe(true);
+      for (const animation of opening) {
+        animation.finish();
+      }
+      expect(getComputedStyle(dialog).opacity).toBe("1");
+
+      let exiting: Animation[] = [];
+      await expect
+        .poll(() => {
+          if (dialog.open) {
+            return 0;
+          }
+          exiting = dialog
+            .getAnimations()
+            .filter(
+              (animation) =>
+                animation instanceof CSSTransition &&
+                ["running", "paused"].includes(animation.playState) &&
+                Number.isFinite(animation.effect?.getComputedTiming().endTime),
+            );
+          for (const animation of exiting) {
+            animation.pause();
+          }
+          return exiting.length;
+        })
+        .toBeGreaterThan(0);
+      expect(completions).toBe(0);
+      expect(dialog.dataset.phase).toBe("closing");
+      expect(getComputedStyle(document.body).overflow).toBe("hidden");
+      expect(occluded).toBe(true);
+
+      for (const animation of exiting) {
+        animation.finish();
+      }
+      await hidden;
+      expect(completions).toBe(1);
+      expect(dialog.dataset.phase).toBe("hidden");
+      expect(getComputedStyle(document.body).overflow).toBe(originalOverflow);
+      expect(occluded).toBe(false);
+    } finally {
+      for (const animation of dialog.getAnimations()) {
+        animation.cancel();
+      }
+      modal.remove();
+      unsubscribe();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("locks the owning document until its last shadow-hosted modal closes", async () => {
+    const frame = document.createElement("iframe");
+    container.append(frame);
+    const doc = frame.contentDocument!;
+    const view = frame.contentWindow!;
+    doc.body.style.minHeight = "200vh";
+    const originalOverflow = view.getComputedStyle(doc.body).overflow;
+    const host = document.createElement("div");
+    doc.body.append(host);
+    const shadow = host.attachShadow({ mode: "open" });
+    const firstMount = document.createElement("div");
+    const secondMount = document.createElement("div");
+    shadow.append(firstMount, secondMount);
+
+    const first = await mountModal(firstMount, "palette");
+    expect(first.dialog.open).toBe(true);
+    expect(view.getComputedStyle(doc.body).overflow).toBe("hidden");
+    const second = await mountModal(secondMount, "palette");
+    const secondHidden = afterModalPhase(second.modal, "closed");
+    second.modal.hide();
+    await secondHidden;
+    expect(first.dialog.open).toBe(true);
+    expect(view.getComputedStyle(doc.body).overflow).toBe("hidden");
+
+    const firstHidden = afterModalPhase(first.modal, "closed");
+    first.modal.hide();
+    await firstHidden;
+    expect(view.getComputedStyle(doc.body).overflow).toBe(originalOverflow);
+  });
+
   it.each(["palette", "drawer", "drawer drawer--floating"])(
     "assigns motion to the rendered interaction (%s)",
     async (variant) => {
@@ -136,10 +255,14 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
   );
 
   it.each(
-    [false, true].flatMap((moved) => ["light", "shadow", "slot"].map((tree) => ({ moved, tree }))),
+    [false, true].flatMap((moved) =>
+      ["light", "shadow", "slot"]
+        .map((tree) => ({ moved, tree, blocked: "inert" }))
+        .concat({ moved, tree: "light", blocked: "disabled" }),
+    ),
   )(
-    "returns focus after background inertness clears without replacing new focus ($tree, moved=$moved)",
-    async ({ moved, tree }) => {
+    "returns focus after background controls become focusable without replacing new focus ($tree, $blocked, moved=$moved)",
+    async ({ moved, tree, blocked }) => {
       const background = document.createElement("div");
       const trigger = document.createElement("button");
       const nextTarget = document.createElement("button");
@@ -160,10 +283,12 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       const { modal } = await mountModal();
       modal.setReturnFocusTarget(trigger);
 
-      background.inert = true;
+      background.inert = blocked === "inert";
+      trigger.disabled = blocked === "disabled";
       modal.remove();
       expect(trigger.matches(":focus")).toBe(false);
       background.inert = false;
+      trigger.disabled = false;
       if (moved) {
         nextTarget.focus();
       }
@@ -172,7 +297,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     },
   );
 
-  it.each(["inert", "reconnected", "removed"])(
+  it.each(["inert", "disabled", "reconnected", "removed"])(
     "drops deferred focus restoration after cancellation (%s)",
     async (state) => {
       const background = document.createElement("div");
@@ -186,7 +311,8 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         restored = true;
       });
 
-      background.inert = true;
+      background.inert = state !== "disabled";
+      trigger.disabled = state === "disabled";
       modal.remove();
       if (state === "reconnected") {
         background.inert = false;

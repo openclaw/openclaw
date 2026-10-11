@@ -8,6 +8,7 @@ import { containsComposed } from "./overlay-registry.ts";
 import { ModalDialogContent } from "./solid/modal-dialog.tsx";
 import { retainShadowStyles } from "./solid/shadow-styles.ts";
 import modalStyles from "./solid/modal-dialog.css?inline";
+import modalScrollLockStyles from "./solid/modal-scroll-lock.css?inline";
 import overlayStyles from "./solid/overlay.css?inline";
 
 export type ModalDialogProperties = {
@@ -75,6 +76,7 @@ function setModalLayer(host: HTMLElement, open: boolean) {
 
 function acquirePresentation(host: HTMLElement): () => void {
   const doc = host.ownerDocument;
+  const releaseScrollLockStyles = retainShadowStyles(doc, [modalScrollLockStyles]);
   let locks = scrollLocks.get(doc);
   if (!locks) {
     locks = new Set();
@@ -94,6 +96,7 @@ function acquirePresentation(host: HTMLElement): () => void {
       doc.documentElement.classList.remove("oc-modal-scroll-lock");
       doc.documentElement.classList.remove("oc-modal-scroll-gutter");
     }
+    releaseScrollLockStyles();
   };
 }
 
@@ -197,16 +200,16 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       clearReturnFocus();
       return;
     }
-    if (!isInert(target)) {
+    if (!isInert(target) && !target.matches(":disabled")) {
       clearReturnFocus();
       restoreFocus(target);
       return;
     }
-    // Teardown can take over if the containing render removes us before inertness clears.
+    // Teardown can take over before the containing render makes the target focusable.
     returnFocusPending = true;
     const version = ++focusReturnVersion;
     const connected = host.isConnected;
-    // A containing render can release background inertness after removing us.
+    // A containing render may enable the target or release inertness after removal.
     queueMicrotask(() => {
       if (version !== focusReturnVersion || host.isConnected !== connected || dialog.open) {
         return;
@@ -215,7 +218,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
         clearReturnFocus();
         return;
       }
-      if (!isInert(target)) {
+      if (!isInert(target) && !target.matches(":disabled")) {
         clearReturnFocus();
         restoreFocus(target);
       }

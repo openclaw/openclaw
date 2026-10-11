@@ -333,18 +333,14 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     </>
   );
 }
-export const OpenClawBrowserTabCard = defineSolidBridge<BrowserTabCardProps>(
-  "openclaw-browser-tab-card",
-  BrowserTabCard,
-  {
-    properties: {
-      context: { default: undefined, attribute: false },
-      preview: { default: undefined, attribute: false },
-      revision: { default: undefined, attribute: false },
-      latest: { default: false },
-    },
+defineSolidBridge<BrowserTabCardProps>("openclaw-browser-tab-card", BrowserTabCard, {
+  properties: {
+    context: { default: undefined, attribute: false },
+    preview: { default: undefined, attribute: false },
+    revision: { default: undefined, attribute: false },
+    latest: { default: false },
   },
-);
+});
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-browser-tab-card": SolidBridgeElement<BrowserTabCardProps>;

@@ -6,18 +6,33 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { renderHubTabs } from "./hub-tabs.ts";
-import { renderSessionsHubHeader } from "./sessions-hub-header.ts";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 
-type SessionsHubTabsProps = Pick<
-  Parameters<typeof renderSessionsHubHeader>[0],
-  "active" | "onSelect"
->;
+type SessionsHubTabsProps = {
+  active: "sessions" | "worktrees";
+  onSelect: (tab: "sessions" | "worktrees") => void;
+};
 
-async function mount(props: SessionsHubTabsProps): Promise<HTMLDivElement> {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderSessionsHubHeader({ ...props, title: "Sessions" }), container);
+async function mount(
+  props: SessionsHubTabsProps,
+  container = document.createElement("div"),
+): Promise<HTMLDivElement> {
+  if (!container.isConnected) {
+    document.body.append(container);
+  }
+  render(
+    renderHubTabs({
+      ...props,
+      id: "sessions",
+      tabs: [
+        { value: "sessions", label: "Sessions" },
+        { value: "worktrees", label: "Worktrees" },
+      ],
+      ariaLabel: "Sessions",
+      panelId: "sessions-hub-panel",
+    }),
+    container,
+  );
   await Promise.resolve();
   return container;
 }
@@ -60,11 +75,7 @@ describe("Sessions hub navigation", () => {
   it("does not echo controlled selection changes as navigation", async () => {
     const onSelect = vi.fn();
     const container = await mount({ active: "sessions", onSelect });
-    render(
-      renderSessionsHubHeader({ active: "worktrees", onSelect, title: "Sessions" }),
-      container,
-    );
-    await Promise.resolve();
+    await mount({ active: "worktrees", onSelect }, container);
     expect(container.querySelector('[role="tab"][active]')?.id).toBe("sessions-tab-worktrees");
     expect(onSelect).not.toHaveBeenCalled();
   });

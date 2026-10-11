@@ -16,6 +16,22 @@ describe("lazy tooltip content materialization", () => {
     vi.restoreAllMocks();
   });
 
+  it("waits for the native surface to render before opening an anchor preview", async () => {
+    const tooltip = document.createElement("openclaw-tooltip");
+    const anchor = document.createElement("button");
+    anchor.textContent = "Preview";
+    document.body.append(anchor, tooltip);
+
+    tooltip.previewForAnchor(anchor, "Preview details", "focus");
+    expect(tooltip.hasAttribute("open")).toBe(false);
+    await settleTooltip(tooltip);
+
+    expect(tooltipSurface(tooltip)?.matches(":popover-open")).toBe(true);
+    expect(tooltipSurface(tooltip)?.querySelector(".tooltip-content")?.textContent).toBe(
+      "Preview details",
+    );
+  });
+
   it("materializes content on first hover intent and reuses the native surface", async () => {
     const { tooltip, trigger } = createTooltip("Hover details");
     const untouched = createTooltip("Untouched details");

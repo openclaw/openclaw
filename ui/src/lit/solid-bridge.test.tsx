@@ -78,6 +78,25 @@ function createHost() {
   return new Bridge.Element();
 }
 
+it("runs Solid caller effects after the parent render completes", () => {
+  const EffectBridge = defineSolidBridge<{ label: string }>(
+    "openclaw-solid-effect-bridge-test",
+    (props) => {
+      const [label, setLabel] = createSignal("");
+      createEffect(
+        () => props.label,
+        (value) => {
+          setLabel(value);
+        },
+      );
+      return <output>{label()}</output>;
+    },
+    { properties: { label: { default: "" } } },
+  );
+  const view = render(() => <EffectBridge label="committed" />);
+  expect(view.getByText("committed")).toBeTruthy();
+});
+
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();

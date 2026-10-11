@@ -111,7 +111,7 @@ const {
   getChatSpy,
   getLoadConfigMock,
   getOnHandler,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   onSpy,
   getReadChannelAllowFromStoreMock,
   replySpy,
@@ -1172,7 +1172,7 @@ describe("createTelegramBot", () => {
   );
 
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
-    listSkillCommandsForAgents.mockImplementationOnce(({ agentIds }) => {
+    prepareSkillCommandsForAgents.mockImplementationOnce(async ({ agentIds }) => {
       if (agentIds?.length !== 1 || agentIds[0] !== "main") {
         throw new Error("pagination queried commands for the wrong agent");
       }
@@ -1202,7 +1202,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledOnce();
+    expect(prepareSkillCommandsForAgents).toHaveBeenCalledOnce();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       -100999,
@@ -1671,27 +1671,37 @@ describe("createTelegramBot", () => {
         { agents: { defaults: { userTimezone: "UTC" } } },
       );
       loadConfig.mockReturnValue(config);
-      const callbackHandler = await createCallbackHandler({ config });
-      const page = buildCommandsMessagePaginated(config, [], {
-        surface: "telegram",
-        forcePaginatedList: true,
-        page: Number.MAX_SAFE_INTEGER,
-      });
-      expect(page.text).toContain("active-memory");
-      await callbackHandler(
-        createTelegramCallbackContext({
-          id: "cbq-command-code",
-          data: `commands_page_${page.currentPage}:main`,
-          message: { message_id: 17 },
-        }),
-      );
-      expect(editMessageTextSpy).toHaveBeenCalledWith(
-        1234,
-        17,
-        expect.stringContaining("<code>/active-memory</code>"),
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
-      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+      const readSession = vi
+        .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
+        .mockResolvedValue(undefined);
+      try {
+        const callbackHandler = await createCallbackHandler({ config });
+        const page = buildCommandsMessagePaginated(config, [], {
+          surface: "telegram",
+          forcePaginatedList: true,
+          page: Number.MAX_SAFE_INTEGER,
+        });
+        expect(page.text).toContain("active-memory");
+        await callbackHandler(
+          createTelegramCallbackContext({
+            id: "cbq-command-code",
+            data: `commands_page_${page.currentPage}:main`,
+            message: { message_id: 17 },
+          }),
+        );
+        expect(editMessageTextSpy).toHaveBeenCalledWith(
+          1234,
+          17,
+          expect.stringContaining("<code>/active-memory</code>"),
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
+        expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+        expect(readSession).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "main", sessionKey: expect.any(String) }),
+        );
+      } finally {
+        readSession.mockRestore();
+      }
     });
   });
 
@@ -1706,7 +1716,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgents).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
   });
 

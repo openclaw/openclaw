@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, flush, onSettled, untrack } from "solid-js";
 import { createTabsController } from "../lib/tabs-controller.ts";
-import "./panel-elements.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { bindShadowStyles } from "./solid/shadow-styles.ts";

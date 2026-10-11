@@ -613,6 +613,11 @@ export function createOverlay(
             }
             return;
           }
+          // Native close can start a fresh exit after an interrupted entry settles.
+          if (!native.isOpen(surface) && hasPendingPresentation()) {
+            complete(false, token);
+            return;
+          }
         }
         if (native.isOpen(surface) !== next) {
           return;

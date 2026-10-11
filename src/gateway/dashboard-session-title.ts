@@ -30,10 +30,7 @@ import {
   resolveExplicitSessionName,
   sessionTitleRequests,
 } from "./session-title-state.js";
-import {
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-} from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -487,11 +484,8 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       sessionKey,
       storePath: params.storePath,
     };
-    const transcriptSource = (
-      incognito
-        ? await readSessionTitleFieldsFromTranscriptAsync(transcriptScope)
-        : readSessionTitleFieldsFromTranscript(transcriptScope)
-    ).firstUserMessage;
+    const transcriptSource = (await readSessionTitleFieldsFromTranscriptAsync(transcriptScope))
+      .firstUserMessage;
     assertIncognitoCurrent();
     const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
     const currentText = params.currentUserMessage?.trim() ?? "";

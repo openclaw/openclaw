@@ -84,6 +84,10 @@ const HOSTED_TAB_REQUESTS = [
   ["terminal", TERMINAL_PANEL_TOGGLE_EVENT, { open: true, newSession: true }],
 ] as const;
 
+function activePanelTab(root: ParentNode | null | undefined) {
+  return root?.querySelector<HTMLElement>('.tabstrip-tab[aria-selected="true"]');
+}
+
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) panelIdPrefix = "";
   @property({ attribute: false }) conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
@@ -188,7 +192,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.focusedSurface = header;
     const restoreFocus = () => {
       if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
-        header.querySelector<HTMLElement>(".tabstrip-tab[active]")?.focus();
+        activePanelTab(header)?.focus();
       }
     };
     const hosted = this.hostedTabsElement(active);
@@ -625,9 +629,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           const now = document.activeElement;
           const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
           if (this.sideFocusLocked && !moved) {
-            side
-              ?.querySelector<HTMLElement>('[data-region-header="side"] .tabstrip-tab[active]')
-              ?.focus();
+            activePanelTab(side?.querySelector('[data-region-header="side"]'))?.focus();
           }
         });
       }
