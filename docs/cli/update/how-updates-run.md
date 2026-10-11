@@ -209,6 +209,12 @@ recovery files would change their metadata and could invalidate an older sealed
 helper's fingerprint. Explicit runtime links into those recovery artifacts are
 rejected; the evidence remains untouched for its recovery owner.
 
+Unchanged retained runtime files use hard links when the filesystem supports
+them. Retention verifies each source before linking and checks the resulting
+inode and metadata, without rehashing bytes for the change time caused by its
+own link. Files requiring independent plugin-safety checks or relocation still
+use verified copies.
+
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,
 package version, and launcher verification, recording that full package contents
@@ -220,8 +226,11 @@ identity, metadata, directory listings, links, and a final metadata sweep. A
 file's content digest from the earlier baseline or staged-package scan is reused
 only when its complete metadata, including inode, link count, size, modification
 time, and change time, is unchanged and its change time predates that earlier
-read by at least five seconds. Recovery helpers and later commands re-read file
-contents. Like the metadata sweep, these checks observe the package rather than
+read by at least five seconds. Files that were too recent during preparation
+become eligible after a later successful verification observes them settled;
+subsequent publication checks reuse that observation while still comparing
+against the original package fingerprint. Recovery helpers and later commands
+re-read file contents. Like the metadata sweep, these checks observe the package rather than
 lock it: writes through an already-modified shared memory mapping may not update
 file times. Keep other package managers and tools that modify the installation
 stopped during an update.
