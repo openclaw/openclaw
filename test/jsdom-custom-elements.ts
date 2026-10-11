@@ -25,18 +25,17 @@ export type CustomElementTracking = {
   repoOwnedTags: Set<string>;
 };
 
+const VITEST_SPY_FRAME = /[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u;
+
 // Conservative on an unreadable stack: keeping a repo tag costs a stale class in
 // one lane, dropping a dependency tag would leave it unupgraded for the whole run.
 export function isRepoOwnedDefineStack(stack: string | undefined): boolean {
-  // Vitest spies forward to the tracked define; they do not own the registered class.
+  const frames = (stack ?? "").split("\n").slice(2);
+  // A Vitest spy on define forwards here, possibly through a fixture's mock
+  // implementation. Neither owns the registered class; whoever called the spy does.
+  const spyFrame = frames.findIndex((frame) => VITEST_SPY_FRAME.test(frame));
   const callerFrame =
-    (stack ?? "")
-      .split("\n")
-      .slice(2)
-      .find(
-        (frame) =>
-          !/[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u.test(frame),
-      ) ?? "";
+    frames.slice(spyFrame + 1).find((frame) => !VITEST_SPY_FRAME.test(frame)) ?? "";
   return callerFrame.trim() !== "" && !/[\\/]node_modules[\\/]/u.test(callerFrame);
 }
 

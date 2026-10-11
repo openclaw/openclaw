@@ -15,10 +15,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
-import {
-  prepareSessionSharingTargets,
-  resolveSessionSharingTarget,
-} from "./session-sharing-policy.js";
+import { resolveSessionSharingTarget } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
@@ -110,9 +107,6 @@ it("prepares missing sharing facts and reads committed creation and membership w
       expect(resolveSessionSharingTarget({ cfg, sessionKey })?.entry.sessionId).toBe(
         "memory-sharing",
       );
-      expect(prepareSessionSharingTargets({ cfg, targets: [{ sessionKey }] })).toMatchObject([
-        { ok: true, value: { entry: { sessionId: "memory-sharing" } } },
-      ]);
       expect(() =>
         resolveSessionSharingTarget({
           cfg: {
@@ -136,7 +130,7 @@ it("prepares missing sharing facts and reads committed creation and membership w
   expect(() => prepared.source.assertCurrent()).toThrow("no longer retained");
 });
 
-it("reads sibling and batch sharing from the captured owner after leaving the actor scope", async () => {
+it("reads sibling sharing from the captured owner after leaving the actor scope", async () => {
   const { binding, owner, storage } = await fixture();
   const siblingKey = "agent:main:dashboard:incognito-memory-sharing-sibling";
   const sibling = await storage.acquire(siblingKey);
@@ -178,18 +172,6 @@ it("reads sibling and batch sharing from the captured owner after leaving the ac
         sessionKey: "agent:other:dashboard:incognito-absent-owner",
       }),
     ).toEqual({ entry: undefined, members: [] });
-    expect(
-      prepareSessionSharingTargets({
-        cfg: { agents: { entries: { main: {}, other: {} } } },
-        targets: [{ sessionKey: "agent:other:dashboard:incognito-absent-owner" }],
-      }),
-    ).toEqual([{ ok: true, value: null }]);
-    expect(
-      prepareSessionSharingTargets({ cfg, targets: [{ sessionKey }, { sessionKey: siblingKey }] }),
-    ).toMatchObject([
-      { ok: true, value: null },
-      { ok: true, value: { entry: { sessionId: "sibling-session" } } },
-    ]);
     return {
       facts: await prepareSessionMutationFacts({ cfg, sessionKey: siblingKey, agentId: "main" }),
       source: await prepareSessionSharingSource(

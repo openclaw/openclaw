@@ -1,6 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../../lib/chat/message-normalizer.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
@@ -65,6 +68,14 @@ export function prepareGroupMessage(
 
 export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
+    return false;
+  }
+  if (
+    bubbleMode &&
+    group.messages.some(
+      (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
+    )
+  ) {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));

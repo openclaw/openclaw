@@ -148,6 +148,7 @@ describe("terminal panel readiness", () => {
       expect(
         panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-connecting"),
       ).toBe(true);
+      expect(panel.renderRoot.querySelector("wa-tab-panel")?.active).toBe(true);
     });
 
     open.resolve(terminalOpenResult("session-1"));

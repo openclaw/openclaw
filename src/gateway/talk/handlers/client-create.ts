@@ -42,7 +42,7 @@ import {
   projectInternalRealtimeVoicePublicConfig,
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../../talk/provider-internal.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
+import { resolveConfiguredRealtimeVoiceProviderAsync } from "../../../talk/provider-resolver.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
@@ -113,7 +113,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     });
     const requested = replacement ? { ...params, ...replacement.launch } : params;
     const runtimeConfig = context.getRuntimeConfig();
-    const realtimeConfig = buildTalkRealtimeConfig(
+    const realtimeConfig = await buildTalkRealtimeConfig(
       runtimeConfig,
       requested.provider,
       requested.model,
@@ -152,7 +152,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     );
     const sessionTarget = { agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
     assertSecretOwnerAvailable("capability", "talk:realtime");
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+    const resolution = await resolveConfiguredRealtimeVoiceProviderAsync({
       configuredProviderId: realtimeConfig.provider,
       providerConfigs: realtimeConfig.providers,
       ...(launchOptions.model ? { providerConfigOverrides: { model: launchOptions.model } } : {}),

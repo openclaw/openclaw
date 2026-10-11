@@ -35,7 +35,7 @@ type IncognitoSessionDeadline = {
   agentId: string;
   sessionId: string;
   expiresAt: number;
-  source: { identity: string | symbol; assertCurrent(): void; assertSettlingCurrent?(): void };
+  source: { identity: string | symbol; assertCurrent(): void };
 };
 
 type DeleteIncognitoSession = (
@@ -53,22 +53,16 @@ function createIncognitoSessionDeadlineOwner(params: {
   const scheduler = params.scheduler.scope();
   const restartSignal = getGatewayRestartDrainSignal();
   const deadlines = new Map<string, Deadline>();
-  const current = (deadline: Deadline, accepted = false) => {
-    const registered = deadlines.get(deadline.sessionKey);
-    const retaining = accepted && deadline.source.assertSettlingCurrent !== undefined;
+  const current = (deadline: Deadline) => {
     if (
-      (!retaining && (scheduler.signal.aborted || restartSignal.aborted)) ||
-      (registered !== deadline && (!retaining || registered !== undefined))
+      scheduler.signal.aborted ||
+      restartSignal.aborted ||
+      deadlines.get(deadline.sessionKey) !== deadline
     ) {
       return false;
     }
     try {
-      // An acknowledged deletion may remove its own row and deadline before cleanup settles.
-      if (accepted && deadline.source.assertSettlingCurrent) {
-        deadline.source.assertSettlingCurrent();
-      } else {
-        deadline.source.assertCurrent();
-      }
+      deadline.source.assertCurrent();
       return true;
     } catch {
       return false;
@@ -94,7 +88,7 @@ function createIncognitoSessionDeadlineOwner(params: {
         let accepted = true;
         try {
           await params.deleteSession(deadline, () => {
-            if (!accepted || !current(deadline, true)) {
+            if (!accepted || !current(deadline)) {
               throw new Error("Incognito expiry no longer owns this session.");
             }
           });

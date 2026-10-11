@@ -349,16 +349,18 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         : undefined,
       modelProviderOverride: usesSupervisionConnection
         ? undefined
-        : resolveCodexAppServerThreadModelSelection({
-            homeScope: appServer.start.homeScope,
-            provider: params.provider,
-            model: params.modelId,
-            binding: mutable.startupBinding,
-            authProfileId: startupAuthProfileId,
-            authProfileStore: attemptAuthProfileStore,
-            agentDir,
-            config: params.config,
-          }).modelProvider,
+        : (
+            await resolveCodexAppServerThreadModelSelection({
+              homeScope: appServer.start.homeScope,
+              provider: params.provider,
+              model: params.modelId,
+              binding: mutable.startupBinding,
+              authProfileId: startupAuthProfileId,
+              authProfileStore: attemptAuthProfileStore,
+              agentDir,
+              config: params.config,
+            })
+          ).modelProvider,
       signal: runAbortController.signal,
     });
   }

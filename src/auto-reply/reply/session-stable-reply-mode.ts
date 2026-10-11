@@ -28,7 +28,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 /** Synthetic and chat turns must share messageToolPolicyHash to reuse CLI sessions (#121485). */
-export function resolveSessionStableReplyMode(params: {
+export async function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   sessionEntry?: SessionEntry;
@@ -36,7 +36,7 @@ export function resolveSessionStableReplyMode(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): SourceReplyDeliveryMode {
+}): Promise<SourceReplyDeliveryMode> {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
     normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
@@ -52,7 +52,7 @@ export function resolveSessionStableReplyMode(params: {
     Surface: normalizeOptionalString(ctx.Surface) ?? sessionDeliveryChannel(sessionEntry),
     ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
   };
-  const { harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
+  const { harnessDefaultVisibleReplies } = await resolveVisibleRepliesPolicy({
     cfg,
     chatType,
     ctx,

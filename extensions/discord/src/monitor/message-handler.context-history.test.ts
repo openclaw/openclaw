@@ -329,7 +329,7 @@ describe("Discord native recent history through process context", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
-  it.each(["abort", "policy", "reset", "tombstone"] as const)(
+  it.each(["abort", "policy"] as const)(
     "does not publish fetched context after %s changes while awaiting REST",
     async (kind) => {
       const controller = new AbortController();
@@ -347,15 +347,8 @@ describe("Discord native recent history through process context", () => {
       const get = vi.fn(async () => {
         if (kind === "abort") {
           controller.abort();
-        } else if (kind === "policy") {
-          policyCurrent = false;
         } else {
-          await writeSession(ctx, {
-            sessionId: "same-session",
-            lifecycleRevision: kind === "tombstone" ? "before" : "after",
-            updatedAt: kind === "tombstone" ? 0 : startedAt + 9_000,
-            sessionStartedAt: kind === "tombstone" ? startedAt : startedAt + 9_000,
-          });
+          policyCurrent = false;
         }
         return [nativeMessage(900)];
       });

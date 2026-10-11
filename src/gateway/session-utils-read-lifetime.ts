@@ -16,10 +16,8 @@ import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import {
-  findCanonicalStoreMatch,
-  omitInternalSessionEffectsEntries,
-} from "./session-utils-store-selection.js";
+import { omitInternalSessionEffectsEntries } from "./session-utils-store-selection.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 function captureMemoryRead(params: {
@@ -128,15 +126,7 @@ export async function withGatewaySessionEntryReadOnly<T>(
     env: params.env,
   });
   if (!binding) {
-    const loaded = loadGatewaySessionEntryReadOnly(
-      params.key,
-      { agentId: params.agentId, env: params.env, projection: params.projection },
-      params.cfg,
-    );
-    if (params.excludeInternalEffects) {
-      omitInternalSessionEffectsEntries(loaded.store, loaded.storeKeys);
-      loaded.entry = findCanonicalStoreMatch(loaded.store, loaded.storeKeys)?.entry;
-    }
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker(params);
     return consume(loaded, () => params.assertActive?.());
   }
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
