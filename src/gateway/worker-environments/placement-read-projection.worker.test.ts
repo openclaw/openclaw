@@ -296,7 +296,9 @@ describe("worker placement read projection", () => {
                 expect(prepared.placement).toEqual(placement);
               }
               prepared.assertCurrent();
-              expect(readCalls()).toHaveLength(1);
+              expect(readCalls()).toHaveLength(
+                kind === "inventory" && settlement === "rollback" ? 0 : 1,
+              );
             } finally {
               prepared.release();
             }
