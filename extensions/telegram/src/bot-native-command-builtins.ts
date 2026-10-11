@@ -1,10 +1,8 @@
 import {
-  buildModelAliasIndex,
   loadPreparedModelCatalog,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultModelForAgent,
-  resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -20,7 +18,6 @@ import {
   resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   getSessionEntryAsync,
   resolveStorePath,
@@ -32,6 +29,7 @@ import {
   prepareTelegramCommandDispatch,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
+import { resolveTelegramUnpinnedTopicModel } from "./dm-topic-model.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
@@ -51,32 +49,6 @@ type TelegramMenuModelParams = {
   modelParentSessionKey?: null;
   chatId?: string;
 };
-
-/** What the next reply in an unpinned DM topic runs on: the channel's model, else the agent default. */
-function resolveTelegramUnpinnedTopicModel(
-  params: TelegramMenuModelParams,
-  defaultModel: { provider: string; model: string },
-): { provider: string; model: string } {
-  const channelModel = resolveChannelModelOverride({
-    cfg: params.cfg,
-    channel: "telegram",
-    groupChatType: "direct",
-    directUserIds: [params.chatId],
-  });
-  const selectionContext = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: defaultModel.provider,
-  };
-  const channelRef = channelModel
-    ? resolveModelRefFromString({
-        ...selectionContext,
-        raw: channelModel.model,
-        aliasIndex: buildModelAliasIndex(selectionContext),
-      })?.ref
-    : undefined;
-  return channelRef ?? { provider: defaultModel.provider, model: defaultModel.model };
-}
 
 async function resolveTelegramCommandMenuModelContext(
   params: TelegramMenuModelParams,
