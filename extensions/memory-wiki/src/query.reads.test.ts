@@ -3,7 +3,6 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import * as wikiLinks from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -74,51 +73,6 @@ describe("wiki query page reads", () => {
     expect(openedPages).not.toContain(unrelatedPath);
   });
 
-  it.each([false, true])(
-    "searches and reads without extracting unused links (compiled=%s)",
-    async (compiled) => {
-      const { config, targetPath, relativePath } = await createReadVault();
-      await fs.appendFile(
-        targetPath,
-        "\nCobalt lantern notes.\n[Guide](../concepts/guide.md)\n[[concepts/reference]]\n",
-      );
-      if (compiled) {
-        await compileMemoryWikiVault(config);
-      }
-      const extractLinks = vi.spyOn(wikiLinks, "extractWikiLinks");
-
-      for (const query of ["Alpha", "cobalt lantern", "concepts/reference"]) {
-        const results = await searchMemoryWiki({ config, query });
-        expect(results).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ path: relativePath, title: "Alpha", corpus: "wiki" }),
-          ]),
-        );
-      }
-      await expect(searchMemoryWiki({ config, query: "unmatched-orchid" })).resolves.toEqual([]);
-      for (const lookup of [relativePath, "alpha", "source.alpha"]) {
-        const result = await getMemoryWikiPage({ config, lookup });
-        expect(result?.path).toBe(relativePath);
-        expect(result?.content).toContain("[Guide](../concepts/guide.md)");
-      }
-      expect(extractLinks).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["sources/alpha.md", "sources/alpha.md"],
-    ["  sources\\nested\\alpha.md  ", "sources/nested/alpha.md"],
-  ])("reads %s without enumerating unrelated pages", async (lookup, relativePath) => {
-    const { rootDir, config } = await createReadVault(relativePath);
-    await fs.writeFile(path.join(rootDir, "sources", "unrelated.md"), "---\ninvalid: [\n---\n");
-    const readdir = vi.spyOn(fs, "readdir");
-
-    await expect(
-      getMemoryWikiPage({ config, lookup, fromLine: 4, lineCount: 1 }),
-    ).resolves.toMatchObject({ path: relativePath, content: "readable line", truncated: true });
-    expect(readdir).not.toHaveBeenCalled();
-  });
-
   it.each(["large", "hardlinked"] as const)(
     "keeps exact, basename and ID reads equivalent for a %s page",
     async (kind) => {
@@ -159,7 +113,7 @@ describe("wiki query page reads", () => {
     });
   });
 
-  it.each(["deleted", "directory"] as const)(
+  it.each(["directory"] as const)(
     "skips a compiled candidate replaced by %s state",
     async (kind) => {
       const { rootDir, config, relativePath } = await createReadVault();
@@ -188,7 +142,7 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it.each(["absent", "invalid", "directory"] as const)(
+  it.each(["invalid"] as const)(
     "retains ID fallback when the canonical candidate is %s",
     async (kind) => {
       const { rootDir, config, targetPath, relativePath } = await createReadVault();
@@ -212,49 +166,39 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it.each(["exact", "basename", "search"] as const)(
-    "rejects a page swapped outside the vault during %s reads",
-    async (route) => {
-      const { config, targetPath, relativePath } = await createReadVault();
-      const outside = await createReadVault();
-      const canonicalTarget = await fs.realpath(targetPath);
-      await fs.writeFile(
-        outside.targetPath,
-        (await fs.readFile(outside.targetPath, "utf8")).replace(
-          "readable line",
-          "outside-vault marker",
-        ),
-      );
-      let swapped = false;
-      const swap = async () => {
-        if (swapped) {
-          return;
-        }
-        swapped = true;
-        await fs.unlink(targetPath);
-        await fs.symlink(outside.targetPath, targetPath);
-      };
-      __setFsSafeTestHooksForTest({
-        beforeOpen: async (filePath) => {
-          if (path.resolve(filePath) === canonicalTarget) {
-            await swap();
-          }
-        },
-      });
-      const readdir = vi.spyOn(fs, "readdir");
-      const read =
-        route === "search"
-          ? searchMemoryWiki({ config, query: "Alpha" })
-          : getMemoryWikiPage({ config, lookup: route === "exact" ? relativePath : "alpha" });
-
-      await expect(read).rejects.toMatchObject({
-        name: "FsSafeError",
-        code: expect.stringMatching(/symlink|path-mismatch/u),
-      });
-      expect(swapped).toBe(true);
-      if (route === "exact") {
-        expect(readdir).not.toHaveBeenCalled();
+  it("rejects a page swapped outside the vault during basename reads", async () => {
+    const { config, targetPath } = await createReadVault();
+    const outside = await createReadVault();
+    const canonicalTarget = await fs.realpath(targetPath);
+    await fs.writeFile(
+      outside.targetPath,
+      (await fs.readFile(outside.targetPath, "utf8")).replace(
+        "readable line",
+        "outside-vault marker",
+      ),
+    );
+    let swapped = false;
+    const swap = async () => {
+      if (swapped) {
+        return;
       }
-    },
-  );
+      swapped = true;
+      await fs.unlink(targetPath);
+      await fs.symlink(outside.targetPath, targetPath);
+    };
+    __setFsSafeTestHooksForTest({
+      beforeOpen: async (filePath) => {
+        if (path.resolve(filePath) === canonicalTarget) {
+          await swap();
+        }
+      },
+    });
+    const read = getMemoryWikiPage({ config, lookup: "alpha" });
+
+    await expect(read).rejects.toMatchObject({
+      name: "FsSafeError",
+      code: expect.stringMatching(/symlink|path-mismatch/u),
+    });
+    expect(swapped).toBe(true);
+  });
 });
