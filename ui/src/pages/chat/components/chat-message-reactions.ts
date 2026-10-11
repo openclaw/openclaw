@@ -1,7 +1,6 @@
 import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { css, html, nothing, svg } from "lit";
+import { css, html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import {
   isReactionEmoji,
@@ -13,12 +12,21 @@ import { sessionEmojiPickerShortcut } from "../../../components/session-icon-pic
 import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import {
+  GroupMessageReactions,
+  type renderSolidGroupMessageReactions,
+} from "./chat-message-reaction-chips-view.tsx";
+
+export {
+  GroupMessageReactions,
+  renderSolidGroupMessageReactions,
+} from "./chat-message-reaction-chips-view.tsx";
 
 export type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
 type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
-const TOOLTIP_NAME_LIMIT = 3;
 
 const addReactionIcon = strokeIcon(svg`<path d="M21 11.5a9 9 0 1 1-8.5-8.5"/>
   <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6"/>
@@ -33,20 +41,6 @@ export function ownReactionEmoji(
       .filter((reaction) => reaction.identities.some((identity) => identity.id === userId))
       .map((reaction) => reaction.emoji),
   );
-}
-
-function reactorsLabel(reaction: MessageReactionSummary, userId: string | null | undefined) {
-  const you = t("chat.reactions.you");
-  const names = reaction.identities
-    .map((identity) => (identity.id === userId ? you : (identity.label ?? identity.id)))
-    .toSorted((a, b) => Number(b === you) - Number(a === you));
-  const shown = names.slice(0, TOOLTIP_NAME_LIMIT).join(", ");
-  const hidden = names.length - Math.min(names.length, TOOLTIP_NAME_LIMIT);
-  return t("chat.reactions.reactedWith", {
-    names:
-      hidden > 0 ? t("chat.reactions.andOthers", { names: shown, count: String(hidden) }) : shown,
-    emoji: reaction.emoji,
-  });
 }
 
 export type MessageReactionOptions = {
@@ -72,51 +66,14 @@ export function messageReactionOptions(
 }
 
 export function renderGroupMessageReactions(
-  group: Parameters<typeof messageReactionOptions>[0],
-  actionDetails: { reactionMessageId?: string } | null | undefined,
-  isStreaming: boolean,
-  opts: MessageReactionOptions,
+  ...args: Parameters<typeof renderSolidGroupMessageReactions>
 ) {
-  const messageId = isStreaming ? undefined : actionDetails?.reactionMessageId;
-  const options = messageReactionOptions(group, opts);
-  const reactions = messageId ? options.messageReactions?.get(messageId) : undefined;
-  if (!messageId || !reactions?.length) {
-    return nothing;
-  }
-  const { userId, onReact } = options;
-  const own = ownReactionEmoji(reactions, userId);
-  return html`<div class="chat-message-reactions" data-message-id=${messageId}>
-    ${reactions.map((reaction) => {
-      const pressed = own.has(reaction.emoji);
-      return html`<openclaw-tooltip .content=${reactorsLabel(reaction, userId)}>
-        <button
-          class="chat-reaction-chip"
-          type="button"
-          aria-label=${`${reaction.emoji} ${reaction.count}`}
-          aria-pressed=${String(pressed)}
-          ?disabled=${!onReact}
-          @click=${() => onReact?.(messageId, reaction.emoji, pressed)}
-        >
-          <span class="chat-reaction-chip__emoji">${reaction.emoji}</span>
-          ${keyed(
-            reaction.count,
-            html`<span class="chat-reaction-chip__count">${reaction.count}</span>`,
-          )}
-        </button>
-      </openclaw-tooltip>`;
-    })}
-    ${
-      onReact
-        ? html`<openclaw-message-reaction-picker
-            class="chat-reaction-chip chat-reaction-chip--add"
-            compact
-            placement=${options.reactionPlacement ?? "bottom-start"}
-            .activeEmoji=${own}
-            .onSelect=${(emoji: string, remove: boolean) => onReact(messageId, emoji, remove)}
-          ></openclaw-message-reaction-picker>`
-        : nothing
-    }
-  </div>`;
+  return solidContent(GroupMessageReactions, {
+    group: args[0],
+    actionDetails: args[1],
+    isStreaming: args[2],
+    options: args[3],
+  });
 }
 
 class MessageReactionPicker extends OpenClawLitElement {

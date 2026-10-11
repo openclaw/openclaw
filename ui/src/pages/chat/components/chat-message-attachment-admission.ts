@@ -1,7 +1,6 @@
-import { html, noChange } from "lit";
-import { AsyncDirective, directive } from "lit/async-directive.js";
-import { keyed } from "lit/directives/keyed.js";
-import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+import { createComponent } from "solid-js";
+import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
 import {
@@ -35,83 +34,27 @@ export type AttachmentAdmission = {
   onAdmit: () => void;
 };
 
-type AttachmentAdmissionInput = {
+type LegacyAdmissionProps = {
   attachments: readonly AttachmentItem["attachment"][];
   options: ImageRenderOptions;
   render: (admission?: AttachmentAdmission) => unknown;
 };
-
-class ChatAttachmentAdmissionDirective extends AsyncDirective {
-  private input: AttachmentAdmissionInput | undefined;
-  private key = "";
-  private generation = 0;
-  private admitted = false;
-  private stopObserving: (() => void) | undefined;
-  private readonly admit = () => {
-    if (this.isConnected && !this.admitted) {
-      this.admitted = true;
-      this.stopObserving?.();
-      this.stopObserving = undefined;
-      this.refresh();
-    }
-  };
-  private readonly observeElement = (element: Element | undefined) => {
-    this.stopObserving?.();
-    this.stopObserving = undefined;
-    if (!element || !this.isConnected || this.admitted) {
-      return;
-    }
-    const generation = this.generation;
-    this.stopObserving = observeChatAttachmentViewport(element, () => {
-      if (generation === this.generation) {
-        this.admit();
-      }
-    });
-  };
-  private readonly refresh = () => {
-    if (this.isConnected && this.input) {
-      this.setValue(this.render(this.input));
-    }
-  };
-
-  override render(input: AttachmentAdmissionInput) {
-    const { attachments, options } = input;
-    const key = JSON.stringify([
-      attachments.map((attachment) => [attachment.url, attachment.artifactId]),
-      options.sessionKey,
-      options.agentId,
-      options.connectionEpoch,
-      options.resourceBasePath,
-      options.authToken,
-      options.policyKey,
-    ]);
-    if (key !== this.key) {
-      this.generation++;
-      this.stopObserving?.();
-      this.stopObserving = undefined;
-      this.admitted = false;
-    }
-    this.key = key;
-    this.input = input;
-    if (!this.isConnected) {
-      return noChange;
-    }
-    if (typeof IntersectionObserver !== "function") {
-      this.admitted = true;
-    }
-    return html`${keyed(key, input.render({ observeElement: this.admitted ? undefined : this.observeElement, onAdmit: this.admit }))}`;
-  }
-
-  protected override disconnected() {
-    this.generation++;
-    this.stopObserving?.();
-    this.stopObserving = undefined;
-    this.admitted = false;
-  }
-
-  protected override reconnected() {
-    this.refresh();
-  }
+function LegacyAdmission(props: LegacyAdmissionProps) {
+  return createComponent(ChatAttachmentAdmission, {
+    get attachments() {
+      return props.attachments;
+    },
+    get options() {
+      return props.options;
+    },
+    render: (admission) =>
+      createComponent(LitContent, {
+        get value() {
+          return props.render(admission);
+        },
+      }),
+  });
 }
-
-export const renderChatAttachmentAdmission = directive(ChatAttachmentAdmissionDirective);
+export function renderChatAttachmentAdmission(input: LegacyAdmissionProps) {
+  return solidContent(LegacyAdmission, input);
+}

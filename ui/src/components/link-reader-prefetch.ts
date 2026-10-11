@@ -22,8 +22,12 @@ const PREFETCH_LIMIT = 8;
 const PREFETCH_DELAY_MS = 150;
 const SCAN_IDLE_TIMEOUT_MS = 500;
 
-class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
-  private root: HTMLElement | undefined;
+export class LinkReaderPrefetch {
+  constructor(
+    private readonly root: HTMLElement | undefined,
+    private connected = true,
+  ) {}
+
   private provider: Element | null = null;
   private readonly handleCapabilities = () => {
     this.release();
@@ -32,11 +36,9 @@ class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
   };
   private sessionKey: string | undefined;
   private active = false;
-  protected override presentationChanged(binding?: PresentationBinding) {
-    if (binding?.isPresented() === false) {
-      this.active = false;
-      this.release();
-    }
+  setPresented(presented: boolean): void {
+    this.active = presented;
+    this.handleVisibilityChange();
   }
   private cancelScan: (() => void) | undefined;
   private observer: IntersectionObserver | null = null;
@@ -62,21 +64,12 @@ class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
     return claim;
   };
 
-  render(_sessionKey: string, _presented: PresentationValue, _connected = true) {
-    return nothing;
-  }
-
-  override update(
-    part: ElementPart,
-    [sessionKey, presented, connected = true]: [string, PresentationValue, boolean?],
-  ) {
-    this.updatePresentation(presented);
+  update(sessionKey: string, presented: boolean, connected = true): void {
     if (sessionKey !== this.sessionKey || !connected) {
       this.release();
       this.attempted.clear();
       this.sessionKey = sessionKey;
     }
-    this.root = part.element instanceof HTMLElement ? part.element : undefined;
     const provider = this.root?.closest(LINK_READER_HOVERCARD_PROVIDER_TAG) ?? null;
     if (provider !== this.provider) {
       this.provider?.removeEventListener(
@@ -88,25 +81,25 @@ class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
       this.release();
       this.attempted.clear();
     }
-    this.active =
-      connected && (typeof presented === "boolean" ? presented : presented.isPresented());
+    this.active = connected && presented;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
-    return nothing;
   }
 
-  protected override disconnected(): void {
-    super.disconnected();
-    this.provider?.removeEventListener("link-reader-capabilities-changed", this.handleCapabilities);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    this.release();
-  }
-
-  protected override reconnected(): void {
-    super.reconnected();
-    this.provider?.addEventListener("link-reader-capabilities-changed", this.handleCapabilities);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    this.handleVisibilityChange();
+  setConnected(connected: boolean): void {
+    this.connected = connected;
+    if (connected) {
+      this.provider?.addEventListener("link-reader-capabilities-changed", this.handleCapabilities);
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.handleVisibilityChange();
+    } else {
+      this.provider?.removeEventListener(
+        "link-reader-capabilities-changed",
+        this.handleCapabilities,
+      );
+      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+      this.release();
+    }
   }
 
   private readonly handleVisibilityChange = () => {
@@ -140,14 +133,14 @@ class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
   }
 
   private canPrefetch(): boolean {
-    return this.active && this.isConnected && Boolean(this.root?.isConnected) && !document.hidden;
+    return this.active && this.connected && Boolean(this.root?.isConnected) && !document.hidden;
   }
 
   private scheduleScan(): void {
     if (this.cancelScan || this.attempted.size >= PREFETCH_LIMIT) {
       return;
     }
-    // Lit commits this directive before its children. Discover links after paint;
+    // Refs and element directives can commit before children. Discover links after paint;
     // the mutation observer owns subsequent row and href changes.
     const scan = () => {
       this.cancelScan = undefined;
@@ -264,6 +257,47 @@ class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
       }
       return;
     }
+  }
+}
+
+class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
+  private owner?: LinkReaderPrefetch;
+
+  protected override presentationChanged(binding?: PresentationBinding) {
+    if (binding?.isPresented() === false) {
+      this.owner?.setPresented(false);
+    }
+  }
+
+  render(_sessionKey: string, _presented: PresentationValue, _connected = true) {
+    return nothing;
+  }
+
+  override update(
+    part: ElementPart,
+    [sessionKey, presented, connected = true]: [string, PresentationValue, boolean?],
+  ) {
+    this.updatePresentation(presented);
+    this.owner ??= new LinkReaderPrefetch(
+      part.element instanceof HTMLElement ? part.element : undefined,
+      this.isConnected,
+    );
+    this.owner.update(
+      sessionKey,
+      typeof presented === "boolean" ? presented : presented.isPresented(),
+      connected,
+    );
+    return nothing;
+  }
+
+  protected override disconnected(): void {
+    super.disconnected();
+    this.owner?.setConnected(false);
+  }
+
+  protected override reconnected(): void {
+    super.reconnected();
+    this.owner?.setConnected(true);
   }
 }
 

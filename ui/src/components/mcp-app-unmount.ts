@@ -51,7 +51,7 @@ export class McpAppUnmountGate {
     key: McpAppUnmountKey,
     renderValue: () => unknown,
     leavingRoots: () => Iterable<ParentNode>,
-    options: { retainRenderedValue?: boolean } = {},
+    options: { retainRenderedValue?: boolean; afterCommit?: (effect: () => void) => void } = {},
   ): unknown {
     if (this.pending) {
       return this.renderedValue;
@@ -59,15 +59,19 @@ export class McpAppUnmountGate {
     if (this.restartTargets) {
       const targets = this.restartTargets;
       this.restartTargets = null;
-      // Lit commits the parent update synchronously after render. Restart only
-      // torn-down views that survived that commit; retained siblings stay intact.
-      queueMicrotask(() => {
+      // Restart only torn-down views that survive the owning renderer's commit.
+      const restart = () => {
         for (const target of targets) {
           if (target.isConnected) {
             target.restartAfterTeardown();
           }
         }
-      });
+      };
+      if (options.afterCommit) {
+        options.afterCommit(restart);
+      } else {
+        queueMicrotask(restart);
+      }
       return this.renderedKey === key && options.retainRenderedValue
         ? this.renderedValue
         : this.apply(key, renderValue);

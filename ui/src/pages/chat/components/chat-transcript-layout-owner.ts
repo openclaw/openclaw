@@ -1,5 +1,3 @@
-import { nothing } from "lit";
-import { Directive, directive, type ElementPart } from "lit/directive.js";
 import {
   publishTranscriptScroll,
   readTranscriptViewport,
@@ -144,18 +142,3 @@ export class TranscriptLayoutOwner {
     this.viewport = null;
   }
 }
-
-class TranscriptRangeSize extends Directive {
-  render(_owner: TranscriptLayoutOwner, _height: number) {
-    return nothing;
-  }
-
-  override update(part: ElementPart, [owner, height]: [TranscriptLayoutOwner, number]) {
-    if (part.element instanceof HTMLElement) {
-      owner.commitRange(part.element, height);
-    }
-    return nothing;
-  }
-}
-
-export const transcriptRangeSize = directive(TranscriptRangeSize);

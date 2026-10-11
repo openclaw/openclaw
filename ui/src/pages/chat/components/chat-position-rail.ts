@@ -1,14 +1,13 @@
-import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive } from "lit/directive.js";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
+import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
-  renderChatPositionRailView,
   syncPositionRailPreview,
   syncPositionRailTabStop,
   syncPositionRailVisibility,
   type PositionRailAssistant,
-} from "./chat-position-rail-view.ts";
+  type PositionRailViewParams,
+} from "./chat-position-rail-view.tsx";
 import {
   POSITION_RAIL_MARKER_HEIGHT as MARKER_HEIGHT,
   positionRailWindowIndexes,
@@ -32,22 +31,23 @@ type RailInteraction = {
   dismissed: boolean;
 };
 
-type PositionRailParams = {
+export type PositionRailParams = {
   positions: ChatPositionIndex;
   transcript: ChatTranscriptSession;
   assistant?: PositionRailAssistant;
-  requestUpdate: () => void;
 };
 
 function initialInteraction(): RailInteraction {
   return { hoveredId: null, focusedId: null, dismissed: false };
 }
 
-// The directive owns transient DOM interaction; the session owns reader position.
-class ChatPositionRailDirective extends AsyncDirective {
+// Transient DOM interaction stays here; the transcript session owns reader position.
+export class ChatPositionRailController {
+  private connected = true;
+
+  constructor(private readonly requestRender: () => void) {}
   private session: ChatTranscriptSession | null = null;
   private interaction = initialInteraction();
-  private requestUpdate: (() => void) | undefined;
   private previewElement: HTMLElement | undefined;
   private scrollElement: HTMLElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
@@ -65,7 +65,6 @@ class ChatPositionRailDirective extends AsyncDirective {
   private reservedOffset = 0;
   private viewportResizePending = false;
   private observedActiveId: string | undefined;
-  private renderParams: PositionRailParams | undefined;
   private pendingFocusId: string | undefined;
   private restoringFocus = false;
   private projectionChanged = false;
@@ -187,8 +186,7 @@ class ChatPositionRailDirective extends AsyncDirective {
   }
 
   private refreshWindow(): void {
-    const params = this.renderParams;
-    if (this.isConnected && params) {
+    if (this.connected && this.session) {
       const scroller = this.scrollElement;
       const session = this.session;
       const focused = scroller?.ownerDocument.activeElement;
@@ -196,17 +194,17 @@ class ChatPositionRailDirective extends AsyncDirective {
         focused instanceof HTMLElement ? focused.dataset.positionMarkerId : undefined;
       this.refreshingWindow = true;
       try {
-        this.setValue(this.render(params));
+        this.requestRender();
       } finally {
         this.refreshingWindow = false;
       }
-      // Lit can move a retained keyed part, which blurs its focused button.
+      // A virtual window change can move the retained marker out of DOM order.
       // Restore that focus without treating it as new navigation or recentering.
       if (
         !this.pendingFocusId &&
         focusedId &&
         focused instanceof HTMLElement &&
-        this.isConnected &&
+        this.connected &&
         this.session === session &&
         this.scrollElement === scroller &&
         scroller?.contains(focused) &&
@@ -242,8 +240,8 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.pendingFocusId = id;
     this.revealMarker(id);
     this.refreshWindow();
-    // Rendering can retire this directive through a host update; never focus its successor.
-    if (!this.isConnected || this.session !== session || this.scrollElement !== scroller) {
+    // Rendering can retire this view through a host update; never focus its successor.
+    if (!this.connected || this.session !== session || this.scrollElement !== scroller) {
       this.pendingFocusId = undefined;
       return;
     }
@@ -577,7 +575,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       // Every marker reveals a message in this transcript. Hover-only dismissal keeps focus.
       rail.closest<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
     }
-    this.requestUpdate?.();
+    this.refreshWindow();
   };
 
   private readonly bindPreview = (element?: Element) => {
@@ -591,21 +589,16 @@ class ChatPositionRailDirective extends AsyncDirective {
     element?.ownerDocument.defaultView?.addEventListener("keydown", this.dismissPreview);
   };
 
-  protected override disconnected() {
+  disconnect() {
+    this.connected = false;
     this.pendingFocusId = undefined;
     this.bindPreview();
     this.bindScroller();
     Object.assign(this.interaction, initialInteraction());
   }
 
-  protected override reconnected() {
-    this.requestUpdate?.();
-  }
-
-  render(params: PositionRailParams) {
-    this.renderParams = params;
-    const { positions, transcript, assistant, requestUpdate } = params;
-    this.requestUpdate = requestUpdate;
+  view(params: PositionRailParams): PositionRailViewParams | undefined {
+    const { positions, transcript, assistant } = params;
     if (this.session !== transcript) {
       this.session = transcript;
       this.interaction = initialInteraction();
@@ -632,8 +625,10 @@ class ChatPositionRailDirective extends AsyncDirective {
     }
     const count = markers.length;
     if (count === 0) {
-      this.disconnected();
-      return nothing;
+      this.bindPreview();
+      this.bindScroller();
+      Object.assign(this.interaction, initialInteraction());
+      return undefined;
     }
     const interaction = this.interaction;
     for (const field of ["focusedId", "hoveredId"] as const) {
@@ -683,8 +678,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       }
       this.focusMarker(markers[nextIndex]!.id);
     };
-    return renderChatPositionRailView({
-      transcript,
+    return {
       assistant,
       markers,
       renderedIndexes: this.renderedIndexes,
@@ -701,12 +695,12 @@ class ChatPositionRailDirective extends AsyncDirective {
       stopScrollInput: this.stopScrollInput,
       onPointerLeave: () => {
         interaction.hoveredId = null;
-        this.requestUpdate?.();
+        this.refreshWindow();
       },
       onMarkerHover: (id) => {
         interaction.hoveredId = id;
         interaction.dismissed = false;
-        this.requestUpdate?.();
+        this.refreshWindow();
       },
       onMarkerFocus: (id, event) => {
         if (this.restoringFocus) {
@@ -724,12 +718,11 @@ class ChatPositionRailDirective extends AsyncDirective {
         this.refreshWindow();
         this.syncMountedMarkers();
         this.syncTabStop();
-        this.requestUpdate?.();
       },
       onMarkerBlur: () => {
         interaction.focusedId = null;
         this.syncTabStop();
-        this.requestUpdate?.();
+        this.refreshWindow();
       },
       onMarkerKeyDown: (index, event) => {
         if (
@@ -743,8 +736,13 @@ class ChatPositionRailDirective extends AsyncDirective {
         }
       },
       onMarkerSelect: (anchorId) => transcript.revealMessage(anchorId),
-    });
+    };
   }
 }
 
-export const renderChatPositionRail = directive(ChatPositionRailDirective);
+/** Remaining Lit callers use the same mounted Solid rail. */
+export function renderChatPositionRail(
+  params: PositionRailParams & { requestUpdate?: () => void },
+) {
+  return solidContent(ChatPositionRail, params);
+}
