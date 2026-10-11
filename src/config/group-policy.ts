@@ -2,11 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import { resolveChannelAccountEntry, resolveChannelAccountKey } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import {
-  resolveChannelGroups,
-  type ChannelGroupConfig,
-  type ChannelGroups,
-} from "./channel-groups.js";
+import { resolveChannelGroups } from "./channel-groups.js";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
@@ -15,6 +11,7 @@ import {
   type ScopeTree,
 } from "./group-scope-tree.js";
 import type { GroupToolPolicySender } from "./tools-by-sender.js";
+import type { ChannelGroupConfig, ChannelGroups } from "./types.channel-messaging-common.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import type { GroupToolPolicyConfig } from "./types.tools.js";
 
