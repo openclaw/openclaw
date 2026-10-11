@@ -13,6 +13,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
@@ -366,7 +367,12 @@ export async function sessionsCommand(
             readOnly: true,
             providerDiscoveryProviderIds: [modelRef.provider],
           }).catch(() => undefined);
-        pendingCatalog = gatewayOwner
+        // The agent catalog cannot supply another spawned workspace's capacity.
+        const useGatewayCatalog =
+          gatewayOwner &&
+          (!entry.spawnedWorkspaceDir ||
+            entry.spawnedWorkspaceDir === resolveAgentWorkspaceDir(cfg, agentId));
+        pendingCatalog = useGatewayCatalog
           ? callGateway<ModelsListResult>({
               config: cfg,
               localPortOverride: gatewayOwner.port,

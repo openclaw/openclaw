@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   assignSessionOwner,
@@ -347,16 +348,26 @@ describe("sessionsCommand", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves verified offline capacity for auto runtime (Gateway failure=%s)",
-    async (gatewayFailure) => {
-      if (gatewayFailure) {
+  it.each(["absent", "unreachable", "other-workspace"])(
+    "preserves verified capacity for auto runtime when the Gateway is %s",
+    async (gatewayState) => {
+      const spawnedWorkspaceDir =
+        gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
+      if (gatewayState !== "absent") {
         catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
           pid: 123,
           port: 19461,
           createdAt: "fixture",
         });
-        catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+        if (gatewayState === "unreachable") {
+          catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+        } else {
+          catalogState.callGateway.mockResolvedValue({
+            models: [
+              { provider: "llama-cpp", id: "local-llama", name: "Local", contextTokens: 131_072 },
+            ],
+          });
+        }
       }
       const store = await writeStore({
         "agent:main:main": {
@@ -367,6 +378,7 @@ describe("sessionsCommand", () => {
           agentHarnessId: "openclaw",
           contextTokens: 16_384,
           contextTokensSource: "resolved-v1",
+          spawnedWorkspaceDir,
         },
       });
       setMockSessionsConfig(() => ({
@@ -381,8 +393,13 @@ describe("sessionsCommand", () => {
           contextTokens: 16_384,
           agentRuntime: { id: "openclaw" },
         });
-        expect(errors).toHaveLength(gatewayFailure ? 1 : 0);
-        if (gatewayFailure) {
+        expect(errors).toHaveLength(gatewayState === "unreachable" ? 1 : 0);
+        if (spawnedWorkspaceDir) {
+          expect(loadPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
+            expect.objectContaining({ workspaceDir: spawnedWorkspaceDir, readOnly: true }),
+          );
+        }
+        if (gatewayState === "unreachable") {
           expect(errors[0]).toContain("showing configured or last verified capacity");
         }
       } finally {
