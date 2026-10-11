@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,

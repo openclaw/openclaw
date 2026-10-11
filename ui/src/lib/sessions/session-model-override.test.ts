@@ -36,7 +36,7 @@ describe("session model override lifecycle", () => {
       const next = { thinkingLevel: "high", fastMode: true, contextWindow: "large" } as const;
       let listed = initial;
       const reply = createDeferred<unknown>();
-      const dispatched = createDeferred<void>();
+      const dispatched = createDeferred();
       const client = createTestGatewayClient(async (method) => {
         if (method === "sessions.list") {
           return sessionsResult([listed], 2);

@@ -121,8 +121,9 @@ export function createSessionRosterObservations(
     };
     for (const entry of lists.values()) {
       if (entry.connectionEpoch === host.connection.capture()?.epoch) {
-        for (const row of entry.snapshot.result?.sessions ?? [])
+        for (const row of entry.snapshot.result?.sessions ?? []) {
           append(row, entry.snapshot.agentId);
+        }
       }
     }
     for (const entry of registeredRows) {
@@ -291,8 +292,9 @@ export function createSessionRosterObservations(
         isCurrent(entry) &&
         entry.snapshot.row &&
         matches(entry.snapshot.row, entry.target.agentId)
-      )
+      ) {
         return entry.snapshot.row;
+      }
     }
     return undefined;
   };
@@ -429,8 +431,9 @@ export function createSessionRosterObservations(
       agentId?: string | null,
     ) {
       const previousRows = indexRows(previous?.sessions ?? [], agentId);
-      for (const row of result?.sessions ?? [])
+      for (const row of result?.sessions ?? []) {
         inheritRow(row, previousRows.get(identity(row, agentId) ?? ""));
+      }
     },
   };
   return observations;

@@ -150,7 +150,7 @@ export function createSessionArchiveState(
       pending.clear();
     },
     observe,
-    observeRead(row: GatewaySessionRow) {
+    observeRead(this: void, row: GatewaySessionRow) {
       if (confirmed.has(row.key)) {
         observe(row.key, row.archived === true, row);
       }
