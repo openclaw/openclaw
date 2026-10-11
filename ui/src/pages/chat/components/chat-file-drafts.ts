@@ -60,6 +60,20 @@ export function readFileDraft(content: FileSidebarContent): RetainedFileDraft | 
   return retainedFileDrafts.get(retainedFileDraftKey(content))?.draft;
 }
 
+export function restoreFileDraft(
+  content: FileSidebarContent | null,
+): RetainedFileDraft | undefined {
+  if (!content?.edit) {
+    return undefined;
+  }
+  const draft = readFileDraft(content);
+  if (draft?.content === content.content) {
+    setFileDraft(content, null);
+    return undefined;
+  }
+  return draft;
+}
+
 export function captureFileEditorDraft(
   content: FileSidebarContent,
   edit: { editing: boolean; content: string; dirty: boolean; expectedHash: string },

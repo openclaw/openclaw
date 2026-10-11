@@ -16,7 +16,7 @@ import { defineSolidBridge, LitContent } from "../../../lit/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { AttachmentDownloadController } from "./chat-attachment-download-controller.ts";
 import { FileCopyController } from "./chat-file-copy-controller.ts";
-import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
+import { captureFileEditorDraft, restoreFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { FileHtmlPreviewController } from "./chat-html-preview.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type {
@@ -133,15 +133,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     fileReloading = false;
     fileSaving = false;
     fileSaveNotice = null;
-    const retainedDraft =
-      content?.kind === "file" && content.edit ? readFileDraft(content) : undefined;
-    const restoredDraft =
-      content?.kind === "file" && retainedDraft?.content !== content.content
-        ? retainedDraft
-        : undefined;
-    if (retainedDraft && !restoredDraft && content?.kind === "file") {
-      setFileDraft(content, null);
-    }
+    const restoredDraft = restoreFileDraft(content?.kind === "file" ? content : null);
     fileDraftContent = restoredDraft?.content ?? null;
     fileSavedContent = content?.kind === "file" ? content.content : "";
     fileHash =

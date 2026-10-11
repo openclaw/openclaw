@@ -1,7 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { assertCrabboxLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -321,4 +323,28 @@ export async function stopCrabboxLease(params: {
     });
   }
   crabboxCommandOutput("stop", result);
+}
+
+type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
+
+type LeaseHeartbeatContext = LeaseCommandContext &
+  Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
+
+export async function resolveCrabboxLeaseContext(
+  lease: Parameters<WorkerProvider["inspect"]>[0],
+  resolveBinary: (explicit?: string) => Promise<string>,
+): Promise<{ context: LeaseHeartbeatContext; profile: CrabboxProfile }> {
+  const profile = parseCrabboxProfile(lease.profile);
+  assertCrabboxLeaseId(lease.leaseId);
+  return {
+    context: {
+      binary: await resolveBinary(profile.binary),
+      heartbeatIntervalMs: profile.heartbeatIntervalMs,
+      heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
+      id: lease.leaseId,
+      idleTimeout: profile.idleTimeout,
+      provider: profile.provider,
+    },
+    profile,
+  };
 }
