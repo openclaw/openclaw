@@ -159,6 +159,24 @@ function assertManifestLocation(
   }
 }
 
+/**
+ * The recorded locator must name the pinned directory itself, not a link to it.
+ * pinDirectory opened this exact locator, and the pin revalidates its retained
+ * exact identity, so no realpath spelling comparison is needed: Windows short
+ * (8.3) names, letter case, and symlinked ancestors spell one directory
+ * differently.
+ */
+async function assertPinnedDirectoryAt(
+  pin: Awaited<ReturnType<typeof pinDirectory>>,
+  directory: string,
+  message: string,
+): Promise<void> {
+  if (!(await fs.lstat(directory)).isDirectory()) {
+    throw new Error(message);
+  }
+  await pin.assertCurrent();
+}
+
 async function withRecoveryMetadata<T>(
   location: Omit<UpdateRecoveryBackupRef, "manifestSha256"> & { manifestSha256?: string },
   authority: Authority,
@@ -180,9 +198,11 @@ async function withRecoveryMetadata<T>(
   const pin = await pinDirectory(location.directory);
   try {
     authority.assertOwned();
-    if (pin.receipt.realPath !== location.directory) {
-      throw new Error("Update recovery capture changed location.");
-    }
+    await assertPinnedDirectoryAt(
+      pin,
+      location.directory,
+      "Update recovery capture changed location.",
+    );
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
     authority.assertOwned();
     const bytes = await source.readBytes("manifest.json", {
@@ -227,9 +247,11 @@ async function fingerprintIncompleteRecoveryGeneration(
   const walk = async (current: string): Promise<void> => {
     const pin = await pinDirectory(current);
     try {
-      if (pin.receipt.realPath !== current) {
-        throw new Error("Incomplete recovery generation changed location.");
-      }
+      await assertPinnedDirectoryAt(
+        pin,
+        current,
+        "Incomplete recovery generation changed location.",
+      );
       const before = await fs.lstat(current, { bigint: true });
       observed.set(current, before);
       const source = await safeRoot(current);
