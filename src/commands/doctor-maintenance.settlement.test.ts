@@ -718,7 +718,7 @@ it("rechecks external leases under the process owner after an empty observation"
   ]);
   expect(boundary.readLeases).toHaveBeenCalledOnce();
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledTimes(3);
   expect(boundary.readLeases.mock.invocationCallOrder[0]!).toBeLessThan(
     boundary.gatewayAcquire.mock.invocationCallOrder[0]!,
   );
@@ -757,7 +757,7 @@ it("fails closed on an unknown external lease observation without exposing priva
     }),
   ).toBe("DoctorMaintenanceRefusalError: Doctor could not enter maintenance.");
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledTimes(3);
   expect(boundary.lease).toHaveBeenCalledOnce();
   expect(boundary.release).toHaveBeenCalledOnce();
   expect(boundary.stop).not.toHaveBeenCalled();
@@ -789,7 +789,7 @@ it("preserves held-owner unreadable-state guidance after an external diagnostic 
   expect(refusal).toBeInstanceOf(DoctorUnreadableStateDatabaseError);
   expect(String(refusal)).toContain("restore this file from a verified backup");
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).toHaveBeenCalledTimes(3);
   expect(boundary.lease).toHaveBeenCalledOnce();
   expect(boundary.release).toHaveBeenCalledOnce();
   expect(boundary.close).toHaveBeenCalledOnce();

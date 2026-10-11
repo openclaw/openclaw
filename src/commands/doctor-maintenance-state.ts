@@ -13,7 +13,11 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  isOpenClawStateDatabaseOpen,
+  retireOpenClawStateDatabaseCacheOwnerByPath,
+} from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
@@ -90,6 +94,15 @@ export async function createDoctorMaintenanceState(options: {
     // Transfer can retire the source owner before caller revalidation runs.
     owner = acquired;
     try {
+      acquired.assertCurrent(options.assertCurrent);
+      // Preflight can leave WAL work attached to the cached owner. Settle that owner
+      // before repair admission without invalidating independent state resources.
+      await acquired.run(async () => {
+        const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
+        if (isOpenClawStateDatabaseOpen(databasePath)) {
+          await retireOpenClawStateDatabaseCacheOwnerByPath(databasePath);
+        }
+      });
       acquired.assertCurrent(options.assertCurrent);
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({

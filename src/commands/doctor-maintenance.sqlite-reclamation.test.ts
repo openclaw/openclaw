@@ -1,14 +1,108 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateCurrentReader } from "../state/openclaw-state-db-current-reader.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
+
+it("drains inherited shared-state WAL maintenance before opening Doctor resources", async () => {
+  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+    const inherited = openOpenClawStateDatabase({ env: state.env });
+    const controller = new AbortController();
+    const maintenance = await createDoctorMaintenanceState({
+      params: {
+        root: null,
+        options: { repair: true, nonInteractive: true },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+      env: state.env,
+      signal: controller.signal,
+      deadline: () => undefined,
+      assertReadCurrent() {},
+      settle: (operation) => operation(),
+      warn: vi.fn(),
+    });
+    const cancellationStarted = createDeferred();
+    const allowCancellationToSettle = createDeferred();
+    const cancel = walAdmission.cancelSqliteWalWriteAdmission;
+    const cancellation = vi
+      .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
+      .mockImplementation(async (database) => {
+        if (database === inherited.db) {
+          cancellationStarted.resolve();
+          await allowCancellationToSettle.promise;
+        }
+        return cancel(database);
+      });
+    try {
+      const acquiring = maintenance.acquire();
+      await cancellationStarted.promise;
+      // The inherited native handle remains live until its admitted WAL work
+      // settles; Doctor must not open its repair resources before that point.
+      expect(inherited.db.isOpen).toBe(true);
+      allowCancellationToSettle.resolve();
+      await acquiring;
+      expect(inherited.db.isOpen).toBe(false);
+      const doctorHandle = maintenance.run(() => openOpenClawStateDatabase({ env: state.env }));
+      expect(doctorHandle.db.isOpen).toBe(true);
+    } finally {
+      allowCancellationToSettle.resolve();
+      cancellation.mockRestore();
+      await maintenance.release();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
+
+it("settles the inherited WAL owner without closing an independent same-database reader", async () => {
+  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const reader = await prepareOpenClawStateCurrentReader(
+      captureOpenClawStateWorkerContext({ env: state.env }),
+    );
+    expect(reader).toBeDefined();
+    const maintenance = await createDoctorMaintenanceState({
+      params: {
+        root: null,
+        options: { repair: true, nonInteractive: true },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+      env: state.env,
+      signal: new AbortController().signal,
+      deadline: () => undefined,
+      assertReadCurrent() {},
+      settle: (operation) => operation(),
+      warn: vi.fn(),
+    });
+    let released = false;
+    try {
+      await maintenance.acquire();
+      await maintenance.release();
+      released = true;
+      expect(reader!.read(({ db }) => db.prepare("SELECT 1 AS one").get())).toEqual({
+        one: 1,
+      });
+    } finally {
+      reader?.dispose();
+      if (!released) {
+        await maintenance.release();
+      }
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
 
 it("drains an admitted custom agent outside the state root and retains original write capture", async () => {
   await withOpenClawTestState({ scenario: "external-service", layout: "split" }, async (state) => {
