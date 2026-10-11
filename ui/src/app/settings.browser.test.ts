@@ -43,6 +43,45 @@ it("persists canonical bubble sessions only for their Gateway", () => {
   }
 });
 
+it("preserves pre-bubble v1 preferences when opting a session into bubbles", () => {
+  const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);
+  try {
+    const gatewayUrl = "ws://legacy-bubbles.example:18789";
+    // This record uses the persisted fields written by v2026.10.1, before bubbles existed.
+    const preferences = {
+      gatewayUrl,
+      theme: "claw",
+      themeMode: "dark",
+      chatShowThinking: false,
+      chatShowToolCalls: false,
+      chatPersistCommentary: false,
+      composerHoldToRecord: false,
+      navWidth: 300,
+      chatMessageMaxWidth: "48rem",
+    };
+    const key = settingsKeyForGateway(gatewayUrl);
+    localStorage.setItem(key, JSON.stringify(preferences));
+
+    const loaded = loadSettings(gatewayUrl);
+    expect(loaded).toMatchObject(preferences);
+    expect(isChatBubbleMode(loaded, "main")).toBe(false);
+
+    saveSettings({ ...loaded, ...setChatBubbleMode(loaded, "main", true) });
+    const reopened = loadSettings(gatewayUrl);
+    expect(reopened).toMatchObject(preferences);
+    expect(isChatBubbleMode(reopened, "main")).toBe(true);
+    expect(JSON.parse(localStorage.getItem(key) ?? "{}")).toMatchObject({
+      ...preferences,
+      chatBubbleSessionKeys: ["agent:main:main"],
+    });
+  } finally {
+    localStorage.clear();
+    for (const [key, value] of stored) {
+      localStorage.setItem(key, value);
+    }
+  }
+});
+
 it("normalizes and persists browser-local chat message width", () => {
   const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);
   try {
