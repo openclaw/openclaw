@@ -522,7 +522,6 @@ extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-search.ts	4
-extensions/memory-core/src/memory/manager-sync-base.ts	1
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	2
 extensions/memory-core/src/memory/search-deadline.ts	1
@@ -1324,7 +1323,7 @@ src/agents/fallback-skip-cache.ts	1
 src/agents/fast-mode.ts	1
 src/agents/harness/builtin-openclaw.ts	2
 src/agents/harness/context-engine-lifecycle.ts	3
-src/agents/harness/context-engine-turn-outbox.ts	3
+src/agents/harness/context-engine-turn-outbox.ts	1
 src/agents/harness/gateway-question.ts	4
 src/agents/harness/hook-helpers.ts	1
 src/agents/harness/lifecycle-hook-helpers.ts	1
@@ -1851,7 +1850,6 @@ src/config/sessions/session-accessor.sqlite-read.ts	2
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts	1
-src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-write.ts	2
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
@@ -2349,7 +2347,7 @@ src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	2
-src/plugin-sdk/session-transcript-runtime.ts	6
+src/plugin-sdk/session-transcript-runtime.ts	2
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
@@ -2691,7 +2689,6 @@ ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/desktop/desktop-panel.ts	2
 ui/src/components/dock-panel-layout.ts	3
-ui/src/components/file-preview-modal.ts	1
 ui/src/components/hub-tabs.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
@@ -2708,7 +2705,6 @@ ui/src/components/session-data-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
-ui/src/components/settings-ui.ts	1
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
@@ -2744,8 +2740,6 @@ ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/model-config.ts	2
-ui/src/pages/agents/panels-overview.ts	2
-ui/src/pages/agents/panels-status-files.ts	1
 ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	3
 ui/src/pages/channels/view.nostr.ts	5
@@ -2781,8 +2775,6 @@ ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
-ui/src/pages/chat/components/session-diff-menus.ts	1
-ui/src/pages/chat/components/session-diff-panel.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/composer-dictation.ts	1

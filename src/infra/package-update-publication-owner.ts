@@ -63,14 +63,16 @@ export function createPublicationOwner(
   const assertion = retainMutationAuthority(assertOwner);
   let record = initial;
   let descriptor = record.descriptor;
-  const matches = createPackagePublicationTreeMatcher(descriptor.candidate, onWarning);
+  const trees = createPackagePublicationTreeMatcher(descriptor, onWarning);
+  const matches = trees.matches;
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
-  const matchesSelected = (selected: "previous" | "candidate") =>
+  const matchesSelected = (selected: "previous" | "candidate", contents = true) =>
     matches(
       live,
       descriptor[selected],
       selected === "previous" ? live : descriptor.originalStageRoot,
+      contents,
     );
   const root = (name: string) => path.join(anchor, name);
   // Creation can lose its acknowledgement before custody is journaled. Keep
@@ -173,12 +175,7 @@ export function createPublicationOwner(
       if (!selected) {
         throw new Error("The installed package is not either recorded generation.");
       }
-      await matches(
-        live,
-        descriptor[selected],
-        selected === "previous" ? live : descriptor.originalStageRoot,
-        contents === "all" || contents === "selected",
-      );
+      await matchesSelected(selected, contents === "all" || contents === "selected");
     }
     let previous = await matches(root("previous"), descriptor.previous, live, contents === "all");
     if (copying && (await matches(copyRoot, descriptor.previous, live))) {
@@ -238,28 +235,6 @@ export function createPublicationOwner(
     const bytes = await fsp.readFile(helper());
     if (createHash("sha256").update(bytes).digest("hex") !== descriptor.helperDigest) {
       throw new Error("Sealed package recovery helper changed.");
-    }
-    assertCurrent();
-  };
-  const preflight = async (action: "repair" | "retire") => {
-    assertPackageActivationActionAllowed(record, action);
-    await verifyClosure();
-    if (record.phase === "preparing") {
-      inspectPackageActivationCustody(anchor, record);
-    } else if (action === "repair" || record.phase === "publication-complete") {
-      await inspect(action === "repair" ? "all" : "selected");
-    } else {
-      const selected = selectedPackageRetirementGeneration(record);
-      if (
-        !(await matches(
-          live,
-          descriptor[selected],
-          selected === "previous" ? live : descriptor.originalStageRoot,
-        ))
-      ) {
-        throw new Error("Selected package is missing.");
-      }
-      await verifySelectedLaunchers(record, selected);
     }
     assertCurrent();
   };
@@ -497,34 +472,51 @@ export function createPublicationOwner(
       throw new Error("Candidate publication is incomplete.");
     }
     transition("publication-complete");
-    return packageActivationStatus(record);
+    return trees.legacyWarning ? retire() : packageActivationStatus(record);
   };
-  const persistRetirement = async () => {
-    const assertRetired = () => {
-      assertCurrent();
-      if (!isPackageActivationComplete(anchor, record)) {
-        throw new Error("Package recovery artifacts were not retired.");
-      }
-    };
-    assertRetired();
-    const outcome = await syncDirectory(path.dirname(helper()));
-    assertRetired();
-    requireDirectorySync(outcome, "Package helper retirement");
-    // Retrying a lost acknowledgement persists the same recorded absence without
-    // another journal write. Read-only receipts remain observations, not grants.
-    return packageActivationStatus(record);
+  const assertSettlementSelection = (selected: "previous" | "candidate", cause?: unknown) => {
+    assertion();
+    assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
+    if (packageActivationIdentity(live, true) !== descriptor[selected].identity) {
+      throw new Error("Selected package changed during retirement.", { cause });
+    }
+    assertSelectedLaunchers(record, selected);
   };
-  const retire = async () => {
+  const settleSelected = (
+    selected: "previous" | "candidate",
+    detail: string,
+    onSettled?: (detail: string) => void,
+  ) => {
+    const settled = settlePackageActivationCustody({
+      anchor,
+      journal,
+      record,
+      settlement: {
+        kind: "publication-settled-external-change",
+        replacementIdentity: descriptor[selected].identity,
+        settled: true,
+        detail,
+      },
+      assertCurrent: () => assertSettlementSelection(selected),
+      onSettled: () => onSettled?.(detail),
+    });
+    record = settled.record;
+    return settled;
+  };
+  const retire = async (onSettled?: (detail: string) => void) => {
     await verifyClosure();
     assertPackageActivationActionAllowed(record, "retire");
     const selected = selectedPackageRetirementGeneration(record);
-    await matchesSelected(selected);
-    if (!(await packagePathEntryExists(live))) {
+    if (!(await matchesSelected(selected))) {
       throw new Error("Selected package is missing.");
     }
     await verifySelectedLaunchers(record, selected);
     retirementSelected = selected;
     assertCurrent();
+    if (trees.legacyWarning) {
+      onWarning(settleSelected(selected, trees.legacyWarning, onSettled).warning);
+      return packageActivationStatus(record);
+    }
     if (!["retiring", "anchor-retired"].includes(record.phase)) {
       const publications =
         record.phase === "aborted"
@@ -611,7 +603,14 @@ export function createPublicationOwner(
       throw new Error("Final helper identity changed.");
     }
     await fsp.unlink(helper());
-    return persistRetirement();
+    assertCurrent();
+    const outcome = await syncDirectory(path.dirname(helper()));
+    assertCurrent();
+    requireDirectorySync(outcome, "Package helper retirement");
+    if (!isPackageActivationComplete(anchor, record)) {
+      throw new Error("Package recovery artifacts were not retired.");
+    }
+    return packageActivationStatus(record);
   };
   // Callers have elected retirement after verified publication, restoration, or
   // untouched-preparation refusal. Raw recovery entrypoints retain strict retirement;
@@ -624,17 +623,10 @@ export function createPublicationOwner(
     }
     const selected = selectedPackageRetirementGeneration(record);
     try {
-      await retire();
-      return undefined;
+      await retire(onSettled);
+      return trees.legacyWarning;
     } catch (error) {
-      const assertSelected = () => {
-        assertion();
-        assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
-        if (packageActivationIdentity(live, true) !== descriptor[selected].identity) {
-          throw new Error("Selected package changed during retirement.", { cause: error });
-        }
-        assertSelectedLaunchers(record, selected);
-      };
+      const assertSelected = () => assertSettlementSelection(selected, error);
       assertSelected();
       assertJournalCurrent(record);
       await matchesSelected(selected);
@@ -642,29 +634,13 @@ export function createPublicationOwner(
       assertSelected();
       assertJournalCurrent(record);
       const detail = `Verified ${selected} package; recovery evidence retained after cleanup failed: ${formatErrorMessage(error)}`;
-      const settled = settlePackageActivationCustody({
-        anchor,
-        journal,
-        record,
-        settlement: {
-          kind: "publication-settled-external-change",
-          replacementIdentity: descriptor[selected].identity,
-          settled: true,
-          detail,
-        },
-        assertCurrent: assertSelected,
-        onSettled: () => onSettled?.(detail),
-      });
-      record = settled.record;
-      return settled.warning;
+      return settleSelected(selected, detail, onSettled).warning;
     }
   };
   return {
     publish,
     retire,
     retireVerified,
-    persistRetirement,
-    preflight,
     async disarmRollback() {
       assertCurrent();
       await discardIncompleteCopy();

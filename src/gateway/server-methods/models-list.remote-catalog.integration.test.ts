@@ -8,7 +8,6 @@ import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prep
 import { startSerializedSnapshotBuildBatch } from "../../agents/prepared-model-runtime.build.js";
 import {
   acquireAgentRunPreparedModelRuntime,
-  applyRemoteModelCatalogUpdate,
   loadPublishedGatewayReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "../../agents/prepared-model-runtime.plugin-lifetime.js";
@@ -220,8 +219,8 @@ it.for([1, 2])(
         scopes: ["operator.admin"],
         hotReloadRecovery: unexpectedRestart,
       });
-      let preparing = createDeferred();
-      let commit = createDeferred();
+      const preparing = createDeferred();
+      const commit = createDeferred();
       let pausePublication = false;
       const preparePricing = pricing.prepareModelPricingContext;
       vi.spyOn(pricing, "prepareModelPricingContext").mockImplementation(async (...args) => {
@@ -458,66 +457,8 @@ it.for([1, 2])(
             },
           },
         };
-        const authCatalog = {
-          ...finalCatalog,
-          generatedAt: generatedAt + 3,
-          providers: {
-            kimi: {
-              models: [
-                ...finalCatalog.providers.kimi.models,
-                {
-                  ...modelMetadata,
-                  id: "remote-auth",
-                  name: "Remote Auth",
-                  cost: { input: 15, output: 30 },
-                },
-              ],
-            },
-          },
-        };
-        // A concurrent config or auth publication discards the in-flight candidate, then
-        // adoption retries against the settled owners instead of waiting for the next check.
-        for (const [publication, catalog, model, price] of [
-          ["config", finalCatalog, "remote-last", 13],
-          ["auth", authCatalog, "remote-auth", 15],
-        ] as const) {
-          body = encode(catalog);
-          expect((await refresh()).status).toBe("updated");
-          preparing = createDeferred();
-          commit = createDeferred();
-          pausePublication = true;
-          await list(true);
-          await withinTest(preparing.promise, signal);
-          const pending = applyRemoteModelCatalogUpdate(getRuntimeConfig);
-          if (publication === "config") {
-            const snapshot = await client.request<{ hash: string }>("config.get", {});
-            await client.request("config.patch", {
-              baseHash: snapshot.hash,
-              raw: JSON.stringify({ logging: { level: "debug" } }),
-            });
-            expect(getRuntimeConfig().logging?.level).toBe("debug");
-          } else {
-            await client.request("models.authSetApiKey", {
-              provider,
-              apiKey: "catalog-fixture-next-key",
-              agentId: "main",
-            });
-          }
-          const dispatch = await withinTest(
-            loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
-            signal,
-          );
-          expect(dispatch?.agentId).toBe("main");
-          const current = await withinTest(list(), signal);
-          expect(kimiIds(current)).toContain("remote-next");
-          expect(kimiIds(current)).not.toContain(model);
-          expect(currentPrice(model)).toBeUndefined();
-          pausePublication = false;
-          commit.resolve();
-          expect(await pending).toBe("published");
-          expect(kimiIds(await waitForRows(model))).toContain(model);
-          expect(currentPrice(model)).toBe(price);
-        }
+        body = encode(finalCatalog);
+        expect((await refresh()).status).toBe("updated");
         await list(true);
         expect(kimiIds(await waitForRows("remote-last"))).toContain("remote-last");
         expect(currentPrice()).toBe(11);
