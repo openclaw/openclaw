@@ -154,8 +154,8 @@ describe("Gateway GitHub publication attribution", () => {
                 ...params,
                 execution: {
                   ...params.execution,
-                  recordEffect: (effect, observed) => {
-                    params.execution.recordEffect(effect, observed);
+                  recordEffect: async (effect, observed) => {
+                    await params.execution.recordEffect(effect, observed);
                     if (effect === boundary && observed === undefined) {
                       optOut();
                     }

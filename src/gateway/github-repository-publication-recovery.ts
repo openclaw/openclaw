@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
+import { readGitHubPublicationInWorker } from "../state/github-publication-worker.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -15,11 +16,16 @@ import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
-  bindRepositoryGitHubPublicationCheckpoint,
+  listRepositoryGitHubPublicationsAsync,
+  deferRepositoryGitHubPublicationClaimsAsync,
+  bindRepositoryGitHubPublicationCheckpointAsync,
+  failStaleRepositoryGitHubPublicationAsync,
+  type GitHubPublicationTransitionAuthority,
+  type RepositoryGitHubPublicationExecutionAsync,
+} from "./github-publication-store-async.js";
+import {
   deferRepositoryGitHubPublicationClaims,
-  failStaleRepositoryGitHubPublication,
   listRepositoryGitHubPublications,
-  requireRepositoryGitHubPublication,
   terminalRepositoryGitHubPublication,
   type RepositoryGitHubPublicationExecution,
 } from "./github-repository-publication-store.js";
@@ -35,7 +41,7 @@ import type {
 import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.kernel.js";
 
 export async function settleDeniedRepositoryGitHubPublication(params: {
-  execution: RepositoryGitHubPublicationExecution;
+  execution: RepositoryGitHubPublicationExecutionAsync | RepositoryGitHubPublicationExecution;
   assertCustody: () => void;
   error: GitHubPublicationRequesterUnavailableError;
 }): Promise<SessionGitHubPublicationResult> {
@@ -125,7 +131,7 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
     }
     if (url) {
       return projectGitHubPublicationResult(
-        execution.complete({
+        await execution.complete({
           requestId: row.request_id,
           status: "published",
           url,
@@ -137,7 +143,7 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
     }
   }
   return projectGitHubPublicationResult(
-    execution.complete({
+    await execution.complete({
       requestId: row.request_id,
       status: "failed",
       ...error.failure,
@@ -150,6 +156,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   placements: WorkerSessionPlacementStore;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   isExecuting: (requestId: string) => boolean;
+  assertCurrent: () => void;
   execute: (
     row: RepositoryGitHubPublicationRow,
     assertCustody: () => void,
@@ -187,7 +194,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           throw new Error("GitHub publication lost its workspace result claim.");
         }
       };
-      const pending = listRepositoryGitHubPublications({
+      const pending = await listRepositoryGitHubPublicationsAsync({
         sessionId: claim.sessionId,
         ownerProfileId: null,
         pending: true,
@@ -207,12 +214,45 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           );
           try {
             const assertPreparation = () => {
+              params.assertCurrent();
               assertCurrent();
               requester.assertCurrent();
             };
-            await captureCheckpoint(row, assertPreparation, async (facts) => {
-              bindRepositoryGitHubPublicationCheckpoint(row, facts, assertPreparation);
-            });
+            const authority: GitHubPublicationTransitionAuthority = {
+              assertAction() {
+                params.assertCurrent();
+                assertCurrent();
+                requester.signal.throwIfAborted();
+              },
+              assertCustody() {
+                params.assertCurrent();
+                assertCurrent();
+              },
+              prepareSource: () =>
+                requester.prepareSource({
+                  agentId: row.agent_id,
+                  sessionKey: row.session_key,
+                  sessionId: row.session_id,
+                  lifecycleRevision: row.session_lifecycle_revision,
+                  repositoryWorkspaceId: row.workspace_id,
+                  repositoryBranch: row.branch,
+                }),
+            };
+            await captureCheckpoint(
+              row,
+              assertPreparation,
+              async (facts, prepared) => {
+                if (!prepared.authority) {
+                  throw new Error("GitHub publication checkpoint requires worker authority.");
+                }
+                await bindRepositoryGitHubPublicationCheckpointAsync(
+                  row,
+                  facts,
+                  prepared.authority,
+                );
+              },
+              authority,
+            );
           } finally {
             requester.release();
           }
@@ -225,6 +265,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         }
       }
     },
+
     deferClaimPreparation(claim: WorkerSessionTurnClaim) {
       deferRepositoryGitHubPublicationClaims(
         listRepositoryGitHubPublications({
@@ -236,9 +277,18 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           .map((row) => row.request_id),
       );
     },
+    async deferClaimPreparationAsync(claim: WorkerSessionTurnClaim): Promise<void> {
+      await deferRepositoryGitHubPublicationClaimsAsync(
+        { kind: "claim", claim },
+        params.assertCurrent,
+      );
+    },
     async resumeSessionRequests(): Promise<void> {
       const failures: Error[] = [];
-      const rows = listRepositoryGitHubPublications({ ownerProfileId: null, pending: true });
+      const rows = await listRepositoryGitHubPublicationsAsync({
+        ownerProfileId: null,
+        pending: true,
+      });
       const currentPlacements = await placements.getManyAsync(rows.map((row) => row.session_id));
       for (let row of rows) {
         try {
@@ -251,7 +301,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           await placements.withRepositoryWorkspaceReservation(
             { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
             async (assertCurrent) => {
-              row = requireRepositoryGitHubPublication(row.request_id);
+              row = await requireRepositoryGitHubPublicationInWorker(row.request_id);
               if (terminalRepositoryGitHubPublication(row)) {
                 return;
               }
@@ -259,8 +309,8 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               // observation is recorded. Only then may recovery retire its authority.
               const workspaceId = row.workspace_id;
               const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
+              row = await requireRepositoryGitHubPublicationInWorker(row.request_id);
               assertCurrent();
-              row = requireRepositoryGitHubPublication(row.request_id);
               if (terminalRepositoryGitHubPublication(row)) {
                 return;
               }
@@ -271,9 +321,8 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               }
               const owner = resolveReceiptOwner(row, preparedOwner);
               if (!owner) {
-                failStaleRepositoryGitHubPublication(row, () =>
-                  Boolean(resolveReceiptOwner(row, preparedOwner)),
-                );
+                // Keep the reservation through settlement; retirement needs only owner custody.
+                await failStaleRepositoryGitHubPublicationAsync(row, params.assertCurrent);
                 return;
               }
               await params.execute(row, assertCurrent);
@@ -299,12 +348,19 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         throw new AggregateError(failures, failures.map((error) => error.message).join("; "));
       }
     },
-    /** @deprecated Await deferOrphanedRequestsAsync; retained for released plugin contexts. */
+
     deferOrphanedRequests(): void {
       deferOrphanedRequestsWithPendingResults(placements.listPendingWorkspaceResults());
     },
     async deferOrphanedRequestsAsync(): Promise<void> {
-      deferOrphanedRequestsWithPendingResults(await placements.listPendingWorkspaceResultsAsync());
+      const pending = await listRepositoryGitHubPublicationsAsync({
+        ownerProfileId: null,
+        pending: true,
+      });
+      if (pending.length === 0) {
+        return;
+      }
+      await deferRepositoryGitHubPublicationClaimsAsync({ kind: "orphaned" }, params.assertCurrent);
     },
   };
 }
@@ -312,15 +368,24 @@ export function createRepositoryGitHubPublicationRecovery(params: {
 async function readRepositoryGitHubPublicationInWorker(
   requestId: string,
 ): Promise<RepositoryGitHubPublicationRow | undefined> {
-  const result = await executeExistingOpenClawStateRead(
-    {},
-    { type: "githubRepository.request", requestId },
-    { current: true },
-  );
-  if (!result?.ok || result.type !== "githubRepository.request") {
+  const result = await readGitHubPublicationInWorker({
+    type: "githubPublications.repositoryRead",
+    input: { requestId },
+  });
+  if (result?.type !== "githubPublications.repositoryRead") {
     throw new Error("GitHub repository publication receipt is unavailable.");
   }
   return result.row;
+}
+
+async function requireRepositoryGitHubPublicationInWorker(
+  requestId: string,
+): Promise<RepositoryGitHubPublicationRow> {
+  const row = await readRepositoryGitHubPublicationInWorker(requestId);
+  if (!row) {
+    throw new Error("GitHub publication request no longer exists.");
+  }
+  return row;
 }
 
 async function readKnownRepositoryGitHubPublicationPullRequestUrls(
