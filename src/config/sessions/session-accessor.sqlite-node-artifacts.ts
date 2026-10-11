@@ -14,12 +14,14 @@ import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agen
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { copyLegacyAcpMigrationSourcesForRepair } from "./session-accessor.sqlite-acp-provenance.js";
+import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import {
   copySessionInputCompletionsForRepair,
   copySessionPendingInputsForRepair,
 } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import { deleteSessionPendingInputs } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { mergeParticipantAggregate } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
@@ -144,7 +146,11 @@ export function copySessionNodeArtifactsForRepair(
   destination: OpenClawAgentDatabase,
   sourceKeys: readonly string[],
   canonicalKey: string,
-  options: { includeMembers?: boolean; includeParticipants?: boolean } = {},
+  options: {
+    includeMembers?: boolean;
+    includeParticipants?: boolean;
+    postimages?: SessionEntryWritePostimages;
+  } = {},
 ): void {
   return withSqliteDatabaseWriteScope(
     destination.db,
@@ -161,6 +167,7 @@ export function copySessionNodeArtifactsForRepair(
       const destinationDb = getSessionKysely(destination.db);
       const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));
       const sourceTables = readSessionNodeArtifactTables(source);
+      const postimage = options.postimages?.get(canonicalKey);
       let destinationTables = readSessionNodeArtifactTables(destination);
       if (
         options.includeParticipants !== false &&
@@ -217,6 +224,10 @@ export function copySessionNodeArtifactsForRepair(
           source.db,
           sourceDb.selectFrom("board_tabs").selectAll().where("session_key", "in", keys),
         ).rows) {
+          if (postimage) {
+            postimage.sideTables.hasBoard = true;
+            postimage.changed = true;
+          }
           executeSqliteQuerySync(
             destination.db,
             destinationDb
@@ -267,10 +278,17 @@ export function copySessionNodeArtifactsForRepair(
         sourceTables.has("session_members") &&
         destinationTables.has("session_members")
       ) {
+        const memberIds = postimage
+          ? new Set<string>(JSON.parse(postimage.sideTables.memberIdsJson))
+          : undefined;
         for (const member of executeSqliteQuerySync(
           source.db,
           sourceDb.selectFrom("session_members").selectAll().where("session_key", "in", keys),
         ).rows) {
+          memberIds?.add(member.identity_id);
+          if (postimage) {
+            postimage.changed = true;
+          }
           executeSqliteQuerySync(
             destination.db,
             destinationDb
@@ -279,6 +297,13 @@ export function copySessionNodeArtifactsForRepair(
               .onConflict((conflict) =>
                 conflict.columns(["session_key", "identity_id"]).doNothing(),
               ),
+          );
+        }
+        if (postimage && memberIds) {
+          postimage.sideTables.memberIdsJson = JSON.stringify(
+            [...memberIds].toSorted((left, right) =>
+              Buffer.compare(Buffer.from(left), Buffer.from(right)),
+            ),
           );
         }
       }
@@ -363,6 +388,7 @@ export function copySessionNodeArtifactsForRepair(
         sourceTables.has("session_participants") &&
         destinationTables.has("session_participants")
       ) {
+        let copiedParticipant = false;
         for (const participant of executeSqliteQuerySync(
           source.db,
           sourceDb.selectFrom("session_participants").selectAll().where("session_key", "in", keys),
@@ -399,6 +425,16 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet(aggregate),
               ),
           );
+          copiedParticipant = true;
+        }
+        if (postimage && copiedParticipant) {
+          // A real transfer merges raw histories; project the final ordered destination once.
+          postimage.entry = projectSqliteSessionParticipants(
+            destination.db,
+            canonicalKey,
+            postimage.entry,
+          );
+          postimage.changed = true;
         }
       }
     },

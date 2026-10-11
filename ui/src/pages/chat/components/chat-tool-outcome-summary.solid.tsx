@@ -40,7 +40,7 @@ export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
 }
 
 type ReviewOutcome = ReturnType<typeof resolveToolApprovalReviewOutcome>;
-export function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
+function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
   return (
     <Show when={props.outcome}>
       <span
@@ -65,15 +65,9 @@ export function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: st
   );
 }
 
-export const ToolOutcomeSummaryHost = defineSolidBridge<ToolOutcomeSummaryProps>(
+defineSolidBridge<ToolOutcomeSummaryProps>(
   "openclaw-chat-tool-outcome-summary",
-  (props) => (
-    <ToolOutcomeSummary
-      cards={props.cards}
-      includeCount={props.includeCount}
-      activity={props.activity}
-    />
-  ),
+  ToolOutcomeSummary,
   {
     properties: {
       cards: { default: [], attribute: false },
@@ -82,16 +76,12 @@ export const ToolOutcomeSummaryHost = defineSolidBridge<ToolOutcomeSummaryProps>
     },
   },
 );
-export const ToolReviewOutcomeHost = defineSolidBridge<{
+defineSolidBridge<{
   outcome: ReviewOutcome;
   reviewer: string;
-}>(
-  "openclaw-chat-tool-review-outcome",
-  (props) => <ToolReviewOutcome outcome={props.outcome} reviewer={props.reviewer} />,
-  {
-    properties: {
-      outcome: { default: null, attribute: false },
-      reviewer: { default: "Review", attribute: false },
-    },
+}>("openclaw-chat-tool-review-outcome", ToolReviewOutcome, {
+  properties: {
+    outcome: { default: null, attribute: false },
+    reviewer: { default: "Review", attribute: false },
   },
-);
+});

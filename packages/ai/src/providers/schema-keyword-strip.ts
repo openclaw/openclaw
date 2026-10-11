@@ -7,6 +7,7 @@ import {
   walkSchemaValue,
   type SchemaWalk,
 } from "./schema-walk.js";
+import { inheritToolSchemaTruncation, truncateToolSchemaDepth } from "./tool-schema-depth.js";
 
 function* stripSchemaKeywords(
   schema: unknown,
@@ -43,5 +44,9 @@ export function stripUnsupportedSchemaKeywords(
   schema: unknown,
   unsupportedKeywords: ReadonlySet<string>,
 ): unknown {
-  return evaluateSchemaWalk(stripSchemaKeywords(schema, unsupportedKeywords, new Set()));
+  const bounded = truncateToolSchemaDepth(schema);
+  return inheritToolSchemaTruncation(
+    bounded,
+    evaluateSchemaWalk(stripSchemaKeywords(bounded, unsupportedKeywords, new Set())),
+  );
 }

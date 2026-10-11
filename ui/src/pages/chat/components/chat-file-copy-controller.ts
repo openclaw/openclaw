@@ -6,7 +6,7 @@ export type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed
 
 export class FileCopyController {
   feedback: FileCopyFeedback = {};
-  private readonly attempts = new Map<FileCopyAction, number>();
+  private readonly attempts = new Map<FileCopyAction, object>();
   private readonly timers = new Map<FileCopyAction, ReturnType<typeof globalThis.setTimeout>>();
 
   constructor(
@@ -19,10 +19,7 @@ export class FileCopyController {
       globalThis.clearTimeout(timer);
     }
     this.timers.clear();
-    // Tokens stay monotonic so a pre-disconnect copy cannot own new feedback.
-    for (const [action, attempt] of this.attempts) {
-      this.attempts.set(action, attempt + 1);
-    }
+    this.attempts.clear();
     this.feedback = {};
     if (this.host.isConnected) {
       this.host.requestUpdate();
@@ -38,7 +35,7 @@ export class FileCopyController {
     if (content?.kind !== "file") {
       return;
     }
-    const attempt = (this.attempts.get(action) ?? 0) + 1;
+    const attempt = {};
     this.attempts.set(action, attempt);
     const isCurrent = () =>
       this.attempts.get(action) === attempt && this.content() === content && this.host.isConnected;

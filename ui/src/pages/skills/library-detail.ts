@@ -9,9 +9,7 @@ import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
 import "../../components/modal-dialog.ts";
 
-export function renderLibraryIdentity(
-  entry: Pick<SkillLibraryEntry, "skillId" | "revision" | "name">,
-) {
+function renderLibraryIdentity(entry: Pick<SkillLibraryEntry, "skillId" | "revision" | "name">) {
   return html`<details class="muted" style="overflow-wrap: anywhere; min-width: 0;">
     <summary>${t("skillLibrary.technicalDetails")}</summary>
     <dl>
@@ -25,7 +23,7 @@ export function renderLibraryIdentity(
   </details>`;
 }
 
-export function renderLibraryDialogHeader(title: string, onClose: () => void, busy = false) {
+function renderLibraryDialogHeader(title: string, onClose: () => void, busy = false) {
   return html`<div class="exec-approval-header">
     <strong class="exec-approval-title">${title}</strong
     ><button

@@ -8,7 +8,7 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import * as toast from "../../lib/toast.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { UsageSessionEntry } from "./types.ts";
+import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -20,7 +20,6 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage-page.ts";
 
 afterEach(cleanupUsagePageTest);
 

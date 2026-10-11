@@ -48,5 +48,8 @@ export {
   resolveFastModeState,
 } from "../agents/fast-mode.js";
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models-catalog.js";
-export { listSkillCommandsForAgents } from "../skills/discovery/chat-commands.js";
+export {
+  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
+} from "../skills/discovery/chat-commands.js";
 export { listProviderPluginCommandSpecs } from "../plugins/command-specs.js";

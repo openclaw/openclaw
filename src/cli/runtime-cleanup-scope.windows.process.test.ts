@@ -13,6 +13,8 @@ describe.runIf(process.platform === "win32")("Windows executable process ownersh
     { ownership: "cli", inherited: false, exitCode: 0 },
     { ownership: "cli", inherited: true, exitCode: 0 },
     { ownership: "cli", inherited: true, exitCode: 1 },
+    { ownership: "legacy", inherited: false, exitCode: 0 },
+    { ownership: "legacy-worker", inherited: false, exitCode: 0 },
     { ownership: "borrowed", inherited: false, exitCode: 0 },
     { ownership: "gateway", inherited: false, exitCode: 0 },
   ])(
@@ -44,7 +46,7 @@ describe.runIf(process.platform === "win32")("Windows executable process ownersh
           ...(inherited ? { inheritedJob: true } : {}),
         });
         expect(isPidAlive(parent.pid!)).toBe(true);
-        if (ownership === "cli") {
+        if (ownership === "cli" || ownership.startsWith("legacy")) {
           expect(await waitForPidToExit(descendantPid!)).toBe(true);
         } else {
           expect(isPidAlive(descendantPid!)).toBe(true);

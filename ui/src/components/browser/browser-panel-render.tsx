@@ -323,7 +323,13 @@ function ViewportContent(props: ControllerProps) {
           ) : null}
         </div>
       </Match>
-      <Match when={!props.controller.native.activeTab && props.controller.running === false}>
+      <Match
+        when={
+          !props.controller.native.activeTab &&
+          props.controller.running === false &&
+          !props.controller.loading
+        }
+      >
         <PanelEmptyState
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
@@ -479,7 +485,7 @@ export function BrowserPanelChrome(
         id={panelId}
         class="bp-viewport"
         name={props.controller.activeTargetId ?? "browser"}
-        prop:active
+        prop:active={true}
         aria-labelledby={
           rendersTabStrip() && props.controller.activeTargetId
             ? `${panelId}-tab-${props.controller.activeTargetId}`

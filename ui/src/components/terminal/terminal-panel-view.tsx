@@ -24,7 +24,7 @@ declare module "@solidjs/web" {
   }
 }
 
-export type TerminalSessionPickerState = {
+type TerminalSessionPickerState = {
   hosted: boolean;
   open: boolean;
   loading: boolean;
@@ -404,7 +404,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
           id={viewportId}
           class="tp-viewport"
           name={props.view().activeId ?? "terminal"}
-          prop:active
+          prop:active={true}
           aria-labelledby={
             props.view().activeId && !props.view().hosted
               ? `${idPrefix}-tab-${props.view().activeId}`

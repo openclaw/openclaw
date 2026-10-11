@@ -16,6 +16,13 @@ import { projectTranscriptNavigationSql } from "./session-model-context-projecti
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSessionTranscriptQuestionAnswer } from "./session-transcript-read-fence.js";
+import {
+  PREPARED_ASSISTANT_MAX_NEWER_MESSAGES,
+  PREPARED_ASSISTANT_MAX_NEWER_BYTES,
+  PREPARED_ASSISTANT_MAX_ANCESTORS,
+  preparedAssistantMessagesPreserveTurn,
+  resolveTranscriptAppendParent,
+} from "./transcript-append-parent.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isSessionTranscriptLeafControl,
@@ -24,13 +31,6 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-
-// Stamped by the Talk voice writer in src/talk/client-voice-session.ts.
-const REALTIME_VOICE_PROVENANCE = { kind: "realtime_voice", sourceChannel: "talk" } as const;
-
-const PREPARED_ASSISTANT_MAX_NEWER_MESSAGES = 256;
-const PREPARED_ASSISTANT_MAX_NEWER_BYTES = 1024 * 1024;
-const PREPARED_ASSISTANT_MAX_ANCESTORS = 4096;
 
 /** Validates a prepared assistant from bounded indexed message metadata. */
 export function canRebasePreparedAssistantInTransaction(
@@ -164,22 +164,7 @@ export function canRebasePreparedAssistantInTransaction(
         .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES),
     ),
   );
-  return newerRoles.every((row) => {
-    if (
-      row.message_role !== "user" ||
-      row.event_id === admittedUserId ||
-      row.context_free_command === 1
-    ) {
-      return true;
-    }
-    // Final Talk speech records history without admitting another agent turn.
-    // Both writer markers must match; other provenance still faces the fence.
-    if (
-      row.provenance_kind === REALTIME_VOICE_PROVENANCE.kind &&
-      row.provenance_source_channel === REALTIME_VOICE_PROVENANCE.sourceChannel
-    ) {
-      return true;
-    }
+  return preparedAssistantMessagesPreserveTurn(newerRoles, admittedUserId, (row) => {
     const answer = resolveSessionTranscriptQuestionAnswer(
       database,
       sessionId,
@@ -222,17 +207,13 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "appendIntent" | "parentId">,
 ): string | null {
   const tailId = readActiveTranscriptAppendParentId(database, sessionId);
-  if (options.parentId === undefined) {
-    return tailId;
-  }
-  if (options.appendIntent !== "active-branch" || tailId === options.parentId || tailId === null) {
-    return options.parentId;
-  }
-
-  // Active appends rebase only along known ancestry; deliberate branches keep their parent.
-  return transcriptEntryIsAncestor(database, sessionId, tailId, options.parentId)
-    ? tailId
-    : options.parentId;
+  return resolveTranscriptAppendParent({
+    tailId,
+    parentId: options.parentId,
+    appendIntent: options.appendIntent,
+    isAncestor: (leafId, candidateId) =>
+      transcriptEntryIsAncestor(database, sessionId, leafId, candidateId),
+  });
 }
 
 /** Checks the durable tree directly when the materialized active-path projection is dirty. */

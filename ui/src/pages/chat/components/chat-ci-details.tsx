@@ -491,15 +491,11 @@ function ChatCiDetailsContent(
   );
 }
 
-export const ChatCiDetails = defineSolidBridge<ChatCiDisclosureProps>(
-  "openclaw-chat-ci-details",
-  ChatCiDetailsContent,
-  {
-    properties: {
-      gateway: { default: undefined, attribute: false },
-      pullRequest: { default: undefined, attribute: false },
-      sessionKey: { default: "", attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<ChatCiDisclosureProps>("openclaw-chat-ci-details", ChatCiDetailsContent, {
+  properties: {
+    gateway: { default: undefined, attribute: false },
+    pullRequest: { default: undefined, attribute: false },
+    sessionKey: { default: "", attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});
