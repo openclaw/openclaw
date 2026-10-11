@@ -1,3 +1,5 @@
+import { strict as assert } from "node:assert";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   controlUiSessionUrl,
@@ -143,9 +145,10 @@ suite.define(() => {
         await page.clock.runFor(59_499);
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
         for (const request of before) {
-          const dashboardList =
-            request.params?.source === "dashboard" && request.params.hasBoard === true;
-          expect(request.params).toMatchObject({
+          const params = request.params;
+          assert(isRecord(params));
+          const dashboardList = params.source === "dashboard" && params.hasBoard === true;
+          expect(params).toMatchObject({
             rowMode: dashboardList ? "dashboard" : "compact",
             source: expect.any(String),
           });

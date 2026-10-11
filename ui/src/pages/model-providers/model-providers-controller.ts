@@ -175,9 +175,8 @@ export class ModelProvidersController extends ModelPageController {
     invalidateRequests: () => this.invalidateRequests(),
     ensureInitialData: () => this.ensureInitialData(),
     onSnapshot: (change) => {
-      if (change.initial) {
-        this.resetConnectionState();
-      } else if (change.connectionChanged && !change.identityChanged) {
+      // Initial route data may already be applied before the Solid owner connects.
+      if (!change.initial && change.connectionChanged && !change.identityChanged) {
         // Keep the last snapshot visible while the canonical reconnect load replaces it.
         this.resetConnectionState({ preserveVisibleData: true });
       }

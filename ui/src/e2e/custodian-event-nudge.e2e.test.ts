@@ -564,7 +564,7 @@ suite.define(() => {
     );
   });
 
-  it("stays silent during onboarding", async () => {
+  it("keeps health-event nudges silent during onboarding", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
@@ -581,6 +581,8 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       // Onboarding chrome keeps only the header actions; no identity heading.
       await page.locator(".custodian__header--minimal").waitFor();
+      const channelSetup = page.locator(".custodian__nudge--channel-onboarding");
+      await channelSetup.waitFor();
       await gateway.emitGatewayEvent("health", {
         channelLabels: { telegram: "Telegram" },
         channels: {
@@ -588,7 +590,8 @@ suite.define(() => {
         },
       });
       await settleUi(page);
-      expect(await page.locator(".custodian__nudge").count()).toBe(0);
+      expect(await channelSetup.isVisible()).toBe(true);
+      expect(await page.locator(".custodian__nudge-action").count()).toBe(0);
     });
   });
 });
