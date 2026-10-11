@@ -247,16 +247,12 @@ describe("Codex procfs command inspector", () => {
       });
 
       const inspected = readCodexAppServerProcessCommand(observedProcess, Date.now() + 1_000);
-      if (fixture.reason) {
-        await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
-        if (fixture.reason !== "permission") {
-          await expect(inspected).rejects.not.toThrow("permissions");
-        }
-        if (fixture.reason === "deadline") {
-          await expect(inspected).rejects.toThrow("deadline");
-        }
-      } else {
-        await expect(inspected).resolves.toBe(fixture.expected);
+      await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
+      if (fixture.reason !== "permission") {
+        await expect(inspected).rejects.not.toThrow("permissions");
+      }
+      if (fixture.reason === "deadline") {
+        await expect(inspected).rejects.toThrow("deadline");
       }
       procfs.readFile.mockClear();
       await expect(
