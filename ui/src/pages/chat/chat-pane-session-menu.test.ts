@@ -263,6 +263,23 @@ describe("chat pane session menu boundary", () => {
       return container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
     };
     expect(draw(undefined)).toBe("Retained conversation");
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    state.connected = true;
+    expect(draw(undefined)).toBe("Retained conversation");
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Retained conversation",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    expect(draw({ ...row, sessionId: "retained", sharingRole: "owner" })).toBe(
+      "Retained conversation",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")?.getAttribute("title")).toBe(
+      "Rename session",
+    );
+    state.connected = false;
     expect(draw(row)).toBe("Retained conversation");
     expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
     const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
