@@ -8,12 +8,12 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", () => ({
   refreshControlUiServiceWorker: vi.fn(async () => false),
@@ -31,6 +31,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
   afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
     vi.mocked(refreshControlUiServiceWorker).mockReset();
     vi.mocked(refreshControlUiServiceWorker).mockResolvedValue(false);
@@ -59,7 +60,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       addEventListener: () => () => {},
     };
     const mountPanel = () => {
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
       panel.client = client;
       panel.available = true;
       document.body.append(panel);
@@ -144,7 +145,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         },
         addEventListener: () => () => {},
       };
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
       panel.client = client;
       panel.available = true;
       document.body.append(panel);
@@ -254,7 +255,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         };
       },
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -351,7 +352,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.agentId = "research";
     panel.client = client;
     panel.available = true;
@@ -427,7 +428,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -492,7 +493,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
           releases.push(resolve);
         }),
     );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -545,7 +546,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         releaseRefresh = resolve;
       }),
     );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.catalogReadyTimeoutMs = 10;
     panel.client = client;
     panel.available = true;
@@ -600,7 +601,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       },
       addEventListener: () => () => {},
     };
-    const stalePanel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const stalePanel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     stalePanel.client = client;
     stalePanel.available = true;
     document.body.append(stalePanel);
@@ -629,9 +630,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(requests).toHaveLength(0);
 
     stalePanel.remove();
-    const currentPanel = document.createElement(
-      TERMINAL_PANEL_ELEMENT_NAME,
-    ) as OpenClawTerminalPanel;
+    const currentPanel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     currentPanel.client = client;
     currentPanel.available = true;
     document.body.append(currentPanel);

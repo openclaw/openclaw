@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { startNativeLinkRouting } from "../../app/native-link-routing.ts";
 import { acquireNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { promoteToPopoverTopLayer } from "../menu-surface.ts";
 import {
   createInspectedNode,
@@ -392,7 +393,9 @@ describe("native Browser panel ownership", () => {
       await panel.updateComplete;
       expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
       panel.remove();
-      expect(native.messages().at(-1)).toMatchObject({ type: "release-scope" });
+      await waitForSolid(() =>
+        expect(native.messages().at(-1)).toMatchObject({ type: "release-scope" }),
+      );
       expect(panel.hasAttribute("data-native-browser-scope")).toBe(false);
     },
   );

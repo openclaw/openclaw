@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const baselineSha = "171df4e1c5a08e1da631c4fff50c420db2bb6f84";
+const baselineSha = "53b8118647525c9e855a6d276ed3eef5dfef9464";
 const fixturePath = "scripts/fixtures/control-ui-panel-proof";
 const checkout = fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
 const shaPattern = /^[0-9a-f]{40}$/;

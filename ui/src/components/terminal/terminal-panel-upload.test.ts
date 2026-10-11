@@ -13,7 +13,7 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
 import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import { terminalOpenResult } from "./terminal-panel.test-support.ts";
-import { TerminalPanelController, type OpenClawTerminalPanel } from "./terminal-panel.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -54,13 +54,13 @@ type CreateGhosttyTerminalMock = Mock<
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-upload-${crypto.randomUUID()}`;
 
-defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME, (element) => {
-  const controller = new TerminalPanelController(element);
-  Object.assign(element, {
-    createTerminalController: createGhosttyTerminalMock as unknown as TerminalFactory,
-  });
-  return controller;
-});
+defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME);
+
+function createUploadPanel(): OpenClawTerminalPanel {
+  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  panel.createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
+  return panel;
+}
 
 function terminalUploadFile(name: string, content: string): File {
   const file = new File([content], name);
@@ -71,7 +71,7 @@ function terminalUploadFile(name: string, content: string): File {
 }
 
 async function mountReadyPanel(client: TerminalGatewayClient) {
-  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  const panel = createUploadPanel();
   panel.client = client;
   panel.available = true;
   document.body.append(panel);
@@ -129,7 +129,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("reacts to upload policy changes without intercepting text drops", async () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     const host = createApplicationContextProvider({ config } as ApplicationContext);
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createUploadPanel();
     panel.embedded = true;
     panel.available = true;
     host.append(panel);
@@ -184,6 +184,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
 
   afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

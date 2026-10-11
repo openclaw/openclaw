@@ -112,6 +112,4 @@ export function defineTerminalPanelElement(
   );
 }
 
-if (!customElements.get("openclaw-terminal-panel")) {
-  defineTerminalPanelElement();
-}
+export const TerminalPanelHost = defineTerminalPanelElement();

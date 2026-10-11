@@ -1,8 +1,8 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { For, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/panel-empty-state.ts";
-import "../../components/terminal/terminal-panel-registration.ts";
+import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.ts";
 import {
   projectAgentSelection,
   projectApplicationConfig,
@@ -46,30 +46,29 @@ export function TerminalPageContent(props: { location: RouteLocation | null }) {
     <For each={route()} keyed={(entry) => entry.key}>
       {(entry) => (
         <>
-          <openclaw-terminal-panel
+          <TerminalPanelHost
             hidden={!available()}
             embedded
             fullscreen
-            prop:page={true}
-            prop:routeTarget={entry().target}
-            prop:client={snapshot().phase === "connected" ? snapshot().client : null}
-            prop:available={available()}
-            prop:agentId={owner() ? normalizeAgentId(owner()!) : null}
-            prop:basePath={context.basePath}
-            prop:themeMode={themeMode()}
+            page={true}
+            routeTarget={entry().target}
+            client={snapshot().phase === "connected" ? snapshot().client : null}
+            available={available()}
+            agentId={owner() ? normalizeAgentId(owner()!) : null}
+            basePath={context.basePath}
+            themeMode={themeMode()}
           />
           {!available() && (
-            <openclaw-panel-empty-state
-              prop:heading={t("terminal.title")}
-              prop:description={t("terminal.unavailable")}
-            >
-              <Icon name="terminal" />
-              <span slot="action">
+            <PanelEmptyState
+              heading={t("terminal.title")}
+              description={t("terminal.unavailable")}
+              icon={<Icon name="terminal" />}
+              action={
                 <button class="btn" onClick={() => context.navigate("new-session")}>
                   {t("newSession.title")}
                 </button>
-              </span>
-            </openclaw-panel-empty-state>
+              }
+            />
           )}
         </>
       )}

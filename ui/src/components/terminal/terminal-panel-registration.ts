@@ -1,1 +1,1 @@
-export { defineTerminalPanelElement } from "./terminal-panel-registration.tsx";
+export { defineTerminalPanelElement, TerminalPanelHost } from "./terminal-panel-registration.tsx";

@@ -1,12 +1,12 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, untrack } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
-import "../panel-empty-state.ts";
-import "../panel-loading-skeleton.ts";
+import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
@@ -53,7 +53,7 @@ export type TerminalPanelViewState = {
 function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
   return (
     <button
-      ref={props.state.triggerRef}
+      ref={(element) => untrack(() => props.state.triggerRef(element))}
       class={props.state.hosted ? "rail-header__action" : "rail-header__action tp-icon"}
       type="button"
       title={props.state.hosted ? undefined : t("terminal.sessions")}
@@ -71,14 +71,11 @@ function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialog
 
 function Loading(props: { compact?: boolean; overlay?: boolean; label: string }) {
   return (
-    <openclaw-panel-loading-skeleton
-      prop:variant="terminal"
-      prop:label={props.label}
-      prop:compact={Boolean(props.compact)}
-      prop:overlay={Boolean(props.overlay)}
-      role="status"
-      aria-busy="true"
-      aria-label={props.label}
+    <PanelLoadingSkeleton
+      variant="terminal"
+      label={props.label}
+      compact={Boolean(props.compact)}
+      overlay={Boolean(props.overlay)}
     />
   );
 }
@@ -411,12 +408,11 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             <Loading overlay label={t("terminal.connecting")} />
           </Show>
           <Show when={!props.view().activeId && !props.view().connecting && !props.view().error}>
-            <openclaw-panel-empty-state
-              prop:heading={t("chat.sidePanel.terminal")}
-              prop:description={t("chat.sidePanel.terminalEmpty")}
-            >
-              <Icon name="terminal" />
-            </openclaw-panel-empty-state>
+            <PanelEmptyState
+              heading={t("chat.sidePanel.terminal")}
+              description={t("chat.sidePanel.terminalEmpty")}
+              icon={<Icon name="terminal" />}
+            />
           </Show>
           <Show when={props.view().upload.uploadsEnabled()}>
             <input

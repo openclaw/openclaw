@@ -345,6 +345,6 @@ declare global {
   }
 }
 
-if (!customElements.get("openclaw-browser-panel")) {
-  defineBrowserPanelElement((element) => new BrowserPanelPresentation(element));
-}
+export const BrowserPanelHost = defineBrowserPanelElement(
+  (element) => new BrowserPanelPresentation(element),
+);

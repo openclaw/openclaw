@@ -8,24 +8,15 @@ import { For } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
-import "../panel-loading-skeleton.ts";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
 export function DesktopLoading(props: { label: string; overlay?: boolean }) {
-  return (
-    <openclaw-panel-loading-skeleton
-      prop:variant="desktop"
-      prop:label={props.label}
-      prop:overlay={props.overlay}
-      role="status"
-      aria-busy="true"
-      aria-label={props.label}
-    />
-  );
+  return <PanelLoadingSkeleton variant="desktop" label={props.label} overlay={props.overlay} />;
 }
 
 function PanelIconButton(props: {

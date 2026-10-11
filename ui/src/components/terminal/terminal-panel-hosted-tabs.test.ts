@@ -14,6 +14,7 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   terminalSessionsForTest,
@@ -36,7 +37,7 @@ async function mount(embedded = true, tabsInHeader = true) {
           : {}) as T,
     addEventListener: () => () => {},
   };
-  const panel = document.createElement(tagName) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tagName);
   panel.available = true;
   panel.embedded = embedded;
   panel.tabsInHeader = tabsInHeader;
@@ -75,12 +76,13 @@ describe("Terminal panel hosted tabs", () => {
     await i18n.setLocale("en");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // This fixture has no destination panel to consume a queued docking handoff.
     for (const panel of document.querySelectorAll<OpenClawTerminalPanel>(tagName)) {
       panel.closeTerminalPanel();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

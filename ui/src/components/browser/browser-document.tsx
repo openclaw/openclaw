@@ -6,7 +6,7 @@ import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderConnectingSplash } from "../loading-skeleton.ts";
-import "./browser-panel.ts";
+import { BrowserPanelHost } from "./browser-panel.ts";
 import { readBrowserTabTarget } from "./browser-target.ts";
 
 export type BrowserDocumentProps = {
@@ -46,17 +46,17 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentProps | nu
     <>
       {props.value ? (
         <>
-          <openclaw-browser-panel
+          <BrowserPanelHost
             embedded
             style={available() ? "height: 100dvh;" : "display: none;"}
-            prop:client={connected() ? snapshot()!.client : null}
-            prop:available={available()}
-            prop:remoteAvailable={available()}
-            prop:presented={true}
-            prop:sessionKey={props.value.target.sessionKey}
-            prop:fixedTab={tab() ?? undefined}
-            prop:resourceBasePath={props.value.context.resourceBasePath}
-            prop:authToken={resolveControlUiAuthToken({
+            client={connected() ? snapshot()!.client : null}
+            available={available()}
+            remoteAvailable={available()}
+            presented={true}
+            sessionKey={props.value.target.sessionKey}
+            fixedTab={tab() ?? undefined}
+            resourceBasePath={props.value.context.resourceBasePath}
+            authToken={resolveControlUiAuthToken({
               hello: snapshot()!.hello,
               settings: { token: props.value.context.gateway.connection.token },
               password: props.value.context.gateway.connection.password,

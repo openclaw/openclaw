@@ -8,6 +8,7 @@ import { TERMINAL_PANEL_DOCK_BOTTOM_EVENT } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -18,7 +19,7 @@ const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 function createPanel(client: TerminalGatewayClient, embedded = false) {
-  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
   panel.client = client;
   panel.available = true;
   panel.embedded = embedded;
@@ -70,7 +71,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
   it("offers bottom docking from an embedded terminal", async () => {
     const event = vi.fn();
     window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event);
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = createPickerClient();
     panel.available = true;
     panel.agentId = "main";
@@ -125,6 +126,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
       panel.closeTerminalPanel();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     localStorage.clear();
     sessionStorage.clear();
     createGhosttyTerminalMock.mockReset();
