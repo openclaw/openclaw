@@ -118,13 +118,15 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+// Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
+// identity: each run re-verifies the current tooling against trusted main, and
+// saved FRV/npm evidence is authenticated against its own producer run. Tooling
+// repaired mid-release can therefore resume the same state.
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
   "targetSha",
-  "toolingSha",
   "workflowRef",
-  "publishWorkflowRef",
   "provider",
   "mode",
   "releaseProfile",
@@ -875,11 +877,15 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
   }
 }
 
-function savedPublishWorkflowRef(statePath: string) {
+function savedPublishWorkflowRef(statePath: string, toolingSha: string) {
   const saved = existsSync(statePath)
     ? readJson(statePath, "release candidate state").publishWorkflowRef
     : undefined;
-  return typeof saved === "string" && PUBLISH_TOOLING_TAG_PATTERN.test(saved) ? saved : "";
+  return typeof saved === "string" &&
+    PUBLISH_TOOLING_TAG_PATTERN.test(saved) &&
+    saved.startsWith(`release-publish/${toolingSha.slice(0, 12)}-`)
+    ? saved
+    : "";
 }
 
 function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
@@ -2013,10 +2019,10 @@ async function main() {
         `--workflow-sha ${options.workflowSha} does not match tooling checkout ${toolingSha}`,
       );
     }
-    // A resumed candidate keeps the exact tag it recorded; a newer tag at the
-    // same SHA must not fail state reconciliation. The identity check below
-    // still proves that saved tag resolves to this tooling SHA.
-    const savedTag = savedPublishWorkflowRef(statePath);
+    // A resumed candidate reuses the tag it recorded for this tooling SHA; a
+    // repaired tooling SHA gets its own tag. The identity check below proves
+    // the selected tag resolves to this tooling SHA.
+    const savedTag = savedPublishWorkflowRef(statePath, toolingSha);
     const ensured = savedTag
       ? { tag: savedTag, created: false }
       : ensureReleasePublishToolingTag({

@@ -250,6 +250,7 @@ describe("release candidate checklist", () => {
     registryAdmission?: boolean;
     preflightFailure?: boolean;
     workflowSha?: string;
+    savedToolingSha?: string;
     savedToolingTag?: string;
     retainedHelperRequest?: boolean;
     sdkAcknowledgement?: string;
@@ -262,6 +263,18 @@ describe("release candidate checklist", () => {
     })),
     { launch: "npm-only", generatedFailure: true },
     { workflowSha: "b".repeat(40), savedToolingTag: "release-publish/bbbbbbbbbbbb-100" },
+    ...[false, true].map<QualificationCase>((retainedHelperRequest) => ({
+      workflowSha: "b".repeat(40),
+      savedToolingSha: "a".repeat(40),
+      savedToolingTag: "release-publish/aaaaaaaaaaaa-100",
+      launch: "npm-only",
+      retainedHelperRequest,
+    })),
+    {
+      workflowSha: "b".repeat(40),
+      savedToolingSha: "a".repeat(40),
+      savedToolingTag: "release-publish/aaaaaaaaaaaa-100",
+    },
     { workflowSha: "b".repeat(40) },
     { workflowSha: "c".repeat(40) },
     { pin: "2026.7.4", expected: "warning" },
@@ -354,6 +367,7 @@ describe("release candidate checklist", () => {
       registryAdmission = false,
       preflightFailure = false,
       workflowSha,
+      savedToolingSha,
       savedToolingTag,
       retainedHelperRequest,
       sdkAcknowledgement,
@@ -453,6 +467,8 @@ describe("release candidate checklist", () => {
             ? {
                 ...buildReleaseCandidateState(options, { targetSha, toolingSha }),
                 publishWorkflowRef: savedToolingTag,
+                toolingSha: savedToolingSha ?? toolingSha,
+                ...(launch === "npm-only" ? { fullReleaseRunId: "", npmPreflightRunId: "" } : {}),
               }
             : undefined;
       if (savedState) {
@@ -770,6 +786,16 @@ describe("release candidate checklist", () => {
       const evidence = JSON.parse(
         readFileSync(join(options.outputDir, "release-candidate-evidence.json"), "utf8"),
       );
+      if (savedToolingSha) {
+        // Repaired tooling resumes the same state with its own publication tag.
+        expect(options.publishWorkflowRef).toBe(publishWorkflowRef);
+        expect(ensureToolingTag).toHaveBeenCalledOnce();
+        expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({
+          toolingSha,
+          publishWorkflowRef,
+          ...(launch === "npm-only" ? {} : { fullReleaseRunId: savedState?.fullReleaseRunId }),
+        });
+      }
       if (launch === "npm-only") {
         expect(dispatches).toHaveLength(1);
         const dispatched = expectDefined(dispatches[0], "FRV dispatch");
@@ -833,8 +859,10 @@ describe("release candidate checklist", () => {
       const output = log.mock.calls.map(([line]) => line).join("\n");
       if (workflowSha) {
         // A resumed candidate keeps its recorded tag even though a newer tag exists at the SHA.
-        const toolingTag = savedToolingTag || publishWorkflowRef;
-        if (savedToolingTag) {
+        const reusedToolingTag =
+          savedToolingTag && (!savedToolingSha || savedToolingSha === toolingSha);
+        const toolingTag = reusedToolingTag ? savedToolingTag : publishWorkflowRef;
+        if (reusedToolingTag) {
           expect(ensureToolingTag).not.toHaveBeenCalled();
         } else {
           expect(ensureToolingTag).toHaveBeenCalledExactlyOnceWith({
@@ -844,7 +872,7 @@ describe("release candidate checklist", () => {
           });
         }
         expect(output).toContain(
-          `${savedToolingTag ? "reusing" : "created"} protected tooling tag ${toolingTag} at ${toolingSha}`,
+          `${reusedToolingTag ? "reusing" : "created"} protected tooling tag ${toolingTag} at ${toolingSha}`,
         );
         expect(output).toContain(
           publicationRoute === "prepared" ? `'--ref' '${toolingTag}'` : `--ref ${toolingTag}`,
@@ -1226,6 +1254,37 @@ describe("release candidate checklist", () => {
         { ...expected, fullReleaseRunId: "333" },
       ),
     ).toThrow("state mismatch for fullReleaseRunId");
+  });
+
+  it("resumes bound state on repaired release tooling", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
+    const saved = {
+      ...buildReleaseCandidateState(options, {
+        targetSha: "a".repeat(40),
+        toolingSha: "b".repeat(40),
+      }),
+      publishWorkflowRef: "release-publish/bbbbbbbbbbbb-100",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    };
+    const repaired = {
+      ...buildReleaseCandidateState(options, {
+        targetSha: "a".repeat(40),
+        toolingSha: "c".repeat(40),
+      }),
+      publishWorkflowRef: "release-publish/cccccccccccc-200",
+    };
+
+    expect(reconcileReleaseCandidateState(saved, repaired)).toMatchObject({
+      toolingSha: "c".repeat(40),
+      publishWorkflowRef: "release-publish/cccccccccccc-200",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    });
+    // Candidate-bound inputs stay frozen across a tooling repair.
+    expect(() =>
+      reconcileReleaseCandidateState(saved, { ...repaired, skipParallels: !saved.skipParallels }),
+    ).toThrow("state mismatch for skipParallels");
   });
 
   it("captures changelogs larger than the Node spawnSync default buffer", () => {
