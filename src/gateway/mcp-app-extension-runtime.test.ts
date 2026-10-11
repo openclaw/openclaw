@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { McpCatalogTool } from "../agents/agent-bundle-mcp-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { prepareMcpAppExtensionRuntime } from "./mcp-app-extension-runtime.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -16,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   model: vi.fn(),
   retain: vi.fn(),
   releaseAccess: vi.fn(),
+  bundle: vi.fn(() => [] as Array<{ name: string }>),
+  toolMeta: vi.fn(
+    (): { mcp?: { operation: string; serverName: string; toolName: string } } => ({}),
+  ),
+  requiresApproval: vi.fn(() => false),
+  requestApproval: vi.fn(),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   acquireSessionMcpRuntime: mocks.direct,
@@ -23,8 +30,9 @@ vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   releaseSessionMcpRuntime: mocks.release,
 }));
+// mock-isolation: The catalog builder returns one App tool without loading a bundle.
 vi.mock("../agents/agent-bundle-mcp-materialize.js", () => ({
-  buildBundleMcpToolsFromCatalog: () => [],
+  buildBundleMcpToolsFromCatalog: mocks.bundle,
 }));
 vi.mock("../agents/agent-bundle-mcp-runtime-config.js", () => ({
   loadSessionMcpConfig: () => ({ loaded: { mcpServers: {} } }),
@@ -41,8 +49,9 @@ vi.mock("../agents/sandbox/runtime-status.js", () => ({
 vi.mock("../agents/harness/session-preparation.js", () => ({
   prepareAgentHarnessSessionRuntime: mocks.prepare,
 }));
+// mock-isolation: Approval is flipped after preparation, so the real Codex policy does not run.
 vi.mock("../agents/mcp-codex-tool-approval.js", () => ({
-  requiresMcpCodexToolApproval: () => false,
+  requiresMcpCodexToolApproval: mocks.requiresApproval,
   resolveProjectedMcpCodexToolApprovalMode: () => undefined,
 }));
 vi.mock("../agents/mcp-tool-filter.js", () => ({
@@ -52,9 +61,13 @@ vi.mock("../agents/mcp-tool-filter.js", () => ({
 vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
   getGatewayPluginMetadataSnapshot: () => undefined,
 }));
-vi.mock("../plugins/tool-metadata.js", () => ({ getPluginToolMeta: () => undefined }));
+// mock-isolation: Tool metadata is injected so the App view resolves one named tool.
+vi.mock("../plugins/tool-metadata.js", () => ({ getPluginToolMeta: mocks.toolMeta }));
 vi.mock("./mcp-app-host-files.js", () => ({ resolveMcpAppRequesterId: () => "alice" }));
-vi.mock("./mcp-app-tool-approval.js", () => ({ requestMcpAppToolApproval: vi.fn() }));
+// mock-isolation: The approval prompt is observed and is not sent to a gateway client.
+vi.mock("./mcp-app-tool-approval.js", () => ({
+  requestMcpAppToolApproval: mocks.requestApproval,
+}));
 vi.mock("./operator-run-authority.js", () => ({
   captureGatewayOperatorRunAuthority: mocks.source,
 }));
@@ -90,6 +103,9 @@ beforeEach(() => {
     release: mocks.releaseAccess,
   }));
   mocks.releaseAccess.mockImplementation(() => accessController.abort(new Error("released")));
+  mocks.bundle.mockReturnValue([]);
+  mocks.toolMeta.mockReturnValue({});
+  mocks.requiresApproval.mockReturnValue(false);
   mocks.model.mockReturnValue({ provider: "openai", model: "model" });
   mocks.selection.mockReturnValue("codex");
   mocks.registered.mockReturnValue({
@@ -231,5 +247,48 @@ describe("cold App request admission", () => {
     await expect(prepareMcpAppExtensionRuntime(options())).rejects.toThrow("revoked");
     expect(mocks.prepare).not.toHaveBeenCalled();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
+  });
+  it("rejects an App tool call when approval becomes required after preparation", async () => {
+    const shared = {
+      serverName: "demo",
+      safeServerName: "demo",
+      toolName: "shared",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "shared",
+    } as McpCatalogTool;
+    mocks.bundle.mockReturnValue([{ name: "demo_shared" }]);
+    mocks.toolMeta.mockReturnValue({
+      mcp: { operation: "tool", serverName: "demo", toolName: "shared" },
+    });
+    mocks.native.mockImplementation(async ({ prepareSession }) => {
+      await prepareSession();
+      return {
+        runtime: {
+          assertOwnerCurrent: () => {},
+          getCatalog: async () => ({
+            version: 1,
+            generatedAt: 1,
+            servers: { demo: { pluginId: "bundle" } },
+            tools: [shared],
+          }),
+          joinCleanup: async () => {},
+        },
+        releaseLease: vi.fn(),
+      };
+    });
+    const active = await prepareMcpAppExtensionRuntime(options());
+    accessController = new AbortController();
+    const view = active.retainViewAuthority([shared]);
+    const guard = await view.prepareToolCall({
+      options: options(),
+      toolName: "shared",
+      input: {},
+      assertCurrent: () => {},
+    });
+    expect(mocks.requestApproval).not.toHaveBeenCalled();
+    mocks.requiresApproval.mockReturnValue(true);
+    expect(guard).toThrow("MCP App approval policy changed before execution");
+    view.release();
+    await active.dispose();
   });
 });
