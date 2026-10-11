@@ -1,14 +1,12 @@
 import { cleanup, getByRole, render as renderSolid } from "@solidjs/testing-library";
 import { html, nothing, render, svg, type TemplateResult } from "lit";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createRenderEffect, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderPanelEmptyState } from "./panel-empty-state.ts";
 import {
   renderPanelLoadingSkeleton,
   type PanelLoadingSkeletonVariant,
 } from "./panel-loading-skeleton.ts";
-import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
-import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 
 const owners: HTMLElement[] = [];
 function mountLit(template: TemplateResult) {
@@ -74,26 +72,29 @@ describe("panel presentation bridges", () => {
     expect(skeleton.querySelector(".desktop-loading")?.textContent).toContain("Connecting");
   });
 
-  it("mounts one direct Solid skeleton and synchronizes reactive properties", () => {
+  it("mounts one registered skeleton from Solid and synchronizes reactive properties", async () => {
     const [label, setLabel] = createSignal("Connecting");
     const [compact, setCompact] = createSignal(false);
-    const view = renderSolid(() =>
-      createComponent(PanelLoadingSkeleton, {
-        variant: "desktop",
-        get label() {
-          return label();
+    const view = renderSolid(() => {
+      const host = document.createElement("openclaw-panel-loading-skeleton");
+      host.variant = "desktop";
+      createRenderEffect(
+        () => ({ label: label(), compact: compact() }),
+        (value) => {
+          host.label = value.label;
+          host.compact = value.compact;
         },
-        get compact() {
-          return compact();
-        },
-      }),
-    );
+      );
+      return host;
+    });
     flush();
     const skeleton = view.container.querySelector("openclaw-panel-loading-skeleton")!;
+    await skeleton.updateComplete;
     const spinner = skeleton.querySelector(".desktop-spinner");
     setLabel("Authenticating");
     setCompact(true);
     flush();
+    await skeleton.updateComplete;
     expect(view.container.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
     expect(skeleton.querySelector(".desktop-spinner")).toBe(spinner);
     expect(skeleton.getAttribute("aria-label")).toBe("Authenticating");
@@ -145,29 +146,30 @@ describe("panel presentation bridges", () => {
     expect(action).toHaveBeenCalledTimes(3);
   });
 
-  it("mounts the same empty-state implementation from Solid without a nested host", () => {
+  it("mounts the registered empty state from Solid without a nested host", async () => {
     const [heading, setHeading] = createSignal("No files");
-    const view = renderSolid(() =>
-      createComponent(PanelEmptyState, {
-        get heading() {
-          return heading();
-        },
-        description: "Choose a workspace.",
-        get icon() {
-          return document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        },
-        get action() {
-          const button = document.createElement("button");
-          button.textContent = "Choose workspace";
-          return button;
-        },
-      }),
-    );
+    const view = renderSolid(() => {
+      const host = document.createElement("openclaw-panel-empty-state");
+      host.description = "Choose a workspace.";
+      host.append(document.createElementNS("http://www.w3.org/2000/svg", "svg"));
+      const action = document.createElement("span");
+      action.slot = "action";
+      const button = document.createElement("button");
+      button.textContent = "Choose workspace";
+      action.append(button);
+      host.append(action);
+      createRenderEffect(heading, (value) => {
+        host.heading = value;
+      });
+      return host;
+    });
     flush();
     const host = view.container.querySelector("openclaw-panel-empty-state")!;
+    await host.updateComplete;
     const body = host.querySelector(".empty-state");
     setHeading("No matching files");
     flush();
+    await host.updateComplete;
     expect(view.container.querySelectorAll("openclaw-panel-empty-state")).toHaveLength(1);
     expect(host.querySelectorAll(".empty-state")).toHaveLength(1);
     expect(host.querySelector(".empty-state")).toBe(body);

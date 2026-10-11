@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   nextSettingsRadioName,
@@ -52,52 +51,6 @@ export function SettingsPage(props: {
         {props.children}
       </div>
     </ShellLayoutBoundary>
-  );
-}
-
-export function DocsLink(props: { url: string; children: JSX.Element }) {
-  return (
-    <a href={props.url} target={EXTERNAL_LINK_TARGET} rel={buildExternalLinkRel()}>
-      {props.children}
-    </a>
-  );
-}
-
-export function SettingsHelpTrigger(props: {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon: "question" | "info";
-  popoverId: string;
-}) {
-  return (
-    <openclaw-tooltip prop:content={props.tooltip}>
-      <button
-        id={props.id}
-        type="button"
-        class="settings-section__help-button"
-        aria-label={props.label}
-        aria-controls={props.popoverId}
-        aria-haspopup="dialog"
-      >
-        <span aria-hidden="true">
-          <Icon name={props.icon === "info" ? "info" : "circleQuestionMark"} />
-        </span>
-      </button>
-    </openclaw-tooltip>
-  );
-}
-
-export function LearnMoreLink(props: { url: string }) {
-  return (
-    <a
-      class="learn-more-link"
-      href={props.url}
-      target={EXTERNAL_LINK_TARGET}
-      rel={buildExternalLinkRel()}
-    >
-      {t("common.learnMore")}
-    </a>
   );
 }
 
@@ -188,11 +141,7 @@ export function SettingsSummary(props: { items: ReadonlyArray<{ label: string; v
   );
 }
 
-export function SettingsGroup(props: {
-  children?: JSX.Element;
-  danger?: boolean;
-  carapace?: boolean;
-}) {
+function SettingsGroup(props: { children?: JSX.Element; danger?: boolean; carapace?: boolean }) {
   return (
     <div
       class={[
@@ -335,12 +284,6 @@ export function SettingsToggleRow(
         />
       </div>
     </div>
-  );
-}
-
-export function SettingsDefaultDescription(props: { value: string; overridden: boolean }) {
-  return (
-    <Show when={props.overridden}>{t("configForm.defaultValue", { value: props.value })}</Show>
   );
 }
 

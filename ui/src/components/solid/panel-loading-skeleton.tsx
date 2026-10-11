@@ -15,7 +15,7 @@ export type PanelLoadingSkeletonVariant =
   | "review"
   | "terminal";
 
-export type PanelLoadingSkeletonProps = {
+type PanelLoadingSkeletonProps = {
   variant?: PanelLoadingSkeletonVariant;
   label: string;
   compact?: boolean;
@@ -63,7 +63,7 @@ function Widget(props: { columns: number; rows: number; lines: LineWidth[] }) {
   );
 }
 
-export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
+function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
   const variant = createMemo(() => props.variant ?? "files");
   const content = (): JSX.Element => {
     switch (variant()) {
@@ -201,7 +201,7 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
   return <>{content()}</>;
 }
 
-export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>(
+defineSolidBridge<PanelLoadingSkeletonProps>(
   "openclaw-panel-loading-skeleton",
   (props, host) => {
     host.setAttribute("role", "status");

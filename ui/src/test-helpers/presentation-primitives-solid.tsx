@@ -6,12 +6,10 @@ import { Kbd, KeyboardShortcut } from "../components/solid/kbd.tsx";
 import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
-import { PanelEmptyState } from "../components/solid/panel-empty-state.tsx";
+import "../components/solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../components/solid/panel-icon-button.tsx";
-import {
-  PanelLoadingSkeleton,
-  type PanelLoadingSkeletonVariant,
-} from "../components/solid/panel-loading-skeleton.tsx";
+import type { PanelLoadingSkeletonVariant } from "../components/solid/panel-loading-skeleton.tsx";
+import "../components/solid/panel-loading-skeleton.tsx";
 import { PanelRefreshStatus } from "../components/solid/panel-refresh-status.tsx";
 import {
   CloudProfileIcon,
@@ -234,12 +232,15 @@ function Feedback() {
   return (
     <>
       <Card label="Empty with action" kind="empty">
-        <PanelEmptyState
-          icon={<Icon name="folder" />}
-          heading="No files"
-          description="Add a file to begin working in this panel."
-          action={<Button label="Add file" action="add-file" />}
-        />
+        <openclaw-panel-empty-state
+          prop:heading="No files"
+          prop:description="Add a file to begin working in this panel."
+        >
+          <Icon name="folder" />
+          <span slot="action">
+            <Button label="Add file" action="add-file" />
+          </span>
+        </openclaw-panel-empty-state>
       </Card>
       <Card label="Refresh stale">
         <PanelRefreshStatus
@@ -369,18 +370,29 @@ function Skeletons() {
       <For each={variants}>
         {(variant) => (
           <Card label={variant} kind="panel">
-            <PanelLoadingSkeleton variant={variant} label={`Loading ${variant}`} />
+            <openclaw-panel-loading-skeleton
+              prop:variant={variant}
+              prop:label={`Loading ${variant}`}
+            />
           </Card>
         )}
       </For>
       {group === "skeleton-conversation" ? (
         <>
           <Card label="compact">
-            <PanelLoadingSkeleton variant="terminal" label="Loading compact terminal" compact />
+            <openclaw-panel-loading-skeleton
+              prop:variant="terminal"
+              prop:label="Loading compact terminal"
+              compact
+            />
           </Card>
           <Card label="overlay" kind="panel">
             <p>Retained content</p>
-            <PanelLoadingSkeleton variant="files" label="Refreshing files" overlay />
+            <openclaw-panel-loading-skeleton
+              prop:variant="files"
+              prop:label="Refreshing files"
+              overlay
+            />
           </Card>
         </>
       ) : undefined}

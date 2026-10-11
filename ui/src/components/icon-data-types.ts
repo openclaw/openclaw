@@ -1,4 +1,4 @@
-export type IconAttributes = Readonly<{
+type IconAttributes = Readonly<{
   viewBox?: string;
   fill?: string;
   stroke?: string;

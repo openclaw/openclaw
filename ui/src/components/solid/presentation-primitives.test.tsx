@@ -7,42 +7,46 @@ import {
 } from "../panel-refresh-status-state.ts";
 import { AgentStartupState, LazyViewError, PanelErrorState } from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
-import { PanelEmptyStateContent } from "./panel-empty-state.tsx";
+import "./panel-empty-state.tsx";
 import { PanelIconButton } from "./panel-icon-button.tsx";
-import {
-  PanelLoadingSkeletonContent,
-  type PanelLoadingSkeletonVariant,
-} from "./panel-loading-skeleton.tsx";
+import type { PanelLoadingSkeletonVariant } from "./panel-loading-skeleton.tsx";
+import "./panel-loading-skeleton.tsx";
 import { PanelRefreshStatus } from "./panel-refresh-status.tsx";
 
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  // Registered bridge tags defer disposal so same-turn reparenting keeps their roots.
+  await Promise.resolve();
+});
 
 describe("Solid presentation primitives", () => {
-  it("preserves the labeled empty state and its actionable content", () => {
+  it("preserves the labeled empty state and its actionable content", async () => {
     const action = vi.fn();
     const [heading, setHeading] = createSignal("No files");
     const view = render(() => (
-      <PanelEmptyStateContent
-        icon={
-          <svg viewBox="0 0 24 24">
-            <path d="M1 1h10" />
-          </svg>
-        }
-        heading={heading()}
-        description="Choose a workspace to browse its files."
-        action={
+      <openclaw-panel-empty-state
+        prop:heading={heading()}
+        prop:description="Choose a workspace to browse its files."
+      >
+        <svg viewBox="0 0 24 24">
+          <path d="M1 1h10" />
+        </svg>
+        <span slot="action">
           <button type="button" onClick={action}>
             Choose workspace
           </button>
-        }
-      />
+        </span>
+      </openclaw-panel-empty-state>
     ));
+    const host = view.container.querySelector("openclaw-panel-empty-state")!;
+    await host.updateComplete;
     expect(view.getByRole("status").textContent).toContain("No files");
     expect(view.container.querySelector("svg")?.closest('[aria-hidden="true"]')).not.toBeNull();
     fireEvent.click(view.getByRole("button", { name: "Choose workspace" }));
     expect(action).toHaveBeenCalledOnce();
     setHeading("No matching files");
     flush();
+    await host.updateComplete;
     expect(view.getByRole("status").textContent).toContain("No matching files");
   });
 
@@ -58,20 +62,26 @@ describe("Solid presentation primitives", () => {
     ["terminal", ".terminal .line", 4],
   ] satisfies Array<[PanelLoadingSkeletonVariant, string, number]>)(
     "renders the %s loading structure",
-    (variant, selector, count) => {
+    async (variant, selector, count) => {
       const view = render(() => (
-        <PanelLoadingSkeletonContent variant={variant} label="Loading panel" />
+        <openclaw-panel-loading-skeleton prop:variant={variant} prop:label="Loading panel" />
       ));
+      await view.container.querySelector("openclaw-panel-loading-skeleton")!.updateComplete;
       expect(view.container.querySelectorAll(selector)).toHaveLength(count);
     },
   );
 
-  it("switches the loading structure and updates desktop status without stale content", () => {
+  it("switches the loading structure and updates desktop status without stale content", async () => {
     const [variant, setVariant] = createSignal<PanelLoadingSkeletonVariant>("terminal");
     const [label, setLabel] = createSignal("Connecting");
-    const view = render(() => <PanelLoadingSkeletonContent variant={variant()} label={label()} />);
+    const view = render(() => (
+      <openclaw-panel-loading-skeleton prop:variant={variant()} prop:label={label()} />
+    ));
+    const host = view.container.querySelector("openclaw-panel-loading-skeleton")!;
+    await host.updateComplete;
     setVariant("desktop");
     flush();
+    await host.updateComplete;
     expect(view.container.querySelector(".terminal")).toBeNull();
     expect(view.getByText("Connecting")).toBeTruthy();
     expect(view.container.querySelector(".desktop-spinner")?.getAttribute("aria-hidden")).toBe(
@@ -79,6 +89,7 @@ describe("Solid presentation primitives", () => {
     );
     setLabel("Authenticating");
     flush();
+    await host.updateComplete;
     expect(view.queryByText("Connecting")).toBeNull();
     expect(view.getByText("Authenticating")).toBeTruthy();
   });

@@ -1,20 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
-import { LoadingState } from "./loading-state.tsx";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
 
 export function AgentStartupState() {
   return (
@@ -23,84 +10,6 @@ export function AgentStartupState() {
       <div>{t("agentStartup.title")}</div>
       <div>{t("agentStartup.description")}</div>
     </section>
-  );
-}
-
-export type LazyElementState =
-  | { status: "loading"; element: { label: string } }
-  | { status: "error"; element: { label: string }; error: unknown; stale: boolean };
-
-export function LazyElementStateView(props: {
-  state: LazyElementState;
-  onRetry: () => void;
-  onClose: () => void;
-}) {
-  const error = () => (props.state.status === "error" ? props.state : undefined);
-  return (
-    <Show when={error()} fallback={<LoadingState />}>
-      {(state) => (
-        <LazyViewError
-          actionLabel={t("common.retry")}
-          error={state().error}
-          stale={state().stale}
-          subtitle={state().element.label}
-          onRetry={props.onRetry}
-          onClose={props.onClose}
-        />
-      )}
-    </Show>
-  );
-}
-
-export function LazyElementModal(props: {
-  controller: {
-    visibleState: LazyElementState | undefined;
-    retry(): void;
-    close(): void;
-  };
-}) {
-  const close = () => props.controller.close();
-  return (
-    <Show when={props.controller.visibleState}>
-      {(state) => (
-        <openclaw-modal-dialog
-          class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
-          label={state().element.label}
-          onModal-cancel={close}
-        >
-          {state().status === "loading" ? (
-            <section class="lazy-element-loading">
-              <header class="lazy-element-loading__header">
-                <h2>{state().element.label}</h2>
-                <button
-                  class="btn btn--ghost btn--icon"
-                  type="button"
-                  aria-label={t("common.close")}
-                  onClick={close}
-                >
-                  <Icon name="x" />
-                </button>
-              </header>
-              <div
-                class="lazy-element-loading__status"
-                role="status"
-                aria-live="polite"
-                aria-label={t("common.loading")}
-              >
-                <span class="btn__spinner" aria-hidden="true" />
-                <span>{t("common.loading")}</span>
-              </div>
-            </section>
-          ) : (
-            <LazyElementStateView
-              state={state()}
-              onRetry={() => props.controller.retry()}
-              onClose={close}
-            />
-          )}
-        </openclaw-modal-dialog>
-      )}
-    </Show>
   );
 }
 

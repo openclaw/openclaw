@@ -3,7 +3,7 @@ import { onSettled } from "solid-js";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import panelStyles from "../../styles/panel-empty-state.css?inline";
 
-export type PanelEmptyStateProps = {
+type PanelEmptyStateProps = {
   icon?: JSX.Element;
   heading: string;
   description: string;
@@ -12,7 +12,7 @@ export type PanelEmptyStateProps = {
 
 export type PanelEmptyStateElement = SolidBridgeElement<PanelEmptyStateProps>;
 
-export function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?: JSX.Element }) {
+function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?: JSX.Element }) {
   let outlet: HTMLDivElement | undefined;
   // Keep the caller's Lit range intact; only its direct unnamed elements are decorative.
   onSettled(() => {
@@ -82,7 +82,7 @@ export function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?
   );
 }
 
-export const PanelEmptyState = defineSolidBridge<PanelEmptyStateProps>(
+defineSolidBridge<PanelEmptyStateProps>(
   "openclaw-panel-empty-state",
   (props) => (
     <>

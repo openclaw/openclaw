@@ -139,6 +139,14 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // The presentation E2E page computes its renderer import from a URL parameter.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-fixture.html!",
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+              "src/test-helpers/presentation-primitives-lit.ts!",
+            ]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
