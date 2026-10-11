@@ -505,7 +505,10 @@ describe("anthropic cli migration", () => {
 
     const fresh = await method.runNonInteractive?.(createProviderAuthMethodNonInteractiveContext());
     const freshModels = fresh?.agents?.defaults?.models ?? {};
-    expect(Object.keys(freshModels).sort()).toEqual(["anthropic/*", "anthropic/claude-opus-5-5"]);
+    expect(Object.keys(freshModels).toSorted()).toEqual([
+      "anthropic/*",
+      "anthropic/claude-opus-5-5",
+    ]);
     expect(freshModels).not.toHaveProperty([deprecatedRef]);
 
     const existing = await method.runNonInteractive?.(
