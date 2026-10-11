@@ -22,8 +22,16 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DFJEouXv.js",
 ];
 
+// Candidates through 2026.10.5-beta.1 packed their inventory; later candidates leave it
+// in the source tree, which this harness checkout carries as release tooling.
+const PACKED_UPDATE_COMPAT_INVENTORY = path.join("dist", "update-compat-inventory.json");
+const HARNESS_UPDATE_COMPAT_INVENTORY = fileURLToPath(
+  new URL("../../lib/update-compat-inventory.json", import.meta.url),
+);
+
 function readFirstHopReleases(packageRoot) {
-  const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
+  const packedPath = path.join(packageRoot, PACKED_UPDATE_COMPAT_INVENTORY);
+  const inventoryPath = fs.existsSync(packedPath) ? packedPath : HARNESS_UPDATE_COMPAT_INVENTORY;
   if (!fs.existsSync(inventoryPath)) {
     return [];
   }
@@ -152,13 +160,9 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
     throw new Error("package fixture inventory is not a string array");
   }
 
-  const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
-  const hasRecordedCompatibility = fs.existsSync(compatibilityPath);
-  const recordedChunks = hasRecordedCompatibility
-    ? readJson(compatibilityPath).releases.flatMap((release) =>
-        release.chunks.map((chunk) => chunk.path),
-      )
-    : [];
+  const recordedChunks = readFirstHopReleases(paths.root).flatMap((release) =>
+    (release.chunks ?? []).map((chunk) => chunk.path),
+  );
   if (
     recordedChunks.some(
       (name) =>
@@ -180,18 +184,22 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
       throw new Error("package fixture expected missing chunk has an invalid path");
     }
   }
+  // Harness records may name chunks this candidate never built; only its own bridges count.
+  const bridges = recordedChunks.filter((name) => {
+    const filePath = path.join(paths.root, "dist", name);
+    return (
+      /-[A-Za-z0-9_-]{8}\.m?js$/.test(name) &&
+      fs.existsSync(filePath) &&
+      isUpdateCompatibilityChunk(fs.readFileSync(filePath, "utf8"))
+    );
+  });
+  const hasRecordedCompatibility =
+    fs.existsSync(path.join(paths.root, PACKED_UPDATE_COMPAT_INVENTORY)) || bridges.length > 0;
   const chunks = new Set(
     expectedMissingChunk
       ? [expectedMissingChunk]
       : hasRecordedCompatibility
-        ? recordedChunks.filter((name) => {
-            if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
-              return false;
-            }
-            return isUpdateCompatibilityChunk(
-              fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
-            );
-          })
+        ? bridges
         : LEGACY_UPDATE_COMPAT_CHUNKS,
   );
   const removed = [];
