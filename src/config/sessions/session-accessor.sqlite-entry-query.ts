@@ -121,6 +121,6 @@ export function selectReadableSessionEntryRows(
     ? selectSessionEntryRows(database, projection).select(["current_session_id", "updated_at"])
     : getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
         .selectFrom("session_nodes")
-        .selectAll()
+        .selectAll("session_nodes")
         .select(sessionEntrySnapshotColumnsForKeys(undefined, projection));
 }
