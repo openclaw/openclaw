@@ -869,7 +869,7 @@ it("rechecks source authority after registration notification before authorizing
 });
 
 it.skipIf(process.platform === "win32")(
-  "rejects a warm database path replaced by its source callback before granting admission",
+  "finishes an admitted read on its retained file and rejects replacement at the next command",
   async () => {
     const options = fixture();
     const retainedPath = `${options.path}.retained`;
@@ -895,8 +895,16 @@ it.skipIf(process.platform === "win32")(
             input: { sessionKeys: ["agent:main:missing"] },
           }),
         ),
-      ).rejects.toThrow(/identity changed/);
+      ).resolves.toMatchObject({ entries: [] });
       expect(replaced).toBe(true);
+      await expect(
+        execution.runExisting(source(), (scope) =>
+          scope.execute({
+            type: "session.entry.read",
+            input: { sessionKeys: ["agent:main:missing"] },
+          }),
+        ),
+      ).rejects.toThrow(/identity changed/);
     } finally {
       if (replaced) {
         fs.unlinkSync(options.path);
