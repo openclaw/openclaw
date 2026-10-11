@@ -184,28 +184,30 @@ export async function createOpenClawToolsWithPreparation(
     toolDenylist: captured.pluginToolDenylist,
     preparedModelRuntime: captured.preparedModelRuntime,
   });
-  const [imageGenerate, videoGenerate, musicGenerate] = await Promise.all(
-    (
-      [
-        ["imageGenerate", "imageGenerationProviders", "image"],
-        ["videoGenerate", "videoGenerationProviders", "video"],
-        ["musicGenerate", "musicGenerationProviders", "music"],
-      ] as const
-    ).map(
-      async ([tool, providerKey, kind]) =>
-        mediaPlan[tool] === true &&
-        (await hasGenerationToolAvailabilityAsync({
-          cfg: availabilityConfig,
-          agentDir: captured.agentDir,
-          workspaceDir,
-          authStore: captured.authProfileStore,
-          authProfileStoreSource: captured.authProfileStoreSource,
-          modelConfig: availabilityConfig?.agents?.defaults?.mediaModels?.[kind],
-          providerKey,
-          providers: captured.preparedModelRuntime?.mediaCapabilityProviders?.[providerKey],
-        })),
-    ),
-  );
+  const prepareMediaAvailability = async (
+    tool: "imageGenerate" | "videoGenerate" | "musicGenerate",
+    providerKey:
+      | "imageGenerationProviders"
+      | "videoGenerationProviders"
+      | "musicGenerationProviders",
+    kind: "image" | "video" | "music",
+  ) =>
+    mediaPlan[tool] &&
+    (await hasGenerationToolAvailabilityAsync({
+      cfg: availabilityConfig,
+      agentDir: captured.agentDir,
+      workspaceDir,
+      authStore: captured.authProfileStore,
+      authProfileStoreSource: captured.authProfileStoreSource,
+      modelConfig: availabilityConfig?.agents?.defaults?.mediaModels?.[kind],
+      providerKey,
+      providers: captured.preparedModelRuntime?.mediaCapabilityProviders?.[providerKey],
+    }));
+  const [imageGenerate, videoGenerate, musicGenerate] = await Promise.all([
+    prepareMediaAvailability("imageGenerate", "imageGenerationProviders", "image"),
+    prepareMediaAvailability("videoGenerate", "videoGenerationProviders", "video"),
+    prepareMediaAvailability("musicGenerate", "musicGenerationProviders", "music"),
+  ]);
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
   const steps = createOpenClawToolsSteps(captured, delegated, webSearchConfigured, {
