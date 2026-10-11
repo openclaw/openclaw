@@ -428,7 +428,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     );
   }
 
-  /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await persistAsync. This method will be removed in the next Plugin SDK major. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
     prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);

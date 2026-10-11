@@ -405,7 +405,13 @@ it("prepares real Active Memory prompt and status hooks from the actor SDK witho
           detachConversationBinding: async () => ({ removed: false }),
           getCurrentConversationBinding: async () => null,
         }),
-      ).toEqual({ text: "Active Memory: on for this session." });
+      ).toEqual({
+        text: [
+          "Active Memory: on for this session.",
+          "Trigger recall configuration: on for agent main.",
+          "Remember across conversations setting: on.",
+        ].join("\n"),
+      });
       expect(
         await promptHook(event, {
           ...context,

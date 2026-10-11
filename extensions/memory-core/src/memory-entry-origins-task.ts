@@ -60,12 +60,7 @@ export type MemoryEntryOriginOperations = {
   delete: { input: MemoryOriginDeletion; output: number };
 };
 
-export type MemorySessionTombstone = {
-  sessionId: string;
-  agentId: string;
-  reason: string;
-  createdAt: number;
-};
+export const MEMORY_SESSION_TOMBSTONE_BATCH_SIZE = 256;
 
 export type MemoryOriginReadFilters = {
   entryKeys?: readonly string[];
@@ -79,10 +74,10 @@ export type MemoryOriginReadInput = {
 } & (
   | ({ kind: "origin-rows" } & MemoryOriginReadFilters)
   | ({ kind: "origin-exists"; entryKeys: readonly string[] } & MemoryOriginReadFilters)
-  | { kind: "session-tombstones"; sessionIds?: readonly string[] }
+  | { kind: "session-tombstones"; sessionIds: readonly string[] }
 );
 
 export type MemoryOriginReadOutput =
   | { kind: "origin-rows"; rows: MemoryEntryOrigin[] }
   | { kind: "origin-exists"; exists: boolean }
-  | { kind: "session-tombstones"; rows: MemorySessionTombstone[] };
+  | { kind: "session-tombstones"; indices: number[] };

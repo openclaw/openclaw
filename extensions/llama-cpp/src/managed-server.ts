@@ -663,8 +663,7 @@ export async function inspectLlamaServerRuntime(params: {
         : undefined;
   return {
     engine: "llama.cpp",
-    state:
-      health.ok && models.ok && props.ok && metrics.ok && !params.loadError ? "ready" : "failed",
+    state: health.ok && models.ok && props.ok && !params.loadError ? "ready" : "failed",
     backend: params.backend,
     buildInfo: typeof propsRecord?.build_info === "string" ? propsRecord.build_info : undefined,
     model: { id: params.modelId, ...(pathValue ? { path: pathValue } : {}) },

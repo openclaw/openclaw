@@ -11,10 +11,12 @@ import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtim
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { runCommandWithRuntime } from "../../cli/cli-utils.js";
+import * as localStateOwner from "../../cli/local-state-owner.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
+import * as proxyLifecycle from "../../infra/net/proxy/proxy-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -97,6 +99,14 @@ function createOwner(
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(localStateOwner, "runWithLocalStateOwner").mockImplementation(async ({ runLocal }) =>
+    runLocal({
+      config: cfg,
+      env: process.env,
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
+  );
   vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue(cfg);
   vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
     sourceConfig: cfg,
@@ -110,6 +120,8 @@ beforeEach(() => {
     createdAt: "fixture",
   });
   vi.spyOn(gateway, "callGateway").mockResolvedValue({ models: [model] });
+  vi.spyOn(proxyLifecycle, "startProxy").mockResolvedValue(null);
+  vi.spyOn(proxyLifecycle, "stopProxy").mockResolvedValue();
   vi.spyOn(catalog, "withPreparedModelCatalogOwner").mockImplementation(
     async (_params, read) => await read(createOwner()),
   );
@@ -133,6 +145,8 @@ describe("models list published transport", () => {
     await list({ agent: "work", provider: "catalog-provider", json: true, refresh: true });
     expect(configLoader.loadModelsConfigWithSource).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+    expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
+    expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         requiredCapabilities: ["published-model-catalog"],
@@ -344,6 +358,14 @@ describe("models list published transport", () => {
     "uses the standalone owner only with no selected Gateway, refresh=%s",
     async (refresh) => {
       vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+      const stop = vi.fn(async () => {});
+      const handle = { proxyUrl: "http://proxy.example.test", stop, kill: vi.fn() };
+      vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
+      vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) => {
+        expect(proxyLifecycle.startProxy).toHaveBeenCalledTimes(refresh ? 1 : 0);
+        expect(proxyLifecycle.stopProxy).not.toHaveBeenCalled();
+        return await read(createOwner());
+      });
       await list({ agent: "work", all: true, json: true, refresh });
       expect(runtime.error).toHaveBeenCalledWith(
         refresh
@@ -355,7 +377,7 @@ describe("models list published transport", () => {
         expect.objectContaining({
           agentId: "work",
           readOnly: !refresh,
-          ...(refresh ? { refreshFullCatalog: true } : {}),
+          ...(refresh ? { refreshFullCatalog: true, persistOfflineRefresh: true } : {}),
         }),
         expect.any(Function),
       );
@@ -368,8 +390,29 @@ describe("models list published transport", () => {
         }),
         2,
       );
+      if (refresh) {
+        expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
+        );
+        expect(proxyLifecycle.startProxy).toHaveBeenCalledExactlyOnceWith(cfg.proxy);
+        expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
+      } else {
+        expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
+        expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
+      }
     },
   );
+
+  it("releases local refresh proxy routing when discovery fails", async () => {
+    vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    const handle = { proxyUrl: "http://proxy.example.test", stop: vi.fn(), kill: vi.fn() };
+    vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
+    vi.mocked(catalog.withPreparedModelCatalogOwner).mockRejectedValue(
+      new Error("discovery failed"),
+    );
+    await expect(list({ refresh: true })).rejects.toThrow("discovery failed");
+    expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
+  });
 
   // Only the standalone owner registers Claude CLI; the command process has no active registry.
   async function listStandaloneClaudeOwner(

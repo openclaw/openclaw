@@ -29,11 +29,36 @@ describe("resolveEnvironmentValue", () => {
 });
 
 describe("mergeProcessEnv", () => {
-  it("lets later Windows sources override inherited keys regardless of case", () => {
-    expect(
-      mergeProcessEnv([{ TEMP: "inherited", HOME: "base" }, { temp: "configured" }], "win32"),
-    ).toEqual({ HOME: "base", temp: "configured" });
-  });
+  it.each([
+    {
+      key: "temp",
+      expected: [
+        ["HOME", "base"],
+        ["temp", "configured"],
+      ],
+    },
+    {
+      key: "home",
+      expected: [
+        ["TEMP", "inherited"],
+        ["home", "configured"],
+      ],
+    },
+    {
+      key: "HOME",
+      expected: [
+        ["TEMP", "inherited"],
+        ["HOME", "configured"],
+      ],
+    },
+  ])(
+    "reapplies later Windows $key overrides with their source spelling and order",
+    ({ key, expected }) => {
+      const source = Object.freeze({ TEMP: "inherited", HOME: "base" });
+      const override = Object.freeze({ [key]: "configured" });
+      expect(Object.entries(mergeProcessEnv([source, override], "win32"))).toEqual(expected);
+    },
+  );
 
   it("keeps Node's lexicographically first Windows duplicate within one source", () => {
     expect(mergeProcessEnv([{ temp: "lower", Temp: "first" }], "win32")).toEqual({
@@ -41,8 +66,12 @@ describe("mergeProcessEnv", () => {
     });
   });
 
-  it("removes inherited Windows keys with a case-insensitive undefined override", () => {
-    expect(mergeProcessEnv([{ Path: "C:\\base" }, { PATH: undefined }], "win32")).toEqual({});
+  it("removes inherited Windows keys before a later source reintroduces them", () => {
+    const sources = [Object.freeze({ Path: "C:\\base" }), Object.freeze({ PATH: undefined })];
+    expect(mergeProcessEnv(sources, "win32")).toEqual({});
+    expect(mergeProcessEnv([...sources, Object.freeze({ path: "C:\\next" })], "win32")).toEqual({
+      path: "C:\\next",
+    });
   });
 
   it("preserves case-distinct POSIX keys", () => {

@@ -23,7 +23,7 @@ import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sessi
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
-import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
+import { codexTestTurnIds, nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
@@ -128,26 +128,6 @@ function codexHookCommand(config: unknown, key: string) {
     ?.hooks?.at(0);
 }
 
-function nativeCommandItem(
-  id: string,
-  status: "inProgress" | "completed",
-  durationMs: number | null,
-) {
-  return {
-    type: "commandExecution",
-    id,
-    command: "git status --short",
-    cwd: "/tmp/workspace",
-    processId: null,
-    source: "agent",
-    status,
-    commandActions: [],
-    aggregatedOutput: status === "completed" ? "" : null,
-    exitCode: status === "completed" ? 0 : null,
-    durationMs,
-  };
-}
-
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
 describe("runCodexAppServerSideQuestion", () => {
@@ -198,7 +178,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       { bindingStore: persistedBindings },
     );
-    await expect(operation).rejects.toThrow("Codex session generation is no longer current");
+    await expect(operation).rejects.toThrow("Codex session execution policy changed");
     expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(persistedBindings.read(current)).toEqual(parent);
   });
@@ -2321,7 +2301,13 @@ describe("runCodexAppServerSideQuestion", () => {
         hostCapabilities: host.hostCapabilities,
         opts: { runId },
       }),
-      { bindingStore: { ...createCodexTestBindingStore(), read: () => parent } },
+      {
+        bindingStore: {
+          ...createCodexTestBindingStore(),
+          read: () => parent,
+          readAsync: async () => parent,
+        },
+      },
     );
     try {
       await Promise.race([

@@ -19,7 +19,10 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
+import {
+  createAgentTestUserTurnRecorder,
+  getAgentTestStorePath,
+} from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -112,6 +115,42 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: loadAgentSessionFixture,
+  };
+});
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) =>
+    loadAgentSessionFixture(params.key, {
+      agentId: params.agentId,
+      projection: params.projection,
+      clone: false,
+    }),
+}));
+
+vi.mock("../../config/sessions/session-transcript-anchor-read.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../config/sessions/session-transcript-anchor-read.js")
+    >();
+  return {
+    ...actual,
+    readSessionTranscriptAnchorsAsync: (
+      ...args: Parameters<typeof actual.readSessionTranscriptAnchorsAsync>
+    ) =>
+      args[1].includeMetadata
+        ? Promise.resolve({
+            anchors: [],
+            metadata: {
+              present: mocks.hasSessionTranscriptEventsSync(args[0]),
+              ...mocks.readTranscriptMutationStateSync(args[0]),
+            },
+          })
+        : actual.readSessionTranscriptAnchorsAsync(...args),
   };
 });
 
@@ -610,7 +649,7 @@ export function resetSessionAccessorMocks() {
               agentId: scope.agentId ?? "main",
               sessionId: scope.sessionId,
               sessionKey: scope.sessionKey,
-              storePath: scope.storePath ?? "/tmp/sessions.json",
+              storePath: scope.storePath ?? getAgentTestStorePath(),
               generation: "test-generation",
               entryId: "test-user-turn",
               rawSeq: 1,
