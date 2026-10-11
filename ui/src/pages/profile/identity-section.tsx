@@ -21,19 +21,6 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 registerEnglishCatalog(registerProfileEnglish);
 
-type ViewerAvatarElement = HTMLElementTagNameMap["openclaw-viewer-avatar"];
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-viewer-avatar": HTMLAttributes<ViewerAvatarElement> & {
-        "prop:user": ViewerAvatarElement["user"];
-        variant?: ViewerAvatarElement["variant"];
-      };
-    }
-  }
-}
-
 export type IdentitySectionProps = {
   config?: ApplicationConfigCapability;
   profile: UserProfile;
