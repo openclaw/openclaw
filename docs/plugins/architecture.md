@@ -446,29 +446,19 @@ the same plugin package. Standalone discovery keeps its own setup lifetime.
 Each worker retains the current plugin registration context for each loader
 workspace, shared by agents with matching configuration, environment, and plugin
 inventory. Alternating unchanged workspaces reuse their captured source; replacing
-one workspace does not evict another. An unchanged native ESM plugin entry keeps
-one module evaluation and one capture URL per workspace for that worker's
-lifetime, including across configuration revisions of that workspace. Two
-workspaces that load the same installed path do not share the module. A
-workspace the worker has not loaded before evaluates another module, and Node
-keeps it until the worker process exits. Refreshing a workspace reuses its
-module and the compiled TypeScript that module already loaded. A later import
-from one of those compiled helpers still resolves after the generation that
-compiled it is released. Each live workspace generation keeps its own execution owner for that
-capture, so a deferred import uses the generation that requested it, including
-after another workspace's generation is released. An import that still names a
-released generation is rejected before capture. An import that does not name a
-generation uses the only accepting owner. After a refresh replaces the
-module's API handle, a registration call from a neighbor or from the released
-generation is rejected. The replacement generation publishes its catalog from
-its own registration. A later call from that same generation returns without
-running the registrar.
-Each generation installs its own resolution hooks and removes them
-when that generation is released. A later generation can load a module the first
-generation did not evaluate, and a lazy import from the retained module still
-resolves. A new capture path would be a module job Node cannot unload. CommonJS plugins still
-capture per generation and drop their require cache on release. Replacing that
-plugin's source is picked up when the catalog worker process restarts. Agent
+one workspace does not evict another. Installed native ESM entries keep one
+module evaluation and capture URL per workspace across configuration revisions.
+Captured files and compiled TypeScript helpers remain available for lazy imports
+until worker retirement; another workspace or installed path gets its own module.
+Each generation owns its registrations and resolution hooks. Deferred imports
+use the requesting live generation, and released owners are rejected before
+capture. Calls through another generation's API registration handle are rejected.
+If a replacement fails, the worker discards that workspace's registrations and
+re-registers the requested configuration on its next request. Arbitrary module
+state is retained; registration must initialize its configuration-dependent state.
+CommonJS plugins still capture per generation and drop their require cache on
+release. Installed ESM source edits take effect when the inventory-owned worker
+restarts. New workspace/path identities remain resident until then. Agent
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
 acquired by that context. The first catalog request prepares registrations for the

@@ -73,10 +73,12 @@ export function attachPluginApiFacades<T extends object>(
   return api as T & PluginApiFacadeFields;
 }
 
-/** A replaced module handle still belongs to the caller already on the stack. */
-function rejectForeignPluginApiCaller(instance: PluginInstanceHandle): void {
+/** Entering a handle must not replace another generation's caller authority. */
+export function assertPluginApiRegistrationCaller(
+  instance: PluginInstanceHandle | undefined,
+): void {
   const caller = pluginInstanceInvocation.getStore()?.instance;
-  if (caller && caller !== instance) {
+  if (instance && caller && caller !== instance) {
     throw new Error(
       `Plugin ${instance.pluginId} API registration does not belong to the calling workspace generation`,
     );
@@ -105,7 +107,7 @@ export function instrumentPluginInstanceApi(
         }
         if (key === "registerCli" || key === "registerNodeCliFeature") {
           return (registrar: OpenClawPluginCliRegistrar, ...options: unknown[]) => {
-            rejectForeignPluginApiCaller(instance);
+            assertPluginApiRegistrationCaller(instance);
             return instance.run(() =>
               Reflect.apply(value, target, [
                 instance.wrap((context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
@@ -120,7 +122,7 @@ export function instrumentPluginInstanceApi(
           };
         }
         return (...args: unknown[]) => {
-          rejectForeignPluginApiCaller(instance);
+          assertPluginApiRegistrationCaller(instance);
           return instance.run(() =>
             Reflect.apply(
               value,

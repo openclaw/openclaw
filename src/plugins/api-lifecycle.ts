@@ -1,6 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { attachPluginApiFacades } from "./api-facades.js";
-import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { assertPluginApiRegistrationCaller, attachPluginApiFacades } from "./api-facades.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
@@ -32,14 +31,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
         }
         return (...args: unknown[]) => {
           if (closed) {
-            // A replaced module handle still rejects a caller from another generation.
-            const caller = pluginInstanceInvocation.getStore()?.instance;
-            const owner = getPluginValueInstance(target);
-            if (caller && owner && caller !== owner) {
-              throw new Error(
-                `Plugin ${owner.pluginId} API registration does not belong to the calling workspace generation`,
-              );
-            }
+            assertPluginApiRegistrationCaller(getPluginValueInstance(target));
             return undefined;
           }
           return Reflect.apply(value, target, args);

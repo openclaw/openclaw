@@ -202,13 +202,11 @@ const retained = new Uint8Array(${NATIVE_ESM_BUFFER_BYTES});
 retained[0] = 7;
 const state = globalThis[Symbol.for("openclaw.nativeEsmCatalogHeap")] ??= { evaluations: 0 };
 state.evaluations += 1;
-const pluginId = ${JSON.stringify(PLUGIN_ID)};
 function record(extra) {
   fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
     evaluations: state.evaluations,
     url: import.meta.url,
     arrayBuffers: process.memoryUsage().arrayBuffers,
-    external: process.memoryUsage().external,
     ...extra,
   }) + "\\n");
 }
@@ -221,8 +219,7 @@ export function register(api) {
     id: ${JSON.stringify(PROVIDER_ID)},
     label: "Heap fixture",
     auth: [],
-    catalog: { async run(ctx) {
-      const ctxRevision = Number(ctx?.config?.plugins?.entries?.[pluginId]?.config?.revision ?? -1);
+    catalog: { async run() {
       let modelId = "heap-model";
       let laterEvaluations;
       let lazyEvaluations;
@@ -232,7 +229,7 @@ export function register(api) {
         laterEvaluations = later.evaluations;
         lazyEvaluations = later.lazyEvaluations;
       }
-      record({ phase: "catalog", revision, ctxRevision, modelId, laterEvaluations, lazyEvaluations });
+      record({ phase: "catalog", revision, modelId, laterEvaluations, lazyEvaluations });
       return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: modelId, name: "Heap model" }] } };
     } },
   });
@@ -372,17 +369,6 @@ export function register(api) {
         lazyEvaluations: latest.lazyEvaluations,
         catalogModelIds,
       });
-      console.log(
-        JSON.stringify({
-          revision: index,
-          evaluations: latest.evaluations,
-          arrayBuffers: latest.arrayBuffers,
-          modelId: latest.modelId,
-          laterEvaluations: latest.laterEvaluations,
-          lazyEvaluations: latest.lazyEvaluations,
-          catalogModelIds,
-        }),
-      );
     }
   } finally {
     await pool.close();

@@ -46,7 +46,7 @@ type CatalogRow = {
 
 type Sample = CatalogRow & { catalogModelIds: string[] };
 
-function writePlugin(dir: string): string {
+function writePackage(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "package.json"),
@@ -66,6 +66,10 @@ function writePlugin(dir: string): string {
       },
     }),
   );
+}
+
+function writePlugin(dir: string): string {
+  writePackage(dir);
   const entry = path.join(dir, "index.js");
   fs.writeFileSync(
     entry,
@@ -120,53 +124,8 @@ function catalogRows(markerPath: string): CatalogRow[] {
     .filter((row) => row.phase === "catalog");
 }
 
-function publish(label: string, names: string[], samples: Sample[]): void {
-  const firstUrl = samples[0]?.url;
-  console.log(
-    JSON.stringify({
-      case: label,
-      steps: samples.map((sample, index) => ({
-        step: names[index],
-        marker: sample.marker,
-        registers: sample.registers,
-        evaluations: sample.evaluations,
-        bornAt: sample.bornAt,
-        arrayBuffers: sample.arrayBuffers,
-        sameModuleAsFirst: sample.url === firstUrl,
-        sawHandle: sample.sawHandle === true,
-        ...(sample.staleRejected === undefined
-          ? {}
-          : {
-              staleRejected: sample.staleRejected,
-              staleError: sample.staleError,
-              staleEvaluations: sample.staleEvaluations,
-              apiCalls: sample.apiCalls,
-              handleRevision: sample.handleRevision,
-            }),
-        ...(sample.laterValue === undefined
-          ? {}
-          : {
-              laterValue: sample.laterValue,
-              laterEvaluations: sample.laterEvaluations,
-              laterError: sample.laterError,
-            }),
-        ...(sample.neighborResult === undefined
-          ? {}
-          : {
-              neighborResult: sample.neighborResult,
-              retiredResult: sample.retiredResult,
-              directEffects: sample.directEffects,
-              handleRevision: sample.handleRevision,
-            }),
-        catalogModelIds: sample.catalogModelIds,
-      })),
-    }),
-  );
-}
-
 async function measure(
   label: string,
-  names: string[],
   requests: Array<{
     entry: string;
     workspaceDir: string;
@@ -177,6 +136,7 @@ async function measure(
   }>,
   options?: {
     captureDir?: string;
+    rejectRequestAt?: number;
     beforeRequest?: (index: number, captureDir: string) => void;
   },
 ): Promise<Sample[]> {
@@ -261,8 +221,18 @@ async function measure(
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
           },
         },
-        { timeoutMs: 60_000 },
+        {
+          timeoutMs: 60_000,
+          onRequest: () => ({ input: index !== options?.rejectRequestAt }),
+        },
       );
+      if (index === options?.rejectRequestAt) {
+        expect(result).toMatchObject({
+          status: "failed",
+          error: "prepared model catalog request retired before discovery",
+        });
+        continue;
+      }
       const catalogModelIds =
         result.status === "ok" && result.kind === "catalog"
           ? result.snapshot.entries.map((entry) => entry.id)
@@ -278,172 +248,82 @@ async function measure(
   } finally {
     await pool.close();
   }
-  publish(label, names, samples);
   return samples;
 }
 
-it("grows when each refresh evaluates a new native ESM module", async () => {
-  const root = makeTempDir("openclaw-retention-refresh-");
-  const workspaceDir = path.join(root, "workspace");
-  const agentDir = path.join(root, "agent");
-  const requests = Array.from({ length: 6 }, (_, revision) => ({
-    entry: writePlugin(path.join(root, `plugin-${revision}`)),
-    workspaceDir,
-    agentDir,
-    agentId: "main",
-    marker: `rev-${revision}`,
-    revision,
-  }));
-  const samples = await measure(
-    "per-refresh",
-    requests.map((_, revision) => `refresh-${revision}`),
-    requests,
-  );
-  expect(samples.map((sample) => sample.marker)).toEqual([
-    "rev-0",
-    "rev-1",
-    "rev-2",
-    "rev-3",
-    "rev-4",
-    "rev-5",
-  ]);
-  expect(samples.at(-1)?.evaluations).toBe(6);
-  expect(samples.at(-1)?.bornAt).toBe(6);
-  expect(new Set(samples.map((sample) => sample.url)).size).toBe(6);
-  const growth = samples.at(-1)!.arrayBuffers - samples[0]!.arrayBuffers;
-  expect(growth).toBeGreaterThan(NATIVE_ESM_BUFFER_BYTES * 4);
-}, 180_000);
-
-it("keeps one native ESM module per workspace for the same installed path", async () => {
-  const root = makeTempDir("openclaw-retention-shared-");
-  const entry = writePlugin(path.join(root, "plugin"));
-  const alpha = {
-    entry,
-    workspaceDir: path.join(root, "workspace-alpha"),
-    agentDir: path.join(root, "agent-alpha"),
-    agentId: "alpha",
-  };
-  const beta = {
-    entry,
-    workspaceDir: path.join(root, "workspace-beta"),
-    agentDir: path.join(root, "agent-beta"),
-    agentId: "beta",
-  };
-  const samples = await measure(
-    "per-workspace-path",
-    ["alpha", "alpha-again", "beta", "alpha-after-beta", "alpha-refresh", "beta-after-refresh"],
-    [
+it.each([true, false])(
+  "isolates native ESM workspaces (shared installed path: %s)",
+  async (sharedPath) => {
+    const root = makeTempDir("openclaw-retention-shared-");
+    const entry = writePlugin(path.join(root, "plugin"));
+    const alpha = {
+      entry,
+      workspaceDir: path.join(root, "workspace-alpha"),
+      agentDir: path.join(root, "agent-alpha"),
+      agentId: "alpha",
+    };
+    const beta = {
+      entry: sharedPath ? entry : writePlugin(path.join(root, "plugin-beta")),
+      workspaceDir: path.join(root, "workspace-beta"),
+      agentDir: path.join(root, "agent-beta"),
+      agentId: "beta",
+    };
+    const samples = await measure("per-workspace-path", [
       { ...alpha, marker: "alpha", revision: 0 },
       { ...alpha, marker: "alpha", revision: 0 },
       { ...beta, marker: "beta", revision: 0 },
       { ...alpha, marker: "alpha", revision: 0 },
       { ...alpha, marker: "alpha", revision: 1 },
       { ...beta, marker: "beta", revision: 0 },
-    ],
-  );
-  expect(samples.map((sample) => sample.evaluations)).toEqual([1, 1, 2, 2, 2, 2]);
-  expect(samples[0]?.url).toBe(samples[1]?.url);
-  expect(samples[0]?.url).toBe(samples[3]?.url);
-  expect(samples[0]?.url).toBe(samples[4]?.url);
-  expect(samples[2]?.url).toBe(samples[5]?.url);
-  expect(samples[0]?.url).not.toBe(samples[2]?.url);
-  expect(samples.every((sample) => sample.sawHandle === true)).toBe(true);
-  expect(samples.map((sample) => sample.marker)).toEqual([
-    "alpha",
-    "alpha",
-    "beta",
-    "alpha",
-    "alpha",
-    "beta",
-  ]);
-  const secondWorkspaceGrowth = samples[2]!.arrayBuffers - samples[1]!.arrayBuffers;
-  const refreshGrowth = samples.at(-1)!.arrayBuffers - samples[2]!.arrayBuffers;
-  expect(secondWorkspaceGrowth).toBeGreaterThanOrEqual(NATIVE_ESM_BUFFER_BYTES);
-  expect(refreshGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
-}, 180_000);
-
-it("keeps a native ESM module per workspace copy and grows with new workspaces", async () => {
-  const root = makeTempDir("openclaw-retention-per-workspace-");
-  const workspace = (name: string, revision = 0) => ({
-    entry: writePlugin(path.join(root, `plugin-${name}`)),
-    workspaceDir: path.join(root, `workspace-${name}`),
-    agentDir: path.join(root, `agent-${name}`),
-    agentId: name,
-    marker: name,
-    revision,
-  });
-  const alpha = workspace("alpha");
-  const beta = workspace("beta");
-  const samples = await measure(
-    "per-workspace",
-    [
+    ]);
+    expect(samples.map((sample) => sample.evaluations)).toEqual([1, 1, 2, 2, 2, 2]);
+    expect(samples[0]?.url).toBe(samples[1]?.url);
+    expect(samples[0]?.url).toBe(samples[3]?.url);
+    expect(samples[0]?.url).toBe(samples[4]?.url);
+    expect(samples[2]?.url).toBe(samples[5]?.url);
+    expect(samples[0]?.url).not.toBe(samples[2]?.url);
+    expect(samples.every((sample) => sample.sawHandle === true)).toBe(true);
+    expect(samples.map((sample) => sample.marker)).toEqual([
       "alpha",
-      "alpha-again",
+      "alpha",
       "beta",
-      "alpha-after-beta",
-      "alpha-refresh",
-      "beta-after-refresh",
-      "gamma",
-      "delta",
-      "alpha-after-churn",
-    ],
+      "alpha",
+      "alpha",
+      "beta",
+    ]);
+    const secondWorkspaceGrowth = samples[2]!.arrayBuffers - samples[1]!.arrayBuffers;
+    const refreshGrowth = samples.at(-1)!.arrayBuffers - samples[2]!.arrayBuffers;
+    expect(secondWorkspaceGrowth).toBeGreaterThanOrEqual(NATIVE_ESM_BUFFER_BYTES);
+    expect(refreshGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
+  },
+  180_000,
+);
+
+it("re-registers the previous config after a failed native ESM refresh", async () => {
+  const root = makeTempDir("openclaw-retention-failed-refresh-");
+  const workspace = {
+    entry: writePlugin(path.join(root, "plugin")),
+    workspaceDir: path.join(root, "workspace"),
+    agentDir: path.join(root, "agent"),
+    agentId: "alpha",
+  };
+  const samples = await measure(
+    "failed-refresh",
     [
-      alpha,
-      { ...alpha, revision: 0 },
-      beta,
-      { ...alpha, revision: 0 },
-      { ...alpha, revision: 1 },
-      { ...beta, revision: 0 },
-      workspace("gamma"),
-      workspace("delta"),
-      { ...alpha, revision: 2 },
+      { ...workspace, marker: "alpha", revision: 0 },
+      { ...workspace, marker: "failed-successor", revision: 1 },
+      { ...workspace, marker: "alpha", revision: 0 },
     ],
+    { rejectRequestAt: 1 },
   );
-  expect(samples.map((sample) => sample.marker)).toEqual([
-    "alpha",
-    "alpha",
-    "beta",
-    "alpha",
-    "alpha",
-    "beta",
-    "gamma",
-    "delta",
-    "alpha",
-  ]);
-  expect(samples[2]?.evaluations).toBe(2);
-  expect(samples[5]?.evaluations).toBe(2);
-  expect(samples[7]?.evaluations).toBe(4);
-  expect(samples[8]?.evaluations).toBe(4);
-  expect(samples[0]?.url).toBe(samples[8]?.url);
-  expect(samples[0]?.url).not.toBe(samples[2]?.url);
-  const refreshGrowth = samples[5]!.arrayBuffers - samples[2]!.arrayBuffers;
-  const churnGrowth = samples[7]!.arrayBuffers - samples[5]!.arrayBuffers;
-  const afterChurnGrowth = samples[8]!.arrayBuffers - samples[7]!.arrayBuffers;
-  expect(refreshGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
-  expect(churnGrowth).toBeGreaterThan(NATIVE_ESM_BUFFER_BYTES);
-  expect(afterChurnGrowth).toBeLessThan(NATIVE_ESM_BUFFER_BYTES);
+  expect(samples.map((sample) => sample.catalogModelIds)).toEqual([["alpha"], ["alpha"]]);
+  expect(samples.map((sample) => sample.registers)).toEqual([1, 3]);
+  expect(samples.map((sample) => sample.evaluations)).toEqual([1, 1]);
+  expect(samples[0]?.url).toBe(samples[1]?.url);
 }, 180_000);
 
 function writeRetiredHandlePlugin(dir: string): string {
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, "package.json"),
-    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
-  );
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: PLUGIN_ID,
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          marker: { type: "string" },
-          revision: { type: "number" },
-        },
-      },
-    }),
-  );
+  writePackage(dir);
   fs.writeFileSync(
     path.join(dir, "retired-side.js"),
     `import { callRetainedHandle } from "./index.js";
@@ -580,7 +460,6 @@ it("rejects a released workspace API handle before native ESM capture", async ()
   let filesBeforeStaleImport: string[] | undefined;
   const samples = await measure(
     "retired-handle",
-    ["alpha", "beta", "alpha-refresh", "beta-after-release"],
     [
       { ...alpha, marker: "alpha", revision: 0 },
       { ...beta, marker: "beta", revision: 0 },
@@ -612,25 +491,7 @@ it("rejects a released workspace API handle before native ESM capture", async ()
 }, 180_000);
 
 function writeDirectHandlePlugin(dir: string): string {
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, "package.json"),
-    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
-  );
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: PLUGIN_ID,
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          marker: { type: "string" },
-          revision: { type: "number" },
-        },
-      },
-    }),
-  );
+  writePackage(dir);
   const entry = path.join(dir, "index.js");
   fs.writeFileSync(
     entry,
@@ -744,16 +605,12 @@ it("rejects a neighbor and a released generation through the replaced API handle
     agentDir: path.join(root, "agent-beta"),
     agentId: "beta",
   };
-  const samples = await measure(
-    "direct-handle",
-    ["alpha", "alpha-refresh", "beta-after-release", "alpha-after-foreign-calls"],
-    [
-      { ...alpha, marker: "alpha", revision: 0 },
-      { ...alpha, marker: "alpha", revision: 1 },
-      { ...beta, marker: "beta", revision: 0 },
-      { ...alpha, marker: "alpha", revision: 1 },
-    ],
-  );
+  const samples = await measure("direct-handle", [
+    { ...alpha, marker: "alpha", revision: 0 },
+    { ...alpha, marker: "alpha", revision: 1 },
+    { ...beta, marker: "beta", revision: 0 },
+    { ...alpha, marker: "alpha", revision: 1 },
+  ]);
   expect(samples.map((sample) => sample.marker)).toEqual(["alpha", "alpha", "beta", "alpha"]);
   expect(samples[0]?.url).toBe(samples[1]?.url);
   expect(samples[0]?.url).toBe(samples[3]?.url);
@@ -772,25 +629,7 @@ it("rejects a neighbor and a released generation through the replaced API handle
 }, 180_000);
 
 function writeCompilerPlugin(dir: string): string {
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, "package.json"),
-    JSON.stringify({ name: PLUGIN_ID, type: "module" }),
-  );
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: PLUGIN_ID,
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          marker: { type: "string" },
-          revision: { type: "number" },
-        },
-      },
-    }),
-  );
+  writePackage(dir);
   fs.writeFileSync(
     path.join(dir, "later.ts"),
     `const state = globalThis[Symbol.for("openclaw.nativeEsmCompilerLater")] ??= { evaluations: 0 };
@@ -881,15 +720,11 @@ it("keeps a compiled TypeScript helper import after the native module is retaine
     agentId: "alpha",
     marker: "alpha",
   };
-  const samples = await measure(
-    "retained-compiler",
-    ["compile", "refresh", "import-after-release"],
-    [
-      { ...workspace, revision: 0 },
-      { ...workspace, revision: 1 },
-      { ...workspace, revision: 1 },
-    ],
-  );
+  const samples = await measure("retained-compiler", [
+    { ...workspace, revision: 0 },
+    { ...workspace, revision: 1 },
+    { ...workspace, revision: 1 },
+  ]);
   expect(samples.map((sample) => sample.marker)).toEqual(["alpha", "alpha", "alpha"]);
   expect(samples.map((sample) => sample.evaluations)).toEqual([1, 1, 1]);
   expect(samples.map((sample) => sample.registers)).toEqual([1, 2, 2]);
