@@ -132,13 +132,23 @@ export async function runMemoryDatabaseFacts(databasePath: string, agentId: stri
   return result.facts;
 }
 
-export async function runMemoryVectorLoad(target: MemoryReadTarget, extensionPath?: string) {
+export async function runMemoryVectorLoad(
+  target: { agentId?: string; path?: string } | undefined,
+  extensionPath?: string,
+) {
+  if (!target?.agentId || !target.path) {
+    throw new Error("Memory vector inspection requires its captured database target");
+  }
   const result = await runRetrieval(
-    { ...target, kind: "vector-load", extensionPath },
+    { agentId: target.agentId, databasePath: target.path, kind: "vector-load", extensionPath },
     {},
     "vector capability",
   );
-  return result.result;
+  const loaded = result.result;
+  if (!loaded.ok || !loaded.extensionPath) {
+    throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+  }
+  return { extensionPath: loaded.extensionPath, retiredLegacy: false };
 }
 
 export async function runMemoryRecallMetadata(

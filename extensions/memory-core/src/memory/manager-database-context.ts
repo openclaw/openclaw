@@ -633,29 +633,17 @@ export class MemoryIndexDatabase {
   }
 
   async prepareVector(extensionPath: string | undefined, assertCurrent: () => void) {
-    if (this.readOnly) {
-      const target = this.writeOptions;
-      if (!target?.agentId || !target.path) {
-        throw new Error("Memory vector inspection requires its captured database target");
-      }
-      const loaded = await runMemoryVectorLoad(
-        { agentId: target.agentId, databasePath: target.path },
-        extensionPath,
-      );
-      if (!loaded.ok || !loaded.extensionPath) {
-        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
-      }
-      return { extensionPath: loaded.extensionPath, retiredLegacy: false };
-    }
-    return this.retryPublication(() =>
-      this.executePublication(
-        {
-          type: "vector.prepare",
-          input: { state: { ...this.publicationState(), extensionPath } },
-        },
-        assertCurrent,
-      ),
-    );
+    return this.readOnly
+      ? runMemoryVectorLoad(this.writeOptions, extensionPath)
+      : this.retryPublication(() =>
+          this.executePublication(
+            {
+              type: "vector.prepare",
+              input: { state: { ...this.publicationState(), extensionPath } },
+            },
+            assertCurrent,
+          ),
+        );
   }
 
   async updateIndexStructure<Key extends "vector.ensure">(
