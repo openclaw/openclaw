@@ -34,14 +34,16 @@ async function runToolTurn(params: {
           ],
         }),
   };
-  const model = makeCompletionsModel({
-    provider: params.mode === "native" ? "openai" : "compatible-proxy",
-    baseUrl: params.mode === "native" ? "https://api.openai.com/v1" : "http://localhost:8000/v1",
-    reasoning: false,
-    maxTokens: params.modelMaxTokens ?? 4_096,
-    contextWindow: 100_000,
+  const model = {
+    ...makeCompletionsModel({
+      provider: params.mode === "native" ? "openai" : "compatible-proxy",
+      baseUrl: params.mode === "native" ? "https://api.openai.com/v1" : "http://localhost:8000/v1",
+      reasoning: false,
+      maxTokens: params.modelMaxTokens ?? 4_096,
+      contextWindow: 100_000,
+    }),
     compat: { maxTokensField, supportsStrictMode: false, supportsTools: params.supportsTools },
-  });
+  };
   // Shape only the tool fixture at an unconstrained budget; the expected output
   // floors below are independent, fixed values rather than a production result.
   const prepared = buildOpenAICompletionsParams(model, context, options);
