@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, flush, onSettled, untrack } from "solid-js";
-import "./panel-elements.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
@@ -351,7 +350,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   aria-controls={controlsFor(tab())}
                   aria-selected={selected() ? "true" : "false"}
                   title={tab().title || undefined}
-                  active={selected()}
+                  prop:active={selected()}
                   draggable={draggable() ? "true" : undefined}
                   prop:tabIndex={selected() ? 0 : -1}
                   onAuxClick={(event: MouseEvent) => {

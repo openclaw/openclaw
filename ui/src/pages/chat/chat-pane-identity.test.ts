@@ -179,11 +179,15 @@ describe("chat pane assistant identity snapshots", () => {
     try {
       pane.connectedCallback();
       await vi.waitFor(() =>
-        expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        expect(pane.state.chatSessionMessageSubscription).toMatchObject({
+          key: "global",
           agentId: "main",
-          includeApprovals: true,
         }),
       );
+      expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        agentId: "main",
+        includeApprovals: true,
+      });
       pane.state.chatSessionApprovalQueue = [
         {
           id: "stale-main-approval",

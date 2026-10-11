@@ -17,21 +17,30 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "wa-tab-group": HTMLAttributes<WaTabGroup> & {
-        "prop:active"?: string;
-        activation?: "auto" | "manual";
-        "without-scroll-controls"?: boolean;
+        "prop:active": string;
+        activation: "auto" | "manual";
+        "without-scroll-controls": boolean;
         "onWa-tab-show"?: (event: CustomEvent<{ name: string }>) => void;
       };
       "wa-tab": HTMLAttributes<WaTab> & {
         panel: string;
-        active?: boolean;
         "prop:active"?: boolean;
         "prop:tabIndex"?: number;
       };
       "wa-tab-panel": HTMLAttributes<WaTabPanel> & {
         name: string;
-        active?: boolean;
-        "prop:active"?: boolean;
+        "prop:active": boolean;
+      };
+      "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
+        "prop:orientation": "horizontal" | "vertical";
+        "prop:label": string;
+        "prop:splitRatio": number;
+        "prop:minRatio": number;
+        "prop:maxRatio": number;
+        "prop:measureRatio": () => number;
+        "prop:measureSize": () => number;
+        onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
+        "onResize-end": () => void;
       };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;

@@ -67,11 +67,13 @@ async function preparePublicationSession(
   }
 }
 
+/** @deprecated Use GitHubPublicationRequesterPolicyV2; removed in the next Plugin SDK major. */
 export type GitHubPublicationRequesterPolicy = Readonly<{
   snapshot: GitHubPublicationRequesterSnapshot;
   assertCurrent: () => void;
 }>;
 
+/** @deprecated Use GitHubPublicationRequesterV2; removed in the next Plugin SDK major. */
 export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
   Readonly<{
     /** An accepted row keeps its own policy while the current invocation retains its fences. */
