@@ -417,7 +417,7 @@ export function readSandboxRegistryEntryInDatabase(
   return row ? rowToContainerEntry(row) : null;
 }
 
-export function readSandboxRegistryRowInDatabase(
+function readSandboxRegistryRowInDatabase(
   db: DatabaseSync,
   kind: "container" | "browser",
   containerName: string,

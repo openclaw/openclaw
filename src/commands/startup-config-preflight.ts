@@ -8,7 +8,6 @@ import { RetiredStateFormatError } from "../infra/state-migrations.retired-files
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
-  assertPreflightConfigUnchanged,
   readAdmittedConfigSnapshot,
   readConfigPreflightSnapshot,
   type ConfigPreflightSnapshotRead,
@@ -144,10 +143,8 @@ async function prepareStartupConfig(
           }
           assertLeaseCurrent();
           if (read.recovery) {
-            const recovered = read.snapshot;
             await read.recovery.apply(() => pluginLease.assertOwned());
             read = await readSnapshot();
-            assertPreflightConfigUnchanged(recovered, read.snapshot);
           }
         },
       );
@@ -178,7 +175,6 @@ async function prepareStartupConfig(
       }
       if (migration.changes.length) {
         await beforeStatePreparation(read.snapshot);
-        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
         assertLeaseCurrent();
         if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
           const { StartupMaintenanceRequiredError } =

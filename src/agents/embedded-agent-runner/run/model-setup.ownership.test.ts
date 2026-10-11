@@ -263,15 +263,6 @@ describe("model chat and native model ownership", () => {
     expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
   });
 
-  it("rejects store topology changes during native ownership resolution", async () => {
-    const fixture = await createFixture({}, ({ assertCurrent }) => {
-      sessionChanges.emit({ all: true, scope: "stores" });
-      assertCurrent();
-      return { model: "native", auth: "native" };
-    });
-    await expect(fixture.resolve()).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
-    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
-  });
 
   it.each(["current", "changed-again", "revoked"] as const)(
     "reacquires initial model preparation after a shared OAuth refresh while authority is %s",

@@ -14,7 +14,6 @@ import {
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { McpAppPanel, type McpAppPanelElement } from "./mcp-app-panel.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
   MCP_APP_MESSAGE_EVENT,
@@ -23,7 +22,8 @@ import {
   type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import type { McpAppViewElement } from "./mcp-app-view.ts";
+import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
 
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
@@ -95,7 +95,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   return { ...actual, AppBridge, PostMessageTransport };
 });
 
-const { McpAppView } = await import("./mcp-app-view.ts");
+const { McpAppView } = await import("./mcp-app-view.tsx");
 function mountView(props: Parameters<typeof McpAppView>[0], context: object = {}) {
   const supplied = context as Partial<ApplicationContext>;
   const provider = createSolidApplicationContextProvider({

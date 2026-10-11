@@ -122,6 +122,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       expect(state.hot.transcript.idempotency).toEqual([
         { key: "first-user", eventId: "user", rawSeq: 1 },
       ]);
+      expect(state.hot.completionKeys).toEqual([]);
       counter.counts.reads = 0;
       reads.length = 0;
       const working = cloneSessionActorStoredState(state);
@@ -232,13 +233,35 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     expect(readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id).toBe(
       "accepted-input",
     );
+    const completed = cloneSessionActorStoredState(state);
+    runOpenClawAgentWriteTransaction(
+      (db) =>
+        withSessionActorTransactionState(db, completed, () => {
+          mutatePendingInput(
+            {
+              ...pending,
+              kind: "complete",
+              outcome: buildAgentRunTerminalOutcome({ status: "ok" }),
+            },
+            {
+              admit() {},
+              writeTransaction: (_label, _owner, run) => run(db),
+            },
+            () => {},
+          );
+        }),
+      options,
+    );
+    const completedPostimage = projectSessionActorHotState(completed);
+    expect(completedPostimage.pendingInputs).toEqual([]);
+    expect(completedPostimage.completionKeys).toEqual([pending.idempotencyKey]);
     const rehydrated = hydrateSessionActorState(
       database,
       target,
       state.hot.version,
       state.hot.writeToken,
     );
-    expect(projectSessionActorHotState(rehydrated)).toEqual(committed);
+    expect(projectSessionActorHotState(rehydrated)).toEqual(completedPostimage);
   });
 });
 

@@ -43,14 +43,7 @@ import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
-import {
-  getPreparedModelRuntimeBorrowedSnapshot,
-  getPreparedModelRuntimePluginGeneration,
-} from "../../prepared-model-runtime-generation-scope.js";
-import { readAdmittedPublishedModelCatalog } from "../../prepared-model-runtime.capture.js";
-import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
-import { capturePreparedModelRuntimeLifetime } from "../../prepared-model-runtime.lifecycle.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -93,47 +86,42 @@ async function prepareNativeSessionRuntime(
         ? [resolveIncognitoOpenClawAgentSqlitePath({ agentId: sessionAgentId })]
         : []),
     ]);
-    let changed = false;
-    const stop = sessionChanges.subscribeFacts((change) => {
-      if (
-        sessionChangeAffectsStoredRow(change, {
+    const consume = async (current: SessionEntry | undefined, assertReadCurrent: () => void) => {
+      let changed = false;
+      const assertCurrent = () => {
+        assertCallerCurrent();
+        runParams.abortSignal?.throwIfAborted();
+        if (runParams.lifecycleGeneration) {
+          assertAgentRunLifecycleGenerationCurrent(runParams.lifecycleGeneration);
+        }
+        try {
+          assertReadCurrent();
+        } catch (cause) {
+          throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause });
+        }
+        const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
+        if (
+          changed ||
+          getRegisteredAgentHarness(pinnedHarnessId)?.harness !== harness ||
+          current?.sessionId !== sessionId ||
+          current?.lifecycleRevision !== lifecycleRevision ||
+          resolveSessionPinnedHarnessId(current) !== pinnedHarnessId ||
+          (expectedWriter !== undefined && current?.activeWriterRunId !== expectedWriter)
+        ) {
+          throw new AgentHarnessPreflightError(ownershipChangedMessage);
+        }
+      };
+      assertCurrent();
+      // Native auth must retain live authority for the entire ownership hook.
+      const stop = sessionChanges.subscribeFacts((change) => {
+        changed ||= sessionChangeAffectsStoredRow(change, {
           ...publication,
           agentId: sessionAgentId,
           sessionKeys: [admission.sessionKey],
-        })
-      ) {
-        changed = true;
-      }
-    });
-    try {
-      const consume = (current: SessionEntry | undefined, assertReadCurrent: () => void) => {
-        const assertCurrent = () => {
-          assertCallerCurrent();
-          runParams.abortSignal?.throwIfAborted();
-          if (runParams.lifecycleGeneration) {
-            assertAgentRunLifecycleGenerationCurrent(runParams.lifecycleGeneration);
-          }
-          try {
-            assertReadCurrent();
-          } catch (cause) {
-            throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause });
-          }
-          if (changed) {
-            throw new AgentHarnessPreflightError(ownershipChangedMessage);
-          }
-          const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
-          if (
-            getRegisteredAgentHarness(pinnedHarnessId)?.harness !== harness ||
-            current?.sessionId !== sessionId ||
-            current?.lifecycleRevision !== lifecycleRevision ||
-            resolveSessionPinnedHarnessId(current) !== pinnedHarnessId ||
-            (expectedWriter !== undefined && current?.activeWriterRunId !== expectedWriter)
-          ) {
-            throw new AgentHarnessPreflightError(ownershipChangedMessage);
-          }
-        };
-        assertCurrent();
-        return readSessionRuntimeOwnershipAsync({
+        });
+      });
+      try {
+        return await readSessionRuntimeOwnershipAsync({
           config: runParams.config,
           agentId: admission.agentId,
           sessionKey: admission.sessionKey,
@@ -142,66 +130,65 @@ async function prepareNativeSessionRuntime(
           assertCurrent,
           readPreparedPreviousSessionId: () => current?.previousSessionId,
         });
-      };
-      if (admittedEntry) {
-        return await consume(admittedEntry, assertCallerCurrent);
+      } finally {
+        stop();
       }
-      if (isIncognitoSessionKey(admission.sessionKey)) {
-        return await withSessionEntryReadOnlyInWorker(
-          admission,
-          assertCallerCurrent,
-          async (read, owner) => {
-            if (!read.ok) {
-              throw read.error;
-            }
-            return consume(read.value, owner.assertCurrent);
-          },
-        );
-      }
-      const reader = getReplyOperationSessionReader(runParams.replyOperation);
-      if (reader) {
-        publication.prepareSource(
-          reader.database,
-          readDatabasePathIdentitySync(reader.database.path),
-        );
-        const prepared = await reader.withRead(
-          {
-            sessionKeys: [admission.sessionKey],
-            lifecycleSessionKey: admission.sessionKey,
-            snapshotFields: [],
-          },
-          assertCallerCurrent,
-          (read) => ({
-            entry: read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
-            assertNativeCurrent: captureSessionEntryNativeMutationWitness([reader.database]),
-          }),
-        );
-        // Retain the native witness too: legacy synchronous writes can skip row publication.
-        return await consume(prepared.entry, () => {
-          reader.assertCurrent();
-          prepared.assertNativeCurrent();
-        });
-      }
-      return await withSessionEntriesFromStoreInWorker(
+    };
+    if (admittedEntry) {
+      return await consume(admittedEntry, assertCallerCurrent);
+    }
+    if (isIncognitoSessionKey(admission.sessionKey)) {
+      return await withSessionEntryReadOnlyInWorker(
+        admission,
+        assertCallerCurrent,
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return consume(read.value, owner.assertCurrent);
+        },
+      );
+    }
+    const reader = getReplyOperationSessionReader(runParams.replyOperation);
+    if (reader) {
+      publication.prepareSource(
+        reader.database,
+        readDatabasePathIdentitySync(reader.database.path),
+      );
+      const prepared = await reader.withRead(
         {
-          agentId: sessionAgentId,
           sessionKeys: [admission.sessionKey],
           lifecycleSessionKey: admission.sessionKey,
-          storePath: admission.storePath,
-          includeAuthorization: true,
           snapshotFields: [],
         },
-        (read) =>
-          consume(
-            read.result.entries.find((item) => item.sessionKey === admission.sessionKey)?.entry,
-            read.assertCurrent,
-          ),
-        false,
-        (...source) => publication.prepareSource(...source),
+        assertCallerCurrent,
+        (read) => ({
+          entry: read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+          assertNativeCurrent: captureSessionEntryNativeMutationWitness([reader.database]),
+        }),
       );
-    } finally {
-      stop();
+      return await consume(prepared.entry, () => {
+        reader.assertCurrent();
+        prepared.assertNativeCurrent();
+      });
     }
+    return await withSessionEntriesFromStoreInWorker(
+      {
+        agentId: sessionAgentId,
+        sessionKeys: [admission.sessionKey],
+        lifecycleSessionKey: admission.sessionKey,
+        storePath: admission.storePath,
+        includeAuthorization: true,
+        snapshotFields: [],
+      },
+      (read) =>
+        consume(
+          read.result.entries.find((item) => item.sessionKey === admission.sessionKey)?.entry,
+          read.assertCurrent,
+        ),
+      false,
+      (...source) => publication.prepareSource(...source),
+    );
   };
   const ownership = await readOwnership(admission.entry);
   if (!ownership) {
@@ -381,10 +368,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const hasSelectedNativeModel = () =>
     catalog?.entries.some(ownsSelectedNativeModel) === true ||
     catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
-  const generation = getPreparedModelRuntimePluginGeneration();
-  const borrowedSnapshot = generation
-    ? getPreparedModelRuntimeBorrowedSnapshot(generation)
-    : undefined;
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
@@ -392,14 +375,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
     params.preparedModelRuntime?.loadNativeModelCatalog &&
     !hasSelectedNativeModel()
   ) {
-    const assertRuntimeCurrent = capturePreparedModelRuntimeLifetime();
-    // Run projections add prompt-project facts while keeping the owner's native operation.
-    const isCurrent =
-      generation &&
-      borrowedSnapshot?.loadNativeModelCatalog ===
-        params.preparedModelRuntime.loadNativeModelCatalog
-        ? () => getPreparedModelRuntimeBorrowedSnapshot(generation) === borrowedSnapshot
-        : params.preparedModelRuntime.isCurrent;
     try {
       catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
         provider,
@@ -411,8 +386,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
     }
     runParams.abortSignal?.throwIfAborted();
     params.assertCurrent();
-    assertRuntimeCurrent();
-    assertPreparedModelRuntimeInputCurrent(params.preparedModelRuntime, isCurrent);
   }
   const nativeModelOwned =
     nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
@@ -424,15 +397,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
       model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
       ...createEmptyAgentDiscoveryStores(),
     };
-    // Run projections drop capture identity; the owner keeps the catalog the picker read.
-    const routeCatalog =
-      (borrowedSnapshot &&
-      borrowedSnapshot.modelCatalog === params.preparedModelRuntime?.modelCatalog
-        ? readAdmittedPublishedModelCatalog(borrowedSnapshot)
-        : undefined) ?? catalog;
     const routeVariants =
-      routeCatalog &&
-      createModelCatalogSnapshotView(runParams.config ?? {}, routeCatalog).variantsOf({
+      catalog &&
+      createModelCatalogSnapshotView(runParams.config ?? {}, catalog).variantsOf({
         provider,
         id: modelId,
       });

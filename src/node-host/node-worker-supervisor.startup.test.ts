@@ -308,9 +308,8 @@ lines.once("line", line => {
       vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
         this: NodeWorkerLaunchStore,
         params,
-        authority,
       ) {
-        const receipt = await originalMarkRunning.call(this, params, authority);
+        const receipt = await originalMarkRunning.call(this, params);
         stopping =
           operation === "cancel"
             ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))

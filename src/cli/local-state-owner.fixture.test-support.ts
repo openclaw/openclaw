@@ -108,10 +108,8 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
           method: string;
           params: Record<string, unknown>;
           scopes: string[];
-          prepareDispatchCurrent(): Promise<void>;
           assertDispatchCurrent(): void;
         }) => {
-          await options.prepareDispatchCurrent();
           options.assertDispatchCurrent();
           if (ownerTransport.revokeBeforeMutation) {
             ownerTransport.current = false;

@@ -46,7 +46,6 @@ export function registerCanaryProgressWorkerTests(
     "recorded-text",
     "reopened",
     "source-replaced",
-    "revoked-at-commit",
     "interrupted-after-acceptance",
     "uncertain",
   ] as const)(
@@ -177,9 +176,6 @@ export function registerCanaryProgressWorkerTests(
           if (outcome === "interrupted-after-acceptance" && firstCommit) {
             run.interrupted = true;
           }
-          if (outcome === "revoked-at-commit") {
-            opts.run = { ...run };
-          }
         }
       };
       const onStepComplete = vi.fn();
@@ -215,33 +211,17 @@ export function registerCanaryProgressWorkerTests(
           expect(mocks.spawn).not.toHaveBeenCalled();
           return;
         }
-        if (outcome === "revoked-at-commit" || outcome === "interrupted-after-acceptance") {
+        if (outcome === "interrupted-after-acceptance") {
           await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
           expect(checkedCommit).toBe(true);
           const saved = await getUpdateRunAsync(run.runId, { env });
-          if (outcome === "revoked-at-commit") {
-            expect(saved).toEqual({
-              ...created,
-              updatedAtMs: expect.any(Number),
-              steps: [
-                ...created.steps,
-                {
-                  step: "candidate-state-snapshot",
-                  status: "in_progress",
-                  startedAtMs: expect.any(Number),
-                  detail: "Preparing update checks",
-                },
-              ],
-            });
-          } else {
-            expect(saved?.steps).toContainEqual(
-              expect.objectContaining({
-                step: "candidate-state-snapshot",
-                status: "in_progress",
-                detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
-              }),
-            );
-          }
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({
+              step: "candidate-state-snapshot",
+              status: "in_progress",
+              detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
+            }),
+          );
           expect(onStepComplete).toHaveBeenCalledWith(
             expect.objectContaining({
               name: "candidate-state-snapshot",

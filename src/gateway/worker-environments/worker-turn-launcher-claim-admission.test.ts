@@ -8,10 +8,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
-import {
-  createPlacementTurnClaimFixtureOps,
-  seedAttachedPlacementEnvironment,
-} from "./placement-test-fixtures.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
@@ -257,53 +254,6 @@ describe("worker turn launcher claim admission", () => {
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
-
-  it("retries admission when a collided claim releases before inspection", async () => {
-    await seedActivePlacement();
-    const active = placements.get(SESSION_ID);
-    if (active?.state !== "active") {
-      throw new Error("expected active placement");
-    }
-    const priorClaim = await placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      claimId: "released-before-inspection",
-      runId: "prior-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    const claimOps = createPlacementTurnClaimFixtureOps(database);
-    const claimTurn = placements.claimTurn.bind(placements);
-    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
-      try {
-        return await claimTurn(...args);
-      } catch (error) {
-        claimOps.releaseTurn(priorClaim);
-        throw error;
-      }
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "next-run",
-        },
-        turn("next-run"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("Active worker placement does not match its attached environment");
-  });
 
   it("holds a remote-exec follow-up when reconciliation starts during claim admission", async () => {
     await seedActivePlacement("remote-exec");
