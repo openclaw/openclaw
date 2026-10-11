@@ -109,7 +109,6 @@ import {
 } from "./store-save.js";
 import { createAuthProfileStoreUpdater } from "./store-update.js";
 import type {
-  AuthProfileCredential,
   AuthProfileCredentialSource,
   AuthProfileStore,
   AuthProfileStoreOwner,
@@ -302,53 +301,32 @@ export function findPersistedAuthProfileCredential(params: {
     method: "findPersistedAuthProfileCredential",
     replacement: "findPersistedAuthProfileCredentialAsync",
   });
-  return findPersistedAuthProfileCredentials({
-    agentDir: params.agentDir,
-    profileIds: [params.profileId],
-  }).get(params.profileId);
-}
-
-/** Capture a credential authority snapshot for a locked batch without rereading each store. */
-export function findPersistedAuthProfileCredentials(params: {
-  agentDir?: string;
-  profileIds: readonly string[];
-}): ReadonlyMap<string, AuthProfileCredential | undefined> {
-  const credentials = new Map<string, AuthProfileCredential | undefined>();
   if (isEnvOnlyAuthProfileRuntime()) {
-    return credentials;
+    return undefined;
   }
-  const persistedIds: string[] = [];
-  for (const profileId of params.profileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      credentials.set(
-        profileId,
-        authProfileRuntimeMode.getStore()
-          ? undefined
-          : readUserModelAuthProfile(profileId)?.credential,
-      );
-    } else {
-      persistedIds.push(profileId);
-    }
-  }
-  if (persistedIds.length === 0) {
-    return credentials;
+  if (isUserModelAuthProfileId(params.profileId)) {
+    return authProfileRuntimeMode.getStore()
+      ? undefined
+      : readUserModelAuthProfile(params.profileId)?.credential;
   }
   const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
   const requestedStore = loadPersistedAuthProfileStore(agentDir);
+  const requestedProfile = requestedStore?.profiles[params.profileId];
   const scopedSharedStore = getScopedSharedAuthStore();
-  const needsSharedStore = persistedIds.some((profileId) => !requestedStore?.profiles[profileId]);
-  const sharedStore =
-    scopedSharedStore ??
-    (needsSharedStore && agentDir && !isSharedMainAuthProfileAgentDir(agentDir)
-      ? loadPersistedAuthProfileStore(resolveRuntimeAuthProfileAgentDir())
-      : undefined);
-  for (const profileId of persistedIds) {
-    credentials.set(
-      profileId,
-      requestedStore?.profiles[profileId] ?? sharedStore?.profiles[profileId],
-    );
+  if (scopedSharedStore) {
+    return requestedProfile ?? scopedSharedStore.profiles[params.profileId];
   }
-  return credentials;
+  if (requestedProfile || !agentDir) {
+    return requestedProfile;
+  }
+
+  if (isSharedMainAuthProfileAgentDir(agentDir)) {
+    return requestedProfile;
+  }
+
+  return loadPersistedAuthProfileStore(resolveRuntimeAuthProfileAgentDir())?.profiles[
+    params.profileId
+  ];
 }
 
 /**

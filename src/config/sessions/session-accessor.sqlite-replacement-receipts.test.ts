@@ -28,7 +28,10 @@ import {
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import {
   applySessionEntryCanonicalReplacements,
@@ -108,9 +111,13 @@ it("sheds aggregate optional snapshots while committing every required receipt r
 it.each(["autocommit", "transaction"] as const)(
   "seals native metadata before observers for %s",
   async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const sessionKey = "agent:main:native-metadata-seal";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey, env },
+        { sessionId: "native-metadata-seal", updatedAt: 1, verboseLevel: "off" },
+      );
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
       let published: ReturnType<typeof readPreparedSessionEntryChange>;
       const stop = sessionChanges.subscribeFacts((change) => {
         if ("sessionKey" in change && change.sessionKey === sessionKey) {

@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   openOpenClawAgentDatabase,
@@ -130,9 +133,16 @@ it("refreshes incognito visibility from its process-held session", async () => {
 it("updates synchronous tool gates from committed preferences without main-thread reads", async () => {
   const key = "agent:main:followup-visibility";
   const { turn, entry } = createStoredTurn({ key });
+  const scope = {
+    agentId: "main",
+    storePath: database.path,
+    sessionKey: key,
+    env: testState.env,
+  };
+  await upsertSessionEntryCore(scope, { ...entry, updatedAt: 2, verboseLevel: "full" });
   state.execute.mockImplementation(async (params: AgentTurnParams) => {
     for (const level of ["off", "full"] as const) {
-      writeSessionEntry(database, key, { ...entry, updatedAt: 3, verboseLevel: level });
+      await upsertSessionEntryCore(scope, { ...entry, updatedAt: 3, verboseLevel: level });
       const sql = observeHostDataSql();
       try {
         expect(params.shouldEmitToolResult()).toBe(level === "full");

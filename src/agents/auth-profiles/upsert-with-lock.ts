@@ -18,7 +18,7 @@ import {
   saveAuthProfileStoreWithPreparedOwner,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
-import { findPersistedAuthProfileCredentials } from "./store.js";
+import { findPersistedAuthProfileCredential } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
@@ -55,10 +55,12 @@ function loadAuthProfileWriteAuthorities(
       const shared = loadAuthProfileWriteTarget({ stateDir: params.stateDir });
       inherited = new Map(missingIds.map((profileId) => [profileId, shared?.profiles[profileId]]));
     } else {
-      inherited = findPersistedAuthProfileCredentials({
-        agentDir: params.agentDir,
-        profileIds: missingIds,
-      });
+      inherited = new Map(
+        missingIds.map((profileId) => [
+          profileId,
+          findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId }),
+        ]),
+      );
     }
   }
   return new Map(
