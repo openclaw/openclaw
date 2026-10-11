@@ -23,6 +23,7 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
     "scripts/podman/common.sh",
     "scripts/lib/host-timeout.sh",
     "scripts/lib/build-metadata.sh",
+    "scripts/lib/container-gateway-capability.sh",
   ]) {
     const target = path.join(root, relative);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -56,7 +57,17 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
     'case "$2" in %u) printf "1000\\n";; %Lp|%a) printf "700\\n";; *) exit 97;; esac',
   );
   command("uname", 'printf "Linux\\n"');
-  command("podman", 'printf "%s\\n" "$*" >> "$PODMAN_CALLS"');
+  command(
+    "podman",
+    [
+      'printf "%s\\n" "$*" >> "$PODMAN_CALLS"',
+      'case "$1" in',
+      `  create) printf '%s\\n' '${"a".repeat(64)}';;`,
+      `  inspect) printf '%s\\n' 'sha256:${"b".repeat(64)}';;`,
+      '  start) printf "%s" "published-port";;',
+      "esac",
+    ].join("\n"),
+  );
   const emitted = backend === "od" ? `${" ab".repeat(32)}\n` : `${fixtureToken}\n`;
   command(
     backend,

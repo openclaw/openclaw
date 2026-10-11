@@ -29,6 +29,7 @@ export function resolveGatewayWsBrowserOrigin(
     return undefined;
   }
   return {
+    ...(params.publishedPort !== undefined ? { publishedPort: params.publishedPort } : {}),
     requestHost: params.requestHost,
     origin: params.origin,
     isLocalClient: params.isLocalClient,

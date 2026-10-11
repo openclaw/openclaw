@@ -5,6 +5,7 @@ import {
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { resolveAcceptedBrowserOriginForGateway } from "../gateway/origin-check.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isRequestBodyLimitError,
@@ -18,10 +19,19 @@ import {
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
-export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
+/** Resolve browser policy with deployment metadata owned by the serving Gateway. */
+export function resolveAcceptedBrowserOrigin(
+  params: Omit<Parameters<typeof resolveAcceptedBrowserOriginForGateway>[0], "publishedPort">,
+): string | undefined {
+  return resolveAcceptedBrowserOriginForGateway({
+    ...params,
+    publishedPort: getPluginRuntimeGatewayRequestScope()?.publishedPort,
+  });
+}
 export {
   runHttpConnectionRequest,
   sendHttpRequestRejection,

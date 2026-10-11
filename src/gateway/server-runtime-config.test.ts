@@ -205,7 +205,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedBindHost: "0.0.0.0",
       },
       {
-        name: "does not replace an explicit empty origin list with the public origin",
+        name: "accepts an explicit empty origin list as deny-all",
         cfg: {
           gateway: {
             bind: "lan" as const,
@@ -214,7 +214,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             controlUi: { allowedOrigins: [] },
           },
         },
-        expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+        expectedBindHost: "0.0.0.0",
       },
       {
         name: "allows non-loopback control UI without allowed origins when dangerous fallback is enabled",

@@ -74,6 +74,7 @@ export function assertGatewayRuntimeSecurityConfig(
   > & {
     cfg: OpenClawConfig;
     port: number;
+    publishedPort?: number;
   },
 ): void {
   const { cfg, bindHost, controlUiEnabled, resolvedAuth, tailscaleMode } = params;
@@ -81,9 +82,10 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasSharedSecret =
     (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
     (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
-  const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg).some((value) =>
-    value.trim(),
+  const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg, params.publishedPort).some(
+    (value) => value.trim(),
   );
+  const hasAuthoredControlUiAllowedOrigins = cfg.gateway?.controlUi?.allowedOrigins !== undefined;
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
@@ -112,6 +114,7 @@ export function assertGatewayRuntimeSecurityConfig(
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
     !hasControlUiAllowedOrigins &&
+    !hasAuthoredControlUiAllowedOrigins &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
@@ -127,9 +130,27 @@ export function assertGatewayRuntimeSecurityConfig(
   }
 }
 
+/** Reload candidates resolve auth from their own config and env before the shared policy runs. */
+export function assertGatewayCandidateSecurityConfig(
+  params: Omit<Parameters<typeof assertGatewayRuntimeSecurityConfig>[0], "resolvedAuth"> & {
+    env?: NodeJS.ProcessEnv;
+  },
+): void {
+  const { env, ...policy } = params;
+  assertGatewayRuntimeSecurityConfig({
+    ...policy,
+    resolvedAuth: resolveGatewayAuth({
+      authConfig: policy.cfg.gateway?.auth,
+      tailscaleMode: policy.tailscaleMode,
+      env,
+    }),
+  });
+}
+
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
+  publishedPort?: number;
   bind?: GatewayBindMode;
   host?: string;
   controlUiEnabled?: boolean;
@@ -202,7 +223,12 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
     hooksConfig,
   };
-  assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
+  assertGatewayRuntimeSecurityConfig({
+    ...runtimeConfig,
+    cfg: params.cfg,
+    port: params.port,
+    publishedPort: params.publishedPort,
+  });
   if (hooksConfig) {
     commitHookTransformMappingReload();
   }

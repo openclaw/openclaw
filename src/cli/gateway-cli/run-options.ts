@@ -12,6 +12,7 @@ export type GatewayRunOpts = Partial<
 
 const GATEWAY_RUN_VALUE_KEYS = [
   "port",
+  "publishedPort",
   "bind",
   "token",
   "auth",

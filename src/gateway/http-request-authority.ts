@@ -112,6 +112,7 @@ export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unkn
 }
 
 export type GatewayHttpRequestAuthOptions = {
+  publishedPort?: number;
   auth: ResolvedGatewayAuth;
   cfg?: OpenClawConfig;
   getRuntimeConfig?: () => OpenClawConfig;

@@ -80,7 +80,7 @@ describe("private background byte route with real HTTP authentication", () => {
         req,
         res,
         new URL(req.url!, "http://localhost").pathname,
-        { auth, basePath: "/control", trustedProxies: ["127.0.0.1"] },
+        { auth, basePath: "/control", trustedProxies: ["127.0.0.1"], publishedPort: 19123 },
       )
         .then((handled) => {
           if (!handled) {
@@ -121,6 +121,31 @@ describe("private background byte route with real HTTP authentication", () => {
       });
       expect(preflight.status).toBe(204);
       expect(preflight.headers.get("access-control-allow-headers")).toBe("Authorization");
+      const cfg = getRuntimeConfig();
+      vi.mocked(getRuntimeConfig).mockReturnValue({
+        gateway: {
+          auth,
+          trustedProxies: ["127.0.0.1"],
+          publicOrigin: "https://rotated.example.test",
+        },
+      });
+      const mapped = await fetch(url, {
+        headers: headers("one@example.test", "operator.read", "http://localhost:19123"),
+      });
+      expect(mapped.status).toBe(200);
+      expect(mapped.headers.get("access-control-allow-origin")).toBe("http://localhost:19123");
+      await mapped.arrayBuffer();
+      vi.mocked(getRuntimeConfig).mockReturnValue({
+        gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: [] } },
+      });
+      const denied = await fetch(url, {
+        method: "OPTIONS",
+        headers: { Origin: "http://localhost:19123" },
+      });
+      expect(denied.status).toBe(403);
+      expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+      await denied.arrayBuffer();
+      vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
       expect(
         (await fetch(url, { headers: headers("two@example.test", "operator.admin") })).status,
       ).toBe(404);

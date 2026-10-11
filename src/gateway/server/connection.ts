@@ -50,6 +50,7 @@ import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 export type GatewayConnectionOptions = Pick<
   GatewayWsMessageHandlerParams,
+  | "publishedPort"
   | "bootId"
   | "clients"
   | "connectionWork"
@@ -580,6 +581,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     ...params,
     ...connectionLifecycle,
     upgradeReq,
+    publishedPort: params.publishedPort,
     ingressAttribution,
     ...params.addresses,
     forwardedFor,

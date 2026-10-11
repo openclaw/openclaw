@@ -16,7 +16,7 @@ import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createGatewayRequest } from "./hooks-test-helpers.js";
-import { handleGatewayProbeRequest } from "./server-http-probes.js";
+import { createGatewayProbeHandler } from "./server-http-probes.js";
 import { createReadinessChecker } from "./server/readiness.js";
 
 const paths = new Set<string>();
@@ -71,18 +71,17 @@ describe("Gateway shared-state integrity readiness", () => {
       getStateDatabaseFailure: () =>
         openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname),
     });
+    const handleProbeRequest = createGatewayProbeHandler({ getReadiness });
     const probe = async (url: string, remoteAddress = "127.0.0.1", method = "GET") => {
       const response = createMockServerResponse();
       expect(
-        await handleGatewayProbeRequest(
+        await handleProbeRequest(
           createGatewayRequest({ path: url, remoteAddress, method }),
           response,
           url,
           { mode: "none", allowTailscale: false },
           [],
           false,
-          undefined,
-          getReadiness,
         ),
       ).toBe(true);
       return response;

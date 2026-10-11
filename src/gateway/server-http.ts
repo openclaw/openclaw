@@ -100,7 +100,7 @@ import {
   shouldEnforceDefaultPluginGatewayAuth,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
-import { handleGatewayProbeRequest } from "./server-http-probes.js";
+import { createGatewayProbeHandler } from "./server-http-probes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
@@ -131,6 +131,7 @@ export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
+  publishedPort?: number;
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;
@@ -174,10 +175,9 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
     joinRateLimiter,
-    getReadiness,
-    getStartup,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
+  const handleProbeRequest = createGatewayProbeHandler(opts);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
@@ -273,17 +273,7 @@ export function createGatewayHttpServer(opts: {
         return undefined;
       }
       if (classifyGatewayProbePath(requestPath) === "live") {
-        await handleGatewayProbeRequest(
-          req,
-          res,
-          requestPath,
-          resolvedAuth,
-          [],
-          false,
-          rateLimiter,
-          getReadiness,
-          getStartup,
-        );
+        await handleProbeRequest(req, res, requestPath, resolvedAuth, [], false);
         return undefined;
       }
 
@@ -341,6 +331,7 @@ export function createGatewayHttpServer(opts: {
       const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
+        publishedPort: opts.publishedPort,
         auth: resolvedAuthValue,
         cfg: configSnapshot,
         getRuntimeConfig: loadGatewayConfig,
@@ -389,16 +380,13 @@ export function createGatewayHttpServer(opts: {
       };
       const requestStages: GatewayHttpRequestStage[] = [
         () =>
-          handleGatewayProbeRequest(
+          handleProbeRequest(
             req,
             res,
             scopedRequestPath,
             resolvedAuthValue,
             trustedProxies,
             allowRealIpFallback,
-            rateLimiter,
-            getReadiness,
-            getStartup,
           ),
       ];
       const addRequestStage = (
@@ -576,6 +564,7 @@ export function createGatewayHttpServer(opts: {
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
+          publishedPort: opts.publishedPort,
           req,
           auth: resolvedAuthValue,
           trustedProxies,
@@ -661,6 +650,7 @@ export function createGatewayHttpServer(opts: {
               gatewayRequestAuth: pluginAuthorization?.requestAuth,
               gatewayRequestOperatorScopes: pluginAuthorization?.operatorScopes,
               gatewayRequestClientIp: requestClientIp,
+              publishedPort: opts.publishedPort,
             });
           },
         );

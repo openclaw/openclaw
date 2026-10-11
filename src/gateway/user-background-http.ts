@@ -24,6 +24,7 @@ export async function handleUserBackgroundHttpRequest(
     req,
     res,
     options.cfg ?? options.getRuntimeConfig?.() ?? getRuntimeConfig(),
+    options.publishedPort,
   );
   if (req.method === "OPTIONS") {
     if (!corsAllowed) {
@@ -53,7 +54,12 @@ export async function handleUserBackgroundHttpRequest(
   }
   // CORS is separate from explicit-credential authorization. Reapply the live
   // origin grant after attribution; revoked browser origins must not inherit ACAO.
-  setControlUiImageCorsHeaders(req, res, options.getRuntimeConfig?.() ?? getRuntimeConfig());
+  setControlUiImageCorsHeaders(
+    req,
+    res,
+    options.getRuntimeConfig?.() ?? getRuntimeConfig(),
+    options.publishedPort,
+  );
   const profileId = auth.authenticatedUserProfile?.profileId;
   if (!profileId || !parsed.assetId) {
     auth.assertCurrent();
@@ -70,7 +76,12 @@ export async function handleUserBackgroundHttpRequest(
     if (!prepared.isCurrent()) {
       continue;
     }
-    setControlUiImageCorsHeaders(req, res, options.getRuntimeConfig?.() ?? getRuntimeConfig());
+    setControlUiImageCorsHeaders(
+      req,
+      res,
+      options.getRuntimeConfig?.() ?? getRuntimeConfig(),
+      options.publishedPort,
+    );
     auth.assertCurrent();
     const image = prepared.image;
     if (prepared.byteLength === undefined) {

@@ -56,6 +56,7 @@ function response() {
     response: Object.assign(new EventEmitter(), {
       end,
       setHeader,
+      removeHeader: vi.fn(),
       writeHead,
       socket: null,
     }) as unknown as ServerResponse,
@@ -118,28 +119,29 @@ describe("profile avatar HTTP endpoint", () => {
     });
   });
 
-  it("answers credentialed avatar preflights with the public origin", async () => {
-    getRuntimeConfig.mockReturnValue({ gateway: { publicOrigin: "https://control.example" } });
-    const res = response();
-    const req = {
-      method: "OPTIONS",
-      url: "/ignored-by-handler",
-      headers: { origin: "https://control.example" },
-    } as unknown as IncomingMessage;
+  it.each(["https://control.example", "http://localhost:19123"])(
+    "answers credentialed avatar preflights for inherited origin %s",
+    async (origin) => {
+      getRuntimeConfig.mockReturnValue({ gateway: { publicOrigin: "https://control.example" } });
+      const res = response();
+      const req = {
+        method: "OPTIONS",
+        url: "/ignored-by-handler",
+        headers: { origin },
+      } as unknown as IncomingMessage;
 
-    await handleUserProfileAvatarHttpRequest(req, res.response, "/api/users/profile-1/avatar", {
-      auth: {} as never,
-    });
+      await handleUserProfileAvatarHttpRequest(req, res.response, "/api/users/profile-1/avatar", {
+        auth: {} as never,
+        publishedPort: 19123,
+      });
 
-    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
-    expect(res.setHeader).toHaveBeenCalledWith(
-      "Access-Control-Allow-Origin",
-      "https://control.example",
-    );
-    expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Credentials", "true");
-    expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Headers", "Authorization");
-    expect(res.writeHead).toHaveBeenCalledWith(204);
-  });
+      expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
+      expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Origin", origin);
+      expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Credentials", "true");
+      expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Headers", "Authorization");
+      expect(res.writeHead).toHaveBeenCalledWith(204);
+    },
+  );
 
   it.each([
     { method: "GET", revision: undefined, conditional: false, immutable: false },

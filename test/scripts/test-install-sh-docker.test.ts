@@ -1247,8 +1247,8 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain("run_podman_detached()");
     expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
-    expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
-    expect(script).not.toContain('podman run --pull="$PODMAN_PULL" -d --replace \\');
+    expect(script).toContain("run_podman_detached --pull=never -d --replace \\");
+    expect(script).not.toContain("podman run --pull=never -d --replace \\");
   });
 
   it("binds the Podman Quadlet Gateway port to loopback", () => {

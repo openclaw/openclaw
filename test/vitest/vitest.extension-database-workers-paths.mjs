@@ -50,6 +50,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/migrate-hermes/secrets.test.ts",
   "extensions/migrate-hermes/files-and-skills.test.ts",
   "extensions/openai/binary-transport.test.ts",
+  "extensions/openai/realtime-quicksilver-session-origin-policy.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/discord/src/monitor/ingress.test.ts",

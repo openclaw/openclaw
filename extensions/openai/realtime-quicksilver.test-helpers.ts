@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
@@ -8,6 +9,7 @@ import { vi, type Mock } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
+import type { OpenAIQuicksilverSocketFactory } from "./realtime-quicksilver-socket.shared.js";
 
 type MockLogger = {
   debug: Mock<NonNullable<PluginLogger["debug"]>>;
@@ -90,10 +92,12 @@ export function createPreflightRequest(origin: string, host?: string): IncomingM
 export function createResponseHarness(): {
   res: ServerResponse;
   end: ReturnType<typeof vi.fn>;
+  removeHeader: ReturnType<typeof vi.fn>;
   setHeader: ReturnType<typeof vi.fn>;
   readBody: () => string;
 } {
   let body = "";
+  const removeHeader = vi.fn();
   const setHeader = vi.fn();
   const end = vi.fn((value?: string) => {
     body = value ?? "";
@@ -101,10 +105,11 @@ export function createResponseHarness(): {
   });
   const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
+    removeHeader,
     setHeader,
     end,
   }) as unknown as ServerResponse;
-  return { res, end, setHeader, readBody: () => body };
+  return { res, end, removeHeader, setHeader, readBody: () => body };
 }
 
 export function createCallResponse(answer = "v=answer\r\n", callId = "rtc_test"): Response {
@@ -124,8 +129,10 @@ export function emitSideband(socket: FakeSocket, payload: unknown, isBinary = fa
 
 export function createBroker(params?: {
   fetchImpl?: typeof fetch;
+  getConfig?: () => OpenClawConfig | undefined;
   runAgentConsult?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
   socketFactory?: (attempt: number) => FakeSocket;
+  webSocketFactory?: OpenAIQuicksilverSocketFactory;
 }) {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
@@ -135,20 +142,24 @@ export function createBroker(params?: {
   };
   const realtime = createOpenAIQuicksilverBrowserSessionBroker(
     {
-      getConfig: () => ({
-        gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
-      }),
+      getConfig:
+        params?.getConfig ??
+        (() => ({
+          gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
+        })),
       logger,
       fetchImpl: params?.fetchImpl ?? vi.fn(async () => createCallResponse()),
-      webSocketFactory: (url, options) => {
-        const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
-        sockets.push(socket);
-        socketRequests.push({
-          url,
-          headers: options.headers as Record<string, string> | undefined,
-        });
-        return socket;
-      },
+      webSocketFactory:
+        params?.webSocketFactory ??
+        ((url, options) => {
+          const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
+          sockets.push(socket);
+          socketRequests.push({
+            url,
+            headers: options.headers as Record<string, string> | undefined,
+          });
+          return socket;
+        }),
     },
     openAIRealtimeHost,
   );

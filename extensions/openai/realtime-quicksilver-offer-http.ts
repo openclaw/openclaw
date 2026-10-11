@@ -55,6 +55,9 @@ export function applyRealtimeOfferCorsHeaders(
   }
   const origin = resolveAcceptedBrowserOrigin({ req, cfg });
   if (!origin) {
+    // A request may have been admitted before an awaited body read and revoked since.
+    // Never retain the earlier grant on a late policy rejection.
+    res.removeHeader("Access-Control-Allow-Origin");
     return false;
   }
   res.setHeader("Access-Control-Allow-Origin", origin);

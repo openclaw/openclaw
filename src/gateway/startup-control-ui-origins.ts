@@ -1,4 +1,7 @@
-import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
+import {
+  ensureControlUiAllowedOriginsForNonLoopbackBind,
+  resolveControlUiAllowedOrigins,
+} from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isContainerEnvironment } from "./net.js";
 
@@ -11,7 +14,14 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   runtimeBind?: unknown;
   runtimePort?: unknown;
+  publishedPort?: number;
 }): Promise<{ config: OpenClawConfig; seededAllowedOrigins: boolean }> {
+  if (
+    params.config.gateway?.controlUi?.allowedOrigins !== undefined ||
+    resolveControlUiAllowedOrigins(params.config, params.publishedPort).length > 0
+  ) {
+    return { config: params.config, seededAllowedOrigins: false };
+  }
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
     isContainerEnvironment,
     runtimeBind: params.runtimeBind,

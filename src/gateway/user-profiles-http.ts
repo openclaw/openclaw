@@ -200,8 +200,8 @@ export async function handleUserProfileAvatarHttpRequest(
     return false;
   }
   const method = req.method;
-  const cfg = opts.cfg ?? getRuntimeConfig();
-  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg);
+  const cfg = opts.cfg ?? opts.getRuntimeConfig?.() ?? getRuntimeConfig();
+  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg, opts.publishedPort);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
       sendJson(res, 403, { ok: false, error: { type: "origin_not_allowed" } });
@@ -232,7 +232,18 @@ export async function handleUserProfileAvatarHttpRequest(
   if (!authResult) {
     return true;
   }
-  authResult.assertCurrent();
+  const assertCurrentResponse = () => {
+    // Credential authority and browser origin grants are separate. Refresh both
+    // after image I/O so a revoked origin cannot retain an earlier CORS grant.
+    setControlUiImageCorsHeaders(
+      req,
+      res,
+      opts.getRuntimeConfig?.() ?? getRuntimeConfig(),
+      opts.publishedPort,
+    );
+    authResult.assertCurrent();
+  };
+  assertCurrentResponse();
   // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
@@ -245,7 +256,7 @@ export async function handleUserProfileAvatarHttpRequest(
     const reader = createProfileAvatarReader(profileId);
     for (;;) {
       const prepared = await reader.inspect();
-      authResult.assertCurrent();
+      assertCurrentResponse();
       const profile = prepared.profile;
       if (!profile) {
         throw new UserProfileNotFoundError(profileId);
@@ -256,7 +267,7 @@ export async function handleUserProfileAvatarHttpRequest(
         const needsBytes =
           method !== "HEAD" && !matchesHttpIfNoneMatch(req.headers["if-none-match"], etag);
         const bytes = needsBytes ? await prepared.loadBytes() : undefined;
-        authResult.assertCurrent();
+        assertCurrentResponse();
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
@@ -268,7 +279,7 @@ export async function handleUserProfileAvatarHttpRequest(
         profileId === GATEWAY_OWNER_PROFILE_ID && profile.id === profileId && !profile.mergedInto
           ? await resolveHostAccountAvatar()
           : null;
-      authResult.assertCurrent();
+      assertCurrentResponse();
       if (!prepared.isCurrent()) {
         continue;
       }
@@ -284,7 +295,7 @@ export async function handleUserProfileAvatarHttpRequest(
       break;
     }
   } catch (error) {
-    authResult.assertCurrent();
+    assertCurrentResponse();
     if (error instanceof UserProfileNotFoundError) {
       sendJson(res, 404, { ok: false, error: { type: "not_found" } });
       return true;
@@ -320,7 +331,7 @@ export async function handleUserProfileAvatarHttpRequest(
       waiterSignal.throwIfAborted();
       const result = await racePromiseWithAbortSignal(resolveGravatar(hash), waiterSignal);
       waiterSignal.throwIfAborted();
-      authResult.assertCurrent();
+      assertCurrentResponse();
       if (result.kind === "hit") {
         sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
@@ -341,7 +352,7 @@ export async function handleUserProfileAvatarHttpRequest(
   if (clientAbort.signal.aborted) {
     return true;
   }
-  authResult.assertCurrent();
+  assertCurrentResponse();
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },

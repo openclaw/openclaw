@@ -32,6 +32,7 @@ import {
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
+import { registerGatewayPortOptionTests } from "./run-port-options.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -467,16 +468,8 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
+  registerGatewayPortOptionTests({ runGatewayCli, startGatewayServer, runtimeErrors });
   registerGatewayRunCleanupReceiptTests({ runGatewayCli, runGatewayLoop });
-
-  it("rejects invalid gateway ports before startup", async () => {
-    await expect(
-      runGatewayCli(["gateway", "--port", "0", "--token", "test-token"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Invalid --port. Use a port number from 1 to 65535");
-  });
 
   it("suppresses ambient channel triggers by default in dev mode", async () => {
     await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev"]);
