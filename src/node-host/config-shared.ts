@@ -116,7 +116,9 @@ function cloudflareAccessEntry(cloudflareAccess: NodeHostCloudflareAccessConfig 
   return cloudflareAccess ? { cloudflareAccess } : {};
 }
 
-export function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGatewayConfig | undefined {
+export function normalizeGatewayConfig(
+  gateway: NodeHostGatewayConfig,
+): NodeHostGatewayConfig | undefined {
   const normalized: NodeHostGatewayConfig = {
     host: normalizeOptionalString(gateway.host),
     port: validatePort(gateway.port, "gateway port"),

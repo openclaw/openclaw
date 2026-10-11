@@ -4,6 +4,7 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -11,11 +12,16 @@ import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
-import type { createUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunPhasePatch, UpdateRunWriteCommand } from "./update-run-mutation.types.js";
-import type { UpdateRunPhase, UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
+import type {
+  CreateUpdateRunInput,
+  FinishUpdateRunInput,
+  UpdateRunDiagnostics,
+  UpdateRunPhase,
+  UpdateRunRecord,
+  UpdateRunStep,
+} from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
-import type { finishUpdateRun, UpdateRunDiagnostics } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   context?: OpenClawStateWorkerContext;
@@ -34,8 +40,8 @@ async function recordUpdateRunMutationAsync(
   mutation:
     | { kind: "step"; step: UpdateRunStep & { reason?: string } }
     | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch }
-    | { kind: "create"; run: Parameters<typeof createUpdateRun>[0] }
-    | { kind: "finish"; result: Parameters<typeof finishUpdateRun>[1] }
+    | { kind: "create"; run: CreateUpdateRunInput }
+    | { kind: "finish"; result: FinishUpdateRunInput }
     | { kind: "verification"; verification: UpdateRunRecord["verification"]; onlyIfRunning?: true }
     | { kind: "diagnostics"; diagnostics: UpdateRunDiagnostics; preserveRecovery?: true },
   options: UpdateRunWriteOptions = {},
@@ -159,7 +165,7 @@ export async function recordUpdateRunPhaseAsync(
 }
 
 export async function createUpdateRunAsync(
-  input: Parameters<typeof createUpdateRun>[0],
+  input: CreateUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
   const run = { ...input, runId: input.runId ?? randomUUID() };
@@ -172,7 +178,7 @@ export async function createUpdateRunAsync(
 
 export async function finishUpdateRunAsync(
   runId: string,
-  result: Parameters<typeof finishUpdateRun>[1],
+  result: FinishUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
   const record = await recordUpdateRunMutationAsync(runId, { kind: "finish", result }, options);
@@ -230,4 +236,29 @@ export async function recordUpdateRunDiagnosticsAsync(
     );
     return undefined;
   }
+}
+
+export function createUpdateRunProcessIdentityWarning(
+  runId: string | undefined,
+  env: NodeJS.ProcessEnv,
+): (pid: number, message: string) => void {
+  return (pid, message) => {
+    console.warn(`[update] ${message}`);
+    if (runId) {
+      void trackAsyncWork(() =>
+        recordUpdateRunStepAsync(
+          runId,
+          {
+            step: `warning:process-start-identity:${pid}`,
+            status: "completed",
+            detail: message,
+            endedAtMs: Date.now(),
+          },
+          { env },
+        ),
+      ).catch(() => {
+        /* Identity warnings must not abort an update. */
+      });
+    }
+  };
 }

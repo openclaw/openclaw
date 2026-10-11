@@ -102,10 +102,18 @@ function createCurrentConversationBindingQueries(db: DatabaseSync) {
                 "is",
                 null,
               ),
-              eb.and({
-                channel: parameter((params) => params.scope?.channel ?? null),
-                account_id: parameter((params) => params.scope?.accountId ?? null),
-              }),
+              eb.and([
+                eb(
+                  parameter((params) => params.scope?.channel ?? null),
+                  "=",
+                  eb.ref("channel"),
+                ),
+                eb(
+                  parameter((params) => params.scope?.accountId ?? null),
+                  "=",
+                  eb.ref("account_id"),
+                ),
+              ]),
             ]),
           )
           .orderBy("target_session_key", "asc")

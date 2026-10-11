@@ -133,18 +133,32 @@ describe("update.run unexpected-error diagnostics", () => {
       let restoreDiagnosticFailure: (() => void) | undefined;
       transferManagedServiceUpdateHandoffMock.mockImplementationOnce(async () => {
         if (recordingFailure !== "none") {
-          const codec = await import("../../infra/update-run-codec.js");
-          const encode = codec.encodeRun;
-          const write = vi.spyOn(codec, "encodeRun").mockImplementation((record, options) => {
-            const step = record.steps.find((entry) => entry.step === "requested");
-            if (
-              recordingFailure === "state" ? step?.status === "failed" : step?.failureFacts?.length
-            ) {
-              write.mockRestore();
-              throw new Error("diagnostic ledger is read-only");
-            }
-            return encode(record, options);
-          });
+          const worker = await import("../../state/openclaw-state-worker-store.js");
+          const run = worker.runOpenClawStateWorkerOperation;
+          const write = vi
+            .spyOn(worker, "runOpenClawStateWorkerOperation")
+            .mockImplementation((context, operation, options) =>
+              run(
+                context,
+                (scope) =>
+                  operation({
+                    execute: (command, executeOptions) => {
+                      const shouldFail =
+                        recordingFailure === "state"
+                          ? command.type === "updateRuns.recordStep" &&
+                            command.input.step.step === "requested" &&
+                            command.input.step.status === "failed"
+                          : command.type === "updateRuns.recordDiagnostics";
+                      if (shouldFail) {
+                        write.mockRestore();
+                        throw new Error("diagnostic ledger is read-only");
+                      }
+                      return scope.execute(command, executeOptions);
+                    },
+                  }),
+                options,
+              ),
+            );
           restoreDiagnosticFailure = () => write.mockRestore();
         }
         throw error;

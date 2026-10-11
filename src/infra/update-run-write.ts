@@ -13,12 +13,12 @@ import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
   finishUpdateRunRecord,
-  type FinishUpdateRunResult,
+  type FinishUpdateRunInput,
+  type UpdateRunDiagnostics,
   type UpdateRunPhase,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "./update-run-record.js";
-import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
@@ -198,10 +198,6 @@ export function isRequiredUpdateRunStep(step: UpdateRunStep & { reason?: string 
 }
 
 type RecoveryDiagnostics = Pick<UpdateRunRecord["verification"], "recovery" | "rollbackOutcome">;
-export type UpdateRunDiagnostics = RecoveryDiagnostics &
-  Partial<Pick<UpdateRunResult, "verification" | "steps">> & {
-    failure?: Pick<UpdateRunStep, "step" | "detail" | "failureFacts" | "exitCode">;
-  };
 type UpdateRunDiagnosticsInput =
   | UpdateRunDiagnostics
   | ((recorded: Readonly<RecoveryDiagnostics>) => UpdateRunDiagnostics);
@@ -294,19 +290,13 @@ export function recordUpdateRunDiagnostics(
 
 export function finishUpdateRun(
   runId: string,
-  result: FinishUpdateRunResult & {
-    before?: UpdateRunRecord["before"];
-    diagnostics?: UpdateRunDiagnostics;
-  },
+  result: FinishUpdateRunInput,
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(runId, (record) => applyFinishUpdateRun(record, result), options);
 }
 
-export function applyFinishUpdateRun(
-  record: UpdateRunRecord,
-  result: Parameters<typeof finishUpdateRun>[1],
-): void {
+export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpdateRunInput): void {
   if (record.status === "running") {
     const diagnostics = result.diagnostics;
     if (diagnostics) {

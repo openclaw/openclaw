@@ -21,23 +21,26 @@ export const githubSetupOperations = {
     }
     return withMissingSecretStoreFallback(
       () =>
-        context.write(({ db }) => {
-          const row = executeSqliteQueryTakeFirstSync(
-            db,
-            getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-              .deleteFrom("secret_store_entries")
-              .where("scope_kind", "=", "team")
-              .where("scope_id", "=", "")
-              .where("name", "=", name)
-              .where("kind", "=", "secret")
-              .where("allowed_hosts", "is", null)
-              .where("created_at_ms", ">=", now - GITHUB_SETUP_HANDOFF_MAX_AGE_MS)
-              .where("created_at_ms", "<=", now)
-              .where("deleted_at_ms", "is", null)
-              .returning("value"),
-          );
-          return row?.value;
-        }, { operationLabel: "secrets.store.consume-github-setup-handoff" }),
+        context.write(
+          ({ db }) => {
+            const row = executeSqliteQueryTakeFirstSync(
+              db,
+              getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
+                .deleteFrom("secret_store_entries")
+                .where("scope_kind", "=", "team")
+                .where("scope_id", "=", "")
+                .where("name", "=", name)
+                .where("kind", "=", "secret")
+                .where("allowed_hosts", "is", null)
+                .where("created_at_ms", ">=", now - GITHUB_SETUP_HANDOFF_MAX_AGE_MS)
+                .where("created_at_ms", "<=", now)
+                .where("deleted_at_ms", "is", null)
+                .returning("value"),
+            );
+            return row?.value;
+          },
+          { operationLabel: "secrets.store.consume-github-setup-handoff" },
+        ),
       undefined,
     );
   },

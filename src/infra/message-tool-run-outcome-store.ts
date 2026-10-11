@@ -160,7 +160,10 @@ export async function recordMessageToolRunOutcome(params: {
                       input: undefined,
                     },
                   );
-                const result = await worker.execute({ type: "record", input: values }, assertCurrent);
+                const result = await worker.execute(
+                  { type: "record", input: values },
+                  assertCurrent,
+                );
                 if (!result.ok) {
                   const error = new Error("Message-tool outcome transaction failed");
                   retainOpenClawStateWorkerErrorPayload(error, result.error);

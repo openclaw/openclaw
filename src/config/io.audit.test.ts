@@ -160,9 +160,7 @@ describe("config io audit helpers", () => {
     const work = new AsyncWorkScope();
     const sql = observeMainThreadSql();
     try {
-      work.run(() =>
-        enqueueConfigAuditRecord({ env: {}, homedir: () => home, record: second }),
-      );
+      work.run(() => enqueueConfigAuditRecord({ env: {}, homedir: () => home, record: second }));
       await work.drain();
       sql.expectIdle();
     } finally {

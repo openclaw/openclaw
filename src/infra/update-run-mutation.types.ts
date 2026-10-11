@@ -1,8 +1,13 @@
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
-import type { createUpdateRun } from "./update-run-ledger.js";
-import type { UpdateRunPhase, UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
+import type {
+  CreateUpdateRunInput,
+  FinishUpdateRunInput,
+  UpdateRunDiagnostics,
+  UpdateRunPhase,
+  UpdateRunRecord,
+  UpdateRunStep,
+} from "./update-run-record.js";
 import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
-import type { finishUpdateRun, UpdateRunDiagnostics } from "./update-run-write.js";
 
 export type UpdateRunRedactionFacts = {
   effectiveHome: string;
@@ -32,11 +37,11 @@ type UpdateRunWriteResult =
 
 export type UpdateRunWriteOperations = {
   "updateRuns.create": {
-    input: UpdateRunWriteInput & { run: Parameters<typeof createUpdateRun>[0] };
+    input: UpdateRunWriteInput & { run: CreateUpdateRunInput };
     output: UpdateRunWriteResult;
   };
   "updateRuns.finish": {
-    input: UpdateRunWriteInput & { result: Parameters<typeof finishUpdateRun>[1] };
+    input: UpdateRunWriteInput & { result: FinishUpdateRunInput };
     output: UpdateRunWriteResult;
   };
   "updateRuns.recordVerification": {

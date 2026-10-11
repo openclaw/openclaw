@@ -101,7 +101,9 @@ describe("secret store", () => {
       vi.setSystemTime(now - ageMs);
       await write(name, "temporary-value", { kind, allowedHosts });
       const consumption = consumeGitHubSetupHandoff({ name, nowMs: now, database });
-      const duplicate = accepted ? consumeGitHubSetupHandoff({ name, nowMs: now, database }) : undefined;
+      const duplicate = accepted
+        ? consumeGitHubSetupHandoff({ name, nowMs: now, database })
+        : undefined;
       expect(await consumption).toBe(accepted ? "temporary-value" : undefined);
       if (accepted) {
         expect(await duplicate).toBeUndefined();
