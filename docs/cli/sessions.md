@@ -39,6 +39,10 @@ session keys.
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
+The context denominator follows the selected model and runtime, using saved
+discovery metadata, configured limits, or a matching verified run budget.
+Unknown capacity is `?` in the table and `null` in JSON, with no percentage.
+
 Flags:
 
 | Flag                 | Description                                                         |

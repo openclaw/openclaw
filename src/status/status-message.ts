@@ -12,7 +12,7 @@ import {
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
@@ -214,8 +214,7 @@ const formatEstimatedContextBudgetTokens = (
     return null;
   }
   const estimatedPromptTokens = Math.floor(estimate);
-  const ctx =
-    asPositiveFiniteNumber(contextTokens) ?? asPositiveFiniteNumber(status.contextTokenBudget);
+  const ctx = asPositiveFiniteNumber(contextTokens);
   const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
@@ -645,6 +644,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     modelContextWindow: args.selectedContextWindow,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const activeCatalogEntry = contextLookupProvider
     ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
@@ -672,6 +672,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
         ? args.runtimeContextTokens
         : undefined),
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
@@ -704,9 +705,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     entry?.modelSelectionLocked !== true &&
     runtimeDiffersFromSelected &&
     !runtimeSnapshotHasFallbackProvenance;
-  const contextTokens = useSelectedContext
-    ? (selectedContextTokens ?? DEFAULT_CONTEXT_TOKENS)
-    : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
+  const contextTokens = useSelectedContext ? selectedContextTokens : projectedActiveContextTokens;
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
@@ -927,7 +926,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
   const compactionValue = formatCompactionStatus(entry);
   const contextPct =
-    typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
+    typeof totalTokens === "number" && totalTokens > 0 && contextTokens != null && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
   const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));

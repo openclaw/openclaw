@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   assignSessionOwner,
@@ -32,6 +33,17 @@ import {
 } from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
+
+const catalogState = vi.hoisted(() => ({
+  catalog: { entries: [], routeVariants: [] } as ModelCatalogSnapshot,
+}));
+// mock-isolation: Supply catalog I/O without provider discovery or prepared-runtime startup.
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => catalogState.catalog),
+}));
+beforeEach(() => {
+  catalogState.catalog = { entries: [], routeVariants: [] };
+});
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 import { sessionsCommand } from "./sessions.js";
@@ -181,12 +193,12 @@ describe("sessionsCommand", () => {
       "1m ago",
       "claude-opus-4-7",
       "Claude CLI",
-      "unknown/200k (?%)",
+      "unknown/1.0m (?%)",
       "visibility:shared id:main-session",
     ]);
   });
 
-  it("renders recorded runtime with current context after a same-model runtime change", async () => {
+  it("renders current runtime and context after a same-model runtime change", async () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
@@ -227,9 +239,59 @@ describe("sessionsCommand", () => {
     cleanupStore(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("OpenClaw Default");
+    expect(row).toContain("OpenAI Codex");
     expect(row).toContain("11/1.0m (0%)");
   });
+
+  it.each([32_768, undefined])(
+    "reports the selected local model's discovered capacity (%s) without a default denominator",
+    async (capacity) => {
+      setMockSessionsConfig(() => ({
+        agents: { defaults: { model: { primary: "ollama/qwen3:8b" } } },
+        models: {
+          providers: {
+            ollama: { models: [{ id: "qwen3:8b", contextTokens: 128_000 }] },
+          },
+        },
+      }));
+      catalogState.catalog = {
+        entries:
+          capacity === undefined
+            ? []
+            : [
+                {
+                  provider: "ollama",
+                  id: "qwen3:4b",
+                  name: "qwen3:4b",
+                  contextWindow: 262_144,
+                  contextTokens: capacity,
+                },
+              ],
+        routeVariants: [],
+      };
+      const store = await writeStore({
+        "agent:main:main": {
+          sessionId: "local-model-switch",
+          updatedAt: Date.now(),
+          modelProvider: "ollama",
+          model: "qwen3:8b",
+          providerOverride: "ollama",
+          modelOverride: "qwen3:4b",
+          agentHarnessId: "openclaw",
+          contextTokens: 128_000,
+          contextTokensSource: "resolved-v1",
+        },
+      });
+
+      const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+
+      expect(payload.sessions?.[0]).toMatchObject({
+        modelProvider: "ollama",
+        model: "qwen3:4b",
+        contextTokens: capacity ?? null,
+      });
+    },
+  );
 
   it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeStore({
@@ -247,7 +309,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
-    expect(row).toContain("unknown/200k (?%)");
+    expect(row).toContain("unknown/? (?%)");
     expect(row).toContain("think:high");
   });
 
@@ -742,7 +804,7 @@ describe("sessionsCommand model resolution", () => {
         expect(session).toMatchObject({
           modelProvider: "clawrouter",
           model: "openai/gpt-5.6",
-          agentRuntime: { id: "openclaw", source: "session" },
+          agentRuntime: { id: "openclaw", source: "model" },
           contextTokens: 272_000,
         });
       },

@@ -200,6 +200,7 @@ export function readSessionRowInputs(params: {
     modelContextTokens: catalogEntry?.contextTokens,
     modelContextWindow: contextWindowProfile.contextTokens,
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
