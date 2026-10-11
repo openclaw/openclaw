@@ -1,0 +1,15 @@
+mock model server on http://127.0.0.1:54649/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-gw167365-J6aAWH
+starting shipped gateway on port 19719 ...
+[ok] gateway became ready — 127.0.0.1:19719
+running Gateway-first agent turn ...
+[ok] [1] agent CLI exit 0 — exit=0
+[FAIL] [2] envelope ok/status — no envelope parsed
+[ok] [3] model turn#1 advertised e2e_ping — tools(41): e2e_echo,e2e_ping
+[ok] [4] model turn#1 advertised e2e_echo
+[ok] [5] tool result marker flowed back (tool executed) — found pong-e2e-167365
+[FAIL] [6] final reply carries proof marker
+[FAIL] [7] no unresolved error in envelope
+--- no unknown-entries warning in gateway logs ---
+
+=== 5/8 checks passed ===

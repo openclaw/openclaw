@@ -1,0 +1,55 @@
+auth seed: skipped (config inline apiKey)
+========================================================================
+HEADLESS SHIPPED PROOF #167365 — AFTER
+========================================================================
+fixture root   : /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-headless-after-U3JRZw
+mock server    : http://127.0.0.1:64834/v1
+cli exit code  : 0
+runtime markers: provider=true tools=true
+verdict        : PASS
+------------------------------------------------------------------------
+checks:
+  [x] exit code 0
+  [x] envelope status ok
+  [x] completion#1 advertised e2e_ping
+  [x] completion#1 advertised e2e_echo
+  [x] completion#2 carried tool result marker
+  [x] final text contains proof marker
+  [x] toolSummary.calls >= 1
+------------------------------------------------------------------------
+completions observed by mock server:
+  #1 POST /v1/chat/completions tools=[agents_wait, apply_patch, ask_user, automations, conversations_list, conversations_send, conversations_turn, create_goal, dashboard, e2e_echo, e2e_ping, edit, exec, gateway, get_goal, intent, ls, memory_get, memory_search, plugins, portal, presence, process, progress_card, read, secrets, session_status, sessions, sessions_history, sessions_list, sessions_search, sessions_send, sessions_spawn, sessions_yield, skill_workshop, skills_read, skills_search, subagents, terminal, theme, update_goal, web_fetch, write] markerInMessages=false
+  #2 POST /v1/chat/completions tools=[agents_wait, apply_patch, ask_user, automations, conversations_list, conversations_send, conversations_turn, create_goal, dashboard, e2e_echo, e2e_ping, edit, exec, gateway, get_goal, intent, ls, memory_get, memory_search, plugins, portal, presence, process, progress_card, read, secrets, session_status, sessions, sessions_history, sessions_list, sessions_search, sessions_send, sessions_spawn, sessions_yield, skill_workshop, skills_read, skills_search, subagents, terminal, theme, update_goal, web_fetch, write] markerInMessages=true
+------------------------------------------------------------------------
+completion #2 tool messages:
+  {"role":"tool","content":"pong-e2e-167365","tool_call_id":"calle2e1"}
+------------------------------------------------------------------------
+envelope (trimmed):
+{
+  "ok": true,
+  "status": "ok",
+  "final": "E2E-167365-PROOF tool result marker received: pong-e2e-167365",
+  "toolSummary": {
+    "calls": 1,
+    "tools": [
+      "e2e_ping"
+    ],
+    "failures": 0
+  },
+  "model": "e2e-model",
+  "provider": "e2e-provider"
+}
+------------------------------------------------------------------------
+stderr (tail):
+[plugins] Bundled plugin vllm identity unavailable: plugin runtime artifact contains unsupported symlink entry
+[plugins] Bundled plugin litellm identity unavailable: plugin runtime artifact contains unsupported symlink entry
+[plugins] Bundled plugin lmstudio identity unavailable: plugin runtime artifact contains unsupported symlink entry
+[plugins] Bundled plugin ollama identity unavailable: plugin runtime artifact contains unsupported symlink entry
+[plugins] Bundled plugin vllm identity unavailable: plugin runtime artifact contains unsupported symlink entry
+[state/agent-db] agent database integrity gate
+[skills] Skipping invalid skill: file=/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-headless-after-U3JRZw/state/plugin-skills/browser-automation/SKILL.md error=symlink prefix resolves outside the root ancestry: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-headless-after-U3JRZw/state/plugin-skills/browser-automation/SKILL.md
+[skills] Skipping invalid skill: file=/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-headless-after-U3JRZw/state/plugin-skills/canvas/SKILL.md error=symlink prefix resolves outside the root ancestry: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-headless-after-U3JRZw/state/plugin-skills/canvas/SKILL.md
+[agents/agent-command] [agent] run af797afd-b1d6-4460-a112-09ad6cae578c ended with stopReason=stop
+[state/agent-db] agent database clean-close receipt: active-leases
+[state/agent-db] agent database clean-close receipt: active-leases
+[state/agent-db] agent database clean-close receipt: written
