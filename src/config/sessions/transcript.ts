@@ -60,7 +60,7 @@ import {
   type SessionTranscriptAssistantMessage,
 } from "./transcript-assistant-message.js";
 import {
-  findLatestEquivalentAssistantMessageId,
+  findLatestEquivalentDeliveryMirrorMessageId,
   isRedundantDeliveryMirror,
 } from "./transcript-mirror-dedupe.js";
 import {
@@ -630,7 +630,7 @@ async function appendExactAssistantMessageWithSource(
         shouldAppend: async (appendTarget) => {
           const messageId =
             isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
-              ? await findLatestEquivalentAssistantMessageId(
+              ? await findLatestEquivalentDeliveryMirrorMessageId(
                   appendTarget,
                   preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
                   params.config,

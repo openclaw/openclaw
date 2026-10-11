@@ -63,7 +63,7 @@ function extractAssistantMessageText(message: AgentMessage): string | null {
   return parts.length > 0 ? parts.join("\n").trim() : null;
 }
 
-export async function findLatestEquivalentAssistantMessageId(
+export async function findLatestEquivalentDeliveryMirrorMessageId(
   target: SessionTranscriptTurnWriteContext,
   message: SessionTranscriptAssistantMessage,
   config?: OpenClawConfig,
