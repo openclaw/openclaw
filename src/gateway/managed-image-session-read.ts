@@ -70,17 +70,18 @@ export function resolveNativeManagedImageSessionRead(params: {
       sessionKey,
       storePath: target.storePath,
     };
-    const exact = loadExactSessionEntryReadOnlyResult(readTarget);
-    if (!exact.found) {
-      return { kind: "unavailable" };
-    }
-    let targetEntry = exact.value?.entry;
-    if (!targetEntry) {
-      try {
-        targetEntry = resolveSessionEntry(readTarget, { readOnly: true }).existing;
-      } catch {
+    let targetEntry: SessionEntry;
+    try {
+      const exact = loadExactSessionEntryReadOnlyResult(readTarget);
+      if (!exact.found) {
         return { kind: "unavailable" };
       }
+      targetEntry = exact.value?.entry;
+      if (!targetEntry) {
+        targetEntry = resolveSessionEntry(readTarget, { readOnly: true }).existing;
+      }
+    } catch {
+      return { kind: "unavailable" };
     }
     if (targetEntry) {
       if (matched) {

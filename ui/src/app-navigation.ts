@@ -371,9 +371,9 @@ export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
 }
 
-export function titleForRoute(routeId: NavigationRouteId): string {
+export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
-  return t(titleKey);
+  return translate(titleKey);
 }
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
@@ -399,7 +399,7 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-export function subtitleForRoute(routeId: NavigationRouteId): string {
+export function subtitleForRoute(routeId: NavigationRouteId, translate = t): string {
   const subtitleKey = NAVIGATION_PRESENTATION[routeId][2];
-  return t(subtitleKey);
+  return translate(subtitleKey);
 }

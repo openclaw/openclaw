@@ -4,17 +4,17 @@ import {
   resolveThemeBranding,
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { UI_APPEARANCE_DEFAULTS } from "../../app/settings.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import "../../components/tooltip.ts";
 import {
   SettingsDefaultDescription,
   SettingsRow,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/tooltip.ts";
-import "../../components/lobster-illustration.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -168,13 +168,7 @@ export function LobsterPetSection(props: ConfigProps) {
                                     role="img"
                                     aria-label={ariaLabel()}
                                   >
-                                    <openclaw-lobster-illustration
-                                      style={{ display: "contents" }}
-                                      prop:look={look}
-                                      prop:options={{
-                                        standalone: true,
-                                      }}
-                                    />
+                                    <LobsterSvg look={look} standalone />
                                     {shinySeen() ? (
                                       <>
                                         <span class="lobsterdex__mini-star" aria-hidden="true">

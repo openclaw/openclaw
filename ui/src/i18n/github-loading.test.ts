@@ -1,7 +1,20 @@
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
+let registryFrame: HTMLIFrameElement;
+
+beforeEach(() => {
+  // Cold module imports also need a fresh native custom-element registry.
+  registryFrame = document.createElement("iframe");
+  document.body.append(registryFrame);
+  vi.stubGlobal("customElements", registryFrame.contentWindow!.customElements);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  registryFrame.remove();
+});
 
 it.each([
   {

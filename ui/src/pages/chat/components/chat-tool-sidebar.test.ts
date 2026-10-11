@@ -1,16 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolFixture as render } from "./chat-tool-render.test-support.ts";
 
 describe("tool detail sidebar", () => {
   it.each([
     { name: "browser.open", args: undefined },
     { name: "read", args: { path: "/notes/Project · Notes.md" } },
     { name: "web_search", args: { query: "Project · Notes" } },
-  ])("opens $name details with literal output and identity", ({ name, args }) => {
+  ])("opens $name details with literal output and identity", async ({ name, args }) => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
     const card = {
@@ -22,7 +22,7 @@ describe("tool detail sidebar", () => {
       resultMessageId: "result-message",
       callId: "tool-call",
     };
-    render(
+    await render(
       renderToolCard(card, {
         messageKey: "test-message",
         sessionKey: "global",

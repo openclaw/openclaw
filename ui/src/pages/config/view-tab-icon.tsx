@@ -6,15 +6,15 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
 import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "./tab-icon-avatar.ts";
-import "../../components/lobster-illustration.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
+import { TabIconAvatar } from "./tab-icon-avatar.tsx";
 
 export type TabIconViewProps = {
   tabIcon: TabIconPreference | undefined;
@@ -38,11 +38,7 @@ function LobsterPreview(props: { palette: LobsterPetPalette }) {
       style={lobsterLookStyle(look())}
       aria-hidden="true"
     >
-      <openclaw-lobster-illustration
-        style={{ display: "contents" }}
-        prop:look={look()}
-        prop:options={{ standalone: true }}
-      />
+      <LobsterSvg look={look()} standalone />
     </span>
   );
 }
@@ -54,12 +50,11 @@ function AvatarPreview(props: {
   fallbackOnly?: boolean;
 }) {
   return (
-    <openclaw-tab-icon-avatar
-      style={{ display: "contents" }}
-      prop:imageUrl={props.source}
-      prop:shape={props.shape ?? "square"}
-      prop:fallbackOnly={props.fallbackOnly ?? false}
-      prop:fallbackUrl={props.fallbackUrl}
+    <TabIconAvatar
+      imageUrl={props.source}
+      shape={props.shape ?? "square"}
+      fallbackOnly={props.fallbackOnly ?? false}
+      fallbackUrl={props.fallbackUrl}
     />
   );
 }

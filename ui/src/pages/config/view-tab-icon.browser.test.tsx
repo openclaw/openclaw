@@ -104,7 +104,7 @@ describe("browser tab icon settings", () => {
     );
     const agentPreview = radio(container, "agent")
       ?.closest("label")
-      ?.querySelector("openclaw-tab-icon-avatar");
+      ?.querySelector(".identity-avatar--agent.settings-tab-icon__preview");
     expect(agentPreview).not.toBeNull();
     expect(choices).toHaveLength(3);
     expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
@@ -114,7 +114,9 @@ describe("browser tab icon settings", () => {
     expect(props.tabIcon).toBe("agent:circle");
     expect(container.querySelector('button[aria-label="Circle"]')).toBe(circle);
     expect(
-      radio(container, "agent")?.closest("label")?.querySelector("openclaw-tab-icon-avatar"),
+      radio(container, "agent")
+        ?.closest("label")
+        ?.querySelector(".identity-avatar--agent.settings-tab-icon__preview"),
     ).toBe(agentPreview);
     expect(circle.getAttribute("aria-pressed")).toBe("true");
     expect(choices[0]?.getAttribute("aria-pressed")).toBe("false");

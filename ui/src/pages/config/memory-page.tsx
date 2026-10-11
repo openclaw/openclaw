@@ -27,7 +27,7 @@ import {
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
-import "../agents/memory/memory-panel.ts";
+import { AgentMemoryPanel } from "../agents/memory/memory-panel.tsx";
 import { dreamingConfigPath } from "./memory-defaults.ts";
 import { MemoryDreamingControls } from "./memory-dreaming.tsx";
 import { MemoryMemories } from "./memory-memories.tsx";
@@ -707,7 +707,7 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
       }
       dreams={
         <Show when={agentId()} keyed>
-          {(id) => <openclaw-agent-memory-panel prop:agentId={id} />}
+          {(id) => <AgentMemoryPanel agentId={id} />}
         </Show>
       }
       editor={activeTab() === "settings" ? props.buildEditor() : null}

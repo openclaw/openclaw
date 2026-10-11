@@ -11,7 +11,7 @@ import {
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { McpAppContextStrip } from "./mcp-app-context-strip.ts";
+import { McpAppContextStrip } from "./solid/mcp-app-context-strip.tsx";
 
 describe("composer app context", () => {
   it("clears consumed context immediately", () => {

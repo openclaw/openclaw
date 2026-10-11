@@ -1,4 +1,4 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { html, nothing } from "lit";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
@@ -25,7 +25,7 @@ export const htmlPreviewElement = {
   get label() {
     return t("chat.detailPanel.renderPreview");
   },
-  loadModule: () => import("./chat-html-preview-element.ts"),
+  loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
 export function renderHtmlPreview(
@@ -63,18 +63,17 @@ export function renderHtmlPreview(
 }
 
 /** Owns file HTML presentation while the detail panel owns its editor and draft. */
-export class FileHtmlPreviewController implements ReactiveController {
+export class FileHtmlPreviewController {
   private source = false;
   private preview: string | null = null;
   private readonly loader: LazyCustomElementRequestController;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: { requestUpdate(): void; readonly updateComplete?: Promise<unknown> },
     private readonly content: () => SidebarContent | null,
     private readonly text: () => string,
   ) {
     this.loader = new LazyCustomElementRequestController(host);
-    host.addController(this);
   }
 
   get file() {
@@ -114,7 +113,7 @@ export class FileHtmlPreviewController implements ReactiveController {
     }
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.loader.requestWhileActive(htmlPreviewElement, false);
   }
 

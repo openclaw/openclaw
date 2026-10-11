@@ -1,3 +1,4 @@
+import "../../worker-heap-flag.mjs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MessagePort, Worker } from "node:worker_threads";

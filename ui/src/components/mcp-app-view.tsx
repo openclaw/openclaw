@@ -13,7 +13,6 @@ import {
 } from "./mcp-app-view-controller.ts";
 import "../styles/mcp-app-view.css";
 
-export type { McpAppViewProps, McpAppViewElement } from "./mcp-app-view-controller.ts";
 const controllers = new WeakMap<McpAppViewElement, McpAppViewController>();
 
 export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(

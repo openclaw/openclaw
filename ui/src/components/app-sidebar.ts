@@ -10,7 +10,7 @@ import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import "./session-menu.ts";
-import "./mcp-app-catalog.ts";
+import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";

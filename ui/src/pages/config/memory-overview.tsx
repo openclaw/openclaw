@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import "../../components/lobster-illustration.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import { createLobsterPetLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
 import {
@@ -112,11 +112,7 @@ function Hero(props: MemoryOverviewProps) {
   return (
     <section class={["memory-overview__hero", { "memory-overview__hero--sleeping": off() }]}>
       <div class="memory-overview__lobster" style={lobsterLookStyle(look())}>
-        <openclaw-lobster-illustration
-          style={{ display: "contents" }}
-          prop:look={look()}
-          prop:options={pose()}
-        />
+        <LobsterSvg look={look()} {...pose()} />
       </div>
       <div class="memory-overview__hero-copy">
         <h2>{headline()}</h2>

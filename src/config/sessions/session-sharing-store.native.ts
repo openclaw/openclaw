@@ -31,7 +31,12 @@ function assertAuthorizedSessionInstance(
   expectedSessionId: string | undefined,
   expectedEntry?: SessionSharingExpectedEntry,
 ): string {
-  const sessionId = readSessionEntryInstanceId(database, sessionKey);
+  const entry = expectedEntry
+    ? readExactSessionEntryRow(database, sessionKey, "list")?.entry
+    : undefined;
+  const sessionId = expectedEntry
+    ? entry?.sessionId
+    : readSessionEntryInstanceId(database, sessionKey);
   if (
     sessionId === undefined ||
     (expectedSessionId !== undefined && sessionId !== expectedSessionId)
@@ -39,7 +44,6 @@ function assertAuthorizedSessionInstance(
     throw new Error("session changed before sharing mutation");
   }
   if (expectedEntry) {
-    const entry = readExactSessionEntryRow(database, sessionKey, "list")?.entry;
     if (
       !entry ||
       !isDeepStrictEqual(

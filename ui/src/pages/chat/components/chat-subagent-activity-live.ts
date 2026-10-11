@@ -136,3 +136,16 @@ export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-chat-subagent-activity")) {
   customElements.define("openclaw-chat-subagent-activity", ChatSubagentActivityLive);
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-subagent-activity": HTMLAttributes<ChatSubagentActivityLive> &
+        Properties<ChatSubagentActivityLive> & {
+          "prop:rows"?: ChatSubagentActivityLive["rows"];
+          "prop:onOpenSubagent"?: ChatSubagentActivityLive["onOpenSubagent"];
+          "prop:onOpenSession"?: ChatSubagentActivityLive["onOpenSession"];
+        };
+    }
+  }
+}

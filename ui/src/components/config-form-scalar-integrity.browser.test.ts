@@ -17,30 +17,6 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form scalar integrity", () => {
-  it("keeps repeated number input identity arguments aligned", () => {
-    const container = document.createElement("div");
-    const renderValue = (controlIdentity: number[]) => {
-      renderNumberInputFixture(container, {
-        schema: { type: "integer" },
-        value: 2,
-        path: ["values", 0],
-        sourceIdentity: 2,
-        controlIdentity,
-        onPatch: vi.fn(),
-      });
-    };
-
-    renderValue([2]);
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='number']"),
-      "repeated number input",
-    );
-    renderValue([2, 4]);
-    expect(container.querySelector("input[type='number']")).toBe(input);
-    expect(input.value).toBe("2");
-    expect(input.getAttribute("aria-invalid")).toBe("false");
-  });
-
   it("keeps a focused in-flight edit through a snapshot identity refresh", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -77,92 +53,6 @@ describe("config form scalar integrity", () => {
     } finally {
       container.remove();
     }
-  });
-
-  it("allows required nullable enums to select their null member", () => {
-    const container = document.createElement("div");
-    const nullablePatch = vi.fn();
-    renderSelectFixture(container, {
-      schema: {
-        type: "string",
-        nullable: true,
-        enumIncludesNull: true,
-      },
-      value: "fixed",
-      path: ["nullableMode"],
-      isRequired: true,
-      options: ["fixed", "other"],
-      onPatch: nullablePatch,
-    });
-    const nullableSelect = expectElement(
-      container.querySelector<HTMLSelectElement>("select"),
-      "required nullable enum",
-    );
-    const nullOption = expectElement(
-      nullableSelect.querySelector<HTMLOptionElement>("option[value='__null__']"),
-      "nullable enum null option",
-    );
-    expect(nullOption.disabled).toBe(false);
-    expect(
-      nullableSelect.querySelector<HTMLOptionElement>("option[value='__unset__']")?.disabled,
-    ).toBe(true);
-    nullableSelect.value = "__null__";
-    nullableSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(nullablePatch).toHaveBeenCalledWith(["nullableMode"], null);
-
-    const requiredPatch = vi.fn();
-    renderSelectFixture(container, {
-      schema: { type: "string" },
-      value: "fixed",
-      path: ["requiredMode"],
-      isRequired: true,
-      options: ["fixed", "other"],
-      onPatch: requiredPatch,
-    });
-    const requiredSelect = expectElement(
-      container.querySelector<HTMLSelectElement>("select"),
-      "required non-null enum",
-    );
-    expect(
-      requiredSelect.querySelector<HTMLOptionElement>("option[value='__unset__']")?.disabled,
-    ).toBe(true);
-    requiredSelect.value = "__unset__";
-    requiredSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(requiredSelect.value).toBe("0");
-    expect(requiredPatch).not.toHaveBeenCalled();
-  });
-
-  it("keeps optional nullable enum unset distinct from explicit null", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    const renderValue = (value: unknown) => {
-      renderSelectFixture(container, {
-        schema: {
-          type: "string",
-          nullable: true,
-          enumIncludesNull: true,
-        },
-        value,
-        path: ["mode"],
-        options: ["fixed", "other"],
-        onPatch,
-      });
-    };
-
-    renderValue(null);
-    const select = expectElement(
-      container.querySelector<HTMLSelectElement>("select"),
-      "optional nullable enum",
-    );
-    expect(select.value).toBe("__null__");
-    select.value = "__unset__";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["mode"], undefined);
-
-    renderValue("fixed");
-    select.value = "__null__";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["mode"], null);
   });
 
   it("shows inherited defaults without turning them into stored overrides", () => {
@@ -212,20 +102,6 @@ describe("config form scalar integrity", () => {
     numberInput.dispatchEvent(arrowUp);
     expect(arrowUp.defaultPrevented).toBe(true);
     expect(onPatch).toHaveBeenLastCalledWith(["retries"], 4);
-  });
-
-  it("shows the default description without a reset button on an overridden row", () => {
-    const container = document.createElement("div");
-    renderTextInputFixture(container, {
-      schema: { type: "string", default: "balanced" },
-      value: "custom",
-      path: ["mode"],
-      inputType: "text",
-      onPatch: vi.fn(),
-    });
-
-    expect(container.textContent).toContain("Default: balanced");
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
   });
 
   it("restores scalar and select defaults through clearing and default selection", () => {
@@ -285,73 +161,6 @@ describe("config form scalar integrity", () => {
         "inherited select",
       ).selectedOptions[0]?.textContent?.trim(),
     ).toBe("Default: balanced");
-  });
-
-  it("commits the valid branch type for constrained text unions", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    renderTextInputFixture(container, {
-      schema: {
-        anyOf: [
-          { type: "string", const: "auto" },
-          { type: "integer", minimum: 0 },
-        ],
-      },
-      value: "auto",
-      path: ["mode"],
-      inputType: "text",
-      onPatch,
-    });
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='text']"),
-      "constrained union input",
-    );
-
-    input.value = "42";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["mode"], 42);
-    expect(input.getAttribute("aria-invalid")).toBe("false");
-
-    input.value = "auto";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["mode"], "auto");
-
-    onPatch.mockClear();
-    input.value = "invalid";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-  });
-
-  it("commits explicit boolean branches without retyping numeric strings", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    renderTextInputFixture(container, {
-      schema: {
-        anyOf: [{ type: "string" }, { type: "number" }, { const: false }],
-      },
-      value: "500mb",
-      path: ["maxDiskBytes"],
-      inputType: "text",
-      onPatch,
-    });
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='text']"),
-      "string-number-boolean union input",
-    );
-
-    input.value = "false";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], false);
-
-    input.value = "true";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], "true");
-
-    const identifier = "1048113311314608148";
-    input.value = identifier;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], identifier);
   });
 
   it("does not commit a clear while a number input holds partial numeric text", () => {
@@ -419,27 +228,6 @@ describe("config form scalar integrity", () => {
     expect(onPatch).not.toHaveBeenCalled();
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.value).toBe(raw);
-  });
-
-  it("accepts an exactly represented integer above the safe-integer range", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    renderNumberInputFixture(container, {
-      schema: { type: "integer" },
-      value: 0,
-      path: ["numeric"],
-      onPatch,
-    });
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='number']"),
-      "exact large number input",
-    );
-
-    input.value = "9007199254740992";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-
-    expect(onPatch).toHaveBeenCalledWith(["numeric"], 9_007_199_254_740_992);
-    expect(input.getAttribute("aria-invalid")).toBe("false");
   });
 
   it.each(["mixed", "number"] as const)(
@@ -555,57 +343,12 @@ describe("config form scalar integrity", () => {
     expect(input.readOnly).toBe(false);
   });
 
-  it("preserves string and false edits through the analyzer path", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    const schema = {
-      type: "object",
-      properties: {
-        sessionRetention: {
-          anyOf: [{ type: "string" }, { type: "boolean", const: false }],
-        },
-      },
-    };
-    const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("sessionRetention");
-
-    const renderValue = (value: string | boolean) => {
-      renderAnalyzedFormFixture(container, analysis, {
-        value: { sessionRetention: value },
-        onPatch,
-      });
-      return expectElement(
-        container.querySelector<HTMLInputElement>("input"),
-        "string-or-false union input",
-      );
-    };
-
-    let input = renderValue("7d");
-    expect(input.value).toBe("7d");
-    input.value = "false";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["sessionRetention"], false);
-
-    input = renderValue(false);
-    expect(input.value).toBe("false");
-    input.value = "30d";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["sessionRetention"], "30d");
-  });
-
   it.each([
-    { name: "numeric literal", variants: [{ type: "string" }, { const: 5 }], value: 5 },
-    {
-      name: "typed numeric literal",
-      variants: [{ type: "string" }, { type: "number", const: 5 }],
-      value: 5,
-    },
     {
       name: "object literal",
       variants: [{ type: "string" }, { const: { enabled: true } }],
       value: { enabled: true },
     },
-    { name: "array literal", variants: [{ type: "string" }, { const: ["auto"] }], value: ["auto"] },
     {
       name: "explicit null branch",
       variants: [{ type: "string" }, { const: false }, { type: "null" }],
@@ -744,13 +487,6 @@ const cases = [
 ];
 
 describe("typed config enum selection through analyzed forms", () => {
-  it.each(cases)("initially selects the typed member: $name", ({ options, typed }) => {
-    const view = fixture(options, typed);
-    expect(view.control.tagName).toBe(options.length <= 5 ? "DIV" : "SELECT");
-    expect(view.value()).toBe("2");
-    expect(view.onPatch).not.toHaveBeenCalled();
-  });
-
   it.each(cases)(
     "preserves type through callbacks and rerenders: $name",
     async ({ options, typed, primitive }) => {

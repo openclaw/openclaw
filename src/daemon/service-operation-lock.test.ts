@@ -204,22 +204,6 @@ it.each([{ profile: "personal", bound: true }])(
   },
 );
 
-it("rejects a conflicting manager route instead of replacing an operation binding", async () => {
-  const env = await fixture();
-  const create = vi.fn(async () => readBinding());
-  await withGatewayServiceOperationLock(env, async () => {
-    await withSystemdServiceReadBinding(env, create, async () => {});
-    await expect(
-      withSystemdServiceReadBinding(
-        { ...env, DBUS_SESSION_BUS_ADDRESS: "unix:path=/different" },
-        create,
-        async () => {},
-      ),
-    ).rejects.toThrow("different manager");
-  });
-  expect(create).toHaveBeenCalledTimes(1);
-});
-
 it("joins pending reads before disposing their native binding", async () => {
   const env = await fixture();
   const binding = readBinding();

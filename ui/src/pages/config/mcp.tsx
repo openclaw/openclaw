@@ -1,12 +1,12 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
+import { McpServersCard } from "../../components/mcp-servers-card.tsx";
 import {
   LearnMoreLink,
   SettingsPage,
   SettingsRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/mcp-servers-card.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -73,10 +73,7 @@ export function Mcp(props: McpViewProps) {
             </div>
           </div>
         </section>
-        <openclaw-mcp-servers-card
-          prop:pluginsHref={props.pluginsHref}
-          prop:docsUrl={MCP_DOCS_URL}
-        />
+        <McpServersCard pluginsHref={props.pluginsHref} docsUrl={MCP_DOCS_URL} />
       </SettingsPage>
       {props.editor}
     </section>

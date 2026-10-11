@@ -85,7 +85,7 @@ function fixturePayload(): DoctorMemoryStatusPayload {
   };
 }
 
-async function renderOverview(
+function renderOverview(
   status: MemoryOverviewStatus,
   engineSelection: MemoryOverviewProps["engineSelection"] = {
     kind: "default",
@@ -107,13 +107,12 @@ async function renderOverview(
     }),
   );
   flush();
-  await container.querySelector("openclaw-lobster-illustration")?.updateComplete;
   return container;
 }
 
 describe("renderMemoryOverview", () => {
-  it("renders the awake reading hero and status cards from one payload", async () => {
-    const container = await renderOverview({ kind: "ready", payload: fixturePayload() });
+  it("renders the awake reading hero and status cards from one payload", () => {
+    const container = renderOverview({ kind: "ready", payload: fixturePayload() });
 
     expect(container.textContent).toContain("Memory is awake");
     expect(container.textContent).toContain("memory-core · hybrid search");
@@ -126,8 +125,8 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("metrics=ready");
   });
 
-  it("renders a grumpy error hero with retry and no book", async () => {
-    const container = await renderOverview({ kind: "error", message: "gateway request failed" });
+  it("renders a grumpy error hero with retry and no book", () => {
+    const container = renderOverview({ kind: "error", message: "gateway request failed" });
 
     expect(container.textContent).toContain("Memory needs attention");
     expect(container.textContent).toContain("gateway request failed");
@@ -135,8 +134,8 @@ describe("renderMemoryOverview", () => {
     expect(container.querySelector(".lob-reading-book")).toBeNull();
   });
 
-  it("renders the dimmed sleeping hero when the engine is off", async () => {
-    const container = await renderOverview({ kind: "idle" }, { kind: "off" });
+  it("renders the dimmed sleeping hero when the engine is off", () => {
+    const container = renderOverview({ kind: "idle" }, { kind: "off" });
 
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("Open Settings");
@@ -145,8 +144,8 @@ describe("renderMemoryOverview", () => {
     expect(container.querySelector(".lob-reading-book")).toBeNull();
   });
 
-  it("hibernates a disabled pinned engine and points to Settings", async () => {
-    const container = await renderOverview(
+  it("hibernates a disabled pinned engine and points to Settings", () => {
+    const container = renderOverview(
       { kind: "ready", payload: fixturePayload() },
       { kind: "pinned", pluginId: "memory-core" },
       { engineDisabled: true },
@@ -160,12 +159,12 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).not.toContain("Sleep schedule");
   });
 
-  it("reports every phase disabled when the global dream cycle is off", async () => {
+  it("reports every phase disabled when the global dream cycle is off", () => {
     const payload = fixturePayload();
     if (payload.dreaming) {
       payload.dreaming.enabled = false;
     }
-    const container = await renderOverview({ kind: "ready", payload });
+    const container = renderOverview({ kind: "ready", payload });
     const phaseRows = [...container.querySelectorAll(".settings-row")].filter((row) =>
       /Light phase|Deep phase|REM phase/.test(row.textContent ?? ""),
     );
@@ -175,12 +174,12 @@ describe("renderMemoryOverview", () => {
     expect(phaseRows.every((row) => !row.textContent?.includes("next "))).toBe(true);
   });
 
-  it("reports an enabled phase without its managed cron as not scheduled", async () => {
+  it("reports an enabled phase without its managed cron as not scheduled", () => {
     const payload = fixturePayload();
     if (payload.dreaming) {
       payload.dreaming.phases.light.managedCronPresent = false;
     }
-    const container = await renderOverview({ kind: "ready", payload });
+    const container = renderOverview({ kind: "ready", payload });
     const lightRow = [...container.querySelectorAll(".settings-row")].find((row) =>
       row.textContent?.includes("Light phase"),
     );
@@ -190,7 +189,7 @@ describe("renderMemoryOverview", () => {
     expect(lightRow?.textContent).not.toContain("next ");
   });
 
-  it("offers an inline embedding test before readiness has been checked", async () => {
+  it("offers an inline embedding test before readiness has been checked", () => {
     const payload = fixturePayload();
     payload.embedding = {
       ok: false,
@@ -198,7 +197,7 @@ describe("renderMemoryOverview", () => {
       error: "run `openclaw memory status --deep` to probe",
     };
     const onProbeEmbeddings = vi.fn();
-    const container = await renderOverview({ kind: "ready", payload }, undefined, {
+    const container = renderOverview({ kind: "ready", payload }, undefined, {
       onProbeEmbeddings,
     });
 
@@ -215,8 +214,8 @@ describe("renderMemoryOverview", () => {
   it.each([
     { searchRuntimeRegistered: false, error: "memory plugin unavailable", neutral: true },
     { searchRuntimeRegistered: true, error: "search manager failed", neutral: false },
-  ])("distinguishes absent search support from $error", async ({ neutral, ...diagnostic }) => {
-    const container = await renderOverview({
+  ])("distinguishes absent search support from $error", ({ neutral, ...diagnostic }) => {
+    const container = renderOverview({
       kind: "ready",
       payload: {
         agentId: "main",
@@ -232,15 +231,11 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
   });
 
-  it("opens the Memories tab from the overview shortcut", async () => {
+  it("opens the Memories tab from the overview shortcut", () => {
     const onNavigate = vi.fn();
-    const container = await renderOverview(
-      { kind: "ready", payload: fixturePayload() },
-      undefined,
-      {
-        onNavigate,
-      },
-    );
+    const container = renderOverview({ kind: "ready", payload: fixturePayload() }, undefined, {
+      onNavigate,
+    });
 
     const shortcut = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
       button.textContent?.includes("Search memories"),
