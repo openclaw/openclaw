@@ -122,6 +122,20 @@ export async function getReplyFromConfig(
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const baseline: { capture?: Promise<void> } = {};
+  try {
+    return await resolveReplyFromConfig(ctx, options, configOverride, baseline);
+  } finally {
+    await baseline.capture;
+  }
+}
+
+async function resolveReplyFromConfig(
+  ctx: MsgContext,
+  options: GetReplyOptions | undefined,
+  configOverride: OpenClawConfig | undefined,
+  baseline: { capture?: Promise<void> },
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
@@ -520,24 +534,25 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
-  if (!useFastTestBootstrap) {
-    try {
-      await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
+  const baselineCapture = !useFastTestBootstrap
+    ? traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
         prepareReplySessionDiffBaseline({
           agentId,
           workspaceDir,
           sessionState,
         }),
-      );
-    } catch (error) {
-      if (isSessionWorkStartInvalidatedError(error)) {
-        throw error;
-      }
-      logVerbose(
-        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
+      ).catch((error: unknown) => {
+        if (isSessionWorkStartInvalidatedError(error)) {
+          throw error;
+        }
+        logVerbose(
+          `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
+        );
+      })
+    : undefined;
+  // The model can start while capture runs; tools and reply cleanup share its settlement.
+  baseline.capture = baselineCapture;
+  void baselineCapture?.catch(() => {});
   const {
     sessionCtx,
     sessionEntry,
@@ -576,9 +591,18 @@ export async function getReplyFromConfig(
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
-  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
-    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
-    : optsWithCommandQueueOverride;
+  const optsWithSessionSkillOverrides = {
+    ...optsWithCommandQueueOverride,
+    ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
+    ...(baselineCapture &&
+    !sessionEntry.execNode &&
+    (sessionEntry.sessionDiffBaselineCapture?.status === "pending" ||
+      (isNewSession &&
+        sessionEntry.createdVia === "operator" &&
+        sessionEntry.sessionDiffBaseline?.sessionId !== sessionId))
+      ? { awaitSessionDiffBaseline: () => baselineCapture }
+      : {}),
+  };
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -816,6 +840,10 @@ export async function getReplyFromConfig(
     }
     const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
     const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    await resolvedOpts?.awaitSessionDiffBaseline?.();
+    assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+    resolvedOpts?.operatorAuthority?.assertCurrent();
+    command.assertOwnerCurrent?.();
     await emitResetCommandHooks({
       action,
       agentId,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createInlineToolDispatchFixture,
@@ -19,6 +19,72 @@ describe("inline tool execution ownership", () => {
   beforeEach(() => {
     createOpenClawToolsMock.mockReset();
   });
+
+  it.each(["settled", "failed", "authority revoked"] as const)(
+    "waits for workspace attribution before direct skill effects (%s)",
+    async (outcome) => {
+      const entered = createDeferred<void>();
+      const baseline = createDeferred<void>();
+      let active = true;
+      const { typing, toolExecute, ctx, skillCommands } = createInlineToolDispatchFixture({
+        body: "/send_status hello",
+        toolName: "message",
+        execute: async () => ({ content: "sent" }),
+        skill: { name: "send_status", skillName: "send-status", description: "Send status" },
+        sourceFilePath: "/tmp/plugin/commands/send-status.md",
+      });
+      const result = runTestInlineActions({
+        ctx,
+        typing,
+        cleanedBody: "/send_status hello",
+        command: {
+          isAuthorizedSender: true,
+          senderIsOwner: true,
+          assertOwnerCurrent: () => {
+            if (!active) {
+              throw new Error("command authority ended");
+            }
+          },
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands,
+          opts: {
+            awaitSessionDiffBaseline: async () => {
+              entered.resolve();
+              await baseline.promise;
+            },
+          },
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(entered.promise, result, "Skill bypassed attribution");
+        expect(toolExecute).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          baseline.reject(new Error("attribution failed"));
+        } else {
+          active = outcome !== "authority revoked";
+          baseline.resolve();
+        }
+        await expect(result).resolves.toMatchObject({
+          kind: "reply",
+          reply: {
+            text:
+              outcome === "settled"
+                ? "sent"
+                : expect.stringContaining(
+                    outcome === "failed" ? "attribution failed" : "command authority ended",
+                  ),
+          },
+        });
+        expect(toolExecute).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
+      } finally {
+        baseline.resolve();
+        await result;
+      }
+    },
+  );
 
   it.each(["before start", "at start", "during execution", "successful completion"] as const)(
     "preserves admitted inline tool ownership (%s)",

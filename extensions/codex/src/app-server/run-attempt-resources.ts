@@ -573,7 +573,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       connection.assertCurrent();
     }
     const requiresExecutionAdmission =
-      requiresProcessAdmission || requiresModelAdmission || requiresWorkspaceAdmission;
+      requiresProcessAdmission ||
+      requiresModelAdmission ||
+      requiresWorkspaceAdmission ||
+      params.hostCapabilities.requiresToolPreparation === true;
     const relayEvents =
       requiresExecutionAdmission && !nativeHookRelayEvents.includes("pre_tool_use")
         ? [...nativeHookRelayEvents, "pre_tool_use" as const]

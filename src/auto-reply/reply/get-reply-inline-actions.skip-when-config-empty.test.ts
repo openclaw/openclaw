@@ -2,6 +2,7 @@ import path from "node:path";
 // Tests inline action skipping when channel config does not define actions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
@@ -182,6 +183,58 @@ describe("handleInlineActions", () => {
           : undefined,
     );
   });
+
+  it.each(["settled", "failed", "authority revoked"] as const)(
+    "waits for workspace attribution before command dispatch (%s)",
+    async (outcome) => {
+      const entered = createDeferred<void>();
+      const baseline = createDeferred<void>();
+      let active = true;
+      const result = runTestInlineActions({
+        ctx: buildTestCtx({ Body: "/export-session", CommandBody: "/export-session" }),
+        typing: createTypingController(),
+        cleanedBody: "/export-session",
+        command: {
+          isAuthorizedSender: true,
+          senderIsOwner: true,
+          assertOwnerCurrent: () => {
+            if (!active) {
+              throw new Error("command authority ended");
+            }
+          },
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          opts: {
+            awaitSessionDiffBaseline: async () => {
+              entered.resolve();
+              await baseline.promise;
+            },
+          },
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(entered.promise, result, "Command bypassed attribution");
+        expect(handleCommandsMock).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          baseline.reject(new Error("attribution failed"));
+          await expect(result).rejects.toThrow("attribution failed");
+        } else if (outcome === "authority revoked") {
+          active = false;
+          baseline.resolve();
+          await expect(result).rejects.toThrow("command authority ended");
+        } else {
+          baseline.resolve();
+          await expect(result).resolves.toMatchObject({ kind: "continue" });
+        }
+        expect(handleCommandsMock).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
+      } finally {
+        baseline.resolve();
+        await result.catch(() => undefined);
+      }
+    },
+  );
 
   it("notifies session metadata changes before continuing after a command", async () => {
     const typing = createTypingController();

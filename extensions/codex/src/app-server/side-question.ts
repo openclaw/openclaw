@@ -66,6 +66,7 @@ import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
+  assertCodexNativeHookRelayAllowed,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   resolveCodexNativeHookRelayEvents,
@@ -624,11 +625,23 @@ export async function runCodexAppServerSideQuestion(
     };
 
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
-    const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    const configuredNativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
       appServer,
     });
-    if (options.nativeHookRelay && options.nativeHookRelay.enabled !== false) {
+    const requiresToolPreparation = sideRunParams.hostCapabilities.requiresToolPreparation === true;
+    if (requiresToolPreparation) {
+      await assertCodexNativeHookRelayAllowed(client, runAbortController.signal);
+      assertCurrent();
+    }
+    const nativeHookRelayEvents =
+      requiresToolPreparation && !configuredNativeHookRelayEvents.includes("pre_tool_use")
+        ? [...configuredNativeHookRelayEvents, "pre_tool_use" as const]
+        : configuredNativeHookRelayEvents;
+    if (
+      requiresToolPreparation ||
+      (options.nativeHookRelay && options.nativeHookRelay.enabled !== false)
+    ) {
       const channelId = buildAgentHookContextChannelFields({
         sessionKey: params.sessionKey,
         messageChannel: params.messageChannel,
@@ -647,8 +660,9 @@ export async function runCodexAppServerSideQuestion(
         ...(channelId ? { channelId } : {}),
         allowedEvents: nativeHookRelayEvents,
         preToolUseLoopDetection: appServer.loopDetectionPreToolUseRelay,
+        requirePreToolUse: requiresToolPreparation,
         ttlMs: resolveCodexNativeHookRelayTtlMs({
-          explicitTtlMs: options.nativeHookRelay.ttlMs,
+          explicitTtlMs: options.nativeHookRelay?.ttlMs,
           attemptTimeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
           startupTimeoutMs: appServer.requestTimeoutMs * 2,
           turnStartTimeoutMs: appServer.requestTimeoutMs,
@@ -669,7 +683,7 @@ export async function runCodexAppServerSideQuestion(
             nativePreToolUseFailures.record(failure);
           }
         },
-        command: { timeoutMs: options.nativeHookRelay.gatewayTimeoutMs },
+        command: { timeoutMs: options.nativeHookRelay?.gatewayTimeoutMs },
       });
     }
     await nativeHookRelay?.prepareInvocation();
