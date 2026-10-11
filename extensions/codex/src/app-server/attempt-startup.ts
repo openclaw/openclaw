@@ -507,6 +507,7 @@ export async function startCodexAttemptThread(params: {
                       configCwd: startupExecutionCwd,
                       appCacheKey: pluginAppCacheKey,
                       scheduledRuntimeAuthority: attemptParams.scheduledRuntimeAuthority,
+                      nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
                     })
                   : undefined,
               }) satisfies Parameters<typeof startOrResumeThread>[0];

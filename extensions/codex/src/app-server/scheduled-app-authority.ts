@@ -426,8 +426,8 @@ export async function captureScheduledCodexAppAuthority(params: {
     version: 1,
     runtimeId: "codex",
     namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
-    // Native filesystem/MCP tools are absent from the dynamic snapshot. Apps
-    // remain independently capped by this payload and the current app policy.
+    // Native tools are absent from the dynamic snapshot. Default owner runs use
+    // current app policy; restricted runs keep this captured app cap.
     ...(params.nativeToolSurfaceEnabled === true ? { allowOwnerToolDefaults: true as const } : {}),
     payload: {
       version: 1,
@@ -472,7 +472,7 @@ function appApprovalCeiling(
     : "auto";
 }
 
-/** Intersects a stored app-ID cap with current policy without admitting new apps. */
+/** Default owner runs use current app policy; restricted runs retain their captured cap. */
 export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   config: CodexPluginThreadConfig,
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
@@ -480,13 +480,18 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     config: {},
     toolsByApp: new Map(),
   },
+  nativeToolSurfaceEnabled = false,
 ): CodexPluginThreadConfig {
   const scheduled = parseScheduledCodexAppAuthority(authority);
   if (!scheduled) {
     return config;
   }
-  const omittedAppIds = scheduled.apps
-    .map((app) => app.id)
+  const useCurrentOwnerApps =
+    nativeToolSurfaceEnabled && authority?.allowOwnerToolDefaults === true;
+  const admittedAppIds = useCurrentOwnerApps
+    ? Object.keys(config.policyContext.apps)
+    : scheduled.apps.map((app) => app.id);
+  const omittedAppIds = admittedAppIds
     .filter((id) => {
       const currentTools = currentPolicy.toolsByApp.get(id);
       return (
@@ -504,19 +509,22 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const capturedById = new Map(scheduled.apps.map((app) => [app.id, app] as const));
   const apps: Record<string, CodexAppPolicyContextEntry> = {};
   for (const [id, current] of Object.entries(config.policyContext.apps)) {
-    const captured = capturedById.get(id);
-    if (!captured) {
+    const captured = useCurrentOwnerApps ? undefined : capturedById.get(id);
+    if (!captured && !useCurrentOwnerApps) {
       continue;
     }
-    apps[id] = {
-      ...current,
-      allowDestructiveActions: current.allowDestructiveActions && captured.allowDestructiveActions,
-      allowOpenWorld: current.allowOpenWorld !== false && captured.allowOpenWorld,
-      destructiveApprovalMode: stricterApprovalMode(
-        defaultApprovalMode(current),
-        captured.destructiveApprovalMode,
-      ),
-    };
+    apps[id] = captured
+      ? {
+          ...current,
+          allowDestructiveActions:
+            current.allowDestructiveActions && captured.allowDestructiveActions,
+          allowOpenWorld: current.allowOpenWorld !== false && captured.allowOpenWorld,
+          destructiveApprovalMode: stricterApprovalMode(
+            defaultApprovalMode(current),
+            captured.destructiveApprovalMode,
+          ),
+        }
+      : current;
   }
   const pluginAppIds = Object.fromEntries(
     Object.entries(config.policyContext.pluginAppIds)
@@ -529,13 +537,10 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     currentPolicy.config,
   );
   const appsPatch = asOptionalRecord(configPatch.apps);
-  for (const [appId, captured] of capturedById) {
+  for (const [appId, currentApp] of Object.entries(apps)) {
+    const captured = useCurrentOwnerApps ? undefined : capturedById.get(appId);
     const appPatch = asOptionalRecord(appsPatch?.[appId]);
     if (!appPatch || !Object.hasOwn(apps, appId)) {
-      continue;
-    }
-    const currentApp = apps[appId];
-    if (!currentApp) {
       continue;
     }
     if (currentApp.destructiveApprovalMode === "ask") {
@@ -555,9 +560,11 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     appPatch.tools = Object.fromEntries(
       [...tools.keys()].toSorted().map((toolName) => {
         const metadata = tools.get(toolName);
-        const storedAppCeiling = appApprovalCeiling(captured.destructiveApprovalMode, metadata);
         const currentAppCeiling = appApprovalCeiling(defaultApprovalMode(currentApp), metadata);
-        const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
+        const storedAppCeiling = captured
+          ? appApprovalCeiling(captured.destructiveApprovalMode, metadata)
+          : currentAppCeiling;
+        const capturedMode = captured?.tools[toolName] ?? storedAppCeiling;
         const currentToolPolicy = readCurrentToolPolicy(
           currentPolicy.config,
           appId,

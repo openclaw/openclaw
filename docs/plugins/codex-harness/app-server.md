@@ -236,7 +236,9 @@ remains bound to that exact profile and account. Without a prepared profile, an
 agent-scoped configured WebSocket app-server owns the schedule through its
 connection fingerprint. Reauthenticating that same endpoint to another account
 does not revoke the schedule: subsequent runs use the endpoint's current account,
-subject to the captured app ceiling and current app/tool policy. Scheduled
+subject to current app/tool policy. Default owner agent turns with native tools
+can use apps connected after creation; restricted turns also retain the captured
+app ceiling. Scheduled
 authority does not store or replay authentication credentials.
 
 Scheduled app approval ceilings preserve native tool overrides and the approval
@@ -250,7 +252,8 @@ changing its captured managed requirements rejects the run before app execution.
 The job remains inspectable, with an error in automation run history and its
 last-run state; normal failure backoff still applies. Restore the authorized
 connection or recreate the automation from a fresh authenticated owner turn.
-Account changes that remove access to a captured app also fail visibly.
+Restricted runs also fail visibly when an account change removes access to a
+captured app.
 
 Before rolling back to a build without configured-endpoint authority and cron
 authority hydration, disable these jobs with `openclaw automations disable <id>`

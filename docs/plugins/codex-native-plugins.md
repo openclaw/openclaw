@@ -201,19 +201,23 @@ changes.
 When an authenticated owner creates an automation from a Codex turn, OpenClaw
 captures the app IDs and approval limits callable on that exact Codex thread.
 The stored authority is bound to the creator's prepared Codex profile and
-account. Scheduled runs intersect that cap with current Codex policy and app
-availability. They never gain new app IDs or a broader destructive,
+account. Default agent turns created with owner defaults and running with native
+tools use the owner's currently connected apps and current app policy. A later
+explicit tool restriction keeps the captured cap. Restricted scheduled runs
+intersect that cap with current Codex policy and app availability. They never
+gain new app IDs or a broader destructive,
 open-world, or approval ceiling. Tools added later within an already captured
 app may run only when both the stored ceiling and current policy allow them.
 
-Scheduled app calls are unattended. Only actions explicitly allowed both when
-the job was created and when it runs can proceed without a prompt. An action
-that still requires approval or elicitation is declined. A changed account,
-runtime, revoked app, narrower policy, or unavailable inventory stops before
-app execution and reports how to restore access or reauthorize the automation.
+Scheduled app calls are unattended. Current app permissions and approval policy
+apply to every run; restricted runs also retain their captured limits. An action
+that still requires approval or elicitation is declined. A changed prepared
+account or runtime rejects the stored identity. Restricted runs also reject a
+revoked captured app or unavailable inventory and report how to restore access
+or reauthorize the automation.
 Model fallbacks cannot move this authority to another runtime or account.
 
-This path is stricter than an ordinary interactive turn. OpenClaw generates
+Restricted runs are stricter than an ordinary interactive turn. OpenClaw generates
 per-tool `enabled` and `approval_mode` values from current tool metadata and
 the captured authority. An explicit native `enabled: true` cannot override a
 captured or current destructive/open-world restriction on a scheduled run.

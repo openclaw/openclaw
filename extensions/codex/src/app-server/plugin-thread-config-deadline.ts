@@ -182,6 +182,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
   appCacheKey: string;
   metadataCache?: CodexPluginMetadataCache;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
+  nativeToolSurfaceEnabled?: boolean;
 }) {
   const {
     client,
@@ -190,6 +191,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
     enabledPluginConfigKeys,
     appCache,
     metadataCache: configuredMetadataCache,
+    nativeToolSurfaceEnabled,
     ...buildParams
   } = params;
   const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
@@ -226,6 +228,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
                   configCwd: params.configCwd,
                   threadId: buildOptions?.threadId,
                 }),
+                nativeToolSurfaceEnabled,
               )
           : undefined,
         request: (method, requestParams, options) => client.request(method, requestParams, options),

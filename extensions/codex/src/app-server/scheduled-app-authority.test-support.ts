@@ -1,3 +1,63 @@
+import {
+  buildPluginAppPolicyContext,
+  type CodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
+
+export function createScheduledAppAuthority(overrides?: Record<string, unknown>) {
+  return {
+    version: 1 as const,
+    runtimeId: "codex",
+    namespace: "codex.apps",
+    payload: {
+      version: 1,
+      auth: { profileId: "openai:work", accountId: "acct-1" },
+      apps: [
+        {
+          id: "calendar",
+          allowDestructiveActions: true,
+          allowOpenWorld: true,
+          destructiveApprovalMode: "allow",
+          tools: { list: "auto", edit: "approve" },
+        },
+      ],
+      ...overrides,
+    },
+  };
+}
+
+export function createScheduledAppThreadConfig(): CodexPluginThreadConfig {
+  const context = buildPluginAppPolicyContext(
+    {
+      calendar: {
+        source: "account",
+        appName: "Calendar",
+        allowDestructiveActions: false,
+        allowOpenWorld: false,
+        destructiveApprovalMode: "ask",
+        mcpServerNames: [],
+      },
+      newly_connected: {
+        source: "account",
+        appName: "New",
+        allowDestructiveActions: true,
+        allowOpenWorld: true,
+        destructiveApprovalMode: "allow",
+        mcpServerNames: [],
+      },
+    },
+    {},
+  );
+  return {
+    enabled: true,
+    fingerprint: "current-fingerprint",
+    inputFingerprint: "current-input",
+    configPatch: { apps: {} },
+    provisionalAppIds: ["calendar", "newly_connected"],
+    policyContext: context,
+    diagnostics: [],
+  };
+}
+
 export const scheduledAppApprovalPolicyCases = [
   { name: "global default", app: {}, expected: "prompt" },
   {

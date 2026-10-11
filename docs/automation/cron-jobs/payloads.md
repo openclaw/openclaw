@@ -66,9 +66,10 @@ explicit tool policy retain their current behavior until their tool policy is ex
 edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
 whose creator captured Codex app authority still store the creating turn's tools: scripts
 reach MCP only through servers their list names. A default Codex agent turn created with
-native tools enabled uses its owner's current tool policy, preserving native filesystem
-and MCP access. Captured app identity, app permissions, and current approval policy remain
-independent limits; explicit finite tool lists still restrict the run.
+native tools enabled uses its owner's current tool policy, including currently connected
+apps, native filesystem tools, and MCP access. Its captured runtime identity must still
+match, and current app permissions and approval policy still apply. Explicit finite tool
+lists retain their captured app limits.
 
 Earlier releases saved a copy of the creating turn's tool list on agent-created agent turns.
 That copy could miss tools the creator had, such as the native shell. Those jobs now run with

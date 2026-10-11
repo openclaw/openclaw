@@ -16,6 +16,8 @@ import {
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
 import {
+  createScheduledAppAuthority as authority,
+  createScheduledAppThreadConfig as threadConfig,
   scheduledAppApprovalPolicyCases,
   scheduledAppHeadlessPolicyCases,
 } from "./scheduled-app-authority.test-support.js";
@@ -43,61 +45,6 @@ function policyContext() {
     },
     {},
   );
-}
-
-function authority(overrides?: Record<string, unknown>) {
-  return {
-    version: 1 as const,
-    runtimeId: "codex",
-    namespace: "codex.apps",
-    payload: {
-      version: 1,
-      auth: { profileId: "openai:work", accountId: "acct-1" },
-      apps: [
-        {
-          id: "calendar",
-          allowDestructiveActions: true,
-          allowOpenWorld: true,
-          destructiveApprovalMode: "allow",
-          tools: { list: "auto", edit: "approve" },
-        },
-      ],
-      ...overrides,
-    },
-  };
-}
-
-function threadConfig(): CodexPluginThreadConfig {
-  const context = buildPluginAppPolicyContext(
-    {
-      calendar: {
-        source: "account",
-        appName: "Calendar",
-        allowDestructiveActions: false,
-        allowOpenWorld: false,
-        destructiveApprovalMode: "ask",
-        mcpServerNames: [],
-      },
-      newly_connected: {
-        source: "account",
-        appName: "New",
-        allowDestructiveActions: true,
-        allowOpenWorld: true,
-        destructiveApprovalMode: "allow",
-        mcpServerNames: [],
-      },
-    },
-    {},
-  );
-  return {
-    enabled: true,
-    fingerprint: "current-fingerprint",
-    inputFingerprint: "current-input",
-    configPatch: { apps: {} },
-    provisionalAppIds: ["calendar", "newly_connected"],
-    policyContext: context,
-    diagnostics: [],
-  };
 }
 
 describe("scheduled Codex app authority", () => {
@@ -379,7 +326,7 @@ describe("scheduled Codex app authority", () => {
     );
   });
 
-  it.each([false, true])("bounds apps with owner defaults %s", (native) => {
+  it.each([false, true])("bounds apps for a restricted run (creator defaults=%s)", (native) => {
     const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
       threadConfig(),
       {
@@ -945,7 +892,7 @@ describe("scheduled Codex app authority", () => {
     ).toBeUndefined();
   });
 
-  it.each([false, true])("denies unlisted apps (owner defaults=%s)", (native) => {
+  it.each([false, true])("requires current app-policy discovery (owner defaults=%s)", (native) => {
     const startup = resolveCodexPluginThreadConfigStartupPolicy({
       pluginConfig: {},
       nativeToolSurfaceEnabled: true,
