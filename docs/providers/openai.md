@@ -152,3 +152,35 @@ For hosted execution, file handling, and connected tools in chat, see the
     Auth details and credential reuse rules.
   </Card>
 </CardGroup>
+
+## Decision models
+
+The bundled `openai` plugin supports the beta
+[OpenAI Decisions API](https://developers.openai.com/api/reference/resources/decisions/methods/create)
+through OpenClaw's [Decision model role](/concepts/decision-models).
+Configure `OPENAI_API_KEY` or an `openai` API-key auth profile, then select
+`openai/gpt-6-luna` in the Decision picker or set:
+
+```json5
+{
+  agents: { defaults: { decisionModel: "openai/gpt-6-luna" } },
+}
+```
+
+The account and selected model must have Decisions API access. ChatGPT/Codex
+subscription profiles and Sign in with ChatGPT token-sharing grants do not
+authorize this endpoint. Requests use the configured OpenAI provider headers
+and transport settings. A custom Platform-compatible `baseUrl` must implement
+`POST /decisions`; ChatGPT backend URLs are rejected.
+
+Boolean questions map to predicates; choices retain their string labels; score
+levels use zero-based rubric positions. Structured evidence and criteria are
+serialized as JSON text. The current Decision V1 contract carries text/JSON
+evidence, so this adapter does not send image parts. A per-question refusal
+makes the entire batch unavailable with `unsupported-input`; malformed or
+incomplete answers return `invalid-response`. Probabilities, fractional scores,
+provider confidence, and input/output token usage are preserved.
+
+Selecting a Decision model does not replace the primary chat model or enable
+automatic Decision assistance. Explicit evaluations send the supplied evidence
+to OpenAI and use Platform billing.

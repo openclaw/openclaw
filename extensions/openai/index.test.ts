@@ -51,6 +51,7 @@ function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, u
   capturedRegistrations.push(captured);
   const on = vi.fn(captured.api.on);
   const registerHttpRoute = vi.fn(captured.api.registerHttpRoute);
+  const registerDecisionProvider = vi.fn(captured.api.registerDecisionProvider);
   const registerRuntimeLifecycle = vi.fn(captured.api.lifecycle.registerRuntimeLifecycle);
   plugin.register({
     ...captured.api,
@@ -61,9 +62,16 @@ function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, u
     pluginConfig: params?.pluginConfig,
     on,
     registerHttpRoute,
+    registerDecisionProvider,
     lifecycle: { ...captured.api.lifecycle, registerRuntimeLifecycle },
   });
-  return { on, providers: captured.providers, registerHttpRoute, registerRuntimeLifecycle };
+  return {
+    on,
+    providers: captured.providers,
+    registerHttpRoute,
+    registerRuntimeLifecycle,
+    registerDecisionProvider,
+  };
 }
 
 function expectOpenAIPromptContribution(
@@ -117,6 +125,17 @@ describe("openai plugin", () => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
+  });
+
+  it("registers the OpenAI Decision provider without loading credentials", () => {
+    const { registerDecisionProvider } = registerOpenAIPluginWithHook();
+    expect(registerDecisionProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "openai",
+        contractVersion: 1,
+        evaluate: expect.any(Function),
+      }),
+    );
   });
 
   it("registers the native GPT-Live offer route and cleanup lifecycle", async () => {

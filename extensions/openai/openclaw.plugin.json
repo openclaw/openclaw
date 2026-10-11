@@ -15,6 +15,17 @@
   },
   "enabledByDefault": true,
   "providers": ["openai"],
+  "decisionModels": [
+    {
+      "provider": "openai",
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "capabilities": {
+        "questionTypes": ["boolean", "choice", "score"],
+        "confidence": "provider-specific"
+      }
+    }
+  ],
   "providerUsageAuthEnvVars": {
     "openai": ["OPENAI_ADMIN_KEY"]
   },
@@ -429,6 +440,7 @@
     }
   ],
   "contracts": {
+    "decisionProviders": ["openai"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
