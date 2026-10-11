@@ -145,6 +145,7 @@ export class GatewayBrowserClient {
   private deviceTokenRetryBudgetUsed = false;
   private nativeAuthAbort: AbortController | null = null;
   private nativeAuthError: GatewayRequestError | null = null;
+  private nativeHelloAdmissionRequired = false;
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
@@ -153,8 +154,10 @@ export class GatewayBrowserClient {
   private pairingFailure: GatewayRequestError | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
+    this.nativeHelloAdmissionRequired = Boolean(opts.nativeConnectAuth);
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.nativeHelloAdmissionRequired = Boolean(this.opts.nativeConnectAuth);
         this.pendingPairing = null;
         this.pairingFailure = null;
         this.reachabilityProbe?.abort();
@@ -246,6 +249,9 @@ export class GatewayBrowserClient {
       onEvent: (event) => {
         if (this.pendingPairing) {
           this.handlePairingResolution(event);
+          return;
+        }
+        if (this.nativeHelloAdmissionRequired) {
           return;
         }
         this.chatEvents.dispatch(event, this.opts.onEvent);
@@ -359,6 +365,7 @@ export class GatewayBrowserClient {
       nativeSignal: this.nativeAuthAbort.signal,
       selectAuth: (input) => this.selectConnectAuth(input),
     });
+    this.nativeHelloAdmissionRequired = Boolean(plan.expectedHelloAuth);
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
@@ -366,6 +373,19 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    const expectedHelloAuth = plan.expectedHelloAuth;
+    if (
+      expectedHelloAuth &&
+      (hello.auth?.method !== expectedHelloAuth.method ||
+        hello.auth?.recoveryScope !== expectedHelloAuth.recoveryScope)
+    ) {
+      this.nativeAuthError = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "The Gateway did not return the app-approved Tailscale identity.",
+        retryable: false,
+      });
+      throw this.nativeAuthError;
+    }
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
     this.recovery.value = hello.auth?.recoveryScope ?? "";
@@ -397,6 +417,7 @@ export class GatewayBrowserClient {
         scopes,
       });
     }
+    this.nativeHelloAdmissionRequired = false;
     void this.resolveRecoveryScope(hello, plan);
   }
 
@@ -589,6 +610,9 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
+    if (this.nativeHelloAdmissionRequired) {
+      return Promise.reject(new Error("The native Gateway hello has not been admitted."));
+    }
     return this.chatEvents.request<T>(this.client, method, params, options);
   }
 
@@ -627,7 +651,12 @@ export class GatewayBrowserClient {
   }
 
   addEventListener(listener: GatewayEventListener): () => void {
-    return this.client.addEventListener((event) => this.chatEvents.dispatch(event, listener));
+    return this.client.addEventListener((event) => {
+      if (this.nativeHelloAdmissionRequired) {
+        return;
+      }
+      this.chatEvents.dispatch(event, listener);
+    });
   }
 
   /** Drops a stale socket; the shared reconnect supervisor owns recovery. */

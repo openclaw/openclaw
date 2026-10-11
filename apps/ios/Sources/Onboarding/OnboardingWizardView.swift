@@ -27,6 +27,7 @@ struct OnboardingWizardView: View {
     @State private var manualPortText: String = "18789"
     @State private var manualTLS: Bool = true
     @State private var manualContextPath: String?
+    @State private var manualPersonalTailscaleAuthentication: Bool?
     @State private var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State private var connectMessage: String?
     @State private var localConnectionFailure: String?
@@ -224,6 +225,7 @@ struct OnboardingWizardView: View {
             self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
         }
         .onDisappear {
+            self.manualPersonalTailscaleAuthentication = nil
             self.invalidateSetupAttempt()
             self.qrCodeCompletion.cancel()
             self.discoveryRestartTask?.cancel()
@@ -233,6 +235,15 @@ struct OnboardingWizardView: View {
         }
         .onChange(of: self.discoveryDomain) { _, _ in
             self.scheduleDiscoveryRestart()
+        }
+        .onChange(of: self.currentManualGatewayStableID) { _, _ in
+            self.manualPersonalTailscaleAuthentication = nil
+        }
+        .onChange(of: self.manualTransport.effectiveTLS) { _, _ in
+            self.manualPersonalTailscaleAuthentication = nil
+        }
+        .onChange(of: self.selectedMode) { _, _ in
+            self.manualPersonalTailscaleAuthentication = nil
         }
         .onChange(of: self.manualPortText) { _, newValue in
             let digits = newValue.filter(\.isNumber)
@@ -254,6 +265,7 @@ struct OnboardingWizardView: View {
         }
         .onChange(of: self.setupCode) { _, newValue in
             guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            self.manualPersonalTailscaleAuthentication = nil
             self.qrCodeCompletion.cancel()
             self.clearStagedGatewaySetupLink()
         }
@@ -725,6 +737,26 @@ extension OnboardingWizardView {
                     text: self.gatewayCredentialBinding(\.password),
                     focusedField: .gatewayPassword)
             }
+            if self.manualTransport.effectiveTLS,
+               self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasSuffix(".ts.net")
+            {
+                Toggle(isOn: Binding(
+                    get: {
+                        self.manualPersonalTailscaleAuthentication ?? self.currentManualGatewayStableID.map {
+                            self.gatewayController.pendingPersonalTailscaleAuthentication(stableID: $0) ??
+                                GatewaySettingsStore.usesPersonalTailscaleAuthentication(stableID: $0)
+                        } ?? false
+                    },
+                    set: { self.manualPersonalTailscaleAuthentication = $0 }))
+                {
+                    Text("Use Personal Tailscale Sign-In")
+                        .font(OpenClawType.body)
+                }
+                .disabled(self.connectingGateway != nil)
+                Text("The Gateway verifies your Tailscale identity. Off uses saved Gateway credentials.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            }
             self.manualConnectButton
         } header: {
             Text(title)
@@ -985,6 +1017,7 @@ extension OnboardingWizardView {
         _ link: GatewayConnectDeepLink,
         disconnectExistingGatewayForBootstrap: Bool = true) async -> Bool
     {
+        self.manualPersonalTailscaleAuthentication = nil
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         if setupAuth.hasBootstrapToken {
             guard await GatewayOnboardingReset.prepareForBootstrapPairing(
@@ -1414,6 +1447,8 @@ extension OnboardingWizardView {
             useTLS: self.manualTLS,
             contextPath: self.manualContextPath,
             authOverride: authOverride,
+            personalTailscaleAuthentication: self.manualPersonalTailscaleAuthentication ??
+                self.gatewayController.pendingPersonalTailscaleAuthentication(stableID: stableID),
             forceReconnect: forceReconnect,
             admissionCheckpoint: admissionCheckpoint)
         guard !Task.isCancelled,

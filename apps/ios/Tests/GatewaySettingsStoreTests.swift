@@ -694,6 +694,53 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         }
     }
 
+    @Test @MainActor func `registration persists explicit personal choice without changing omitted choice`() async {
+        await withLastGatewaySnapshot {
+            applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
+            let entry = GatewaySettingsStore.GatewayRegistryEntry(
+                stableID: "manual|proof.tailnet.ts.net|443",
+                kind: .manual,
+                name: "Proof",
+                host: "proof.tailnet.ts.net",
+                port: 443,
+                useTLS: true,
+                lastConnectedAtMs: nil)
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(
+                entry,
+                activate: true,
+                personalTailscaleAuthentication: true))
+            #expect(GatewaySettingsStore.loadGatewayRegistry().activeEntry?.personalTailscaleAuthentication == true)
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(entry))
+            #expect(GatewaySettingsStore.usesPersonalTailscaleAuthentication(stableID: entry.stableID))
+            let personalRegistry = GatewaySettingsStore.loadGatewayRegistry()
+            for replacement in [(false, entry.host), (true, "example.test")] {
+                var invalid = entry
+                invalid.useTLS = replacement.0
+                invalid.host = replacement.1
+                #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(invalid, activate: true))
+                #expect(GatewaySettingsStore.loadGatewayRegistry() == personalRegistry)
+            }
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(
+                entry,
+                personalTailscaleAuthentication: false))
+            #expect(!GatewaySettingsStore.usesPersonalTailscaleAuthentication(stableID: entry.stableID))
+            let before = GatewaySettingsStore.loadGatewayRegistry()
+            var insecure = entry
+            insecure.useTLS = false
+            #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(
+                insecure,
+                activate: true,
+                personalTailscaleAuthentication: true))
+            #expect(GatewaySettingsStore.loadGatewayRegistry() == before)
+            var otherHost = entry
+            otherHost.host = "example.test"
+            #expect(!GatewaySettingsStore.upsertGatewayRegistryEntry(
+                otherHost,
+                personalTailscaleAuthentication: true))
+            #expect(GatewaySettingsStore.loadGatewayRegistry() == before)
+        }
+    }
+
     @Test @MainActor func `registry CRUD round trip persists deterministic ordering`() async {
         await withLastGatewaySnapshot {
             applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
@@ -782,6 +829,40 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
             #expect(registry.version == 1)
             #expect(registry.activeStableID == "bonjour|alpha")
             #expect(registry.connectedStableIDs.isEmpty)
+        }
+    }
+
+    @Test @MainActor func `persisted personal operator authentication survives registry reload and rewrite`() async {
+        await withLastGatewaySnapshot {
+            let gatewayID = "manual|personal-auth.example.ts.net|443"
+            let registryJSON = (try? JSONSerialization.data(withJSONObject: [
+                "version": 1,
+                "activeStableID": gatewayID,
+                "connectedStableIDs": [gatewayID],
+                "entries": [[
+                    "stableID": gatewayID,
+                    "kind": "manual",
+                    "name": "Personal gateway",
+                    "host": "personal-auth.example.ts.net",
+                    "port": 443,
+                    "useTLS": true,
+                    "personalTailscaleAuthentication": true,
+                ]],
+            ])).flatMap { String(data: $0, encoding: .utf8) }
+            #expect(registryJSON != nil)
+            applyKeychain([
+                gatewayRegistryKeychainEntry: registryJSON,
+                lastGatewayKeychainEntry: nil,
+            ])
+
+            let restored = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(restored.activeEntry?.personalTailscaleAuthentication == true)
+            #expect(GatewaySettingsStore.usesPersonalTailscaleAuthentication(stableID: gatewayID))
+            #expect(GatewaySettingsStore.saveGatewayRegistry(restored))
+
+            let relaunched = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(relaunched.activeEntry?.personalTailscaleAuthentication == true)
+            #expect(GatewaySettingsStore.usesPersonalTailscaleAuthentication(stableID: gatewayID))
         }
     }
 

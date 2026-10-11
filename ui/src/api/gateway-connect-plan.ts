@@ -23,6 +23,7 @@ import {
 import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
+  NativeGatewayHelloExpectation,
 } from "../app/native-gateway-auth.ts";
 import { i18n } from "../i18n/index.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
@@ -62,6 +63,7 @@ export type ConnectPlan = {
   explicitGatewayToken?: string;
   selectedAuth: GatewayConnectAuthSelection;
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  expectedHelloAuth?: NativeGatewayHelloExpectation;
 };
 
 function browserDeviceFamily(): string | undefined {
@@ -230,5 +232,6 @@ export async function buildBrowserGatewayConnectPlan({
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,
     deviceIdentity,
+    ...(nativeAuth?.expectedHelloAuth ? { expectedHelloAuth: nativeAuth.expectedHelloAuth } : {}),
   };
 }

@@ -32,11 +32,14 @@ final class IOSChatViewModelOwner {
         let routingContract = appModel.chatSessionRoutingContract ?? ""
         let connected = appModel.isOperatorGatewayConnected
         let controlUIInputs = appModel.activeGatewayConnectConfig?.controlUIInputs
-        let authorityChanged = self.controlUIInputs != nil && controlUIInputs != nil &&
-            self.controlUIInputs != controlUIInputs
+        let personalOwnerChanged = appModel.activeGatewayConnectConfig?.personalTailscaleAuthentication == true &&
+            !self.ownerID.isEmpty && self.ownerID != ownerID
+        let authorityChanged = personalOwnerChanged || (self.controlUIInputs != nil && controlUIInputs != nil &&
+            self.controlUIInputs != controlUIInputs)
         let reconnected = connected && !self.wasConnected
         self.wasConnected = connected
         if authorityChanged { self.viewModel?.retireQuestionAuthority() }
+        if personalOwnerChanged { self.viewModel?.detachTransport() }
         if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged,
            self.ownerID == ownerID, self.transportAgentID == agentID
         {

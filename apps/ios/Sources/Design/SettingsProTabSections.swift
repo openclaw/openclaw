@@ -749,47 +749,72 @@ extension SettingsProTab {
         let keepsConnected = self.gatewayRegistry.connectedStableIDs.contains {
             GatewayStableIdentifier.matches($0, entry.stableID)
         }
-        return HStack(spacing: 12) {
-            Button {
-                guard !isActive else { return }
-                Task { await self.switchGateway(to: entry) }
-            } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name)
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(.primary)
-                    Text(self.gatewayEndpointSummary(entry))
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-            }
-            .buttonStyle(.plain)
-            .disabled(self.connectingGateway != nil)
-
-            if self.connectingGateway == .gateway(entry.id) {
-                ProgressView()
-                    .controlSize(.small)
-            } else if isActive {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(OpenClawBrand.accent)
-                    .accessibilityLabel("Focused Gateway")
-            } else {
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
                 Button {
-                    if self.gatewayController.setGatewayConnectionEnabled(
-                        stableID: entry.stableID,
-                        enabled: !keepsConnected)
-                    {
-                        self.refreshGatewayRegistry()
-                    }
+                    guard !isActive else { return }
+                    Task { await self.switchGateway(to: entry) }
                 } label: {
-                    Image(systemName: keepsConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(keepsConnected ? OpenClawBrand.accent : .secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.name)
+                            .font(OpenClawType.subheadSemiBold)
+                            .foregroundStyle(.primary)
+                        Text(self.gatewayEndpointSummary(entry))
+                            .font(OpenClawType.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(keepsConnected ? "Disconnect Gateway" : "Keep Gateway Connected")
+                .disabled(self.connectingGateway != nil)
+
+                if self.connectingGateway == .gateway(entry.id) {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawBrand.accent)
+                        .accessibilityLabel("Focused Gateway")
+                } else {
+                    Button {
+                        if self.gatewayController.setGatewayConnectionEnabled(
+                            stableID: entry.stableID,
+                            enabled: !keepsConnected)
+                        {
+                            self.refreshGatewayRegistry()
+                        }
+                    } label: {
+                        Image(systemName: keepsConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+                            .font(OpenClawType.subheadSemiBold)
+                            .foregroundStyle(keepsConnected ? OpenClawBrand.accent : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(keepsConnected ? "Disconnect Gateway" : "Keep Gateway Connected")
+                }
+            }
+            if (entry.useTLS && entry.host?.lowercased().hasSuffix(".ts.net") == true) ||
+                entry.personalTailscaleAuthentication == true
+            {
+                self.settingsToggle("Use Personal Tailscale Sign-In", isOn: Binding(
+                    get: { entry.personalTailscaleAuthentication == true },
+                    set: { enabled in
+                        Task {
+                            guard self.gatewayController.setPersonalTailscaleAuthentication(
+                                stableID: entry.stableID,
+                                enabled: enabled)
+                            else {
+                                self.gatewayActionStatusText = String(localized: "Could not save the sign-in choice.")
+                                return
+                            }
+                            self.refreshGatewayRegistry()
+                            if isActive { await self.reconnectGateway() }
+                        }
+                    }))
+                    .disabled(self.connectingGateway != nil || self.isReconnectingGateway)
+                Text("The Gateway verifies your Tailscale identity. Off uses saved Gateway credentials.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .contentShape(Rectangle())

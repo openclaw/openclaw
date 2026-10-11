@@ -384,13 +384,18 @@ enum GatewaySettingsStore {
     }
 
     @discardableResult
-    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry, activate: Bool = false) -> Bool {
+    static func upsertGatewayRegistryEntry(
+        _ entry: GatewayRegistryEntry,
+        activate: Bool = false,
+        personalTailscaleAuthentication: Bool? = nil) -> Bool
+    {
         guard let normalized = self.normalizedGatewayRegistryEntry(entry) else { return false }
         var registry = self.loadGatewayRegistry()
         if let index = registry.entries.firstIndex(where: {
             GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
         }) {
             var replacement = normalized
+            replacement.personalTailscaleAuthentication = registry.entries[index].personalTailscaleAuthentication
             // Connection/Bonjour updates do not own ingress identity. Retain the
             // last admitted origin until its owner retires or replaces the grant.
             replacement.accessOrigin = replacement.accessOrigin ?? registry.entries[index].accessOrigin
@@ -401,6 +406,18 @@ enum GatewaySettingsStore {
         } else {
             registry.entries.append(normalized)
         }
+        if let personalTailscaleAuthentication,
+           let index = registry.entries.firstIndex(where: {
+               GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
+           })
+        {
+            registry.entries[index].personalTailscaleAuthentication = personalTailscaleAuthentication ? true : nil
+        }
+        guard registry.entries.first(where: {
+            GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
+        })?.personalTailscaleAuthentication != true ||
+            normalized.useTLS && normalized.host?.lowercased().hasSuffix(".ts.net") == true
+        else { return false }
         if activate {
             registry.activate(stableID: normalized.stableID)
         }
@@ -859,6 +876,7 @@ extension GatewaySettingsStore {
         var useTLS: Bool
         var contextPath: String?
         var accessOrigin: CloudflareAccessOrigin?
+        var personalTailscaleAuthentication: Bool?
         var lastConnectedAtMs: Int?
 
         init(
@@ -870,6 +888,7 @@ extension GatewaySettingsStore {
             useTLS: Bool,
             contextPath: String? = nil,
             accessOrigin: CloudflareAccessOrigin? = nil,
+            personalTailscaleAuthentication: Bool? = nil,
             lastConnectedAtMs: Int?)
         {
             self.stableID = stableID
@@ -880,6 +899,7 @@ extension GatewaySettingsStore {
             self.useTLS = useTLS
             self.contextPath = contextPath
             self.accessOrigin = accessOrigin
+            self.personalTailscaleAuthentication = personalTailscaleAuthentication
             self.lastConnectedAtMs = lastConnectedAtMs
         }
 
@@ -896,6 +916,7 @@ extension GatewaySettingsStore {
                 lhs.useTLS == rhs.useTLS &&
                 lhs.contextPath == rhs.contextPath &&
                 lhs.accessOrigin == rhs.accessOrigin &&
+                lhs.personalTailscaleAuthentication == rhs.personalTailscaleAuthentication &&
                 lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
         }
     }

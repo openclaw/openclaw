@@ -8,9 +8,18 @@ import Security
 /// Mutable state is confined to queue; test-facing access synchronizes with that queue.
 final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     struct ConnectAuth: Equatable, Sendable {
+        let role: String?
         let token: String?
         let bootstrapToken: String?
         let deviceToken: String?
+    }
+
+    struct CapturedRPC {
+        let id: String
+        let method: String
+        let params: [String: Any]?
+        let index: Int
+        fileprivate let connectionIndex: Int
     }
 
     struct ConnectFailure: Sendable {
@@ -81,8 +90,14 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     private let queue: DispatchQueue
     private let issuedDeviceTokens: [String?]
     private let connectFailures: [Int: ConnectFailure]
+    private let authMethod: String?
+    private let recoveryScope: String?
+    private let manualResponseMethods: Set<String>
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
+    private var connectDeviceIDs: [String?] = []
+    private var capturedRPCs: [CapturedRPC] = []
+    private var pendingManualRPCIndices = Set<Int>()
     private var nextConnectionIndex = 0
     private var stopped = false
     let port: UInt16
@@ -94,7 +109,10 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         port: UInt16,
         fingerprint: String?,
         issuedDeviceTokens: [String?],
-        connectFailures: [Int: ConnectFailure])
+        connectFailures: [Int: ConnectFailure],
+        authMethod: String?,
+        recoveryScope: String?,
+        manualResponseMethods: Set<String>)
     {
         self.listener = listener
         self.queue = queue
@@ -102,6 +120,9 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.fingerprint = fingerprint
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
+        self.authMethod = authMethod
+        self.recoveryScope = recoveryScope
+        self.manualResponseMethods = manualResponseMethods
         self.listener.newConnectionHandler = { [weak self] connection in
             guard let self else {
                 connection.cancel()
@@ -116,6 +137,9 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     nonisolated static func start(
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure] = [:],
+        authMethod: String? = nil,
+        recoveryScope: String? = nil,
+        manualResponseMethods: Set<String> = [],
         tls: Bool = false) async throws -> NativeGatewayWebSocketFixture
     {
         let parameters: NWParameters
@@ -159,7 +183,10 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
                         port: port.rawValue,
                         fingerprint: fingerprint,
                         issuedDeviceTokens: issuedDeviceTokens,
-                        connectFailures: connectFailures)
+                        connectFailures: connectFailures,
+                        authMethod: authMethod,
+                        recoveryScope: recoveryScope,
+                        manualResponseMethods: manualResponseMethods)
                     try Task.checkCancellation()
                     return fixture
                 case let .failed(error):
@@ -194,6 +221,51 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync {
             guard self.connectAuth.indices.contains(index) else { return nil }
             return self.connectAuth[index]
+        }
+    }
+
+    func capturedDeviceID(at index: Int) -> String? {
+        self.queue.sync {
+            guard self.connectDeviceIDs.indices.contains(index) else { return nil }
+            return self.connectDeviceIDs[index]
+        }
+    }
+
+    func capturedRPC(at index: Int) -> CapturedRPC? {
+        self.queue.sync {
+            guard self.capturedRPCs.indices.contains(index) else { return nil }
+            return self.capturedRPCs[index]
+        }
+    }
+
+    func waitForRPC(method: String, afterIndex: Int = -1) async throws -> CapturedRPC {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if let rpc = self.queue.sync(execute: {
+                self.capturedRPCs.first(where: { $0.method == method && $0.index > afterIndex })
+            }) {
+                return rpc
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw URLError(.timedOut)
+    }
+
+    @discardableResult
+    func respond(to rpc: CapturedRPC, payload: [String: Any]) -> Bool {
+        self.queue.sync {
+            guard self.clients[rpc.connectionIndex] != nil,
+                  self.capturedRPCs.indices.contains(rpc.index),
+                  self.capturedRPCs[rpc.index].id == rpc.id,
+                  self.pendingManualRPCIndices.remove(rpc.index) != nil
+            else { return false }
+            self.sendJSON([
+                "type": "res",
+                "id": rpc.id,
+                "ok": true,
+                "payload": payload,
+            ], index: rpc.connectionIndex)
+            return true
         }
     }
 
@@ -407,17 +479,24 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     }
 
     private func handleText(_ data: Data, index: Int) {
-        guard var client = self.clients[index], client.phase == .connect,
+        guard var client = self.clients[index],
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               request["type"] as? String == "req",
-              request["method"] as? String == "connect",
+              let method = request["method"] as? String,
               let id = request["id"] as? String
         else { return }
 
         let params = request["params"] as? [String: Any]
+        guard client.phase == .connect, method == "connect" else {
+            guard client.phase == .open else { return }
+            self.captureRPC(id: id, method: method, params: params, connectionIndex: index)
+            return
+        }
         let auth = params?["auth"] as? [String: Any]
+        self.connectDeviceIDs.append((params?["device"] as? [String: Any])?["id"] as? String)
         self.receivedRoles.append(params?["role"] as? String ?? "")
         self.connectAuth.append(ConnectAuth(
+            role: params?["role"] as? String,
             token: auth?["token"] as? String,
             bootstrapToken: auth?["bootstrapToken"] as? String,
             deviceToken: auth?["deviceToken"] as? String))
@@ -426,7 +505,20 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         if let failure = self.connectFailures[index] {
             self.sendConnectFailure(id: id, failure: failure, index: index)
         } else {
-            self.sendConnectOK(id: id, index: index)
+            self.sendConnectOK(id: id, index: index, role: params?["role"] as? String ?? "node")
+        }
+    }
+
+    private func captureRPC(id: String, method: String, params: [String: Any]?, connectionIndex: Int) {
+        let rpc = CapturedRPC(
+            id: id,
+            method: method,
+            params: params,
+            index: self.capturedRPCs.count,
+            connectionIndex: connectionIndex)
+        self.capturedRPCs.append(rpc)
+        if self.manualResponseMethods.contains(method) {
+            self.pendingManualRPCIndices.insert(rpc.index)
         }
     }
 
@@ -442,11 +534,13 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.sendJSON(frame, index: index)
     }
 
-    private func sendConnectOK(id: String, index: Int) {
+    private func sendConnectOK(id: String, index: Int, role: String) {
         var auth: [String: Any] = [
-            "role": "node",
+            "role": role,
             "scopes": [],
         ]
+        auth["method"] = self.authMethod
+        auth["recoveryScope"] = self.recoveryScope
         if self.issuedDeviceTokens.indices.contains(index),
            let token = self.issuedDeviceTokens[index]
         {
