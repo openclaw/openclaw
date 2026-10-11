@@ -14,7 +14,7 @@ import {
   MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
   MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
   normalizeMSTeamsDelegatedTokens,
-} from "./src/delegated-state.js";
+} from "./src/delegated-token-contract.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 
 export * from "./config-doctor-api.js";
