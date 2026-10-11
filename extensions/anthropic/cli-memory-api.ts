@@ -1,1 +1,1 @@
-export { excludesClaudeNativeMemory } from "./cli-native-memory.js";
+export { excludesClaudeNativeMemoryByDefault } from "./cli-native-memory.js";

@@ -317,15 +317,24 @@ To move existing Claude Code memory into OpenClaw:
 
   Both paths copy only the memory you chose into
   `memory/imports/claude-code/`, where memory search indexes it, and leave the
-  source files in place. The Doctor note stops once the workspace has a Claude
-  Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants)
+  source files in place. The Doctor note for an agent stops once its workspace
+  has a Claude Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants)
   and [`openclaw migrate`](/cli/migrate).
 
+  Doctor reminds only while `excludeNativeMemory` is unset. If you do not want
+  that memory in OpenClaw, set the option explicitly to keep it out and end the
+  reminder:
+
+  ```bash
+  openclaw config set plugins.entries.anthropic.config.claudeCli.excludeNativeMemory true
+  ```
+
   When `~/.claude/settings.json` sets `autoMemoryDirectory`, Claude Code keeps
-  its auto memory in that one directory instead. Doctor reports that directory,
-  and **Import Memory** lists it as its own collection. When the Gateway runs
-  with `CLAUDE_CONFIG_DIR`, Doctor and the import read that directory in place
-  of `~/.claude`.
+  its auto memory in that one directory instead, shared by every agent. Doctor
+  reports that directory and names the `claude-cli` agents that have no import
+  yet, and **Import Memory** lists it as its own collection. When the Gateway
+  runs with `CLAUDE_CONFIG_DIR`, Doctor and the import read that directory in
+  place of `~/.claude`.
 
 - **`~/.claude/CLAUDE.md`:** these rules apply to every Claude Code session on
   the host, so OpenClaw does not copy them automatically. Move the rules an

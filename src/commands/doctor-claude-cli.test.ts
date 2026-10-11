@@ -169,9 +169,10 @@ describe("noteClaudeCliHealth", () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
       const memoryDir = path.join(projectDir, "memory");
-      fs.mkdirSync(memoryDir, { recursive: true });
-      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "- [Fact](fact.md)\n");
-      fs.writeFileSync(path.join(memoryDir, "fact.md"), "fact\n");
+      // The import copies subfolders too, so the count includes them.
+      fs.mkdirSync(path.join(memoryDir, "topics"), { recursive: true });
+      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "- [Fact](topics/fact.md)\n");
+      fs.writeFileSync(path.join(memoryDir, "topics", "fact.md"), "fact\n");
       mockClaudeAuthentication(true);
 
       const noteFn = vi.fn();
@@ -182,19 +183,25 @@ describe("noteClaudeCliHealth", () => {
       expect(body).toContain(
         `openclaw migrate claude --agent ${quote("main")} --from ${quote(memoryDir)}`,
       );
+      expect(body).toContain(
+        "config set plugins.entries.anthropic.config.claudeCli.excludeNativeMemory true",
+      );
       expect(body).not.toContain("- Fix:");
 
-      const optedOut = vi.fn();
-      noteClaudeCliHealth(
-        {
-          ...defaultClaudeConfig,
-          plugins: {
-            entries: { anthropic: { config: { claudeCli: { excludeNativeMemory: false } } } },
+      // Either explicit value is the operator's decision, so the reminder stops.
+      for (const excludeNativeMemory of [false, true]) {
+        const decided = vi.fn();
+        noteClaudeCliHealth(
+          {
+            ...defaultClaudeConfig,
+            plugins: {
+              entries: { anthropic: { config: { claudeCli: { excludeNativeMemory } } } },
+            },
           },
-        },
-        { workspaceDir, noteFn: optedOut },
-      );
-      expect(optedOut).not.toHaveBeenCalled();
+          { workspaceDir, noteFn: decided },
+        );
+        expect(decided).not.toHaveBeenCalled();
+      }
 
       fs.mkdirSync(path.join(workspaceDir, "memory", "imports", "claude-code"), {
         recursive: true,
@@ -245,6 +252,56 @@ describe("noteClaudeCliHealth", () => {
       expect(body).toContain("Control UI Settings → Import Memory");
       expect(body).not.toContain("migrate claude");
       expect(body).not.toContain("- Fix:");
+    });
+  });
+
+  it("keeps the configured-directory note for agents without an import", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveModelAgentRuntimeMetadataMock.mockReturnValue({ id: "claude-cli", source: "model" });
+      const root = path.dirname(workspaceDir);
+      const runtimeModel = "anthropic/claude-opus-4-7";
+      const agent = (id: string) => {
+        const workspace = path.join(root, `workspace-${id}`);
+        fs.mkdirSync(workspace, { recursive: true });
+        return {
+          workspace,
+          model: runtimeModel,
+          models: { [runtimeModel]: { agentRuntime: { id: "claude-cli" } } },
+        };
+      };
+      const config = {
+        agents: {
+          defaults: { model: { primary: runtimeModel } },
+          entries: { alpha: agent("alpha"), beta: agent("beta") },
+        },
+      };
+      fs.mkdirSync(path.join(homeDir, "claude-notes"));
+      fs.writeFileSync(path.join(homeDir, "claude-notes", "MEMORY.md"), "- fact\n");
+      fs.mkdirSync(path.join(homeDir, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(homeDir, ".claude", "settings.json"),
+        JSON.stringify({ autoMemoryDirectory: "~/claude-notes" }),
+      );
+      mockClaudeAuthentication(true);
+      const importInto = (id: string) =>
+        fs.mkdirSync(path.join(root, `workspace-${id}`, "memory", "imports", "claude-code"), {
+          recursive: true,
+        });
+
+      const none = vi.fn();
+      noteClaudeCliHealth(config, { noteFn: none });
+      expect(noteBody(none)).toContain("Import Memory for agents alpha, beta.");
+
+      // An import lands in one agent's workspace; the other agent still has no copy.
+      importInto("alpha");
+      const one = vi.fn();
+      noteClaudeCliHealth(config, { noteFn: one });
+      expect(noteBody(one)).toContain("Import Memory for agent beta.");
+
+      importInto("beta");
+      const both = vi.fn();
+      noteClaudeCliHealth(config, { noteFn: both });
+      expect(both).not.toHaveBeenCalled();
     });
   });
 
