@@ -2,7 +2,7 @@ import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./debug-overlay.ts";

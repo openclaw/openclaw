@@ -181,7 +181,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
       ) : undefined}
       {props.catalogDiscoveryError ? (
         <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
-          <span>{t("modelProviders.defaults.discoverFailed")}</span>
+          <span>{props.catalogDiscoveryError}</span>
           <button class="btn btn--sm" type="button" onClick={() => props.onCatalogRetry()}>
             {t("modelProviders.defaults.retryDiscover")}
           </button>
