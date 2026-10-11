@@ -9,6 +9,7 @@ import {
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
@@ -29,6 +30,7 @@ import {
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import { captureIncognitoSessionMutationFacts } from "./session-sharing-incognito.js";
+import type { PreparedSessionFactsSource } from "./session-sharing-source.types.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
@@ -42,6 +44,7 @@ import {
   type GatewaySessionStoreSelection,
 } from "./session-utils-store-retained.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 export type SessionSharingTarget = {
   agentId: string;
@@ -557,3 +560,18 @@ export function authorizeSessionSharingTarget(
         },
       });
 }
+
+export type SessionFactsRequest = {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  preserveQualifiedAddress?: boolean;
+  storageReady?: Promise<void>;
+  preparedSource?: PreparedSessionFactsSource;
+};
+export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
+  readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
+  bindCreation(this: void, operation: SessionEntryCreationOperation): void;
+  readCurrent(this: void, cfg: OpenClawConfig): Facts;
+  release(this: void): void;
+};
