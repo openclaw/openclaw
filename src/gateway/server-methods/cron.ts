@@ -710,4 +710,3 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
   }
   cronHandlers[method] = wrapped;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
