@@ -214,3 +214,19 @@ declare global {
     "openclaw-sparkline": SparklineTile;
   }
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-sparkline": HTMLAttributes<SparklineTile> & {
+        "prop:label": string;
+        "prop:sub"?: string;
+        "prop:samples": readonly SparklineSample[];
+        "prop:format": (value: number) => string;
+        "prop:floorMax"?: number;
+        "prop:stackColors"?: readonly string[];
+        autorange?: boolean;
+      };
+    }
+  }
+}

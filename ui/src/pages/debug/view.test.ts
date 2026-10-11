@@ -1,5 +1,5 @@
 import hljs from "highlight.js/lib/core";
-import { createComponent, flush } from "solid-js";
+import { createComponent, createStore, flush } from "solid-js";
 import { assert, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -14,7 +14,6 @@ import { DebugPage } from "./debug-page.tsx";
 import {
   createDebugApplicationContext,
   diagnosticResponse,
-  mountDebugComponent,
   normalizedText,
   useDebugTestEnvironment,
 } from "./debug.test-support.ts";
@@ -27,7 +26,12 @@ const pages = new WeakMap<
 >();
 
 function mountView(initial: DebugProps, container: HTMLElement) {
-  return mountDebugComponent(DebugPageView, initial, container).update;
+  const [props, setProps] = createStore(initial, { shallow: true });
+  mountSolid(() => createComponent(DebugPageView, props), { container });
+  return (next: DebugProps) => {
+    setProps(() => next);
+    flush();
+  };
 }
 
 function mountDebugHost(context: ApplicationContext): TestDebugPage {

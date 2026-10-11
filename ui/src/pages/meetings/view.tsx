@@ -1,5 +1,4 @@
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
-import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { For, Show, createMemo, createEffect } from "solid-js";
@@ -24,23 +23,6 @@ import {
   TRANSCRIPT_FILTER_KEYS,
 } from "./route-state.ts";
 import type { TranscriptsViewProps } from "./view-types.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab": HTMLAttributes<WaTab> & {
-        panel: string;
-        active: boolean;
-        "prop:tabIndex": WaTab["tabIndex"];
-      };
-      "wa-tab-group": HTMLAttributes<WaTabGroup> & {
-        activation: "manual";
-        "prop:active": WaTabGroup["active"];
-        "without-scroll-controls": boolean;
-      };
-    }
-  }
-}
 
 registerEnglishCatalog(registerTranscriptsEnglish);
 registerEnglishCatalog(registerMeetingsEnglish);
@@ -459,7 +441,7 @@ function Reader(props: TranscriptsViewProps) {
                   panel={tab()}
                   aria-controls="transcript-reader-panel"
                   class="hub-tab"
-                  active={props.readerTab === tab()}
+                  prop:active={props.readerTab === tab()}
                   prop:tabIndex={props.readerTab === tab() ? 0 : -1}
                   aria-selected={props.readerTab === tab() ? "true" : "false"}
                   onClick={(event) => {

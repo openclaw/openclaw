@@ -26,23 +26,6 @@ import "../../styles/memory-import.css";
 
 registerEnglishCatalog(registerMemoryImportEnglish);
 
-type AgentSelectElement = HTMLElementTagNameMap["openclaw-agent-select"];
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-agent-select": HTMLAttributes<AgentSelectElement> & {
-        name?: string;
-        "prop:options": AgentSelectElement["options"];
-        "prop:value": string;
-        "prop:accessibleLabel": string;
-        "prop:disabled": boolean;
-        "prop:onSelect": AgentSelectElement["onSelect"];
-      };
-    }
-  }
-}
-
 type MemoryCollection = {
   label: string;
   items: MemoryMigrationItem[];

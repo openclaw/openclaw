@@ -1,27 +1,10 @@
-import { createComponent, createStore, flush, type Component } from "solid-js";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { cleanupSolid as cleanup, mountSolid as render } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid as cleanup } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-
-export function mountDebugComponent<Props extends object>(
-  component: Component<Props>,
-  initial: Props,
-  container: HTMLElement,
-) {
-  const [props, setProps] = createStore(initial, { shallow: true });
-  const mounted = render(() => createComponent(component, props), { container });
-  return {
-    unmount: mounted.unmount,
-    update: (next: Props) => {
-      setProps(() => next);
-      flush();
-    },
-  };
-}
 
 export function createDebugApplicationContext(
   request: (method: string) => Promise<unknown>,

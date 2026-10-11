@@ -14,7 +14,6 @@ import {
   type GatewayStatusSample,
   type GatewayStatusSnapshot,
 } from "../../components/gateway-vitals.ts";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
@@ -237,18 +236,3 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
     render: (props) => <Events gateway={props.value} />,
   }),
 ];
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-sparkline": HTMLAttributes<HTMLElementTagNameMap["openclaw-sparkline"]> & {
-        "prop:label"?: string;
-        "prop:sub"?: string;
-        "prop:samples"?: readonly SparklineSample[];
-        "prop:format"?: (value: number) => string;
-        "prop:floorMax"?: number;
-        autorange?: boolean;
-      };
-    }
-  }
-}

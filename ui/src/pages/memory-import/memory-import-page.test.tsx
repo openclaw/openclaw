@@ -475,12 +475,14 @@ describe("MemoryImportPage", () => {
         throw new Error(`unexpected method: ${method}`);
       });
       const context = createContext(request);
-      const agents = {
+      const agents: ApplicationContext["agents"] = {
         ...context.agents,
         state: {
           ...context.agents.state,
           agentsList: {
             defaultId: "research",
+            mainKey: "main",
+            scope: "per-sender",
             agents: [
               { id: "research", name: "Research" },
               { id: "writer", name: "Writer" },
