@@ -32,7 +32,6 @@ import {
   createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
-  resolveSessionEntrySelection,
   updateSessionEntry,
   waitForSessionTranscriptProjection,
   type SessionTranscriptTurnPersistOptions,
@@ -488,11 +487,26 @@ async function appendExactAssistantMessageWithSource(
           ).entry,
           normalizedKey: actorKey,
         }
-      : resolveSessionEntrySelection({
-          ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
-          sessionKey,
-          storePath,
-        });
+      : await withSessionEntryReadOnlyInWorker(
+          {
+            ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+            sessionKey,
+            storePath,
+          },
+          () => params.assertCurrent?.(),
+          async (read, owner) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return {
+              existing: read.value,
+              normalizedKey: resolveSqliteSessionKey(
+                sessionKey,
+                owner.scope?.agentId ?? storeAgentId,
+              ),
+            };
+          },
+        );
   incognito?.authority.assertCurrent();
   params.assertCurrent?.();
   let entry = resolved.existing;

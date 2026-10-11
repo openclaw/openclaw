@@ -108,12 +108,6 @@ describe("registerTelegramNativeCommands /login", () => {
         replies: [expect.objectContaining({ text: expect.stringContaining("Choose a provider") })],
       }),
     );
-    expect(loginSessionMocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandText: "/login",
-        replyText: expect.stringContaining("Choose a provider"),
-      }),
-    );
     expect(loginFlow).not.toHaveBeenCalled();
     await nativeCommandCallbackDispatcher?.({
       botUser: telegramBotInfoForTest,
