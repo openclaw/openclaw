@@ -102,8 +102,7 @@ type ForkSessionParamsForTest = {
 
 vi.mock("./session-fork.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-fork.js")>()),
-  forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
-    sessionForkMocks.forkSessionFromParent(...args),
+  forkSessionFromParent: sessionForkMocks.forkSessionFromParent,
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
@@ -903,8 +902,7 @@ describe("initSessionState thread forking", () => {
     });
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
     using original = retainEmbeddedSessionPromptState(threadSessionKey);
-    const promptState = original.state;
-    promptState.toolResults.frozen.add("retained-tool-result");
+    original.state.toolResults.frozen.add("retained-tool-result");
     enqueueFollowupRun(
       threadSessionKey,
       createQueueTestRun({ prompt: "retained followup" }),
@@ -942,8 +940,8 @@ describe("initSessionState thread forking", () => {
         mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
       });
       using retained = retainEmbeddedSessionPromptState(threadSessionKey);
-      expect(retained.state).toBe(promptState);
-      expect(promptState.toolResults.frozen).toContain("retained-tool-result");
+      expect(retained.state).toBe(original.state);
+      expect(original.state.toolResults.frozen).toContain("retained-tool-result");
       expect(getFollowupQueueDepth(threadSessionKey)).toBe(1);
       expect(peekSystemEvents(threadSessionKey)).toEqual(["retained event"]);
       expect(replyRunRegistry.get(threadSessionKey)).toBe(activeReply);
