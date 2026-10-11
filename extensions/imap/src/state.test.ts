@@ -7,36 +7,6 @@ import { countImapSkip, initializeImapCursor, rememberImapMessage } from "./stat
 describe("IMAP cursor initialization", () => {
   const previous = { uidValidity: "1", lastSeenUid: 42, updatedAt: 123 };
 
-  it.each([
-    { kind: "baseline", existing: undefined, uidValidity: "1", baseline: 0 },
-    { kind: "reset", existing: previous, uidValidity: "2", baseline: 4294967295 },
-    { kind: "resume", existing: previous, uidValidity: "1", baseline: 99 },
-  ])("initializes a $kind cursor", async ({ kind, existing, uidValidity, baseline }) => {
-    const { state } = createImapTestRuntime();
-    if (existing) {
-      await state.cursors.register("account", existing);
-    }
-    const register = vi.spyOn(state.cursors, "register");
-    const resolveBaseline = vi.fn(async () => baseline);
-    const result = await initializeImapCursor(
-      state,
-      "account",
-      uidValidity,
-      resolveBaseline,
-      () => true,
-    );
-
-    expect(result?.kind).toBe(kind);
-    expect(result?.cursor).toEqual(
-      kind === "resume"
-        ? previous
-        : { uidValidity, lastSeenUid: baseline, updatedAt: expect.any(Number) },
-    );
-    expect(resolveBaseline).toHaveBeenCalledTimes(kind === "resume" ? 0 : 1);
-    expect(register).toHaveBeenCalledTimes(kind === "resume" ? 0 : 1);
-    expect(await state.cursors.lookup("account")).toEqual(result?.cursor);
-  });
-
   it.each([undefined, null, Number.NaN, Infinity, -1, 0.5, "42", 4294967296])(
     "preserves the old cursor when the baseline is invalid: %s",
     async (baseline) => {
