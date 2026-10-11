@@ -90,7 +90,10 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
-    package: { name: "@openclaw/telegram", distWorkerPath: "src/telegram-ingress-worker.runtime.js" },
+    package: {
+      name: "@openclaw/telegram",
+      distWorkerPath: "src/telegram-ingress-worker.runtime.js",
+    },
   });
   const worker = createCpuTrackedWorker(workerUrl, {
     execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
