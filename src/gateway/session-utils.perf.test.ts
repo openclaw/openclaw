@@ -355,14 +355,28 @@ describe("session list resolver cache", () => {
           // Acquisition shares both hits and misses; defaults retain their separate lookup.
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
           const inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
+          catalogSpy.mockClear();
+          let warmCatalogReads: number;
           try {
             await listProjectedSessions({ projection, opts: { limit: 80 } });
             expect(inputs).not.toHaveBeenCalled();
+            warmCatalogReads = catalogSpy.mock.calls.length;
           } finally {
             inputs.mockRestore();
           }
           catalogSpy.mockClear();
           const key = "agent:main:dashboard:catalog-0";
+          for (let update = 0; update < 4; update++) {
+            store[key] = { ...store[key]!, label: `Metadata update ${update}` };
+            writeResidentEntries({ [key]: store[key]! }, 1);
+            const updated = await listProjectedSessions({ projection, opts: { limit: 80 } });
+            expect(updated.sessions.find((row) => row.key === key)).toMatchObject({
+              label: `Metadata update ${update}`,
+              contextTokens: revision * 10_000,
+            });
+          }
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(warmCatalogReads * 4);
+          catalogSpy.mockClear();
           const patch = projectSessionPatchResult({
             cfg,
             canonicalKey: key,

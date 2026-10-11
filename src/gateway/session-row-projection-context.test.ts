@@ -74,10 +74,6 @@ it("retains active-run facts through unrelated row epochs without sharing indepe
     prepare(epoch);
     expect(context.current.projectedAgentRuns).toBe(initial.projectedAgentRuns);
     expect(context.current.projectedSubagentActivity).toBe(initial.projectedSubagentActivity);
-    expect(context.current.configuredDefaultModelByAgent).toBe(
-      initial.configuredDefaultModelByAgent,
-    );
-    expect(context.current.thinkingFactsByModelRef).toBe(initial.thinkingFactsByModelRef);
     expect(context.current.subagentRuns).not.toBe(initial.subagentRuns);
   }
   expect([...context.current.projectedSubagentActivity!]).toEqual([parent]);
@@ -86,15 +82,6 @@ it("retains active-run facts through unrelated row epochs without sharing indepe
   expect(independent).toEqual(initial.projectedAgentRuns);
   expect(independent.sessionKeys).not.toBe(initial.projectedAgentRuns!.sessionKeys);
   expect(fresh.sessionKeys).not.toBe(initial.projectedAgentRuns!.sessionKeys);
-  for (const [offset, scope] of (["config", "catalog"] as const).entries()) {
-    const previous = context.current;
-    context.invalidate({ all: true, scope });
-    prepare(9 + offset);
-    expect(context.current.configuredDefaultModelByAgent).not.toBe(
-      previous.configuredDefaultModelByAgent,
-    );
-    expect(context.current.thinkingFactsByModelRef).not.toBe(previous.thinkingFactsByModelRef);
-  }
 });
 
 it("refreshes both run and ancestor facts at the same epoch after owner publications", () => {

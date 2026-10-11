@@ -9,10 +9,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshotMetadata,
-} from "../config/runtime-snapshot.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -162,7 +159,7 @@ type AgentRosterFactsBatch = {
 let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
 const agentRosterFacts = new WeakMap<
   OpenClawConfig,
-  { publication: ReturnType<typeof getRuntimeConfigSnapshotMetadata>; facts: AgentRosterFacts }
+  { publication: object | undefined; facts: AgentRosterFacts }
 >();
 
 /** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
@@ -181,9 +178,9 @@ function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined
   if (activeAgentRosterFactsBatch?.config === cfg) {
     return activeAgentRosterFactsBatch.facts;
   }
-  const publication =
-    cfg === getRuntimeConfigSnapshot() ? getRuntimeConfigSnapshotMetadata() : null;
-  if (publication === null && !isDeeplyFrozenPlainData(cfg)) {
+  const current = runtimeConfigPublication.current;
+  const publication = current?.config === cfg ? current.revision : undefined;
+  if (publication === undefined && !isDeeplyFrozenPlainData(cfg)) {
     return undefined;
   }
   let cached = agentRosterFacts.get(cfg);

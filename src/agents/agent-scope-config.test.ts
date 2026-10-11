@@ -298,6 +298,9 @@ describe("agent roster resolution", () => {
         setRuntimeConfigSnapshot(source);
         expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Replacement");
         expect(tryResolveLegacyCompatibilityAgentId(source)).toBe("agent-199");
+        clearRuntimeConfigSnapshot();
+        source.agents.entries["agent-0"]!.name = "Unbound";
+        expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Unbound");
       }
     } finally {
       entries.mockRestore();
