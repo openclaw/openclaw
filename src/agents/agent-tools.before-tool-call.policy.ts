@@ -52,6 +52,10 @@ import {
   isCodeModeExecToolKind,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import {
+  findShellDollarExpansionHazard,
+  formatShellDollarExpansionHazard,
+} from "./shell-dollar-expansion-guard.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -102,6 +106,28 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
     toolParams: args.params,
     ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
   });
+}
+
+/**
+ * Veto exec commands whose double-quoted/unquoted text contains `$<digit>`:
+ * the shell expands it to an empty positional parameter, silently corrupting
+ * dollar amounts in messages ("$1,000" -> ",000"). Set
+ * OPENCLAW_EXEC_DOLLAR_GUARD=off to disable.
+ */
+function resolveShellDollarExpansionVeto(
+  toolName: string,
+  toolKind: PluginHookToolKind | undefined,
+  params: unknown,
+): string | undefined {
+  if (toolName !== "exec" || isCodeModeExecToolKind(toolKind)) {
+    return undefined;
+  }
+  if (process.env.OPENCLAW_EXEC_DOLLAR_GUARD?.trim().toLowerCase() === "off") {
+    return undefined;
+  }
+  const command = isPlainObject(params) ? params.command : undefined;
+  const hazard = findShellDollarExpansionHazard(command);
+  return hazard ? formatShellDollarExpansionHazard(hazard) : undefined;
 }
 
 export async function runBeforeToolCallHook(args: {
@@ -169,6 +195,19 @@ export async function runBeforeToolCallHook(args: {
         }
         loopWarning = intervention;
       }
+    }
+
+    // Agent-authored shell text: "$900" in double quotes reaches the recipient as "00".
+    const dollarHazard = resolveShellDollarExpansionVeto(toolName, args.toolKind, params);
+    if (dollarHazard) {
+      const outcome: HookOutcome = {
+        blocked: true,
+        kind: "veto",
+        reason: dollarHazard,
+        params,
+      };
+      markPrivateDecision(outcome, "genericDecision");
+      return outcome;
     }
 
     const hookRunner = getGlobalHookRunner();
