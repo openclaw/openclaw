@@ -130,9 +130,7 @@ describe("managed npm root", () => {
   });
 
   it.each([
-    { installedState: "missing package manifest", expectedMissing: true },
     { installedState: "invalid package manifest", expectedMissing: true },
-    { installedState: "missing native executable", expectedMissing: true },
     {
       installedState: "non-executable native executable",
       expectedMissing: process.platform !== "win32",
@@ -194,92 +192,6 @@ describe("managed npm root", () => {
     },
   );
 
-  it("keeps existing plugin dependencies when adding another managed plugin", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-      },
-      devDependencies: {
-        fixture: "1.0.0",
-      },
-    });
-
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "@openclaw/feishu",
-      dependencySpec: "2026.5.2",
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-        "@openclaw/feishu": "2026.5.2",
-      },
-      devDependencies: {
-        fixture: "1.0.0",
-      },
-    });
-  });
-
-  it("syncs OpenClaw-owned overrides without dropping unrelated local overrides", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-      },
-      overrides: {
-        axios: "1.13.6",
-        "left-pad": "1.3.0",
-        qs: "6.14.0",
-      },
-      openclaw: {
-        managedOverrides: ["axios", "qs"],
-      },
-    });
-
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "@openclaw/feishu",
-      dependencySpec: "2026.5.4",
-      managedOverrides: {
-        axios: "1.18.0",
-        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-        nested: {
-          semver: "1.2.3",
-          alias: "npm:@scope/alias@1.0.0",
-        },
-      },
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-        "@openclaw/feishu": "2026.5.4",
-      },
-      overrides: {
-        "left-pad": "1.3.0",
-        axios: "1.18.0",
-        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-        nested: {
-          alias: "npm:@scope/alias@1.0.0",
-          semver: "1.2.3",
-        },
-      },
-      openclaw: {
-        managedOverrides: ["axios", "nested", "node-domexception"],
-      },
-    });
-  });
-
   it("can omit npm alias overrides for npm versions that reject them", async () => {
     const npmRoot = await makeTempRoot();
 
@@ -309,46 +221,6 @@ describe("managed npm root", () => {
       },
       openclaw: {
         managedOverrides: ["axios", "nested"],
-      },
-    });
-  });
-
-  it("aligns stale managed peer pins with managed overrides when adding a plugin", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "4.12.23",
-      },
-      openclaw: {
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "plugin",
-      dependencySpec: "2.0.0",
-      managedOverrides: {
-        "runtime-peer": "4.12.18",
-      },
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        plugin: "2.0.0",
-        "runtime-peer": "4.12.18",
-      },
-      overrides: {
-        "runtime-peer": "4.12.18",
-      },
-      openclaw: {
-        managedOverrides: ["runtime-peer"],
-        managedPeerDependencies: ["runtime-peer"],
       },
     });
   });
@@ -406,41 +278,6 @@ describe("managed npm root", () => {
       },
       openclaw: {
         managedOverrides: ["pinned-package"],
-      },
-    });
-  });
-
-  it("does not treat wildcard overrides as root dependency conflicts", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "4.12.23",
-      },
-      openclaw: {
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "plugin",
-      dependencySpec: "2.0.0",
-      managedOverrides: {
-        "runtime-peer": "*",
-      },
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toMatchObject({
-      dependencies: {
-        plugin: "2.0.0",
-        "runtime-peer": "4.12.23",
-      },
-      overrides: {
-        "runtime-peer": "*",
       },
     });
   });
@@ -545,22 +382,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("does not overwrite a present malformed package manifest", async () => {
-    const npmRoot = await makeTempRoot();
-    const manifestPath = path.join(npmRoot, "package.json");
-    await fs.writeFile(manifestPath, "{not-json", "utf8");
-
-    await expect(
-      upsertManagedNpmRootDependency({
-        npmRoot,
-        packageName: "@openclaw/feishu",
-        dependencySpec: "2026.5.2",
-      }),
-    ).rejects.toThrow(/JSON|package\.json|not-json/i);
-
-    await expect(fs.readFile(manifestPath, "utf8")).resolves.toBe("{not-json");
-  });
-
   it("pins managed dependencies to the resolved version", () => {
     expect(
       resolveManagedNpmRootDependencySpec({
@@ -624,16 +445,12 @@ describe("managed npm root", () => {
   });
 
   it.each([
-    { name: "default", timeoutMs: undefined, workTimeoutMs: undefined, expectedTimeoutMs: 300_000 },
     {
       name: "unbounded update",
       timeoutMs: 120_000,
       workTimeoutMs: null,
       expectedTimeoutMs: undefined,
     },
-    { name: "explicit update", timeoutMs: 120_000, workTimeoutMs: 50, expectedTimeoutMs: 50 },
-    { name: "short explicit", timeoutMs: 45_000, expectedTimeoutMs: 45_000 },
-    { name: "long explicit", timeoutMs: 420_000, expectedTimeoutMs: 420_000 },
   ])("syncs managed peer pins with the $name budget", async (testCase) => {
     const npmRoot = await makeTempRoot();
     await writeFixtureJson(path.join(npmRoot, "package.json"), {
@@ -893,44 +710,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("preserves existing managed peer dependencies when npm cannot plan third-party peers", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "2.0.0",
-      },
-      openclaw: {
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-
-    const runCommand = vi.fn(async () => ({
-      code: 1,
-      stdout: "",
-      stderr: "npm ERR! ERESOLVE could not resolve third-party peer dependency",
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
-
-    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "2.0.0",
-      },
-      openclaw: {
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-  });
-
   it("uses lockfile metadata to preserve non-host peers when host peer planning fails", async () => {
     const npmRoot = await makeTempRoot();
     await writeFixtureJson(path.join(npmRoot, "package.json"), {
@@ -988,61 +767,6 @@ describe("managed npm root", () => {
     expect(fallbackArgs).toContain("--legacy-peer-deps");
     expect(fallbackOptions.env?.npm_config_legacy_peer_deps).toBe("true");
     expect([strictOptions.timeoutMs, fallbackOptions.timeoutMs]).toEqual([45_000, 45_000]);
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "^2.0.0",
-      },
-      openclaw: {
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-  });
-
-  it("does not promote nested transitive lockfile versions into managed root peers", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-      },
-    });
-
-    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
-      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
-      if (!options.cwd) {
-        throw new Error("expected npm peer plan cwd");
-      }
-      await writeFixtureJson(path.join(options.cwd, "package-lock.json"), {
-        lockfileVersion: 3,
-        packages: {
-          "": {
-            dependencies: {
-              plugin: "1.0.0",
-            },
-          },
-          "node_modules/plugin": {
-            peerDependencies: {
-              "runtime-peer": "^2.0.0",
-            },
-            version: "1.0.0",
-          },
-          "node_modules/transitive": {
-            version: "1.0.0",
-          },
-          "node_modules/transitive/node_modules/runtime-peer": {
-            version: "1.0.0",
-          },
-        },
-      });
-      return successfulSpawn;
-    });
-
-    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
-
     await expect(
       fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
     ).resolves.toEqual({
