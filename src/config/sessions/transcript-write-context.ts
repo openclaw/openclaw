@@ -180,8 +180,7 @@ export function getOwnedSessionTranscriptReader(scope: SessionTranscriptWriteTar
   return reader;
 }
 
-/** Borrow only the actor retained for this exact admitted transcript. */
-export function getOwnedSessionTranscriptActor(
+function findOwnedSessionTranscriptActor(
   scope: SessionTranscriptWriteTarget,
 ): OwnedSessionTranscriptWriteContext["sessionActor"] {
   const context = ownedTranscriptWriteContext.getStore();
@@ -194,10 +193,21 @@ export function getOwnedSessionTranscriptActor(
     context.sessionTarget?.sessionId !== scope.sessionId ||
     context.sessionTarget?.agentId !== scope.agentId
   ) {
-    throw new SessionTranscriptWriterClaimReboundError();
+    return undefined;
   }
   context.assertCommitAllowed?.();
   actor.actor.assertCurrent();
+  return actor;
+}
+
+/** Borrow only the actor retained for this exact admitted transcript. */
+export function getOwnedSessionTranscriptActor(
+  scope: SessionTranscriptWriteTarget,
+): OwnedSessionTranscriptWriteContext["sessionActor"] {
+  const actor = findOwnedSessionTranscriptActor(scope);
+  if (!actor && ownedTranscriptWriteContext.getStore()?.sessionActor) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
   return actor;
 }
 
@@ -205,7 +215,8 @@ export function getOwnedSessionTranscriptActor(
 export function readOwnedSessionTranscriptEntry(
   scope: SessionTranscriptWriteTarget,
 ): SessionTranscriptAnchorEntry | undefined {
-  const binding = getOwnedSessionTranscriptActor(scope);
+  // Reads of another session do not inherit the ambient writer's actor.
+  const binding = findOwnedSessionTranscriptActor(scope);
   if (!binding) {
     return undefined;
   }

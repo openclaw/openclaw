@@ -118,22 +118,29 @@ it.each(["bounded", "anchors"] as const)(
       if (!entryId) {
         throw new Error("Expected the appended message ID");
       }
+      const otherTarget = { ...target, sessionId: "other-session", sessionKey: "agent:main:other" };
+      await upsertSessionEntryCore(otherTarget, { sessionId: otherTarget.sessionId, updatedAt: 1 });
+      const otherSource = await SessionManager.openAsync(otherTarget);
+      const otherEntryId = await otherSource.appendMessageAsync(makeUserMessage("other", 1));
+      if (!otherEntryId) {
+        throw new Error("Expected the other session's message ID");
+      }
       await withSelectedTranscriptReader(
         target,
         async (actor) => {
           if (!actor) {
             throw new Error("Expected retained session actor");
           }
-          const hydration = transcriptHydration.prepareSessionTranscriptHydration(target, {
-            maxBytes: 4096,
-            maxEvents: 3,
-          });
-          const selection = { entryIds: [entryId], contextAuthority: true as const };
-          const read = async () => {
+          const read = async (readTarget = target, readEntryId = entryId) => {
+            const hydration = transcriptHydration.prepareSessionTranscriptHydration(readTarget, {
+              maxBytes: 4096,
+              maxEvents: 3,
+            });
+            const selection = { entryIds: [readEntryId], contextAuthority: true as const };
             let facts: SessionTranscriptAnchorFacts | undefined;
             if (route === "bounded") {
               await hydration.readCohort!(
-                { ...selection, sessionKey: target.sessionKey },
+                { ...selection, sessionKey: readTarget.sessionKey },
                 (prepared) => {
                   if (prepared.kind === "bounded") {
                     facts = prepared.transcript;
@@ -142,7 +149,7 @@ it.each(["bounded", "anchors"] as const)(
               );
             } else {
               facts = await transcriptAnchors.readSessionTranscriptAnchorsAsync(
-                target,
+                readTarget,
                 { ...selection, afterSeq: 0 },
                 undefined,
                 (current) => {
@@ -152,6 +159,9 @@ it.each(["bounded", "anchors"] as const)(
             }
             return facts;
           };
+          expect((await read(otherTarget, otherEntryId))?.contextAuthority?.entry?.sessionId).toBe(
+            otherTarget.sessionId,
+          );
           expect((await read())?.contextAuthority?.entry?.activeWriterRunId).toBeUndefined();
           const authority = { assertCurrent() {}, authorize() {} };
           const current = actor.snapshot(authority)!;
