@@ -79,7 +79,8 @@ flow:
                 kind: agentTurn
                 toolsAllow: [message]
                 message:
-                  expr: "`Use the message tool to create a thread named ${JSON.stringify(config.threadName)} in qa-channel target channel:${config.conversationId}, using action thread-create. After creation succeeds, send exactly ${config.expectedMarker} into that thread with action send and the returned threadId. Do not send to the top-level channel. Then reply briefly.`"
+                  expr: >-
+                    `Create a thread using message with action="thread-create", channel="qa-channel", target="channel:${config.conversationId}", and threadName=${JSON.stringify(config.threadName)}. After creation succeeds, use message with action="send", channel="qa-channel", target="channel:${config.conversationId}", threadId equal to the returned threadId, and message="${config.expectedMarker}". Do not send to the top-level channel. Then reply briefly.`
               delivery:
                 mode: none
             - timeoutMs: 30000
