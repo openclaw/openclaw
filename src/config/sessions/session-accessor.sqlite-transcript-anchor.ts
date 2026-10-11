@@ -17,6 +17,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { validateCanonicalSessionRowEntry } from "./session-canonical-row.js";
 import {
@@ -133,6 +134,31 @@ function readActiveTranscriptEntryFacts(
   projection?: CurrentTranscriptProjection,
   includeVersion = false,
 ) {
+  const actor = readSessionActorTransactionState(params.database, params.resolved);
+  if (actor) {
+    const state = actor.transcript.projection;
+    if (
+      !state ||
+      state.needsRebuild ||
+      state.hasUnclassifiedEvents ||
+      state.indexedSeq !== actor.hot.transcript.version.rawSeq
+    ) {
+      return undefined;
+    }
+    const identity = actor.transcript.identities.get(params.entryId);
+    const active = identity && actor.transcript.active.get(identity.seq);
+    return identity && active
+      ? {
+          seq: identity.seq,
+          parent_id: identity.parent_id,
+          message_idempotency_key: identity.message_idempotency_key,
+          message_position: active.message_position,
+          generation: actor.hot.transcript.version.generation,
+          latestSeq: actor.hot.transcript.version.rawSeq,
+          transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
+        }
+      : undefined;
+  }
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
     selectActiveTranscriptEntryAnchor(params, projection, includeVersion),

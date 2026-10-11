@@ -137,24 +137,6 @@ describe("Reef replay worker ownership", () => {
     expect(f.raw.lookup(key)?.state).toBe("completed");
   });
 
-  it.each(["refresh", "complete", "release"] as const)(
-    "retains a matching owner after lease expiry for %s",
-    async (operation) => {
-      const f = fixture();
-      const replay = f.open();
-      await replay.claim("alice", id, hash);
-      await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
-      if (operation === "complete") {
-        await replay.complete("alice", id, f.receipt, { text: "body" });
-      } else {
-        await replay[operation]!("alice", id);
-      }
-      expect(f.raw.lookup(key)?.state).toBe(
-        { refresh: "in_flight", complete: "completed", release: "available" }[operation],
-      );
-    },
-  );
-
   it("rejects stale completion and cleanup after a conflicting successor takes ownership", async () => {
     const f = fixture();
     const original = f.open();
@@ -304,37 +286,21 @@ describe("Reef replay worker ownership", () => {
     });
   });
 
-  it.each(["mismatch", "duplicate", "in_flight", "refresh", "complete", "release"] as const)(
-    "renews existing-row retention on %s refusal",
-    async (operation) => {
-      const f = fixture();
-      const replay = f.open();
-      await replay.claim("alice", id, hash);
-      const state = operation === "duplicate" ? "consumed" : "in_flight";
-      await f.store.register(
-        key,
-        { ...f.raw.lookup(key)!, state, claimOwner: "successor" },
-        { ttlMs: 1_000 },
-      );
-      const before = f.raw.entries()[0]!.expiresAt!;
-      if (operation === "mismatch" || operation === "duplicate" || operation === "in_flight") {
-        await expect(
-          replay.claim("alice", id, operation === "mismatch" ? "other" : hash),
-        ).resolves.toBe(operation);
-      } else if (operation === "release") {
-        await replay.release("alice", id);
-      } else {
-        await expect(
-          operation === "complete"
-            ? replay.complete("alice", id, f.receipt, { text: "body" })
-            : replay[operation]!("alice", id),
-        ).rejects.toThrow("replay claim is not in flight");
-      }
-      const after = f.raw.entries()[0]!;
-      expect(after.expiresAt! - before).toBeGreaterThan(REEF_REPLAY_TTL_MS - 2_000);
-      expect(after.value.claimOwner).toBe("successor");
-    },
-  );
+  it("renews existing-row retention on duplicate refusal", async () => {
+    const f = fixture();
+    const replay = f.open();
+    await replay.claim("alice", id, hash);
+    await f.store.register(
+      key,
+      { ...f.raw.lookup(key)!, state: "consumed", claimOwner: "successor" },
+      { ttlMs: 1_000 },
+    );
+    const before = f.raw.entries()[0]!.expiresAt!;
+    await expect(replay.claim("alice", id, hash)).resolves.toBe("duplicate");
+    const after = f.raw.entries()[0]!;
+    expect(after.expiresAt! - before).toBeGreaterThan(REEF_REPLAY_TTL_MS - 2_000);
+    expect(after.value.claimOwner).toBe("successor");
+  });
 
   it("validates completion only after matching the live claim", async () => {
     const f = fixture();

@@ -15,6 +15,10 @@ import type { ChatRunStartupState } from "./chat-run-startup.ts";
 
 export type ChatReasoning = {
   runId: string;
+  items: ChatReasoningItem[];
+};
+
+type ChatReasoningItem = {
   itemId: string;
   text: string;
   startedAt: number;

@@ -17,6 +17,7 @@ import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
+import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
@@ -50,6 +51,7 @@ import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-chann
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_AGENT_ROSTER_RULES } from "./doctor/shared/legacy-config-migrations.runtime.entries.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
+import { planProviderRenames } from "./doctor/shared/provider-rename.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
@@ -106,12 +108,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
-  await using pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
-    getBaseSnapshot: () => pluginMetadataSnapshotState.current,
-    env: process.env,
-    getDeferredPluginIds: () =>
-      preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
-  });
+  await using preparingResources = new AsyncDisposableStack();
+  const pluginMetadataSnapshotScope = preparingResources.use(
+    createDoctorPluginMetadataSnapshotScope({
+      getBaseSnapshot: () => pluginMetadataSnapshotState.current,
+      env: process.env,
+      getDeferredPluginIds: () =>
+        preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
+    }),
+  );
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
     // Filesystem/install repairs replace the authoritative plugin generation.
@@ -160,6 +165,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   };
   const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
+  const plannedProviderRenames = runWithCurrentPluginMetadata(state.candidate, () =>
+    planProviderRenames(
+      snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+      resolvePluginDoctorProviderRenames({ config: state.candidate }),
+    ),
+  );
 
   const sourceRosterConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
   const rosterMigrationNeeded =
@@ -190,7 +201,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     applyConfigMutation(
       {
         config: state.candidate,
-        changes: ["Prepared the canonical agent roster for persistence."],
+        changes: ["Prepared the agent roster for persistence."],
       },
       `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
       { emitWarnings: false },
@@ -619,8 +630,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
+  const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
+  // Later Doctor contributions and service finalization consume these callbacks.
+  const resources = preparingResources.move();
 
   return {
+    [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
@@ -655,6 +670,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       : {}),
     ...(openAICodexAuthProfileIdMap ? { openAICodexAuthProfileIdMap } : {}),
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
+    ...(providerRenames.length > 0 ? { providerRenames } : {}),
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
     ...migrationResult,

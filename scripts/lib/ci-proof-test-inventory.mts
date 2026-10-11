@@ -5166,6 +5166,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "test/scripts/pr-host-tools.test.ts",
   "test/scripts/pr-merge-auto-recovery.test.ts",
   "test/scripts/pr-merge-completion.test.ts",
+  "test/scripts/pr-merge-head-drift.test.ts",
   "test/scripts/pr-merge-legacy-recovery.test.ts",
   "test/scripts/pr-publication.test.ts",
   "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
