@@ -11,7 +11,10 @@ import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js"
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
+import {
+  createDoctorHealthContribution,
+  showDoctorHealthSummary,
+} from "./doctor-health-contribution.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorConfigFixture,
@@ -924,7 +927,10 @@ describe("doctor health contributions", () => {
     expect(ctx.configResultWriteCommitted).toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
     const warning = `doctor:runtime-tool-schemas run failed: ${failure.message}`;
-    expect(mocks.note).toHaveBeenCalledWith(warning, "Doctor warnings");
+    showDoctorHealthSummary(ctx);
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      `- Doctor could not complete Runtime tool schemas: ${failure.message}`,
+    );
     expect(ctx.updateWarnings).toContain(warning);
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
@@ -2591,9 +2597,8 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(mocks.collectBundledChannelPackageStateLoadFailures).toHaveBeenCalledOnce();
-    expect(ctx.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("core/doctor/channel-package-state-capabilities"),
-    );
+    showDoctorHealthSummary(ctx);
+    expect(ctx.runtime.log).toHaveBeenCalledWith(expect.stringContaining("checker failed to load"));
   });
 
   it("keeps channel preview warnings opt-in for default lint selection", async () => {
@@ -2747,53 +2752,6 @@ describe("doctor health contributions", () => {
     expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
   });
 
-  it("renders findings from structured health when legacy run is omitted", async () => {
-    const healthChecks = {
-      description: "test structured findings",
-      detect: vi.fn(async () => []),
-    };
-    mocks.runDoctorHealthRepairs.mockResolvedValue({
-      config: {},
-      findings: [
-        {
-          checkId: "core/doctor/test-structured-findings",
-          severity: "warning",
-          message: "structured finding needs attention",
-          path: "openclaw.json",
-          line: 12,
-          fixHint: "run openclaw doctor --fix",
-        },
-      ],
-      remainingFindings: [],
-      changes: [],
-      warnings: [],
-      diffs: [],
-      effects: [],
-      checksRun: 1,
-      checksRepaired: 0,
-      checksValidated: 0,
-    });
-    const contribution = createDoctorHealthContribution(
-      "doctor:test-structured-findings",
-      "Test structured findings",
-      {
-        healthChecks,
-      },
-    );
-    const ctx = createDoctorContext({
-      cfg: {},
-      cfgForPersistence: {},
-      configResult: { cfg: {} },
-    });
-
-    await contribution.run(ctx);
-
-    expect(ctx.runtime.log).toHaveBeenCalledWith(
-      "[warning] core/doctor/test-structured-findings openclaw.json:12 - structured finding needs attention",
-    );
-    expect(ctx.runtime.log).toHaveBeenCalledWith("  fix: run openclaw doctor --fix");
-  });
-
   it("requires explicit health check ids for multi-check contributions", () => {
     expect(() =>
       createDoctorHealthContribution("doctor:test-multiple-checks", "Test multiple checks", {
@@ -2848,7 +2806,19 @@ describe("doctor health contributions", () => {
     const remainingFindings: HealthFinding[] = [
       { checkId, severity: "warning", message: "optional maintenance incomplete" },
       { checkId, severity: "error", message: "required artifact missing" },
-      { checkId, severity: "info", message: "optional setup is available" },
+      {
+        checkId,
+        severity: "info",
+        category: "recommended",
+        message: "optional setup is available",
+      },
+      {
+        checkId,
+        severity: "warning",
+        category: "historical",
+        message: "original archive retained",
+        fixHint: "No action needed.",
+      },
     ];
     mocks.runDoctorHealthRepairs.mockResolvedValue({
       config: {},
@@ -2863,17 +2833,15 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    showDoctorHealthSummary(ctx);
     expect(ctx.updateWarnings).toEqual([
       "earlier warning",
       `${checkId}: optional maintenance incomplete`,
+      `${checkId}: original archive retained`,
       "optional repair unavailable",
     ]);
-    expect(ctx.runtime.log).toHaveBeenCalledWith(
-      `[warning] ${checkId} - optional maintenance incomplete`,
-    );
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
-      `[error] ${checkId} - required artifact missing`,
-    );
+    expect(ctx.runtime.log).toHaveBeenCalledWith("- optional maintenance incomplete");
+    expect(ctx.runtime.error).toHaveBeenCalledWith("- required artifact missing");
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -2896,9 +2864,9 @@ describe("doctor health contributions", () => {
         ...(severity === "warning" ? [`${check.id}: configured model needs attention`] : []),
       ]);
       expect(ctx.healthOk).toBe(severity === "info");
-      expect(mocks.note).toHaveBeenCalledWith(
-        "- configured model needs attention",
-        severity === "info" ? "Doctor information" : "Doctor warnings",
+      showDoctorHealthSummary(ctx);
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        severity === "info" ? "Recommended improvements:" : "Fix now:",
       );
       expect(ctx.runtime.exit).not.toHaveBeenCalled();
     },
@@ -3371,9 +3339,9 @@ describe("doctor health contributions", () => {
       ]);
       expect(later).toHaveBeenCalledOnce();
       expect(receipts).toEqual([recorded]);
-      expect(mocks.note).toHaveBeenCalledWith(
-        "doctor:advisory run failed: optional diagnostic unavailable",
-        "Doctor warnings",
+      showDoctorHealthSummary(ctx);
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        "- Doctor could not complete Advisory: optional diagnostic unavailable",
       );
     });
   });

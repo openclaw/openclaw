@@ -2,6 +2,7 @@ import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 
 type PluginVersionRestartReadiness =
@@ -75,13 +76,7 @@ export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Pro
   const { collectRepointedWorkspaceAliasFindings } =
     await import("../commands/doctor-workspace-alias.js");
   const findings = await collectRepointedWorkspaceAliasFindings(ctx.cfg);
-  if (findings.length > 0) {
-    const { note } = await import("../../packages/terminal-core/src/note.js");
-    note(
-      findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
-      "Workspace",
-    );
-  }
+  renderStructuredHealthFindings(ctx, findings);
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

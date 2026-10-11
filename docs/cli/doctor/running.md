@@ -274,3 +274,15 @@ openclaw channels status --probe
 | `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                                                                                            |
 
 `--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` uses the default read-only lint check selection but keeps Doctor's advisory exit behavior. Both read-only postures reject `--repair`, `--fix`, `--force`, `--yes`, and `--generate-gateway-token`. Explicit `--lint` also rejects `--session-sqlite` modes and their selectors, including `--github-issue`. Other machine modes can still use `--json` for their own output.
+
+## Understanding findings
+
+Doctor's structured results list unresolved findings after repairs, in this order:
+
+- **Fix now:** current failures and checks that need attention. Follow the next step under the finding, then rerun Doctor to verify the result.
+- **Recommended improvements:** optional setup or tuning. Read the finding's benefit before deciding whether to apply it.
+- **Historical recovery notices:** retained evidence from an earlier migration or installation replacement. These do not establish a current failure. Verify expected conversations and current Gateway health before attempting recovery. Keep recovery archives.
+
+A recovery copy saved before repair is protective bookkeeping. **No action is needed** merely because Doctor saved or retained it. Its manifest location is available for manual recovery. Saving a copy does not mean every plugin's private data is covered; follow any specific coverage notice separately.
+
+Successful repairs appear as changes, and resolved structured findings are removed from the final summary. Interactive prompts and repair progress still appear while Doctor runs. Checks that have not yet adopted structured findings retain their individual diagnostic panels.

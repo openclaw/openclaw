@@ -60,7 +60,7 @@ export async function preserveDoctorOriginalState(params: {
       assertCurrent();
       params.runtime.log(
         retained
-          ? `Original update capture retained at ${retained.ref.manifestPath}.`
+          ? `Original update recovery copy retained. No action needed. For manual recovery: ${retained.ref.manifestPath}.`
           : "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
       );
       return;
@@ -88,7 +88,7 @@ export async function preserveDoctorOriginalState(params: {
     });
     assertCurrent();
     params.runtime.log(
-      `Pre-repair state retained for manual recovery at ${captured.ref.manifestPath}.`,
+      `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
     );
     try {
       const retirement = await retireExpiredStandaloneDoctorCaptures({
