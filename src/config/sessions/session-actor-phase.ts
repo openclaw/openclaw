@@ -19,6 +19,7 @@ import type {
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
 import type {
   PendingInputMutation,
@@ -119,12 +120,12 @@ export function applySessionActorPhaseWithBackend(
   const turn = (input: SessionTurnPlan) => {
     if (
       input.sessionKey !== sessionKey ||
-      input.agentId !== backend.agentId ||
       input.options.expectedSessionId !==
         (hot.entry?.sessionId ?? input.options.initialSessionEntry?.sessionId)
     ) {
       throw new Error("Session actor turn changed its captured target");
     }
+    assertCanonicalSessionKeyWrite(sessionKey, input.agentId);
     const committed = backend.turn(input);
     if (committed.result.rejectedReason || committed.result.predicateSkipped) {
       throw new SessionActorStaleStateError("Session actor turn was refused by its current owner");

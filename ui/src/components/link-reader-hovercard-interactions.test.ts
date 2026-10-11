@@ -525,49 +525,54 @@ describe("generic preview portal lifecycle", () => {
     },
   );
 
-  it.each(["forward", "backward", "outside"])(
-    "dismisses keyboard previews on %s exit",
-    async (exit) => {
-      const { anchor, provider } = createIssueLink();
+  it.each([
+    { exit: "forward", mounted: true },
+    { exit: "backward", mounted: true },
+    { exit: "outside", mounted: true },
+    { exit: "outside", mounted: false },
+  ])("dismisses keyboard previews on $exit exit (mounted=$mounted)", async ({ exit, mounted }) => {
+    const { anchor, provider } = createIssueLink();
+    if (mounted) {
       await provider.updateComplete;
-      const outside = exit === "outside" ? document.createElement("button") : null;
-      if (outside) {
-        document.body.append(outside);
-      }
-      anchor.focus();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(hovercard()).not.toBeNull();
+    }
+    const outside = exit === "outside" ? document.createElement("button") : null;
+    if (outside) {
+      document.body.append(outside);
+    }
+    anchor.focus();
+    await provider.updateComplete;
+    await vi.advanceTimersByTimeAsync(mounted ? 0 : 250);
+    expect(hovercard()).not.toBeNull();
 
-      anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
-      expect(document.activeElement).toBe(cardLinks()[0]);
-      if (outside) {
-        outside.focus();
-        await vi.advanceTimersByTimeAsync(120);
-        expect(hovercard()).toBeNull();
-        expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-        return;
-      }
-      const middle = cardLinks()[0];
-      middle?.focus();
-      const insideTab = new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Tab",
-      });
-      middle?.dispatchEvent(insideTab);
-      expect(insideTab.defaultPrevented).toBe(false);
-      expect(hovercard()).not.toBeNull();
+    anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
+    expect(document.activeElement).toBe(cardLinks()[0]);
+    if (outside) {
+      outside.focus();
+      await vi.advanceTimersByTimeAsync(120);
+      expect(hovercard()).toBeNull();
+      expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+      return;
+    }
+    const middle = cardLinks()[0];
+    middle?.focus();
+    const insideTab = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Tab",
+    });
+    middle?.dispatchEvent(insideTab);
+    expect(insideTab.defaultPrevented).toBe(false);
+    expect(hovercard()).not.toBeNull();
 
-      const shiftKey = exit === "backward";
-      const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
-      edge?.focus();
-      edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
-      expect(hovercard()).toBeNull();
-      expect(document.activeElement).toBe(anchor);
-      await vi.advanceTimersByTimeAsync(120 * 2);
-      expect(hovercard()).toBeNull();
-    },
-  );
+    const shiftKey = exit === "backward";
+    const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
+    edge?.focus();
+    edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
+    expect(hovercard()).toBeNull();
+    expect(document.activeElement).toBe(anchor);
+    await vi.advanceTimersByTimeAsync(120 * 2);
+    expect(hovercard()).toBeNull();
+  });
 
   it("uses the latest dependencies assigned before its lazy definition finishes", async () => {
     const tag = `test-github-lazy-upgrade-${crypto.randomUUID()}`;

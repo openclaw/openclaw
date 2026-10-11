@@ -30,6 +30,7 @@ import {
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
+import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
 import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
@@ -89,6 +90,55 @@ function connectToken(
 }
 
 describe("personal model accounts", () => {
+  it("reads current linked credentials together after in-process refresh and unlink writes", () => {
+    const options = stateOptions();
+    const alice = ensureProfileForEmail("catalog-alice@example.test", options);
+    const first = connectToken(alice.id, options).authProfileId;
+    const second = connectUserModelAccount(
+      {
+        ownerProfileId: alice.id,
+        credential: { type: "token", provider: "openai", token: "synthetic-second-token" },
+        assertCurrent() {},
+      },
+      options,
+    ).authProfileId;
+    const { db } = openOpenClawStateDatabase(options);
+    const read = () => {
+      const result = readUserModelAccountCommand(db, {
+        type: "userModelAccounts.catalog",
+        selection: { requesterProfileId: alice.id },
+      });
+      if (result.type !== "userModelAccounts.catalog") {
+        throw new Error("Expected personal catalog");
+      }
+      return result.catalog;
+    };
+    expect(Object.keys(read().profiles)).toEqual([first, second]);
+    expect(
+      updateUserModelAuthProfile(
+        first,
+        (profile) => {
+          if (profile.credential.type !== "token") {
+            throw new Error("Expected token credential");
+          }
+          profile.credential.token = "synthetic-refreshed-token";
+          return true;
+        },
+        options,
+      ),
+    ).toBe(true);
+    clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
+    expect(read()).toEqual({
+      links: [{ provider: "anthropic", authProfileId: first, updatedAt: expect.any(Number) }],
+      profiles: {
+        [first]: {
+          credential: { type: "token", provider: "anthropic", token: "synthetic-refreshed-token" },
+          usageStats: undefined,
+        },
+      },
+    });
+  });
+
   it("observes foreign default-link commits on the next worker read", async () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("worker-links@example.test", options);

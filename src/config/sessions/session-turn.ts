@@ -474,7 +474,7 @@ export async function appendSessionTurnInWorker(
         };
         return operation.run(
           async () => {
-            const hot = actor.snapshot(authority) ?? (await actor.read(authority));
+            const hot = inputActor.snapshot(authority) ?? (await actor.read(authority));
             const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
             if (replicaPreparation) {
               return replicaPreparation;
@@ -511,7 +511,7 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            const before = actor.snapshot(authority) ?? (await actor.read(authority));
+            const before = inputActor.snapshot(authority) ?? (await actor.read(authority));
             const expectedState =
               options.expectedSessionState ??
               buildRestartRecoveryExpectedState(
@@ -546,36 +546,37 @@ export async function appendSessionTurnInWorker(
             const command = {
               commandId: randomUUID(),
               phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
+              expected: before.version,
+              expectedState,
+              lifecycle: {},
+              turn: plan,
             };
-            const actorOutcome =
+            const execute = () =>
               inputActor.phase === "acceptInput"
-                ? await actor.acceptInput(
+                ? actor.acceptInput(command, authority, {
+                    committed: (commit) => record(commit.value.turn),
+                  })
+                : actor.adoptRun(
                     {
                       ...command,
-                      expected: before.version,
-                      expectedState,
-                      lifecycle: {},
-                      turn: plan,
-                    },
-                    authority,
-                    {
-                      committed: (commit) => record(commit.value.turn),
-                    },
-                  )
-                : await actor.adoptRun(
-                    {
-                      ...command,
-                      expected: before.version,
                       sessionId: options.expectedSessionId,
-                      expectedState,
-                      lifecycle: {},
-                      turn: plan,
                     },
                     authority,
                     {
                       committed: (commit) => record(commit.value),
                     },
                   );
+            let actorOutcome = await execute();
+            // A typed stale reply proves no mutation ran; preserve prepared hooks and domain guards.
+            if (
+              actorOutcome.kind === "stale-version" &&
+              !candidate &&
+              authorityFailure === undefined
+            ) {
+              authority.assertCurrent();
+              command.expected = actorOutcome.postimage.version;
+              actorOutcome = await execute();
+            }
             if (actorOutcome.kind !== "committed") {
               throwSessionInputActorFailure(actorOutcome, authorityFailure);
             }
