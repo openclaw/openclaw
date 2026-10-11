@@ -334,7 +334,6 @@ src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor-state-migrations.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
