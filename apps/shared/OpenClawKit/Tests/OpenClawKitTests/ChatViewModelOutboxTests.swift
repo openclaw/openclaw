@@ -462,15 +462,16 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         if !self.requiresRoutingContract {
             let transport = self
             return .available(OpenClawChatTransportRouteLease(
-                sendMessage: { sessionKey, message, thinking, idempotencyKey, attachments in
+                sendTargetedMessage: { sessionKey, target, message, thinking, idempotencyKey, attachments in
                     try await transport.sendMessage(
                         sessionKey: sessionKey,
+                        target: target,
                         message: message,
                         thinking: thinking,
                         idempotencyKey: idempotencyKey,
                         attachments: attachments)
                 },
-                requestHistory: { sessionKey in
+                requestTargetedHistory: { sessionKey, _ in
                     try await transport.requestHistory(sessionKey: sessionKey)
                 }))
         }
@@ -1123,6 +1124,36 @@ struct ChatViewModelBusySendTests {
         #expect(await online.state.sentQueueModes == [mode])
         #expect(await userTexts(reopened) == ["use the shorter approach"])
         #expect(await store.loadCommands().isEmpty)
+    }
+
+    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    @MainActor
+    func `unsupported transport parks explicit intent without sending it as default`(
+        mode: OpenClawChatQueueMode) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false, requiresRoutingContract: false)
+        let vm = await makeOutboxViewModel(
+            transport: transport,
+            outbox: store,
+            activeAgentID: nil,
+            sessionRoutingContract: nil)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.input = "preserve my explicit choice"
+        let send = try #require(vm.send(queueMode: mode))
+        await send.value
+        let bubble = try #require(vm.messages.first { $0.role == "user" })
+
+        await transport.goOnline()
+        await waitForObservedState { vm.outboxState(for: bubble.id)?.isFailed == true }
+        let command = try #require(await store.loadCommands().first)
+        #expect(command.status == .failed)
+        #expect(command.queueMode == mode)
+        #expect(command.lastError == OpenClawChatQueueModeUnsupportedError().localizedDescription)
+        #expect(await transport.state.sentMessages.isEmpty)
     }
 
     @Test(arguments: ["/new", "/reset", "/clear", "/compact"])
