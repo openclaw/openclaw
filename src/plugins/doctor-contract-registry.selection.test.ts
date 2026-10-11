@@ -112,135 +112,153 @@ describe("doctor-contract-registry module loader", () => {
       pins: false,
     },
     {
-      name: "deferred installed owner",
+      name: "untrusted deferred installed owner",
       ownerId: "feishu",
+      trusted: false,
       warning: undefined,
       explicit: false,
       pins: false,
     },
     {
+      name: "trusted deferred installed owner",
+      ownerId: "feishu",
+      trusted: true,
+      warning: undefined,
+      explicit: false,
+      pins: true,
+    },
+    {
       name: "deferred replacement owner",
       ownerId: "custom-feishu",
+      trusted: true,
       warning: undefined,
       explicit: false,
       pins: false,
     },
-  ])("preserves historical webhook ownership for $name", ({ ownerId, warning, explicit, pins }) => {
-    const config: OpenClawConfig = {
-      meta: { migrations: { webhookListeners: { telegram: [] } } },
-      gateway: { port: 18789 },
-      channels: {
-        feishu: {
-          enabled: true,
-          connectionMode: "webhook",
-          tools: { base: true },
-          ...(explicit ? { webhookPort: 9001, webhookHost: "0.0.0.0" } : {}),
-          accounts: {
-            default: { enabled: true },
-            optedOut: { legacyWebhook: false },
-            ...(explicit ? { specific: { enabled: true, webhookPort: 9002 } } : {}),
+  ])(
+    "preserves historical webhook ownership for $name",
+    ({ ownerId, warning, explicit, pins, trusted }) => {
+      const config: OpenClawConfig = {
+        meta: { migrations: { webhookListeners: { telegram: [] } } },
+        gateway: { port: 18789 },
+        channels: {
+          feishu: {
+            enabled: true,
+            connectionMode: "webhook",
+            tools: { base: true },
+            ...(explicit ? { webhookPort: 9001, webhookHost: "0.0.0.0" } : {}),
+            accounts: {
+              default: { enabled: true },
+              optedOut: { legacyWebhook: false },
+              ...(explicit ? { specific: { enabled: true, webhookPort: 9002 } } : {}),
+            },
           },
         },
-      },
-    };
-    const original = structuredClone(config);
-    const listener = createLegacyWebhookListenerDoctorContract({
-      channelKey: "feishu",
-      defaultPort: 3000,
-      defaultHost: "127.0.0.1",
-    });
-    retainedConfigDoctorMock.mockReturnValue({
-      ...listener,
-      normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
-        config: { ...cfg, gateway: { ...cfg.gateway, port: 60000 } },
-        changes: ["Unrelated plugin repair"],
-      }),
-      normalizeHistoricalWebhookConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
-        ...listener.normalizeCompatibilityConfig({ cfg }),
-        historicalWebhookAccountIds: ["default", "optedOut", ...(explicit ? ["specific"] : [])],
-        ...(warning ? { warnings: [warning] } : {}),
-      }),
-    });
-    if (ownerId) {
-      const pluginRoot = makeTempDir();
-      fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-      mocks.createJiti.mockImplementation(() => () => ({
+      };
+      const original = structuredClone(config);
+      const listener = createLegacyWebhookListenerDoctorContract({
+        channelKey: "feishu",
+        defaultPort: 3000,
+        defaultHost: "127.0.0.1",
+      });
+      retainedConfigDoctorMock.mockReturnValue({
+        ...listener,
         normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
-          config: { ...cfg, gateway: { ...cfg.gateway, port: 61000 } },
-          changes: ["Deferred owner ran"],
+          config: { ...cfg, gateway: { ...cfg.gateway, port: 60000 } },
+          changes: ["Unrelated plugin repair"],
         }),
-      }));
-      mockDoctorPlugins({
-        id: ownerId,
-        rootDir: pluginRoot,
-        channels: ["feishu"],
-        providers: [],
-        origin: "global",
-        doctorContract: { configRepair: true },
+        normalizeHistoricalWebhookConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+          ...listener.normalizeCompatibilityConfig({ cfg }),
+          historicalWebhookAccountIds: ["default", "optedOut", ...(explicit ? ["specific"] : [])],
+          ...(warning ? { warnings: [warning] } : {}),
+        }),
       });
-    }
-    const inspected = vi.fn();
-    const result = withDeferredPluginDoctorMigrations([ownerId ?? "feishu"], () =>
-      applyPluginDoctorCompatibilityMigrations(config, {
-        config,
-        env: {},
-        pluginIds: ["feishu"],
-        historicalWebhookListeners: true,
-        onInspectedPlugin: inspected,
-      }),
-    );
+      if (ownerId) {
+        const pluginRoot = makeTempDir();
+        fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+        mocks.createJiti.mockImplementation(() => () => ({
+          normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+            config: { ...cfg, gateway: { ...cfg.gateway, port: 61000 } },
+            changes: ["Deferred owner ran"],
+          }),
+        }));
+        mockDoctorPlugins({
+          id: ownerId,
+          rootDir: pluginRoot,
+          channels: ["feishu"],
+          providers: [],
+          origin: "global",
+          trustedOfficialInstall: trusted,
+          doctorContract: { configRepair: true },
+        });
+      }
+      const inspected = vi.fn();
+      const result = withDeferredPluginDoctorMigrations([ownerId ?? "feishu"], () =>
+        applyPluginDoctorCompatibilityMigrations(config, {
+          config,
+          env: {},
+          pluginIds: ["feishu"],
+          historicalWebhookListeners: true,
+          onInspectedPlugin: inspected,
+        }),
+      );
 
-    expect(config).toEqual(original);
-    expect(result.config).toEqual(
-      pins
-        ? {
-            ...original,
-            meta: {
-              migrations: {
-                webhookListeners: {
-                  telegram: [],
-                  feishu: explicit
-                    ? []
-                    : [["channels", "feishu", "accounts", "default", "legacyWebhook"]],
-                },
-              },
-            },
-            channels: {
-              feishu: {
-                enabled: true,
-                connectionMode: "webhook",
-                tools: { base: true },
-                ...(explicit ? { legacyWebhook: { port: 9001, host: "0.0.0.0" } } : {}),
-                accounts: {
-                  default: {
-                    enabled: true,
-                    ...(explicit ? {} : { legacyWebhook: { port: 3000, host: "127.0.0.1" } }),
+      expect(config).toEqual(original);
+      expect(result.config).toEqual(
+        pins
+          ? {
+              ...original,
+              meta: {
+                migrations: {
+                  webhookListeners: {
+                    telegram: [],
+                    feishu: explicit
+                      ? []
+                      : [["channels", "feishu", "accounts", "default", "legacyWebhook"]],
                   },
-                  optedOut: { legacyWebhook: false },
-                  ...(explicit
-                    ? {
-                        specific: {
-                          enabled: true,
-                          legacyWebhook: { port: 9002, host: "0.0.0.0" },
-                        },
-                      }
-                    : {}),
                 },
               },
-            },
-          }
-        : original,
-    );
-    expect(result.warnings).toEqual(warning ? [warning] : undefined);
-    expect(inspected).not.toHaveBeenCalled();
-    expect(mocks.createJiti).not.toHaveBeenCalled();
-    if (pins) {
-      expect(listener.normalizeCompatibilityConfig({ cfg: result.config })).toMatchObject({
-        config: result.config,
-        changes: [],
-      });
-    }
-  });
+              channels: {
+                feishu: {
+                  enabled: true,
+                  connectionMode: "webhook",
+                  tools: { base: true },
+                  ...(explicit ? { legacyWebhook: { port: 9001, host: "0.0.0.0" } } : {}),
+                  accounts: {
+                    default: {
+                      enabled: true,
+                      ...(explicit ? {} : { legacyWebhook: { port: 3000, host: "127.0.0.1" } }),
+                    },
+                    optedOut: { legacyWebhook: false },
+                    ...(explicit
+                      ? {
+                          specific: {
+                            enabled: true,
+                            legacyWebhook: { port: 9002, host: "0.0.0.0" },
+                          },
+                        }
+                      : {}),
+                  },
+                },
+              },
+            }
+          : original,
+      );
+      expect(result.warnings).toEqual(warning ? [warning] : undefined);
+      expect(inspected).not.toHaveBeenCalled();
+      // Only a trusted official installed owner supplements from the bundled host contract;
+      // replacement and untrusted owners never run their deferred repair code.
+      if (!pins) {
+        expect(mocks.createJiti).not.toHaveBeenCalled();
+      }
+      if (pins) {
+        expect(listener.normalizeCompatibilityConfig({ cfg: result.config })).toMatchObject({
+          config: result.config,
+          changes: [],
+        });
+      }
+    },
+  );
 
   it.each([
     { name: "full scan", touchedPaths: undefined, configRepair: true, expected: true },

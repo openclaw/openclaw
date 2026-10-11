@@ -283,12 +283,20 @@ function resolvePluginDoctorContracts(
       owner.trustedOfficialInstall === true
         ? entries.find((entry) => entry.pluginId === pluginId && !entry.historicalWebhookListener)
         : undefined;
+    // A deferred trusted official installed owner is excluded from executable entries, but the
+    // host historical-listener migration must still run from the bundled contract so candidate
+    // startup does not require a migration that only the candidate can write.
+    const deferredTrustedInstalledOwnerNeedsHostContract =
+      params.historicalWebhookListeners === true &&
+      owner?.id === pluginId &&
+      owner.trustedOfficialInstall === true &&
+      isPluginDoctorMigrationDeferred(pluginId);
     if (
       (isPluginDoctorMigrationDeferred(pluginId) && !params.historicalWebhookListeners) ||
       (!params.historicalWebhookListeners &&
         !Object.hasOwn(params.config?.channels ?? {}, channelId) &&
         !Object.hasOwn(params.config?.plugins?.entries ?? {}, pluginId)) ||
-      (owner && !supplement) ||
+      (owner && !supplement && !deferredTrustedInstalledOwnerNeedsHostContract) ||
       (params.pluginIds &&
         !params.pluginIds.includes(channelId) &&
         !params.pluginIds.includes(pluginId))
@@ -311,7 +319,7 @@ function resolvePluginDoctorContracts(
     if (supplement && contract.historicalWebhookListener && contract.normalizeCompatibilityConfig) {
       supplement.historicalWebhookListener = contract.historicalWebhookListener;
       supplement.historicalWebhookNormalizer = contract.normalizeCompatibilityConfig;
-    } else if (!owner) {
+    } else if (!owner || deferredTrustedInstalledOwnerNeedsHostContract) {
       if (isPluginDoctorMigrationDeferred(pluginId)) {
         const normalize = contract.normalizeHistoricalWebhookConfig;
         if (!contract.historicalWebhookListener || !normalize) {
