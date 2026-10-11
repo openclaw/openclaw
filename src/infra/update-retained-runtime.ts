@@ -22,7 +22,10 @@ import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
-import { serveUpdaterImportsFromRetainedRuntime } from "./update-retained-imports.js";
+import {
+  preloadUpdaterPostSwapImports,
+  serveUpdaterImportsFromRetainedRuntime,
+} from "./update-retained-imports.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
@@ -246,19 +249,23 @@ async function runWithRetainedUpdateRuntime<T>(
           const resolve = (url: URL) =>
             pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
           bind(resolve);
-          const retainedImports = serveUpdaterImportsFromRetainedRuntime({
-            relocations: relocations.rules,
-            // Loaded module URLs use the launch spelling of the package root.
-            origins: [
-              ...(root === sourceRoot
-                ? []
-                : [{ sourceRoot: candidateRoot, destinationRoot: root }]),
-              ...plan.copies.map(([installed, retained]) => ({
-                sourceRoot: retained,
-                destinationRoot: installed,
-              })),
-            ],
-          });
+          // Runtimes without module hooks load their later imports now, while
+          // the installed bytes are still in place.
+          const retainedImports =
+            serveUpdaterImportsFromRetainedRuntime({
+              relocations: relocations.rules,
+              // Loaded module URLs use the launch spelling of the package root.
+              origins: [
+                ...(root === sourceRoot
+                  ? []
+                  : [{ sourceRoot: candidateRoot, destinationRoot: root }]),
+                ...plan.copies.map(([installed, retained]) => ({
+                  sourceRoot: retained,
+                  destinationRoot: installed,
+                })),
+              ],
+            }) || (await preloadUpdaterPostSwapImports(sourceRoot));
+          assertCurrent();
           prepared = true;
           return {
             retainedImports,

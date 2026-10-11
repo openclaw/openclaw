@@ -13,6 +13,7 @@ import {
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
 import {
+  listPostSwapImportChunks,
   parseUpdateCompatibilityInventory,
   readUpdateCompatibilityInventory,
   recordUpdateCompatibilityRelease,
@@ -1285,6 +1286,32 @@ describe("previous release update compatibility", () => {
     };
     return { root, inventory };
   }
+
+  it("preloads exactly the chunks a bridge would cover, and marked releases record none", () => {
+    const { root, inventory } = recordImportedFixture(
+      'import("./service-abcdefgh.js").then((m) => m.runner())',
+      {
+        "service-abcdefgh.js":
+          '//#region src/cli/update-cli/runner.ts\nexport function runner() { return "old"; }',
+      },
+    );
+    // One scan feeds both, so a post-swap import cannot get a bridge without a preload.
+    expect(listPostSwapImportChunks(root)).toEqual(
+      inventory.releases.flatMap((release) => release.chunks.map((chunk) => chunk.path)),
+    );
+    expect(listPostSwapImportChunks(root)).toEqual(["service-abcdefgh.js"]);
+    write(
+      root,
+      "package.json",
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        type: "module",
+        openclaw: { updateRetainedImports: 1 },
+      }),
+    );
+    expect(recordUpdateCompatibilityRelease({ packageDir: root, integrity }).chunks).toEqual([]);
+  });
 
   it.each([
     "generated",

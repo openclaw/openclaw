@@ -367,12 +367,16 @@ files let the old updater finish after its installation is replaced. They do not
 preserve a running Gateway's old module state, cover arbitrary plugin imports,
 or make rollback into an older published package safe without restarting.
 
-An updater that includes retained imports and runs on Node loads its own later
-imports from its retained runtime copy instead of the replaced installation, so
-its updates no longer depend on these files. Updaters running on Bun and older
-published updaters still use them. A release's compatibility files can retire
-once its updater covers every supported runtime, or once it leaves the
-supported upgrade window.
+An updater that includes retained imports does not depend on these files. On
+Node it loads its own later imports from its retained runtime copy instead of
+the replaced installation. On Bun, which has no module hooks, it loads the
+modules it can need after replacement before replacing anything; Bun keeps
+them in memory. Such releases declare `openclaw.updateRetainedImports` in their
+`package.json`, and later builds generate no compatibility files for them.
+Older published updaters keep their compatibility files until they leave the
+supported upgrade window. Nothing is persisted for this: removing the
+mechanism in a later release cannot affect an installed updater, which only
+reads its own package.
 
 For a root-owned Linux system-global install, if `openclaw update` fails with
 `EACCES`, recover with system npm while keeping the Gateway stopped for the

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { UPDATE_RETAINED_IMPORTS_PROTOCOL } from "../../src/infra/update-retained-imports-contract.ts";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
@@ -232,6 +233,76 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
   return undefined;
 }
 
+type PostSwapImport = {
+  file: string;
+  node: ts.CallExpression;
+  owner: string;
+  target: string;
+  relative: string;
+};
+
+/**
+ * Visit each literal dist import the updater can evaluate after package
+ * replacement. Bridges and the preload list share this scan, so every chunk the
+ * inventory would bridge is one the updater preloads.
+ */
+function forEachPostSwapImport(
+  distDir: string,
+  parser: ReturnType<typeof createNativeTypeScriptParser>,
+  onImport: (entry: PostSwapImport) => void,
+) {
+  for (const file of moduleFiles(distDir)) {
+    const source = fs.readFileSync(file, "utf8");
+    if (
+      !source.includes("import(") ||
+      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+        ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
+      )
+    ) {
+      continue;
+    }
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const owner = ownerAt(source, node.getStart());
+        const specifier = node.arguments[0];
+        // Literal dist imports only: computed package assets retain their
+        // package owner's installation contract.
+        if (
+          owner &&
+          POST_SWAP_OWNER.test(owner) &&
+          isPostSwapImport(owner, node) &&
+          specifier &&
+          ts.isStringLiteralLikeNode(specifier) &&
+          specifier.text.startsWith(".")
+        ) {
+          const target = path.resolve(path.dirname(file), specifier.text);
+          const relative = portable(path.relative(distDir, target));
+          if (relative.startsWith("../")) {
+            throw new Error(`Post-swap import escapes dist: ${relative}`);
+          }
+          onImport({ file, node, owner, target, relative });
+        }
+      }
+      node.forEachChild(visit);
+    };
+    visit(parser.parseSourceFile(file, source));
+  }
+}
+
+/** List the dist chunks an updater without module hooks (Bun) preloads before replacement. */
+export function listPostSwapImportChunks(packageDir: string): string[] {
+  const resolved = path.resolve(packageDir);
+  if (!fs.existsSync(path.join(resolved, "dist"))) {
+    return [];
+  }
+  using parser = createNativeTypeScriptParser({ cwd: resolved });
+  const chunks = new Set<string>();
+  forEachPostSwapImport(path.join(resolved, "dist"), parser, ({ relative }) =>
+    chunks.add(relative),
+  );
+  return [...chunks].toSorted();
+}
+
 /** Record the package's emitted imports, without executing any package code. */
 export function recordUpdateCompatibilityRelease(params: {
   packageDir: string;
@@ -259,70 +330,48 @@ export function recordUpdateCompatibilityRelease(params: {
       release.commit === build.commit &&
       release.integrity === params.integrity,
   )?.chunk;
+  // This release's updater serves its own later imports, so it needs no bridges.
+  if (packageJson.openclaw?.updateRetainedImports === UPDATE_RETAINED_IMPORTS_PROTOCOL) {
+    return {
+      version: packageJson.version,
+      buildId: build.buildId,
+      commit: build.commit,
+      integrity: params.integrity,
+      schemaVersions: packageJson.openclaw?.schemaVersions,
+      chunks: [],
+    };
+  }
   using parser = createNativeTypeScriptParser({ cwd: packageDir });
   const graph = new ModuleGraph(parser);
   const chunks = new Map<string, UpdateCompatibilityChunk>();
-  for (const file of moduleFiles(distDir)) {
-    const source = fs.readFileSync(file, "utf8");
-    if (
-      !source.includes("import(") ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
-        ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
-      )
-    ) {
-      continue;
-    }
-    const visit = (node: ts.Node) => {
-      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        const owner = ownerAt(source, node.getStart());
-        if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node)) {
-          const specifier = node.arguments[0];
-          if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
-            // This inventory bridges literal dist imports. Computed package
-            // assets retain their package owner's installation contract.
-            return;
-          }
-          if (specifier.text.startsWith(".")) {
-            const target = path.resolve(path.dirname(file), specifier.text);
-            const relative = portable(path.relative(distDir, target));
-            if (relative.startsWith("../")) {
-              throw new Error(`Post-swap import escapes dist: ${relative}`);
-            }
-            const names = consumedExports(node) ?? graph.names(target);
-            const chunk = chunks.get(relative) ?? { path: relative, imports: [], exports: [] };
-            chunk.imports.push({
-              importer: portable(path.relative(distDir, file)),
-              owner,
-              exports: names.toSorted(),
-            });
-            for (const exported of names) {
-              if (chunk.exports.some((entry) => entry.exported === exported)) {
-                continue;
-              }
-              let origin = graph.origin(target, exported);
-              if (!origin) {
-                throw new Error(
-                  `Cannot trace ${relative} export ${exported} to its release source`,
-                );
-              }
-              if (
-                relative === historicalRegistryChunk &&
-                exported === "markPluginRegistryRetired" &&
-                origin.module === "src/plugins/loader-cache-state.ts" &&
-                origin.symbol === "markPluginRegistryRetired"
-              ) {
-                origin = { module: "src/plugins/registry-lifecycle.ts", symbol: origin.symbol };
-              }
-              chunk.exports.push({ exported, origin });
-            }
-            chunks.set(relative, chunk);
-          }
-        }
+  forEachPostSwapImport(distDir, parser, ({ file, node, owner, target, relative }) => {
+    const names = consumedExports(node) ?? graph.names(target);
+    const chunk = chunks.get(relative) ?? { path: relative, imports: [], exports: [] };
+    chunk.imports.push({
+      importer: portable(path.relative(distDir, file)),
+      owner,
+      exports: names.toSorted(),
+    });
+    for (const exported of names) {
+      if (chunk.exports.some((entry) => entry.exported === exported)) {
+        continue;
       }
-      node.forEachChild(visit);
-    };
-    visit(parser.parseSourceFile(file, source));
-  }
+      let origin = graph.origin(target, exported);
+      if (!origin) {
+        throw new Error(`Cannot trace ${relative} export ${exported} to its release source`);
+      }
+      if (
+        relative === historicalRegistryChunk &&
+        exported === "markPluginRegistryRetired" &&
+        origin.module === "src/plugins/loader-cache-state.ts" &&
+        origin.symbol === "markPluginRegistryRetired"
+      ) {
+        origin = { module: "src/plugins/registry-lifecycle.ts", symbol: origin.symbol };
+      }
+      chunk.exports.push({ exported, origin });
+    }
+    chunks.set(relative, chunk);
+  });
   return {
     version: packageJson.version,
     buildId: build.buildId,

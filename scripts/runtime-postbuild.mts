@@ -12,6 +12,10 @@ import {
   RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
   type RuntimeDependencyOwnership,
 } from "../src/infra/runtime-dependency-ownership.ts";
+import {
+  UPDATE_PRELOAD_IMPORTS_FILE,
+  UPDATE_RETAINED_IMPORTS_PROTOCOL,
+} from "../src/infra/update-retained-imports-contract.ts";
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
@@ -27,6 +31,7 @@ import {
 } from "./lib/static-extension-assets.mts";
 import {
   isUpdateCompatibilityChunk,
+  listPostSwapImportChunks,
   listUpdateCompatibilityChunkPaths,
   readUpdateCompatibilityInventory,
   writeUpdateCompatibilityChunks,
@@ -243,6 +248,7 @@ export function listCoreRuntimePostBuildOutputs(params: RuntimeFsParams = {}) {
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...LEGACY_CLI_EXIT_COMPAT_CHUNKS.map(({ dest }) => dest),
+    `dist/${UPDATE_PRELOAD_IMPORTS_FILE}`,
     ...listUpdateCompatibilityChunkPaths(
       readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
     ).map((fileName) => `dist/${fileName}`),
@@ -612,6 +618,24 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
       inventory: readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
     }),
   );
+  runPhase("updater preload imports", () => {
+    const chunks = listPostSwapImportChunks(rootDir);
+    // A release declaring retained imports ships no bridges for itself, so an
+    // empty list (lost region markers) would leave its Bun updater uncovered.
+    const manifest = path.join(rootDir, "package.json");
+    if (
+      chunks.length === 0 &&
+      fs.existsSync(manifest) &&
+      JSON.parse(fs.readFileSync(manifest, "utf8")).openclaw?.updateRetainedImports ===
+        UPDATE_RETAINED_IMPORTS_PROTOCOL
+    ) {
+      throw new Error("Found no post-swap updater imports to preload");
+    }
+    writeTextFileIfChanged(
+      path.join(rootDir, "dist", UPDATE_PRELOAD_IMPORTS_FILE),
+      `${JSON.stringify({ chunks }, null, 2)}\n`,
+    );
+  });
   runPhase("built plugin control-plane loads", () =>
     verifyBuiltPluginControlPlaneModules(phaseParams),
   );

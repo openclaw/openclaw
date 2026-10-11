@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { useNodeModuleHooks } from "../plugins/native-module-require.js";
+import { UPDATE_PRELOAD_IMPORTS_FILE } from "./update-retained-imports-contract.js";
 import {
   prepareRuntimeRelocations,
   relocateRuntimePath,
@@ -81,8 +82,8 @@ function isRetainedEsModule(file: string): boolean {
  * The hooks stay for the rest of this thread because the retained directory
  * outlives the command and post-command drains still import lazily.
  *
- * Bun keeps its native resolver (see `useNodeModuleHooks`), so Bun-run
- * updaters still depend on generated update-compat bridge chunks.
+ * Bun keeps its native resolver (see `useNodeModuleHooks`), so it returns
+ * false there and the caller preloads instead.
  */
 export function serveUpdaterImportsFromRetainedRuntime(params: {
   /** Install paths, including spellings Node may use in module URLs, to retained paths. */
@@ -178,5 +179,44 @@ export function serveUpdaterImportsFromRetainedRuntime(params: {
         : loaded;
     },
   });
+  return true;
+}
+
+/**
+ * Load every chunk the updater can import after package replacement while the
+ * installed bytes are still in place, for runtimes without module hooks.
+ *
+ * Bun keeps evaluated modules in its registry keyed by real path, so a later
+ * `import()` of the same chunk returns the loaded module instead of reading the
+ * replaced tree. The build lists the chunks; packages without the list (source
+ * checkouts that were never built, older releases) keep their bridges.
+ */
+export async function preloadUpdaterPostSwapImports(packageRoot: string): Promise<boolean> {
+  const distDir = path.join(packageRoot, "dist");
+  let listed: unknown;
+  try {
+    listed = JSON.parse(fs.readFileSync(path.join(distDir, UPDATE_PRELOAD_IMPORTS_FILE), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  const chunks = (listed as { chunks?: unknown }).chunks;
+  if (
+    !Array.isArray(chunks) ||
+    !chunks.every(
+      (chunk) =>
+        typeof chunk === "string" &&
+        !path.isAbsolute(chunk) &&
+        !chunk.split("/").includes("..") &&
+        /\.m?js$/u.test(chunk),
+    )
+  ) {
+    throw new Error(`Invalid updater preload list ${UPDATE_PRELOAD_IMPORTS_FILE}`);
+  }
+  for (const chunk of chunks) {
+    await import(pathToFileURL(path.join(distDir, chunk)).href);
+  }
   return true;
 }

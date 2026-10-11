@@ -3,6 +3,7 @@
   "version": "2026.9.9",
   "openclaw": {
     "updateAdmissionProtocol": 1,
+    "updateRetainedImports": 1,
     "schemaVersions": {
       "state": 20,
       "agent": 26
