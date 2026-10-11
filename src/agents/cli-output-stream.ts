@@ -41,6 +41,7 @@ import {
   preferGeminiCliStreamJsonError,
   readClaudeAttributedSubagentProgressId,
   preferStreamedClaudeTextOverResult,
+  readClaudeCliRateLimitWindows,
   readCliUsage,
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
@@ -301,6 +302,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       sawTerminalResult = true;
     }
     observeSessionId(parsed);
+    if (claudeStreamJson) {
+      const rateLimitWindows = readClaudeCliRateLimitWindows(parsed);
+      if (rateLimitWindows) {
+        params.onRateLimitWindows?.(rateLimitWindows);
+      }
+    }
     const nextUsage = readCliUsage(parsed);
     const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
     if (isClaudeTerminalResult && nextUsage && usage) {

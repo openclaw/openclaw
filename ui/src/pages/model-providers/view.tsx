@@ -366,10 +366,10 @@ function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard 
         </div>
         <div class="settings-row__control">
           {card().usage?.plan ? <SettingsValue value={card().usage?.plan} /> : undefined}
-          {renderProviderStatus(card())}
+          {card().usageOnly ? undefined : renderProviderStatus(card())}
         </div>
       </div>
-      {card().profiles.length > 0 && props.canViewProfiles ? (
+      {card().usageOnly ? undefined : card().profiles.length > 0 && props.canViewProfiles ? (
         <ProviderProfiles
           {...props}
           canMutate={props.canMutate && !props.configBusy}
@@ -393,8 +393,10 @@ function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard 
         )}
         {renderLocalCost(card())}
       </div>
-      <ProviderActions {...props} /> <KeyEditor {...props} />
-      {renderProbeResult(props.probeResults[card().id])} {renderMutationMessage(message())}
+      <Show when={!card().usageOnly}>
+        <ProviderActions {...props} /> <KeyEditor {...props} />
+        {renderProbeResult(props.probeResults[card().id])} {renderMutationMessage(message())}
+      </Show>
     </div>
   );
 }

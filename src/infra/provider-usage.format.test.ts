@@ -98,6 +98,23 @@ describe("provider usage formatting", () => {
     ]);
   });
 
+  it("says how old runtime-observed windows are", () => {
+    const observed = {
+      ...snapshot([{ label: "5h", usedPercent: 56, resetAt: now + 2 * 60 * 60_000 }]),
+      provider: "claude-cli",
+      displayName: "Claude Code",
+    };
+    expect(
+      formatUsageWindowSummary({ ...observed, observedAt: now - 3 * 60 * 60_000 }, { now }),
+    ).toBe("5h 44% left · as of 3h ago");
+    expect(
+      formatUsageReportLines(
+        { updatedAt: now, providers: [{ ...observed, observedAt: now - 12 * 60_000 }] },
+        { now },
+      ),
+    ).toEqual(["Usage:", "  Claude Code (as of 12m ago)", "    5h: 44% left · resets 2h"]);
+  });
+
   it("reports when no provider usage is available", () => {
     expect(formatUsageReportLines({ updatedAt: now, providers: [] })).toEqual([
       "Usage: no provider usage available.",
