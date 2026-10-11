@@ -19,6 +19,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SearchPage } from "./search-page.tsx";
 
 const providerPath = ["plugins", "entries", "example", "config", "webSearch"];
@@ -325,7 +326,11 @@ describe("Search configuration lifecycle", () => {
         false,
       );
       if (phase === "rejected") {
-        expect(field.disabled).toBe(false);
+        await waitForSolid(() => {
+          expect(field.isConnected).toBe(true);
+          expect(fixture.element.querySelector(`input[aria-label="${label}"]`)).toBe(field);
+          expect(field.disabled).toBe(false);
+        });
         expect(fixture.element.textContent).toContain("Synthetic save rejected");
         expect(
           [...fixture.element.querySelectorAll("button")].some(

@@ -15,7 +15,6 @@ export function SanitizedHtml(props: {
   const ref = (element: HTMLElement) => {
     container = element;
   };
-  // eslint-disable-next-line solid/reactivity -- Solid 2 dynamic owns the tracked tag source.
   const Container = dynamic(() => props.tag ?? "div");
   const onClick: JSX.EventHandler<HTMLElement, MouseEvent> = (event) => props.onClick?.(event);
   createEffect(

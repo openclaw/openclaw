@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -69,6 +70,10 @@ const initialConfigSnapshot = {
 };
 
 it("retires saved-install refreshes when their Gateway owner is replaced", async () => {
+  const catalog = createDiscoveryDetail(available);
+  catalog.plugin.id = "catalog-calendar-runtime";
+  const replacementCatalog = createDiscoveryDetail({ ...available, name: "Replacement Calendar" });
+  replacementCatalog.plugin.id = catalog.plugin.id;
   const configRead = deferred<typeof configSnapshot>();
   const catalogRead = deferred<ReturnType<typeof createResult>>();
   let installSaved = false;
@@ -88,7 +93,7 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
       return catalogRead.promise;
     }
     if (method === "plugins.catalog.get") {
-      return createDiscoveryDetail(available);
+      return catalog;
     }
     throw new Error(`Unexpected request: ${method}`);
   });
@@ -101,7 +106,7 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
       return replacementConfig;
     }
     if (method === "plugins.catalog.get") {
-      return createDiscoveryDetail({ ...available, name: "Replacement Calendar" });
+      return replacementCatalog;
     }
     throw new Error(`Unexpected request: ${method}`);
   });
@@ -112,7 +117,7 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
     createPluginsRouteData(
       harness.gateway,
       createResult(available),
-      createPluginsRouteLocation(`/plugins/${createDiscoveryDetail(available).plugin.id}`),
+      createPluginsRouteLocation(pathForPluginCatalogEntry(catalog.plugin.id)),
     ),
   );
   try {

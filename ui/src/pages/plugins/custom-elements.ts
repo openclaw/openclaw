@@ -1,5 +1,3 @@
-import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type { ConfigFormStructuredDraftProps } from "../../components/config-form-structured-draft.ts";
@@ -11,14 +9,6 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-config-form-structured-draft": HTMLAttributes<HTMLElement> & {
         "prop:props"?: ConfigFormStructuredDraftProps;
-      };
-      "wa-dropdown": HTMLAttributes<WaDropdown> & {
-        placement?: WaDropdown["placement"];
-        "onWa-select"?: EventHandler<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;
-      };
-      "wa-dropdown-item": HTMLAttributes<WaDropdownItem> & {
-        value?: string;
-        disabled?: boolean;
       };
       "wa-popup": HTMLAttributes<WaPopup> & {
         "prop:active"?: WaPopup["active"];

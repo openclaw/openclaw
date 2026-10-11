@@ -5,6 +5,7 @@ import { retainGatewayResponsePayload } from "../../../../packages/gateway-clien
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -286,6 +287,7 @@ it("reports rejected artifacts without another confirmation", async () => {
     install: installRequest,
   });
   const catalog = createDiscoveryDetail(available);
+  catalog.plugin.id = "catalog-calendar-runtime";
   const { client, request } = createClient(async (method) => {
     if (method === "plugins.catalog.get") {
       return catalog;
@@ -307,7 +309,7 @@ it("reports rejected artifacts without another confirmation", async () => {
   const { page } = await mountInventory(
     client,
     createResult(available),
-    `/plugins/${catalog.plugin.id}`,
+    pathForPluginCatalogEntry(catalog.plugin.id),
   );
   await clickPluginAction(page, "Install");
   await waitForSolid(() =>
@@ -782,6 +784,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
     install: { source: "official", pluginId: "community-thing" },
   });
   const catalog = createDiscoveryDetail(available);
+  catalog.plugin.id = "catalog-community-thing";
   let installCalls = 0;
   const { client } = createClient(async (method, params) => {
     if (method === "plugins.catalog.get") {
@@ -816,7 +819,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   const { page, harness } = await mountInventory(
     client,
     createResult(available),
-    `/plugins/${catalog.plugin.id}`,
+    pathForPluginCatalogEntry(catalog.plugin.id),
   );
 
   await clickPluginAction(page, "Install");

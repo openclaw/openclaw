@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createRenderEffect, createSignal } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { renderMapField } from "../../components/config-form.node.collection-map.ts";
@@ -20,8 +19,9 @@ import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx"
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import "../../components/web-awesome.ts";
 import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
+import "../../components/web-awesome.ts";
+import type { JSX } from "../../types/solid-elements.d.ts";
 import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
 import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";

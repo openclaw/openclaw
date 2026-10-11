@@ -235,7 +235,9 @@ function renderAdvanced(options: InventoryProps): JSX.Element {
   if (!options.connected) {
     return <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />;
   }
-  if (!options.advancedSchema || !options.configValue) {
+  const schema = options.advancedSchema;
+  const value = options.configValue;
+  if (!schema || !value) {
     return options.configError ? (
       renderRetryError(options.configError, options.onConfigReadRetry)
     ) : options.configSchemaLoading || !options.configValue ? (
@@ -251,8 +253,8 @@ function renderAdvanced(options: InventoryProps): JSX.Element {
           renderNode({
             rawAvailable: false,
             maskSensitive: true,
-            schema: options.advancedSchema,
-            value: options.configValue.plugins ?? {},
+            schema,
+            value: value.plugins ?? {},
             path: ["plugins"],
             hints: options.configHints,
             unsupported: new Set(options.configUnsupportedPaths),
