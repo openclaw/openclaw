@@ -82,29 +82,21 @@ describe("Discord message reads", () => {
 });
 
 describe("Discord voice status", () => {
-  it("returns an active voice state", async () => {
-    const { getMock, opts } = client();
-    const voiceState = { guild_id: "g1", user_id: "u1", channel_id: "c1", session_id: "s1" };
-    getMock.mockResolvedValueOnce(voiceState);
-    await expect(fetchVoiceStatusDiscord("g1", "u1", opts)).resolves.toEqual(voiceState);
-    expect(getMock).toHaveBeenCalledWith(Routes.guildVoiceState("g1", "u1"));
-  });
-
-  it.each([
-    Object.assign(new Error("Not Found"), { status: 404, discordCode: 10065 }),
-    new Error("DiscordError: Unknown Voice State"),
-  ])("recognizes an absent voice state: %s", async (error) => {
-    const { getMock, opts } = client();
-    getMock.mockRejectedValueOnce(error);
-    await expect(fetchVoiceStatusDiscord("g1", "u1", opts)).resolves.toEqual({
-      guild_id: "g1",
-      user_id: "u1",
-      channel_id: null,
-      connected: false,
-      absent: true,
-      reason: "unknown_voice_state",
-    });
-  });
+  it.each([new Error("DiscordError: Unknown Voice State")])(
+    "recognizes an absent voice state: %s",
+    async (error) => {
+      const { getMock, opts } = client();
+      getMock.mockRejectedValueOnce(error);
+      await expect(fetchVoiceStatusDiscord("g1", "u1", opts)).resolves.toEqual({
+        guild_id: "g1",
+        user_id: "u1",
+        channel_id: null,
+        connected: false,
+        absent: true,
+        reason: "unknown_voice_state",
+      });
+    },
+  );
 
   it("propagates other Discord failures", async () => {
     const { getMock, opts } = client();

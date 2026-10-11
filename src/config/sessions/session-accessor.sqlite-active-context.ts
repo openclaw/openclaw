@@ -182,6 +182,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     ignoreReadFence?: boolean;
     readOnly?: boolean;
     resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
     onRead?: (projection: CurrentTranscriptProjection) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
@@ -489,5 +490,6 @@ export function readSessionTranscriptBoundedActiveContextCore(
   return withCurrentProjectionSnapshot(scope, read, {
     readOnly: options.readOnly,
     resolvedScope: options.resolvedScope,
+    transaction: options.transaction,
   });
 }

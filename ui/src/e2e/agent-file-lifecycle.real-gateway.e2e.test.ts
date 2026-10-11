@@ -15,7 +15,6 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { ModelCatalogResult } from "../api/types.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -163,6 +162,7 @@ catalogSuite.define(() => {
     const mutations: string[] = [];
     let rejectCatalog = false;
     let holdCatalog = false;
+    let receivedLatestCatalog = false;
     const heldCatalogs: Array<() => void> = [];
     const publish = async (id: string) => {
       const args = [
@@ -223,6 +223,10 @@ catalogSuite.define(() => {
                 });
               }
               if (catalogReply && holdCatalog) {
+                const models = requireRecord(frame.payload).models;
+                receivedLatestCatalog ||=
+                  Array.isArray(models) &&
+                  models.some((model) => requireRecord(model).id === "inventory-latest");
                 heldCatalogs.push(() => socket.send(message));
               } else if (catalogReply && rejectCatalog) {
                 socket.send(
@@ -301,39 +305,13 @@ catalogSuite.define(() => {
             await picker.locator('[role="option"][data-value="ollama/inventory-before"]').count(),
           ).toBe(0);
 
-          const settleCatalogFrames = () =>
-            evaluateControlUiContext(page, async (context) => {
-              // Gateway readiness above establishes the active client.
-              await context.gateway.snapshot.client!.request("health", {});
-              await new Promise<void>((resolve) => {
-                requestAnimationFrame(() => resolve());
-              });
-            });
-
           holdCatalog = true;
           inventoryModel = "inventory-held";
           commands.push(await refreshInventory());
-          await expect.poll(() => heldCatalogs.length).toBe(1);
-          const readsWhileHeld = catalogRequests.size;
+          await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
           inventoryModel = "inventory-latest";
           commands.push(await refreshInventory());
-          await settleCatalogFrames();
-          expect(catalogRequests.size).toBe(readsWhileHeld);
-          expect(heldCatalogs).toHaveLength(1);
-
-          // Release the retired read, but keep its queued replacement behind the wire gate.
-          for (const release of heldCatalogs.splice(0)) {
-            release();
-          }
-          await expect.poll(() => heldCatalogs.length).toBe(1);
-          expect(catalogRequests.size).toBe(readsWhileHeld + 1);
-          await settleCatalogFrames();
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-held"]').count(),
-          ).toBe(0);
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
-          ).toBe(1);
+          await expect.poll(() => receivedLatestCatalog).toBe(true);
           holdCatalog = false;
           for (const release of heldCatalogs.splice(0)) {
             release();

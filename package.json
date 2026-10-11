@@ -415,6 +415,7 @@
     "scripts/lib/freebsd-service-discovery.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
     "scripts/lib/bun-cli-launcher.mjs",
+    "scripts/lib/openclaw-bun.json",
     "scripts/lib/javascript-statements.mjs",
     "scripts/install-cli.sh",
     "scripts/install-policy.sh",

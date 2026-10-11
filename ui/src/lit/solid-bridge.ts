@@ -11,6 +11,8 @@ import {
   runWithOwner,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 
 /** Temporary DOM-context bridge for unported Lit descendants; delete at cutover. */
@@ -33,10 +35,14 @@ export function connectLegacyApplicationContext(
 /** Temporary renderer island; remove with the last Lit route and template caller. */
 export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {
   let host: HTMLElement;
+  let part: ReturnType<typeof renderLit> | undefined;
   createEffect(value, (next) => {
-    renderLit(next, host, { host });
+    part = renderLit(next, host, { host });
   });
-  onCleanup(() => renderLit(nothing, host));
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
   return (element) => {
     host = element;
   };
@@ -246,6 +252,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       this.#dispose = render(() => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
@@ -263,7 +270,16 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const view = () => content(props, this.#host);
+        const renderContent = () => content(props, this.#host);
+        const view = () =>
+          layout
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layout, host: this },
+                get children() {
+                  return renderContent();
+                },
+              })
+            : renderContent();
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
@@ -315,4 +331,12 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: { render: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  createLitContentRef(() => props.render())(host);
+  return host;
 }
