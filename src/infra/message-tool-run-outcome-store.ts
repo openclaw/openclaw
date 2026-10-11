@@ -4,6 +4,7 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
@@ -27,8 +28,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -41,7 +40,6 @@ import type { MessageToolRunOutcomeWorkerOperations } from "./message-tool-run-o
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 /** Records one bounded completion fact before the run's owner retires. */
@@ -70,6 +68,28 @@ export async function recordMessageToolRunOutcome(params: {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...params, env };
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const { actor, authority } = incognito;
+    const expected = actor.sessions.readSharing(params.sessionKey)?.entry;
+    await actor.sessions.withSharedState(() =>
+      actor.sessions.sideData(
+        {
+          assertCurrent: () => authority.assertCurrent(),
+          authorize(_stage, facts) {
+            if (
+              facts.sharing?.entry?.sessionId !== expected?.sessionId ||
+              facts.sharing?.entry?.lifecycleRevision !== expected?.lifecycleRevision
+            ) {
+              throw new Error("Message-tool outcome session generation changed");
+            }
+          },
+        },
+        { type: "session.messageToolOutcome.record", input: values },
+      ),
+    );
+    return;
+  }
   if (
     isIncognitoSessionKey(scope.sessionKey) ||
     (scope.storePath && isIncognitoOpenClawAgentSqlitePath(scope.storePath, scope))
@@ -86,45 +106,16 @@ export async function recordMessageToolRunOutcome(params: {
   }
   const storePath = scope.storePath ?? resolveOpenClawAgentSqlitePath(scope);
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
   const admission = resolveSqliteWriteAdmissionScope({ ...scope, storePath });
-  const shared = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
   // Retain discovery custody before queuing; close must not turn waiting work into a fresh open.
   await withSessionHistoryWorkerReadCandidates(candidates, async (custody) => {
-    const assertCaptured = () => {
-      custody.assertCurrent();
-      shared.admission.assertCurrent();
-    };
+    const assertCaptured = () => custody.assertCurrent();
     const prepare = () =>
       withSessionStoreTarget(
         { agentId: scope.agentId, storePath, env, candidates },
         async (target, owner) => {
           const options = { ...target.database, env };
-          const identity =
-            identities.get(options.path) ?? readDatabasePathIdentitySync(options.path);
-          if (!identities.has(options.path) && identity.key.startsWith("file:")) {
-            throw new Error("Message-tool outcome target appeared after source capture");
-          }
-          const execution = captureOpenClawAgentDatabaseExecution(
-            options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
-          );
+          const execution = captureOpenClawAgentDatabaseExecution(options);
           const assertCurrent = () => {
             assertCaptured();
             owner.assertCurrent();
@@ -169,19 +160,15 @@ export async function recordMessageToolRunOutcome(params: {
                       input: undefined,
                     },
                   );
-                await worker.run(async (writer) => {
-                  for (const command of [
-                    { type: "prepare", input: undefined },
-                    { type: "record", input: values },
-                  ] as const) {
-                    const result = await writer.execute(command);
-                    if (!result.ok) {
-                      const error = new Error("Message-tool outcome transaction failed");
-                      retainOpenClawStateWorkerErrorPayload(error, result.error);
-                      throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-                    }
-                  }
-                }, assertCurrent);
+                const result = await worker.execute(
+                  { type: "record", input: values },
+                  assertCurrent,
+                );
+                if (!result.ok) {
+                  const error = new Error("Message-tool outcome transaction failed");
+                  retainOpenClawStateWorkerErrorPayload(error, result.error);
+                  throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+                }
               },
               true,
             );

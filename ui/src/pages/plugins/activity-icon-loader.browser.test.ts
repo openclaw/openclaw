@@ -145,6 +145,28 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     }
   });
 
+  it("recovers the same theme artwork URL after a transient fetch failure", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockImplementation(
+        async () =>
+          new Response(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M4 4h16v16H4Z"/></svg>',
+            { headers: { "content-type": "image/svg+xml" } },
+          ),
+      );
+    const params = {
+      ...common,
+      url: "/__openclaw__/plugin-theme-art/test/theme/icon/mark?v=recover",
+    };
+    await expect(fetchPluginThemeArtworkBlobUrl(params)).resolves.toBeNull();
+    const recovered = await fetchPluginThemeArtworkBlobUrl(params);
+    expect(recovered).not.toBeNull();
+    expect(await fetchPluginThemeArtworkBlobUrl(params)).toBe(recovered);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("rasterizes plugin theme artwork once per content URL, including concurrent callers", async () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")

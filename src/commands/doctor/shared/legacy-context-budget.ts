@@ -119,7 +119,5 @@ export function migrateLegacyContextBudgetConfig(raw: JsonRecord): ContextBudget
       message: `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
     });
   }
-  return changes.length > 0
-    ? { config: next, changed: true, changes, warnings }
-    : { config: raw, changed: false, changes, warnings };
+  return { config: next, changed: true, changes, warnings };
 }

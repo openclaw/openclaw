@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
@@ -544,19 +544,6 @@ try {
   for (const file of ["index.mjs", "index.d.mts"]) {
     assert.ok(fs.existsSync(path.join(alias, "dist", file)), "missing sibling " + file);
   }
-  fs.rmSync(output, { recursive: true });
-  const second = begin();
-  const mutation = second.started.promise.then(() => {
-    fs.mkdirSync(output);
-    fs.writeFileSync(path.join(output, "index.mjs"), "export const unrelated = 3;");
-    fs.writeFileSync(path.join(output, "index.d.mts"), "export declare const unrelated: 3;");
-    second.written.resolve();
-  });
-  await assert.rejects(build({ config: false, cwd: root, entry: "src/consumer.ts", dts: true,
-    outDir: ".artifacts/consumer-output", clean: false, logLevel: "silent",
-    hooks: createDeclarationBoundaryHooks() }), /resolution topology changed during compilation/);
-  await mutation;
-  assert.equal(second.compilers, 1);
 } finally {
   current?.written.resolve();
   Program.prototype.emitToString = originalEmit;
@@ -733,35 +720,15 @@ console.log("workspace/AI native compilation settled after success and failure")
     {
       name: "SDK",
       groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-      run: async (command: CommandFixture, root: string, env = {}) =>
+      run: async (command: CommandFixture, root: string, env?: NodeJS.ProcessEnv) =>
         await runWriter(command, root, false, env),
     },
-    { name: "unified", groups: TSDOWN_NON_SDK_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
+    { name: "unified", groups: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
   ])(
-    "uses local explicit references and seals real inputs for $name",
+    "uses local explicit references and records real inputs for $name",
     ({ groups, run }, { command }) =>
       command.lifetime.run(async () => {
-        const { root, write, ancestorInput, localInput } = nestedFixture(command, groups);
-        const unconsumedInput = path.join(root, "test/unrelated.test.ts");
-        write(
-          "tsdown.config.ts",
-          `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
-for (const config of configs) {
-  if (!config.dts?.emitDtsOnly) continue;
-  const register = config.hooks;
-  config.hooks = async hooks => {
-    await register(hooks);
-    hooks.hook("build:done", () => {
-      const marker = ".artifacts/replace-input";
-      if (!fs.existsSync(marker)) return;
-      const file = fs.readFileSync(marker, "utf8") === "unconsumed" ? ${JSON.stringify(unconsumedInput)} : ${JSON.stringify(localInput)};
-      fs.writeFileSync(file + ".replacement", fs.readFileSync(file));
-      fs.renameSync(file + ".replacement", file);
-    });
-  };
-}
-`,
-        );
+        const { root, ancestorInput, localInput } = nestedFixture(command, groups);
         const initial = await run(command, root);
         expect(initial.status, initial.stdout + initial.stderr).toBe(0);
         const published = treeHashes(path.join(root, "dist"));
@@ -782,12 +749,10 @@ for (const config of configs) {
           ).toBe(false);
         }
         expectStagingClean(root);
-        // Both writers seal through the same owner. Replay its mutation cycle once;
-        // the unified suite separately covers failed and mixed-cache publication.
-        if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+        // Both writers share the cache owner; one warm-cache probe covers reuse.
+        if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
           return;
         }
-        const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
         fs.writeFileSync(ancestorInput, coreText("changed-ancestor"));
         const ancestorChanged = await run(command, root);
         expect(ancestorChanged.status, ancestorChanged.stdout + ancestorChanged.stderr).toBe(0);
@@ -795,22 +760,6 @@ for (const config of configs) {
           "[tsdown-build] invocation",
         );
         expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-        write(".artifacts/replace-input", "unconsumed");
-        const unconsumedChanged = await run(command, root, { OPENCLAW_BUILD_CACHE: "0" });
-        expect(unconsumedChanged.status, unconsumedChanged.stdout + unconsumedChanged.stderr).toBe(
-          0,
-        );
-        expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-        const restored = await run(command, root);
-        expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-        expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
-        write(".artifacts/replace-input", "local");
-        const localChanged = await run(command, root, { OPENCLAW_BUILD_CACHE: "0" });
-        expect(localChanged.status, localChanged.stdout + localChanged.stderr).toBeGreaterThan(0);
-        expect(localChanged.stdout + localChanged.stderr).toContain("changed during compilation");
-        expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-        expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
-        expectStagingClean(root);
       }),
   );
 

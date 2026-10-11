@@ -1,5 +1,6 @@
 import {
   buildGatewayConnectAuth,
+  buildDeviceAuthPayload,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   resolveGatewayConnectScopes,
@@ -24,8 +25,7 @@ import type {
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
 import { i18n } from "../i18n/index.ts";
-import { loadOrCreateDeviceIdentity } from "../lib/nodes/index.ts";
-import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
+import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
 
 export type GatewayBrowserConnectOptions = {
   url: string;
@@ -166,17 +166,33 @@ export async function buildBrowserGatewayConnectPlan({
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: CONTROL_UI_OPERATOR_SCOPES,
     });
-  const device =
-    nativeAuth?.device ??
-    (await buildGatewayConnectDevice({
-      deviceIdentity,
-      client,
+  let device = nativeAuth?.device;
+  if (deviceIdentity) {
+    if (connectChallengeTs === null) {
+      throw new Error("gateway connect challenge timestamp invalid");
+    }
+    // The Control UI alone supports pre-challenge Gateways; that timeout fallback has no server time.
+    const signedAt = connectChallengeTs ?? Date.now();
+    const nonce = connectNonce ?? "";
+    const payload = buildDeviceAuthPayload({
+      deviceId: deviceIdentity.deviceId,
+      clientId: client.id,
+      clientMode: client.mode,
       role,
       scopes,
-      authToken: selectedAuth.signatureToken,
-      connectNonce,
-      connectChallengeTs,
-    }));
+      signedAtMs: signedAt,
+      token: selectedAuth.signatureToken ?? null,
+      nonce,
+    });
+    const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+    device = {
+      id: deviceIdentity.deviceId,
+      publicKey: deviceIdentity.publicKey,
+      signature,
+      signedAt,
+      nonce,
+    };
+  }
   return {
     generation,
     params: {

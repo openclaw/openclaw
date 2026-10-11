@@ -56,7 +56,6 @@ export type SlackMessageSummary = {
     count?: number;
     users?: string[];
   }>;
-  /** File attachments on this message. Present when the message has files. */
   files?: Array<{
     id?: string;
     name?: string;
@@ -370,6 +369,13 @@ export async function editSlackMessage(
   await editSlackRenderedMessage(channelId, messageId, text, opts);
 }
 
+function slackNativeEditLimitError(options?: ErrorOptions): Error {
+  return new Error(
+    `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+    options,
+  );
+}
+
 // Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
 export async function editSlackRenderedMessage(
   channelId: string,
@@ -385,9 +391,7 @@ export async function editSlackRenderedMessage(
     ? appendSlackNativeDataFallbackText(editText, blocks)
     : editText;
   if (hasNativeData && countSlackTextUtf8Bytes(nativeFallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
-    throw new Error(
-      `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
-    );
+    throw slackNativeEditLimitError();
   }
   // buildSlackEditTextPayload owns normalization; do not re-trim an edit that already fits.
   const text =
@@ -424,10 +428,7 @@ export async function editSlackRenderedMessage(
     }
     const fallback = fallbackPlan.fallbackMessages[0];
     if (!fallback || countSlackTextUtf8Bytes(fallback.text) > SLACK_EDIT_TEXT_MAX_BYTES) {
-      throw new Error(
-        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
-        { cause: error },
-      );
+      throw slackNativeEditLimitError({ cause: error });
     }
     const fallbackText = fallback.blocks
       ? escapeSlackMrkdwn(fallback.text)
@@ -436,10 +437,7 @@ export async function editSlackRenderedMessage(
           SLACK_EDIT_TEXT_MAX_BYTES,
         );
     if (countSlackTextUtf8Bytes(fallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
-      throw new Error(
-        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
-        { cause: error },
-      );
+      throw slackNativeEditLimitError({ cause: error });
     }
     await client.chat.update({
       channel: channelId,
@@ -532,23 +530,15 @@ export async function listSlackEmojis(opts: SlackActionClientOpts = {}) {
   return await client.emoji.list();
 }
 
-export async function pinSlackMessage(
-  channelId: string,
-  messageId: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  await client.pins.add({ channel: channelId, timestamp: messageId });
+function createSlackPinUpdater(method: "add" | "remove") {
+  return async (channelId: string, messageId: string, opts: SlackActionClientOpts = {}) => {
+    const client = await getClient(opts, "write");
+    await client.pins[method]({ channel: channelId, timestamp: messageId });
+  };
 }
 
-export async function unpinSlackMessage(
-  channelId: string,
-  messageId: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  await client.pins.remove({ channel: channelId, timestamp: messageId });
-}
+export const pinSlackMessage = createSlackPinUpdater("add");
+export const unpinSlackMessage = createSlackPinUpdater("remove");
 
 export async function listSlackPins(
   channelId: string,

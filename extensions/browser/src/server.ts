@@ -96,7 +96,6 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
       server,
       port,
       resolved,
-      owner: "server",
     });
   } catch (err) {
     await new Promise<void>((resolve) => {

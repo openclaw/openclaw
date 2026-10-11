@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
-  withMusicGenerationProviders,
   getMusicGenerationProvider,
   listMusicGenerationProviders,
 } from "../media-generation/registry.js";
@@ -12,6 +11,7 @@ import {
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
@@ -43,14 +43,17 @@ export async function generateMusic(
   if (deps.getProvider && deps.listProviders) {
     return runMusicGeneration(params, deps);
   }
-  return withMusicGenerationProviders(params.cfg, (providers) => {
-    const lookup = createMediaProviderLookup(providers);
-    return runMusicGeneration(params, {
-      ...deps,
-      getProvider: deps.getProvider ?? lookup.getProvider,
-      listProviders: deps.listProviders ?? lookup.listProviders,
-    });
-  });
+  return withAcquiredPluginCapabilityProviders(
+    { key: "musicGenerationProviders", cfg: params.cfg },
+    (providers) => {
+      const lookup = createMediaProviderLookup(providers);
+      return runMusicGeneration(params, {
+        ...deps,
+        getProvider: deps.getProvider ?? lookup.getProvider,
+        listProviders: deps.listProviders ?? lookup.listProviders,
+      });
+    },
+  );
 }
 
 async function runMusicGeneration(

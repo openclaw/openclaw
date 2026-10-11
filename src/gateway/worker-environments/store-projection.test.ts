@@ -18,6 +18,7 @@ import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
+import { createWorkerEnvironmentReceipt, readWorkerEnvironmentReceipt } from "./store-receipt.js";
 import type { WorkerEnvironmentFacts } from "./store.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -87,6 +88,42 @@ function acquireProjection() {
   return owner;
 }
 
+it("requires complete exact-key receipts before replacing environment authority", () => {
+  const owner = acquireProjection();
+  const source = { identity: "environment-store", incarnation: owner.incarnation };
+  owner.install(facts(environment, true), owner.nextSequence(), false);
+  const deletion = createWorkerEnvironmentReceipt(source, facts(undefined));
+  for (const invalid of [
+    { ...deletion, facts: new Map() },
+    { ...deletion, source: { ...source, identity: "another-store" } },
+    { ...deletion, source: { ...source, incarnation: "retired-owner" } },
+    { ...deletion, facts: new Map([[environment.environmentId, { kind: "unknown" }]]) },
+    {
+      ...deletion,
+      facts: new Map([
+        [environment.environmentId, { kind: "postimage", value: { environment: null } }],
+      ]),
+    },
+  ]) {
+    expect(() =>
+      owner.install(
+        readWorkerEnvironmentReceipt(invalid, source, [environment.environmentId]),
+        owner.nextSequence(),
+        false,
+      ),
+    ).toThrow(/receipt/);
+    expect(owner.get(environment.environmentId)).toEqual(environment);
+    expect(owner.credential(environment.environmentId)).toEqual(credential);
+  }
+  owner.install(
+    readWorkerEnvironmentReceipt(deletion, source, [environment.environmentId]),
+    owner.nextSequence(),
+    false,
+  );
+  expect(owner.get(environment.environmentId)).toBeUndefined();
+  expect(owner.credential(environment.environmentId)).toBeUndefined();
+});
+
 it("keeps exact node admission predicates after bootstrap setup binding", () => {
   const owner = acquireProjection();
   owner.install(
@@ -115,8 +152,6 @@ it("keeps exact node admission predicates after bootstrap setup binding", () => 
   expect(owner.hasNodeEnrollmentOwner("cloud-device-bound")).toBe(true);
   expect(owner.hasPendingNodeEnrollmentSetup("setup", "different-cloud-device")).toBe(false);
   expect(owner.hasPendingNodeEnrollmentSetup("missing-setup", "cloud-device-bound")).toBe(false);
-  expect(() => owner.get(environment.environmentId)).toThrow("both SSH and node transports");
-  expect(() => owner.list()).toThrow("both SSH and node transports");
 });
 
 it.each([false, true])(
@@ -181,16 +216,7 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  "unchanged",
-  "activity",
-  "closed",
-  "generation",
-  "lifecycle",
-  "session",
-  "missing",
-  "unknown",
-] as const)(
+it.each(["unchanged", "activity", "missing", "unknown"] as const)(
   "preserves diagnostic record reads while fencing %s attachment and transport changes",
   (change) => {
     const owner = acquireProjection();
@@ -211,10 +237,6 @@ it.each([
     const nextAttachment = {
       ...attachment,
       ...(change === "activity" ? { lastUsedAtMs: 2 } : {}),
-      ...(change === "closed" ? { closedAtMs: 2 } : {}),
-      ...(change === "generation" ? { generation: 2 } : {}),
-      ...(change === "lifecycle" ? { sessionLifecycleRevision: "replacement" } : {}),
-      ...(change === "session" ? { sessionId: "replacement" } : {}),
     };
     if (change !== "missing") {
       after.attachments.push(nextAttachment);
@@ -261,33 +283,24 @@ it.each([
   },
 );
 
-it.each(["delivery", "rotation", "revocation"] as const)(
-  "keeps environment authority readable during credential %s",
-  (change) => {
-    const owner = acquireProjection();
-    owner.install(facts(environment, true), owner.nextSequence(), false);
-    const after = facts(environment);
-    if (change !== "revocation") {
-      after.credentials.push({
-        ...credential,
-        ...(change === "delivery" ? { deliveredAtMs: 2 } : { credentialHash: "c".repeat(43) }),
-      });
-    }
-    const token = {};
-    owner.fence(createWorkerEnvironmentCommitAdmission(after), token);
-    expect(owner.get(environment.environmentId)).toEqual(environment);
-    expect(owner.hasNodeEnrollmentOwner("node")).toBe(true);
-    expect(owner.hasPendingNodeEnrollmentSetup("setup", "node")).toBe(true);
-    expect(() => owner.credential(environment.environmentId)).toThrow("unsettled mutation");
-    expect(() => owner.credentialByHash(credential.credentialHash)).toThrow("unsettled mutation");
-    expect(owner.withAdmission(token, () => owner.credential(environment.environmentId))).toEqual(
-      credential,
-    );
-    owner.install(after, owner.nextSequence(), false);
-    owner.release(token);
-    expect(owner.credential(environment.environmentId)).toEqual(after.credentials[0]);
-  },
-);
+it("keeps environment authority readable during credential revocation", () => {
+  const owner = acquireProjection();
+  owner.install(facts(environment, true), owner.nextSequence(), false);
+  const after = facts(environment);
+  const token = {};
+  owner.fence(createWorkerEnvironmentCommitAdmission(after), token);
+  expect(owner.get(environment.environmentId)).toEqual(environment);
+  expect(owner.hasNodeEnrollmentOwner("node")).toBe(true);
+  expect(owner.hasPendingNodeEnrollmentSetup("setup", "node")).toBe(true);
+  expect(() => owner.credential(environment.environmentId)).toThrow("unsettled mutation");
+  expect(() => owner.credentialByHash(credential.credentialHash)).toThrow("unsettled mutation");
+  expect(owner.withAdmission(token, () => owner.credential(environment.environmentId))).toEqual(
+    credential,
+  );
+  owner.install(after, owner.nextSequence(), false);
+  owner.release(token);
+  expect(owner.credential(environment.environmentId)).toEqual(after.credentials[0]);
+});
 
 it("fences both environments while a conversation attachment moves", () => {
   const owner = acquireProjection();

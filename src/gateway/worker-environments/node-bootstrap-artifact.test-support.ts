@@ -219,7 +219,7 @@ export function useNodeBootstrapArtifactFixtures() {
       plugins: [{ id: "remote-runtime", root: pluginRoot }],
     };
     const provider = createProvider(options);
-    return { root, packageRoot, provider, sourcePackage, pluginPackage, options };
+    return { root, packageRoot, pluginRoot, provider, sourcePackage, pluginPackage, options };
   }
   return { fixture, createProvider, tempDirs };
 }

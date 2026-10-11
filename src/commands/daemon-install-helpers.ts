@@ -1,4 +1,3 @@
-// Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -71,17 +70,6 @@ const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
 ]);
-const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
-
-function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
-  if (isDangerousHostEnvVarName(key)) {
-    return true;
-  }
-  if (!isDangerousHostEnvOverrideVarName(key)) {
-    return false;
-  }
-  return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
-}
 
 async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   env: Record<string, string | undefined>;
@@ -323,7 +311,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
       if (!value) {
         continue;
       }
-      if (isBlockedExecSecretRefPassEnvKey(key)) {
+      if (
+        isDangerousHostEnvVarName(key) ||
+        (isDangerousHostEnvOverrideVarName(key) && key.toUpperCase() !== "HOME")
+      ) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
           warningTitle,
@@ -548,7 +539,6 @@ async function buildGatewayInstallEnvironment(params: {
   };
 }
 
-/** Build command, working directory, and environment for installing the Gateway service. */
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -687,7 +677,6 @@ function normalizeServicePathForCompare(
   return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
 }
 
-/** Return the user-facing recovery hint for failed Gateway service installation. */
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."

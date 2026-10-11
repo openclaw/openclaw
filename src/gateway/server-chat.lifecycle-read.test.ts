@@ -170,9 +170,9 @@ it("settles accepted direct lifecycle writes through a qualified global alias", 
       await persistence;
       const stored = { ...target, storePath: selected.storePath };
       expect(loadExactSessionEntryReadOnly(stored)?.entry).toMatchObject({
-        status: "running",
         lifecycleRunId: "selected-alias-run",
       });
+      expect(loadExactSessionEntryReadOnly(stored)?.entry.status).toBeUndefined();
       expect(
         loadExactSessionEntryReadOnly({ ...stored, sessionKey: requestedKey }),
       ).toBeUndefined();

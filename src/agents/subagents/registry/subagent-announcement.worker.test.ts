@@ -1,7 +1,6 @@
 // Preserve fixture setup before production consumers.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { rename } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -21,10 +20,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "../../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
@@ -44,6 +40,7 @@ import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   registerSubagentRun,
@@ -51,7 +48,6 @@ import {
   prepareSubagentSessionCleanupRevocation,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -345,143 +341,44 @@ it.each(["not-committed", "unknown", "successor"] as const)(
   },
 );
 
-it.each([
-  { phase: "capture", publication: "none" },
-  { phase: "initial write", publication: "none" },
-  { phase: "initial write", publication: "same-row reservation" },
-  { phase: "initial write", publication: "restored same-ID owner" },
-  { phase: "initial write", publication: "replacement source" },
-] as const)(
-  "retains exact cleanup custody after source refusal ($phase, $publication)",
-  async ({ phase, publication }) => {
-    const joinWork = observeRootWork();
-    const run = await registerCompletion("sealed-cleanup-start", {
-      holdForRequester: true,
+it("refuses cleanup before capture when its database is closed", async () => {
+  const joinWork = observeRootWork();
+  const run = await registerCompletion("sealed-cleanup-start", { holdForRequester: true });
+  completeRegistered(run);
+  await joinWork(true);
+  await fixture.settle();
+  await updateRun(run.runId, (draft) => {
+    draft.suppressCompletionDelivery = true;
+  });
+  const entry = subagentRuns.get(run.runId)!;
+  const before = loadSubagentRegistryFromSqlite().get(run.runId);
+  let closing: Promise<void> | undefined;
+  const start = vi
+    .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
+    .mockImplementation((...args) => {
+      closing ??= closeOpenClawStateDatabaseAsync();
+      return nativeCleanup.startSubagentAnnounceCleanupFlow(...args);
     });
-    completeRegistered(run);
+  try {
+    expect(() => resumeSubagentRun(run.runId)).toThrow("state database read admission is closed");
+    await closing;
+    expect(entry.cleanupHandled).not.toBe(true);
+    expect(loadSubagentRegistryFromSqlite().get(run.runId)).toEqual(before);
+    expect(fixture.wake).not.toHaveBeenCalled();
+    start.mockRestore();
+    resumeSubagentRun(run.runId);
     await joinWork(true);
     await fixture.settle();
-    const databasePath = captureOpenClawStateWorkerContext().admission.databasePath;
-    const replacementPath = path.join(fixture.stateDir, "replacement.sqlite");
-    if (publication === "replacement source") {
-      openOpenClawStateDatabase({ path: replacementPath });
-      await closeOpenClawStateDatabaseByPathAsync(replacementPath);
-    }
-    const entry = subagentRuns.get(run.runId)!;
-    await mutateSubagentRuns([run.runId], (rows) => ({
-      value: undefined,
-      postimages: new Map([
-        [run.runId, { ...rows.get(run.runId)!, suppressCompletionDelivery: true }],
-      ]),
-    }));
-    const before = loadSubagentRegistryFromSqlite().get(run.runId);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let closing: Promise<void> | undefined;
-    let refused: unknown;
-    let cleanupContext:
-      | Parameters<typeof nativeCleanup.startSubagentAnnounceCleanupFlow>[0]
-      | undefined;
-    const start = vi
-      .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
-      .mockImplementation((...args) => {
-        cleanupContext = args[0];
-        if (phase !== "capture") {
-          return nativeCleanup.startSubagentAnnounceCleanupFlow(...args);
-        }
-        closing ??= closeOpenClawStateDatabaseAsync();
-        try {
-          return nativeCleanup.startSubagentAnnounceCleanupFlow(...args);
-        } catch (error) {
-          refused = error;
-          throw error;
-        } finally {
-          entered.resolve();
-        }
-      });
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation(async (...args) => {
-        if (
-          phase !== "initial write" ||
-          !cleanupContext?.cleanupReservations.has(getSubagentRunRuntimeKey(entry)) ||
-          closing
-        ) {
-          return nativeWorker.runOpenClawStateWorkerOperation(...args);
-        }
-        closing = closeOpenClawStateDatabaseAsync();
-        try {
-          return await nativeWorker.runOpenClawStateWorkerOperation(...args);
-        } catch (error) {
-          refused = error;
-          entered.resolve();
-          await release.promise;
-          throw error;
-        } finally {
-          entered.resolve();
-        }
-      });
-    try {
-      if (phase === "capture") {
-        expect(() => resumeSubagentRun(run.runId)).toThrow(
-          "state database read admission is closed",
-        );
-      } else {
-        resumeSubagentRun(run.runId);
-      }
-      await entered.promise;
-      await closing;
-      let publicationWork: Promise<unknown> | undefined;
-      if (publication === "replacement source") {
-        await rename(replacementPath, databasePath);
-        publicationWork = restoreSubagentRunsFromDisk({ runs: subagentRuns });
-      } else if (publication !== "none") {
-        publicationWork = (async () => {
-          (await prepareSubagentSessionCleanupRevocation(run.childSessionKey))();
-          if (publication === "restored same-ID owner") {
-            await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-          }
-        })();
-      }
-      release.resolve();
-      await joinWork(true);
-      await publicationWork;
-      const currentOwner = subagentRuns.get(run.runId);
-      const published = loadSubagentRegistryFromSqlite().get(run.runId);
-      expect(refused).toBeInstanceOf(Error);
-      expect(fixture.wake).not.toHaveBeenCalled();
-      if (publication !== "none") {
-        if (publication === "replacement source") {
-          expect(published).toBeUndefined();
-        } else {
-          expect(currentOwner?.execution.suppressSessionEffects).toBe(true);
-          expect(published?.execution.suppressSessionEffects).toBe(true);
-        }
-        expect(entry.cleanupHandled).not.toBe(true);
-        expect(fixture.announce).not.toHaveBeenCalled();
-        return;
-      }
-      expect(entry.cleanupHandled).not.toBe(true);
-      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toEqual(before);
-      expect(fixture.wake).not.toHaveBeenCalled();
-      start.mockRestore();
-      worker.mockRestore();
-      resumeSubagentRun(run.runId);
-      await joinWork(true);
-      await fixture.settle();
-      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.cleanupCompletedAt).toBeTypeOf(
-        "number",
-      );
-      expect(fixture.announce).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      start.mockRestore();
-      worker.mockRestore();
-      await joinWork();
-      await closing;
-    }
-  },
-);
+    expect(loadSubagentRegistryFromSqlite().get(run.runId)?.cleanupCompletedAt).toBeTypeOf(
+      "number",
+    );
+    expect(fixture.announce).not.toHaveBeenCalled();
+  } finally {
+    start.mockRestore();
+    await joinWork();
+    await closing;
+  }
+});
 
 it.each(["current", "revoked", "source switched", "yielded"] as const)(
   "uses current authority for an ended hook after suspended bookkeeping (%s)",

@@ -3,22 +3,10 @@ import {
   type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type IngressReasonCode,
-  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
-
-type TwitchAccessControlResult =
-  | {
-      allowed: false;
-      reason?: string;
-    }
-  | {
-      allowed: true;
-      channelIngress: ResolvedChannelMessageIngress;
-      reason?: string;
-    };
 
 type TwitchPolicyKind = "open" | "allowFrom" | "role";
 
@@ -46,7 +34,7 @@ export async function checkTwitchAccessControl(params: {
   accountId: string;
   botUsername: string;
   contextBinding?: ChannelIngressContextBinding;
-}): Promise<TwitchAccessControlResult> {
+}) {
   const { message, account, botUsername } = params;
   const policyKind = resolveTwitchPolicyKind(account);
   const resolved = await getTwitchRuntime()
@@ -88,14 +76,14 @@ export async function checkTwitchAccessControl(params: {
 
   if (decision.decisiveGateId === "activation" && decision.admission !== "dispatch") {
     return {
-      allowed: false,
+      allowed: false as const,
       reason: "message does not mention the bot (requireMention is enabled)",
     };
   }
 
   if (decision.admission === "dispatch") {
     return {
-      allowed: true,
+      allowed: true as const,
       channelIngress: resolved,
     };
   }
@@ -103,25 +91,25 @@ export async function checkTwitchAccessControl(params: {
   if (policyKind === "allowFrom") {
     if (!params.message.userId) {
       return {
-        allowed: false,
+        allowed: false as const,
         reason: "sender user ID not available for allowlist check",
       };
     }
     return {
-      allowed: false,
+      allowed: false as const,
       reason: "sender is not in allowFrom allowlist",
     };
   }
 
   if (policyKind === "role") {
     return {
-      allowed: false,
+      allowed: false as const,
       reason: `sender does not have any of the required roles: ${params.account.allowedRoles?.join(", ") ?? ""}`,
     };
   }
 
   return {
-    allowed: false,
+    allowed: false as const,
     reason: reasonForTwitchIngressDecision(decision),
   };
 }

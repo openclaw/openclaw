@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { IDBFactory, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixIdbSnapshotJson,
@@ -44,12 +45,9 @@ class MatrixIdbSnapshotMigrationRequiredError extends Error {
 }
 
 function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["indexes"][number] {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<IdbStoreSnapshot["indexes"][number]>;
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate?.name === "string" &&
     (typeof candidate.keyPath === "string" ||
       (Array.isArray(candidate.keyPath) &&
         candidate.keyPath.every((entry) => typeof entry === "string"))) &&
@@ -59,24 +57,19 @@ function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["ind
 }
 
 function isValidIdbRecordSnapshot(value: unknown): value is IdbStoreSnapshot["records"][number] {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return "key" in value && "value" in value;
+  const candidate = asOptionalObjectRecord(value);
+  return Boolean(candidate && "key" in candidate && "value" in candidate);
 }
 
 function isValidIdbStoreSnapshot(value: unknown): value is IdbStoreSnapshot {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<IdbStoreSnapshot>;
+  const candidate = asOptionalObjectRecord(value);
+  const keyPath = candidate?.keyPath;
   const validKeyPath =
-    candidate.keyPath === null ||
-    typeof candidate.keyPath === "string" ||
-    (Array.isArray(candidate.keyPath) &&
-      candidate.keyPath.every((entry) => typeof entry === "string"));
+    keyPath === null ||
+    typeof keyPath === "string" ||
+    (Array.isArray(keyPath) && keyPath.every((entry) => typeof entry === "string"));
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate?.name === "string" &&
     validKeyPath &&
     typeof candidate.autoIncrement === "boolean" &&
     Array.isArray(candidate.indexes) &&
@@ -87,12 +80,9 @@ function isValidIdbStoreSnapshot(value: unknown): value is IdbStoreSnapshot {
 }
 
 function isValidIdbDatabaseSnapshot(value: unknown): value is IdbDatabaseSnapshot {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<IdbDatabaseSnapshot>;
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate?.name === "string" &&
     typeof candidate.version === "number" &&
     Number.isFinite(candidate.version) &&
     candidate.version > 0 &&
@@ -187,8 +177,10 @@ async function clearAccountIndexedDatabases(databasePrefix?: string): Promise<vo
   }
 }
 
-async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise<void> {
-  const idb = fakeIndexedDB;
+async function restoreIndexedDatabases(
+  snapshot: IdbDatabaseSnapshot[],
+  idb: IDBFactory,
+): Promise<void> {
   for (const dbSnap of snapshot) {
     const request = idb.open(dbSnap.name, dbSnap.version);
     request.addEventListener("upgradeneeded", () => {
@@ -217,22 +209,31 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
           continue;
         }
         const tx = db.transaction(storeSnap.name, "readwrite");
-        const store = tx.objectStore(storeSnap.name);
-        for (const rec of storeSnap.records) {
-          if (storeSnap.keyPath !== null) {
-            store.put(rec.value);
-          } else {
-            store.put(rec.value, rec.key);
-          }
-        }
         await new Promise<void>((resolve, reject) => {
+          let enqueueError: unknown;
           tx.addEventListener("complete", () => resolve(), { once: true });
-          // Failed requests abort the transaction instead of emitting complete.
           tx.addEventListener(
             "abort",
-            () => reject(toErrorObject(tx.error, "IndexedDB restore transaction aborted")),
+            () =>
+              reject(
+                enqueueError ?? toErrorObject(tx.error, "IndexedDB restore transaction aborted"),
+              ),
             { once: true },
           );
+          try {
+            const store = tx.objectStore(storeSnap.name);
+            for (const rec of storeSnap.records) {
+              if (storeSnap.keyPath !== null) {
+                store.put(rec.value);
+              } else {
+                store.put(rec.value, rec.key);
+              }
+            }
+          } catch (err) {
+            // A synchronous put failure must also settle earlier queued writes.
+            enqueueError = err;
+            tx.abort();
+          }
         });
       }
     } finally {
@@ -281,8 +282,18 @@ export async function restoreIdbFromDisk(
         await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
+      const names = new Set<string>();
+      for (const { name } of snapshot) {
+        if (names.has(name) || (databasePrefix && !name.startsWith(`${databasePrefix}::`))) {
+          throw new Error("Malformed IndexedDB snapshot database names");
+        }
+        names.add(name);
+      }
+      // Replay the whole candidate before replacing retained account databases:
+      // structural JSON validation cannot prove key, schema, or index constraints.
+      await restoreIndexedDatabases(snapshot, new IDBFactory());
       await clearAccountIndexedDatabases(databasePrefix);
-      await restoreIndexedDatabases(snapshot);
+      await restoreIndexedDatabases(snapshot, fakeIndexedDB);
       LogService.info(
         "IdbPersistence",
         `Restored ${snapshot.length} IndexedDB database(s) from Matrix SQLite state`,

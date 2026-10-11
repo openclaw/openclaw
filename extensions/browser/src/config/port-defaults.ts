@@ -5,7 +5,7 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
 const DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN =
   DEFAULT_BROWSER_CDP_PORT_RANGE_END - DEFAULT_BROWSER_CDP_PORT_RANGE_START;
 
-export const DEFAULT_BROWSER_CONTROL_PORT = 18791;
+const DEFAULT_BROWSER_CONTROL_PORT = 18791;
 
 function derivePort(base: number, offset: number, fallback: number): number {
   const port = base + offset;

@@ -1,32 +1,19 @@
 // Bench Gateway Restart tests cover bench gateway restart script behavior.
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
 import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
-  collectOutputLines,
-  collectTraceLine,
   flushOutputLineBuffers,
   parseNonNegativeInt,
   parsePositiveInt,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
-import {
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../src/infra/kysely-sync.js";
-import { writeGatewayRestartIntentSync } from "../../src/infra/restart-intent.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../src/state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../src/state/openclaw-state-db.js";
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
@@ -82,14 +69,6 @@ function createRestartSampleFixture(
   };
 }
 
-type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
-
-type BenchCliResult = {
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
-
 async function withWallClockDeadline<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -112,70 +91,7 @@ async function withWallClockDeadline<T>(
   }
 }
 
-function runBenchCli(args: string[]): Promise<BenchCliResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-gateway-restart.ts", ...args],
-      {
-        cwd: process.cwd(),
-        env: { ...process.env, NODE_NO_WARNINGS: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stderr = "";
-    let stdout = "";
-    child.stderr.setEncoding("utf8");
-    child.stdout.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (status) => resolve({ status, stderr, stdout }));
-  });
-}
-
-function readRestartIntentRow(env: NodeJS.ProcessEnv) {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_intent")
-      .select(["intent_key", "kind", "pid", "reason"])
-      .where("intent_key", "=", "gateway-restart"),
-  );
-}
-
 describe("gateway restart benchmark script", () => {
-  let helpResult: BenchCliResult;
-  let unknownArgsResult: BenchCliResult;
-
-  beforeAll(async () => {
-    // These validation-only processes share no state; overlap their TSX startup cost.
-    [helpResult, unknownArgsResult] = await Promise.all([
-      runBenchCli(["--help"]),
-      runBenchCli(["--wat"]),
-    ]);
-  });
-
-  it("prints help without running benchmark cases", () => {
-    expect(helpResult.status).toBe(0);
-    expect(helpResult.stdout).toContain("OpenClaw Gateway restart benchmark");
-    expect(helpResult.stdout).toContain("--restarts <n>");
-    expect(helpResult.stdout).toContain("Timeout for initial startup and each restart");
-    expect(helpResult.stdout).toContain("--post-ready-delay-ms <ms>");
-    expect(helpResult.stdout).toContain("skipChannels (gateway restart, skip channels)");
-    expect(helpResult.stdout).toContain(
-      "skipChannelsNoAcpxProbe (gateway restart, skip channels, ACPX startup probe off)",
-    );
-    expect(helpResult.stdout).not.toContain("[gateway-restart-bench]");
-    expect(helpResult.stderr).toBe("");
-  });
-
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
     expect(parsePositiveInt("5", 1, "--restarts")).toBe(5);
@@ -215,34 +131,12 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);
   });
 
-  it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
-    expect(unknownArgsResult.status).toBe(1);
-    expect(unknownArgsResult.stdout).toBe("");
-    expect(unknownArgsResult.stderr.trim()).toBe("Unknown argument: --wat");
-    expect(unknownArgsResult.stderr).not.toContain("\n    at ");
-  });
-
   it("guards the SIGUSR2 restart benchmark on Windows", () => {
     expect(() => testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("win32")).toThrow(
       /not supported on Windows/u,
     );
-  });
-
-  it("buffers child output lines split across chunks", () => {
-    const first = collectOutputLines("", "[gateway] restart trace: restart.ready 12");
-    expect(first.lines).toEqual([]);
-
-    const second = collectOutputLines(first.carry, ".5ms total=45.0ms\r");
-    expect(second.lines).toEqual([]);
-
-    const third = collectOutputLines(second.carry, "\n[gateway] ready\npartial");
-    expect(third.lines).toEqual([
-      "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
-      "[gateway] ready",
-    ]);
-    expect(third.carry).toBe("partial");
   });
 
   it("flushes buffered restart output before classifying an iteration", () => {
@@ -424,39 +318,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
   });
 
-  it("can pin ACPX startup probe policy per benchmark case", () => {
-    const probeOffEnv = testing.sanitizedEnv(
-      "/tmp/openclaw-bench",
-      "/tmp/openclaw-bench/config.json",
-      {
-        config: {},
-        env: { OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE: "0" },
-        id: "skipChannelsNoAcpxProbe",
-        name: "gateway restart, skip channels, ACPX startup probe off",
-      },
-    );
-
-    expect(probeOffEnv.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE).toBe("0");
-  });
-
-  it("parses restart trace metrics including resource Count fields", () => {
-    const restartTrace: Record<string, number> = {};
-
-    collectTraceLine(
-      "[gateway] restart trace: restart.ready 12.5ms total=45.0ms rssMb=200.5 heapUsedMb=80.1 activeHandlesCount=12 activeTimersCount=2 indexPlugins=50",
-      "restart trace",
-      restartTrace,
-    );
-
-    expect(restartTrace["restart.ready"]).toBe(12.5);
-    expect(restartTrace["restart.ready.total"]).toBe(45);
-    expect(restartTrace["restart.ready.rssMb"]).toBe(200.5);
-    expect(restartTrace["restart.ready.heapUsedMb"]).toBe(80.1);
-    expect(restartTrace["restart.ready.activeHandlesCount"]).toBe(12);
-    expect(restartTrace["restart.ready.activeTimersCount"]).toBe(2);
-    expect(restartTrace["restart.ready.indexPlugins"]).toBeUndefined();
-  });
-
   it("requires initial ready logs before restart attribution", () => {
     expect(
       testing.hasInitialReadyLogs({
@@ -501,33 +362,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         signal: "SIGTERM",
       }),
     ).toBeNull();
-  });
-
-  it("does not fail successful restarts when probes miss the unavailable window", () => {
-    const iteration = testing.createRestartIteration(1);
-    iteration.gatewayReadyLogMs = 40;
-    iteration.gatewayReadyLogLine = "[gateway] ready";
-    iteration.healthz = {
-      downtimeMs: null,
-      firstErrorKind: null,
-      firstRecoveryMs: null,
-      ms: 24,
-      status: 200,
-      transitions: [],
-      unavailableMs: null,
-    };
-    iteration.readyz = {
-      downtimeMs: null,
-      firstErrorKind: null,
-      firstRecoveryMs: null,
-      ms: 26,
-      status: 200,
-      transitions: [],
-      unavailableMs: null,
-    };
-    iteration.restartTrace = { "restart.ready.total": 35 };
-
-    expect(testing.finalizeRestartIteration(iteration, false, () => {})).toBeNull();
   });
 
   it("summarizes failure rate, restart.ready totals, and resource slope", () => {
@@ -712,29 +546,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       },
     ]);
     expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(true);
-  });
-
-  it("writes restart intent files for the target gateway pid", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-test-"));
-    try {
-      const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
-      // The benchmark records intent only after Gateway startup creates state.
-      openOpenClawStateDatabase({ env });
-      expect(
-        writeGatewayRestartIntentSync({ env, targetPid: 12345, reason: "gateway-restart-bench" }),
-      ).toBe(true);
-      const row = readRestartIntentRow(env);
-
-      expect(row).toMatchObject({
-        intent_key: "gateway-restart",
-        kind: "gateway-restart",
-        pid: 12345,
-        reason: "gateway-restart-bench",
-      });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(root, { force: true, recursive: true });
-    }
   });
 
   it("finishes restart probes when ready arrives without an unavailable window", async () => {

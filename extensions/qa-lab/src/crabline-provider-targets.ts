@@ -56,34 +56,30 @@ function encodeQaThreadComponent(value: string) {
   return value.replaceAll("%", "%25").replaceAll("/", "%2F");
 }
 
-function resolveMatrixQaTarget(target: string) {
-  const explicitTarget = normalizeExplicitMatrixTarget(target);
-  if (explicitTarget) {
-    return explicitTarget;
-  }
+function translateQaTarget(
+  target: string,
+  resolveConversationId: (value: string) => string,
+  resolveThreadId: (value: string) => string,
+  prefixes: readonly string[],
+) {
   if (target.startsWith("thread:")) {
     if (target.startsWith("thread:/v1/")) {
       const parsed = parseQaTarget(target);
-      const resolvedConversationId = resolveMatrixQaConversationId(parsed.conversationId);
       const kind = parsed.chatType === "direct" ? "dm" : "group";
-      return `thread:/v1/${kind}/${encodeQaThreadComponent(resolvedConversationId)}/${encodeQaThreadComponent(parsed.threadId ?? "")}`;
+      return `thread:/v1/${kind}/${encodeQaThreadComponent(resolveConversationId(parsed.conversationId))}/${encodeQaThreadComponent(resolveThreadId(parsed.threadId ?? ""))}`;
     }
     const threadTarget = target.slice("thread:".length);
     const separator = threadTarget.indexOf("/");
     if (separator > 0) {
-      const conversationId = threadTarget.slice(0, separator);
-      const resolvedConversationId = resolveMatrixQaConversationId(conversationId);
-      return `thread:${resolvedConversationId}${threadTarget.slice(separator)}`;
+      return `thread:${resolveConversationId(threadTarget.slice(0, separator))}/${resolveThreadId(threadTarget.slice(separator + 1))}`;
     }
   }
-  for (const prefix of ["channel:", "group:", "dm:"]) {
+  for (const prefix of prefixes) {
     if (target.startsWith(prefix)) {
-      const conversationId = target.slice(prefix.length);
-      const resolvedConversationId = resolveMatrixQaConversationId(conversationId);
-      return `${prefix}${resolvedConversationId}`;
+      return `${prefix}${resolveConversationId(target.slice(prefix.length))}`;
     }
   }
-  return resolveMatrixQaConversationId(target);
+  return resolveConversationId(target);
 }
 
 function resolveQaMention(text: string, mention: string) {
@@ -94,25 +90,23 @@ function resolveQaMention(text: string, mention: string) {
 }
 
 function resolveDiscordQaTarget(target: string) {
-  const normalized = target.trim();
-  if (normalized.startsWith("thread:")) {
-    if (normalized.startsWith("thread:/v1/")) {
-      const parsed = parseQaTarget(normalized);
-      const kind = parsed.chatType === "direct" ? "dm" : "group";
-      return `thread:/v1/${kind}/${resolveDiscordQaId(parsed.conversationId)}/${resolveDiscordQaId(parsed.threadId ?? "")}`;
-    }
-    const threadTarget = normalized.slice("thread:".length);
-    const separator = threadTarget.indexOf("/");
-    if (separator > 0) {
-      return `thread:${resolveDiscordQaId(threadTarget.slice(0, separator))}/${resolveDiscordQaId(threadTarget.slice(separator + 1))}`;
-    }
-  }
-  for (const prefix of ["channel:", "group:", "dm:", "user:"]) {
-    if (normalized.startsWith(prefix)) {
-      return `${prefix}${resolveDiscordQaId(normalized.slice(prefix.length))}`;
-    }
-  }
-  return resolveDiscordQaId(normalized);
+  return translateQaTarget(target.trim(), resolveDiscordQaId, resolveDiscordQaId, [
+    "channel:",
+    "group:",
+    "dm:",
+    "user:",
+  ]);
+}
+
+function resolveMatrixQaTarget(target: string) {
+  return (
+    normalizeExplicitMatrixTarget(target) ??
+    translateQaTarget(target, resolveMatrixQaConversationId, (threadId) => threadId, [
+      "channel:",
+      "group:",
+      "dm:",
+    ])
+  );
 }
 
 export function createCrablineProviderInboundInput(

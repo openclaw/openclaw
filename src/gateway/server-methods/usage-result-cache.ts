@@ -102,12 +102,7 @@ export async function loadCostUsageSummaryCached(params: {
     revision: getSessionCostUsageUpdatedAt(),
     load: () =>
       allAgents
-        ? loadAllAgentCostUsageSummary({
-            startMs: params.startMs,
-            endMs: params.endMs,
-            dayBucket: params.dayBucket,
-            config: params.config,
-          })
+        ? loadAllAgentCostUsageSummary(params)
         : loadCostUsageSummaryFromCache({
             startMs: params.startMs,
             endMs: params.endMs,

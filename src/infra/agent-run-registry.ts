@@ -108,6 +108,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
+  context.eventState = { seq: 0 };
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -156,6 +157,9 @@ export function registerAgentRunContext(
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
+  if (context.sessionEventDelivery === false) {
+    existing.sessionEventDelivery = false;
+  }
   for (const key of [
     "isControlUiVisible",
     "projectSessionActive",
@@ -488,7 +492,8 @@ export function captureAgentRunDelegatedSourceAssertion(
       refuse();
     }
   };
-  if (readActiveAgentRunDelegatedAuthority(instance, () => {}) !== authority) {
+  const active = readActiveAgentRunDelegatedAuthority(instance, () => {});
+  if (!active || !isCurrentAgentRunApprovalAuthority(active, context?.approvalLeases, authority)) {
     return undefined;
   }
   return {
@@ -584,6 +589,10 @@ export function hasLiveAgentRunContext(runId: string): boolean {
     context?.lifecycleGeneration === state.lifecycleGeneration &&
     (hasAgentRunContextExecutionOwner(runId) || context.projectSessionActive === true)
   );
+}
+
+export function listLiveAgentRunIds(): string[] {
+  return [...getAgentRunRegistryState().contexts.keys()].filter(hasLiveAgentRunContext);
 }
 
 export function recordAgentRunModel(runId: string, model: AgentRunModel | undefined): void {

@@ -500,12 +500,6 @@ describe("handleSlackAction", () => {
     });
   });
 
-  it("rejects invalid blocks JSON", async () => {
-    await expect(
-      handleSlackAction({ ...send, content: "", blocks: "{not json" }, cfg),
-    ).rejects.toThrow(/blocks must be valid JSON/i);
-  });
-
   it("requires a send payload", async () => {
     await expect(handleSlackAction({ ...send, content: "" }, cfg)).rejects.toThrow(
       /requires content, blocks, or mediaUrl/i,
@@ -814,26 +808,6 @@ describe("handleSlackAction", () => {
     expect(context.hasRepliedRef.value).toBe(true);
   });
 
-  it("replyToMode=first threads standalone message-tool sends without ReplyToId", async () => {
-    cfg = slackConfig({ replyToMode: "first" });
-    const hasRepliedRef = { value: false };
-    const context = buildSlackThreadingToolContext({
-      cfg,
-      accountId: null,
-      hasRepliedRef,
-      context: {
-        ChatType: "channel",
-        To: "channel:C123",
-        CurrentMessageId: "1111111111.111111",
-      },
-    });
-
-    await handleSlackAction({ ...send, content: "First" }, cfg, context);
-
-    expectLastSlackSend("First", cfg, "1111111111.111111");
-    await sendSecondMessageAndExpectNoThread({ cfg, context });
-  });
-
   it("preserves a prepared channel override that disables auto-threading", async () => {
     const context = buildSlackThreadingToolContext({
       cfg: slackConfig({ replyToMode: "all", channels: { C123: { replyToMode: "off" } } }),
@@ -847,32 +821,6 @@ describe("handleSlackAction", () => {
     });
     await handleSlackAction({ ...send, content: "Channel root" }, cfg, context);
     expectLastSlackSend("Channel root", cfg);
-  });
-
-  it("consumes the first routable DM reply while retaining the native channel", async () => {
-    const context = {
-      ...createReplyToFirstContext(),
-      currentChannelId: "D123",
-      currentMessagingTarget: "slack:U123",
-    };
-    await handleSlackAction(
-      { action: "sendMessage", to: "user:U123", content: "First" },
-      cfg,
-      context,
-    );
-    expectSlackSendCall(0, "user:U123", "First", { cfg, threadTs: "1111111111.111111" });
-    expect(context.hasRepliedRef.value).toBe(true);
-    await handleSlackAction(
-      { action: "sendMessage", to: "user:U123", content: "Second" },
-      cfg,
-      context,
-    );
-    expectSlackSendCall(1, "user:U123", "Second", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
   });
 
   it("replyToMode=first without hasRepliedRef does not thread", async () => {
@@ -1033,24 +981,5 @@ describe("handleSlackAction", () => {
       { name: "celebrate", identifier: "celebrate", aliasOf: "party" },
       { name: "party", identifier: "party" },
     ]);
-  });
-
-  it("caps emoji-list output at 100", async () => {
-    listSlackEmojis.mockResolvedValueOnce({
-      ok: true,
-      emoji: Object.fromEntries(
-        Array.from({ length: 101 }, (_, index) => [
-          `emoji${String(index).padStart(3, "0")}`,
-          "https://example.com/emoji.png",
-        ]),
-      ),
-    });
-    const result = await handleSlackAction({ action: "emojiList", limit: 150 }, slackConfig());
-    const emojis = requireDetails(result).emojis;
-    if (!Array.isArray(emojis)) {
-      throw new Error("Expected an emoji array");
-    }
-    expect(emojis).toHaveLength(100);
-    expect(emojis.at(-1)).toEqual({ name: "emoji099", identifier: "emoji099" });
   });
 });

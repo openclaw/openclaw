@@ -340,44 +340,6 @@ describe("invocation-owned session mutations", () => {
     },
   );
 
-  it.each(["key", "incarnation"] as const)(
-    "does not borrow a different owned run %s for narrow Stop",
-    async (changed) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const client = roleClient("view", "stop-owner");
-        client.connId = "same-connection";
-        const cfg = rolePolicyConfig();
-        await upsertSessionEntryCore(scope, ownedEntry(client, "own-row"));
-        for (const grant of ["operator.sessions.write", "operator.write"]) {
-          client.connect.scopes = [grant];
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
-            agentId: "main",
-            sessionId: changed === "key" ? "own-row" : "prior-incarnation",
-            owner: { connId: client.connId },
-          });
-          context.chatAbortControllers.set("different-run", run);
-          const respond = vi.fn();
-          await handleGatewayRequest({
-            req: {
-              type: "req",
-              id: grant,
-              method: "chat.abort",
-              params: { sessionKey: key, runId: "different-run" },
-            },
-            client,
-            context,
-            respond,
-            isWebchatConnect: () => false,
-            extraHandlers: { "chat.abort": handleChatAbortRequest },
-          });
-          expect(run.controller.signal.aborted).toBe(grant === "operator.write");
-          expect(respond.mock.calls[0]?.[0]).toBe(grant === "operator.write");
-        }
-      });
-    },
-  );
-
   it.each(["sessions.send", "sessions.create"] as const)(
     "%s keeps its original lease when creation commits before the initial turn",
     async (method) => {

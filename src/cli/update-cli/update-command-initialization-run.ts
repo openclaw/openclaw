@@ -21,7 +21,7 @@ import {
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import {
   applyUpdateCandidateAdmission,
-  assertUpdateAdmissionConfigUnchanged,
+  createUpdateCandidateAdmissionReport,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -118,14 +118,10 @@ export async function initializeAndRunUpdate(
                 resolveConfigPath(env) !== resolveConfigPath()
                   ? (await readUpdateChannelConfig(true)).legacyConfigPlan
                   : undefined;
-              const root = selection.refusal
-                ? selection.refusal.report.root
-                : selection.target.root;
-              const packageAdmission = {
-                serviceRoot: selection.refusal
-                  ? selection.refusal.report.serviceRoot
-                  : selection.target.managedServiceRoot,
-              };
+              const { root, serviceRoot } = selection.refusal
+                ? selection.refusal.report
+                : { root: selection.target.root, serviceRoot: selection.target.managedServiceRoot };
+              const packageAdmission = { serviceRoot, dryRun: opts.dryRun };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
                 ...selection,
@@ -136,37 +132,29 @@ export async function initializeAndRunUpdate(
                 registerRun: async (run, dispose) => {
                   registerRun(run);
                   disposePresentation = dispose;
+                  const recordCompletedStep = (step: string, detail: string) =>
+                    recordUpdateCommandTarget(run, {
+                      step: { step, status: "completed", detail },
+                    });
                   for (const result of selectedTarget?.preflightSteps ?? []) {
                     for (const step of updateRunStepsFromResultStep(result)) {
                       recordUpdateCommandTarget(run, { step });
                     }
                   }
                   if (selectedTarget?.inspectionWarning) {
-                    recordUpdateCommandTarget(run, {
-                      step: {
-                        step: "warning:installation-inspection",
-                        status: "completed",
-                        detail: selectedTarget.inspectionWarning,
-                      },
-                    });
+                    recordCompletedStep(
+                      "warning:installation-inspection",
+                      selectedTarget.inspectionWarning,
+                    );
                   }
                   if (initialization.originalRecoveryCapture) {
-                    recordUpdateCommandTarget(run, {
-                      step: {
-                        step: "original-state-capture",
-                        status: "completed",
-                        detail: `Original state retained for manual recovery at ${initialization.originalRecoveryCapture.directory}.`,
-                      },
-                    });
+                    recordCompletedStep(
+                      "original-state-capture",
+                      `Original state retained for manual recovery at ${initialization.originalRecoveryCapture.directory}.`,
+                    );
                   }
                   for (const [index, detail] of originalCaptureWarnings.entries()) {
-                    recordUpdateCommandTarget(run, {
-                      step: {
-                        step: `warning:original-state-capture:${index + 1}`,
-                        status: "completed",
-                        detail,
-                      },
-                    });
+                    recordCompletedStep(`warning:original-state-capture:${index + 1}`, detail);
                   }
                   handleFailure = await prepareUpdateCommandFailureTriage(
                     { ...opts, invocationCwd, run },
@@ -322,25 +310,15 @@ export async function initializeAndRunUpdate(
                           applyUpdateCandidateAdmission({
                             target,
                             opts,
-                            result: initialization.candidateAdmission.result,
+                            result: initialization.candidateAdmission,
                           });
                         } catch (error) {
                           if (!(error instanceof UpdatePreMutationError)) {
                             throw error;
                           }
-                          throw new UnreportedUpdateAdmissionOutcome({
-                            root: target.root,
-                            mode: target.mode,
-                            installKind: target.updateInstallKind,
-                            opts,
-                            controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-                            reason: error.reason,
-                            message: error.message,
-                            nextAction: error.nextAction,
-                            failureFacts: error.failureFacts,
-                            stepResult: error.stepResult,
-                            recoverySteps: error.recoverySteps,
-                          });
+                          throw new UnreportedUpdateAdmissionOutcome(
+                            createUpdateCandidateAdmissionReport({ target, opts, prepared }, error),
+                          );
                         }
                       },
                     }
@@ -360,31 +338,18 @@ export async function initializeAndRunUpdate(
                   return await runCapturedInitialization();
                 }
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-                const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
-                  initialization.candidateAdmission?.result.verdict?.verdict === "admit"
-                    ? initialization.candidateAdmission.result.verdict.facts.checks.map(
+                  initialization.candidateAdmission?.verdict?.verdict === "admit"
+                    ? initialization.candidateAdmission.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;
-                const checkSchemas = async (phase?: "before" | "after") => {
+                const checkSchemas = async () => {
                   const config = await withOwnedManagedUpdateEnv(env, () =>
                     readUpdateChannelConfig(Boolean(opts.channel), {
                       tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
                     }),
                   );
-                  if (candidateAdmissionChecks?.includes("config") && phase !== "after") {
-                    assertUpdateAdmissionConfigUnchanged(
-                      target.configSnapshot,
-                      config.configSnapshot,
-                    );
-                  }
-                  if (!opts.channel && config.storedChannel !== selectedStoredChannel) {
-                    await target.refuseUpdate(
-                      "update-channel-changed",
-                      "Stored update channel changed after target selection. Rerun the update, or specify --channel explicitly.",
-                    );
-                  }
                   Object.assign(target, config);
                   return await preflightUpdateCommandSchemas({
                     ...target,
@@ -472,7 +437,7 @@ export async function initializeAndRunUpdate(
                           invocationCwd,
                           progress: presentation.progress,
                           assertCurrent,
-                          checkSchemas: async (phase) => void (await checkSchemas(phase)),
+                          checkSchemas: async () => void (await checkSchemas()),
                         });
                       } finally {
                         presentation.dispose();

@@ -20,8 +20,6 @@ sidebarTitle: "Trust model"
 - Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
 - `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
 
-Hosting multiple users or organizations? Run one isolated Gateway cell per tenant instead of sharing a Gateway. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
-
 Before changing remote access, DM policy, reverse proxy, or public exposure, run through the [Gateway exposure runbook](/gateway/security/exposure-runbook) as a pre-flight/rollback checklist.
 
 ## Trust boundary matrix
@@ -50,7 +48,7 @@ Quick model for triaging risk reports:
 - Localhost-only deployment findings (for example missing HSTS on a loopback-only gateway).
 - Discord inbound webhook signature findings for inbound paths that do not exist in this repo.
 - Node pairing metadata treated as a hidden second per-command approval layer for `system.run`; the real execution boundary is the gateway's global node command policy plus the node's own exec approvals.
-- `gateway.nodes.pairing.sshVerify` treated as a vulnerability because it is enabled by default. It never approves on network locality or SSH reachability alone: the gateway reads the device identity back over SSH (BatchMode, strict host keys) and approves only on an exact device-key match with the pending request, which requires the connecting keypair to already live under the operator's account on a host the operator controls. Probes are bounded to private/CGNAT source addresses, share the trusted-CIDR eligibility floor (fresh scopeless `role: node` only), and `sshVerify: false` turns the feature off.
+- `gateway.nodes.pairing.sshVerify` treated as a vulnerability because it is enabled by default. It never approves on network locality or SSH reachability alone: the gateway reads the device identity back over SSH (BatchMode, strict host keys) and approves only on an exact device-key match with the pending request, which requires the connecting keypair to already live under the operator's account on a host the operator controls. Checks are bounded to private/CGNAT source addresses, share the trusted-CIDR eligibility floor (fresh scopeless `role: node` only), and `sshVerify: false` turns the feature off.
 - `gateway.nodes.pairing.autoApproveCidrs` treated as a vulnerability by itself. It is disabled by default, requires explicit CIDR/IP entries, only applies to first-time `role: node` pairing with no requested scopes, and never auto-approves operator/browser/Control UI, WebChat, role/scope upgrades, metadata or public-key changes, or same-host loopback trusted-proxy header paths (even when loopback trusted-proxy auth is enabled).
 - "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
 - Default Gateway-wide session visibility or default-on agent-to-agent messaging treated as a vulnerability on its own. The audit reports plain multi-agent defaults as `info`, not a vulnerability finding, and escalates to `warn` only with trust-boundary signals. One Gateway is one trust boundary; narrow `tools.sessions.visibility` or `tools.agentToAgent` for persona separation, and run separate gateways for adversarial users.
@@ -72,13 +70,13 @@ For hostile-user isolation, split trust boundaries by OS user/host and run separ
 
 ## Threat model
 
-Your AI assistant can execute arbitrary shell commands, read/write files, access network services, and send messages to anyone (if given channel access). People who message it can try to trick it into doing bad things, social-engineer access to your data, or probe for infrastructure details.
+Your AI assistant can execute arbitrary shell commands, read/write files, access network services, and send messages to anyone (if given channel access). People who message it can try to trick it into doing bad things, social-engineer access to your data, or check for infrastructure details.
 
 Most failures here are not exotic exploits - they are "someone messaged the bot and the bot did what they asked." OpenClaw's stance, in order:
 
 1. **Identity first** - decide who can talk to the bot (DM pairing / allowlists / explicit "open").
 2. **Scope next** - decide where the bot can act (group allowlists + mention gating, tools, sandboxing, device permissions).
-3. **Model last** - assume the model can be manipulated; design so manipulation has limited blast radius.
+3. **Model last** - assume the model can be manipulated; design so manipulation can cause only limited damage.
 
 ## Reporting security issues
 

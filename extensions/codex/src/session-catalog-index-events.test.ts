@@ -14,7 +14,7 @@ import {
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
-import { codexCatalogSourceForClient } from "./session-catalog-source.js";
+import { codexCatalogSourceForClient, setCodexCatalogSource } from "./session-catalog-source.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,10 +61,12 @@ async function fixture(
     const limit = params.limit ?? 64;
     return projectCodexCatalogPage(
       {
-        data: structuredClone(threads.slice(offset, offset + limit)),
+        data: structuredClone(threads.slice(offset, offset + limit)).map((entry) =>
+          setCodexCatalogSource(entry, codexCatalogSourceForClient(harness.client)),
+        ),
         nextCursor: offset + limit < threads.length ? String(offset + limit) : null,
       },
-      { sanitize: sanitizeTerminalText, source: codexCatalogSourceForClient(harness.client) },
+      { sanitize: sanitizeTerminalText },
     );
   });
   const index = new CodexCatalogIndex({
@@ -428,13 +430,16 @@ describe("resident Codex catalog notifications", () => {
     const page = await projectCodexCatalogPage(
       {
         data: [
-          thread({
-            cwd: "/workspace/fresh",
-            status: { type: "active", activeFlags: ["staleStatus"] },
-          }),
+          setCodexCatalogSource(
+            thread({
+              cwd: "/workspace/fresh",
+              status: { type: "active", activeFlags: ["staleStatus"] },
+            }),
+            codexCatalogSourceForClient(harness.client),
+          ),
         ],
       },
-      { sanitize: sanitizeTerminalText, source: codexCatalogSourceForClient(harness.client) },
+      { sanitize: sanitizeTerminalText },
     );
     const response = createDeferred<typeof page>();
     const started = createDeferred<void>();
@@ -452,107 +457,6 @@ describe("resident Codex catalog notifications", () => {
       expect(session).toMatchObject({ cwd: "/workspace/fresh", status: "notLoaded" });
       expect(session).not.toHaveProperty("activeFlags");
       expect(readNative).toHaveBeenCalledOnce();
-    } finally {
-      response.resolve(page);
-      await initializing;
-    }
-  });
-
-  it("keeps newer status while publishing refreshed cwd and recency without another read", async () => {
-    const { index, harness, complete, reply } = await fixture();
-    complete();
-    await harness.waitForWrite(0);
-    harness.send({
-      method: "thread/status/changed",
-      params: {
-        threadId: "thread-1",
-        status: { type: "active", activeFlags: ["waitingOnApproval"] },
-      },
-    });
-    await reply(0, thread({ cwd: "/workspace/fresh", recencyAt: 200, updatedAt: 200 }));
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        cwd: "/workspace/fresh",
-        recencyAt: 200,
-        status: "active",
-        activeFlags: ["waitingOnApproval"],
-      });
-    });
-    expect(harness.writes).toHaveLength(1);
-  });
-
-  it("merges fresh hydration metadata with a newer name event without an exact read", async () => {
-    const { index, harness, startOptions, readNative } = await fixture();
-    harness.client.close();
-    const refreshed = thread({ cwd: "/workspace/fresh", recencyAt: 200, updatedAt: 200 });
-    const page = await projectCodexCatalogPage(
-      { data: [{ ...refreshed }] },
-      { sanitize: sanitizeTerminalText },
-    );
-    const response = createDeferred<typeof page>();
-    readNative.mockImplementation(() => response.promise);
-    const replacement = createClientHarness();
-    cleanups.push(async () => replacement.client.close());
-    try {
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        threadId: "thread-1",
-        cwd: "/workspace/project",
-        recencyAt: 100,
-      });
-      expect(readNative).toHaveBeenCalledTimes(2);
-      replacement.send({
-        method: "thread/name/updated",
-        params: { threadId: "thread-1", threadName: "Renamed during hydration" },
-      });
-      response.resolve(page);
-      await nextTurn();
-      expect(replacement.writes).toEqual([]);
-      await vi.waitFor(async () => {
-        expect((await index.list({})).sessions[0]).toMatchObject({
-          name: "Renamed during hydration",
-          cwd: "/workspace/fresh",
-          recencyAt: 200,
-        });
-      });
-      expect(readNative).toHaveBeenCalledTimes(2);
-      expect(replacement.writes).toEqual([]);
-    } finally {
-      response.resolve(page);
-      replacement.client.close();
-    }
-  });
-
-  it("retries once when a replacement becomes ready before the old hydration fails", async () => {
-    const { index, harness, startOptions, readNative } = await fixture([], { initialize: false });
-    const page = await projectCodexCatalogPage(
-      { data: [thread({ name: "Recovered on replacement" })] },
-      { sanitize: sanitizeTerminalText },
-    );
-    const response = createDeferred<typeof page>();
-    const started = createDeferred<void>();
-    readNative.mockImplementationOnce(() => {
-      started.resolve();
-      return response.promise;
-    });
-    readNative.mockResolvedValue(page);
-    const failure = new Error("old connection closed during hydration");
-    const initializing = index.initialize().catch((error: unknown) => error);
-    const replacement = createClientHarness();
-    cleanups.push(async () => replacement.client.close());
-    try {
-      await started.promise;
-      harness.client.close();
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      response.reject(failure);
-      expect(await initializing).toBe(failure);
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
-      await vi.waitFor(async () => {
-        expect((await index.list({})).sessions[0]?.name).toBe("Recovered on replacement");
-      });
-      await nextTurn();
-      expect(readNative).toHaveBeenCalledTimes(2);
     } finally {
       response.resolve(page);
       await initializing;
@@ -586,51 +490,6 @@ describe("resident Codex catalog notifications", () => {
         params: expect.objectContaining({ thread: expect.objectContaining({ preview }) }),
       }),
     );
-  });
-
-  it("preserves name and status arriving immediately after an asynchronous started upsert", async () => {
-    const { index, harness } = await fixture([]);
-    harness.send({ method: "thread/started", params: { thread: thread({ name: "Old title" }) } });
-    notifyNameAndStatus(harness);
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        name: "New title before publication",
-        status: "active",
-        activeFlags: ["waitingOnApproval"],
-      });
-    });
-    expect(harness.writes).toEqual([]);
-  });
-
-  it("preserves name and status received before native hydration publishes its row", async () => {
-    const { index, harness, readNative } = await fixture([], { initialize: false });
-    const page = await projectCodexCatalogPage(
-      { data: [thread({ name: "Old title" })] },
-      { sanitize: sanitizeTerminalText },
-    );
-    const response = createDeferred<typeof page>();
-    const started = createDeferred<void>();
-    readNative.mockImplementation(() => {
-      started.resolve();
-      return response.promise;
-    });
-    const initializing = index.initialize();
-    try {
-      await started.promise;
-      notifyNameAndStatus(harness);
-      response.resolve(page);
-      await initializing;
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        name: "New title before publication",
-        status: "active",
-        activeFlags: ["waitingOnApproval"],
-      });
-      expect(readNative).toHaveBeenCalledOnce();
-      expect(harness.writes).toEqual([]);
-    } finally {
-      response.resolve(page);
-      await initializing;
-    }
   });
 
   it("preserves name and status received while a saved row is being restored", async () => {

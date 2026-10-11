@@ -28,14 +28,6 @@ interface InitResponse {
   supported_auth_methods: string[];
 }
 
-interface BeginResult {
-  deviceCode: string;
-  qrUrl: string;
-  userCode: string;
-  interval: number;
-  expireIn: number;
-}
-
 interface RawBeginResponse {
   device_code: string;
   verification_uri: string;
@@ -68,7 +60,7 @@ function accountsBaseUrl(domain: FeishuDomain): string {
 }
 
 async function postRegistration<T>(baseUrl: string, body: Record<string, string>): Promise<T> {
-  return await fetchFeishuJson<T>({
+  return fetchFeishuJson<T>({
     url: `${baseUrl}${REGISTRATION_PATH}`,
     init: {
       method: "POST",
@@ -99,12 +91,6 @@ async function fetchFeishuJson<T>(params: {
   }
 }
 
-/**
- * Step 1: Initialize registration and verify the environment supports
- * `client_secret` auth.
- *
- * @throws If the environment does not support `client_secret`.
- */
 export async function initAppRegistration(domain: FeishuDomain = "feishu"): Promise<void> {
   const baseUrl = accountsBaseUrl(domain);
   const res = await postRegistration<InitResponse>(baseUrl, { action: "init" });
@@ -118,7 +104,7 @@ export async function initAppRegistration(domain: FeishuDomain = "feishu"): Prom
  * Step 2: Begin the device-code flow. Returns a device code and a QR URL
  * that the user should scan with Feishu/Lark mobile app.
  */
-export async function beginAppRegistration(domain: FeishuDomain = "feishu"): Promise<BeginResult> {
+export async function beginAppRegistration(domain: FeishuDomain = "feishu") {
   const baseUrl = accountsBaseUrl(domain);
   const res = await postRegistration<RawBeginResponse>(baseUrl, {
     action: "begin",
@@ -208,10 +194,8 @@ export async function pollAppRegistration(params: {
       };
     }
 
-    if (pollRes.error) {
-      if (pollRes.error === "authorization_pending") {
-        // Continue waiting.
-      } else if (pollRes.error === "slow_down") {
+    if (pollRes.error && pollRes.error !== "authorization_pending") {
+      if (pollRes.error === "slow_down") {
         currentInterval += 5;
       } else if (pollRes.error === "access_denied") {
         return { status: "access_denied" };

@@ -17,6 +17,7 @@ type PreparedModelRuntimePublicationEvent =
   | { phase: "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
   | { phase: "catalog-status"; modelFactsChanged: false }
+  | { phase: "catalog-observation"; modelFactsChanged: false; agentId: string }
   // Publication owners alone can prove that model facts stayed unchanged.
   | {
       phase: "catalog-published";

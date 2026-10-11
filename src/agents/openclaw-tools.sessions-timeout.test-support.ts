@@ -109,6 +109,10 @@ export function registerSessionsSendTimeoutTests({
       const calls: Array<{ method?: string; params?: unknown }> = [];
       const requesterKey = "agent:main:main";
       const targetKey = "agent:director1:main";
+      await upsertSessionEntryCore(
+        { agentId: "director1", sessionKey: targetKey },
+        { sessionId: "timeout-target", updatedAt: 1 },
+      );
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: unknown };
         calls.push(request);
@@ -184,12 +188,14 @@ export function registerSessionsSendLateReplyTests({
     async ({ targetKey, spawned, pendingError, failure, stopReason }) => {
       const calls: Array<{ method?: string; params?: unknown }> = [];
       const requesterKey = "agent:main:main";
-      if (spawned) {
-        await upsertSessionEntryCore(
-          { agentId: "director1", sessionKey: targetKey },
-          { sessionId: "child-session", updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
-        );
-      }
+      await upsertSessionEntryCore(
+        { agentId: "director1", sessionKey: targetKey },
+        {
+          sessionId: "child-session",
+          updatedAt: 1,
+          ...(spawned ? { spawnedBy: requesterKey, spawnDepth: 1 } : {}),
+        },
+      );
       let targetWaitCount = 0;
       let releaseDelayedWait = () => {};
       const delayedWaitGate = new Promise<void>((resolve) => {

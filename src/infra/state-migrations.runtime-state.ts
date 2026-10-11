@@ -175,18 +175,16 @@ export function migrateLegacyConfigHealth(params: {
               .values(entriesToInsert.map(configHealthRow)),
           );
         }
-        const migrationChanges: string[] = [];
-        if (entriesToInsert.length > 0) {
-          migrationChanges.push(
-            `Migrated ${entriesToInsert.length} config health ${entriesToInsert.length === 1 ? "entry" : "entries"} → shared SQLite state`,
-          );
-        }
-        if (reconciledCount > 0) {
-          migrationChanges.push(
-            `Reconciled ${reconciledCount} config health ${reconciledCount === 1 ? "entry" : "entries"} → shared SQLite state`,
-          );
-        }
-        return migrationChanges;
+        return [
+          { action: "Migrated", count: entriesToInsert.length },
+          { action: "Reconciled", count: reconciledCount },
+        ].flatMap(({ action, count }) =>
+          count > 0
+            ? [
+                `${action} ${count} config health ${count === 1 ? "entry" : "entries"} → shared SQLite state`,
+              ]
+            : [],
+        );
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );

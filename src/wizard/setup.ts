@@ -47,7 +47,7 @@ import {
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./setup.workspace.js";
 
-type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
+type SetupFlowChoice = WizardFlow | "import" | "keep-model";
 
 export async function runSetupWizard(
   opts: OnboardOptions,
@@ -219,15 +219,11 @@ async function runSetupWizardOnce(
   let usedImportFlow = false;
   let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
   let importedInferenceVerified = false;
-  while (opts.importFrom || flow === "import" || flow.startsWith("import:")) {
-    const importFrom = opts.importFrom ?? (flow.startsWith("import:") ? flow.slice(7) : undefined);
+  while (opts.importFrom || flow === "import") {
     let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
     try {
       migrationOutcome = await runSetupMigrationImport({
-        opts: {
-          ...opts,
-          ...(importFrom ? { importFrom } : {}),
-        },
+        opts: { ...opts },
         baseConfig,
         ...migrationDiscovery,
         prompter,
@@ -403,7 +399,7 @@ async function runSetupWizardOnce(
     : null;
   if (remoteProbeAuth?.warning) {
     await prompter.note(
-      ["Could not resolve remote gateway SecretRef for setup probe.", remoteProbeAuth.warning].join(
+      ["Could not resolve remote gateway SecretRef for setup check.", remoteProbeAuth.warning].join(
         "\n",
       ),
       "Gateway auth",
@@ -595,7 +591,7 @@ async function runSetupWizardOnce(
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
-      onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+      onPostWriteHook: channelSetup.onPostWriteHook,
     });
     const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
     await channelSetup.runPostWriteHooks(committed.path);

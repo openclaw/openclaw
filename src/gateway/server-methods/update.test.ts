@@ -580,6 +580,7 @@ describe("update.run restart scheduling", () => {
             errorName: "Error",
             message: "state database unavailable",
           }),
+          expect.objectContaining({ code: "handoff-payload-failed" }),
         ],
       }),
     );

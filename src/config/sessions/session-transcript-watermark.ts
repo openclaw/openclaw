@@ -3,6 +3,10 @@ import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contr
 import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
+import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
 } from "./session-incognito-history-read.js";
@@ -10,8 +14,14 @@ import { withSessionTranscriptReadSource } from "./session-transcript-read-sourc
 
 export function readSessionTranscriptWatermarkAsync(
   scope: SessionTranscriptReadScope,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ) {
+  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(scope);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return Promise.resolve({ generation: null, maxSeq: null });
+  }
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     return readIncognitoSessionHistory(incognito, scope, (target) => ({
       type: "session.history.watermark",
@@ -21,8 +31,8 @@ export function readSessionTranscriptWatermarkAsync(
   return withSessionTranscriptReadSource(
     scope,
     readSessionTranscriptWatermark,
-    ({ scope: captured, owner, expectedIdentity }) =>
-      owner.readWatermark({ scope: captured, expectedIdentity }),
+    ({ scope: captured, owner, preparedReads, expectedIdentity }) =>
+      (preparedReads ?? owner).readWatermark({ scope: captured, expectedIdentity }),
   );
 }
 

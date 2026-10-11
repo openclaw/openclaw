@@ -7,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
@@ -58,9 +57,9 @@ describe("prepareChatSendUserTurn", () => {
     { profileId: "profile-ada", synthetic: false, verified: false, allowed: false },
   ])(
     "projects the verified requester without changing command allowlists: %j",
-    async ({ profileId, synthetic, verified, allowed }) => {
+    ({ profileId, synthetic, verified, allowed }) => {
       const { controller } = createUserTurnInputController("/status");
-      const prepared = await prepareChatSendUserTurn({
+      const prepared = prepareChatSendUserTurn({
         request: {
           inboundMessage: "/status",
           clientInfo: createClientInfo({
@@ -127,7 +126,7 @@ describe("prepareChatSendUserTurn", () => {
             ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
             : {},
         );
-        const prepared = await prepareChatSendUserTurn({
+        const prepared = prepareChatSendUserTurn({
           request: {
             inboundMessage: "hello",
             clientInfo,
@@ -252,7 +251,7 @@ describe("prepareChatSendUserTurn", () => {
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
         const { controller } = createUserTurnInputController();
-        const prepared = await prepareChatSendUserTurn({
+        const prepared = prepareChatSendUserTurn({
           request: {
             inboundMessage: "hello",
             clientInfo: createClientInfo(),
@@ -298,6 +297,7 @@ describe("prepareChatSendUserTurn", () => {
           userTurn: controller,
         });
 
+        await prepared.prepareSessionCreation();
         expect(prepared.ctx.SessionCreation).toEqual({
           via: "operator",
           actor: { type: "human", source: "profile", id: profile.id },
@@ -322,7 +322,7 @@ describe("prepareChatSendUserTurn", () => {
     async ({ inboundMessage, suppressed }) => {
       const { controller, readInput } = createUserTurnInputController(inboundMessage);
       const parsedMessage = `${inboundMessage}\n[media attached: media://inbound/voice.mp3]`;
-      const prepared = await prepareChatSendUserTurn({
+      const prepared = prepareChatSendUserTurn({
         request: {
           inboundMessage,
           clientInfo: createClientInfo({ displayName: "Gateway CLI" }),
@@ -428,7 +428,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("carries pre-staged media and device ownership without UI sender decoration", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    const prepared = await prepareChatSendUserTurn({
+    const prepared = prepareChatSendUserTurn({
       request: {
         inboundMessage: "hello",
         clientInfo: createClientInfo({
@@ -512,7 +512,7 @@ describe("prepareChatSendUserTurn", () => {
     const { controller, readInput } = createUserTurnInputController("inspect");
     const mediaRef = "media://inbound/image-1.png";
     const receipt = "[Source Receipt]\nbridge=fixture\n[/Source Receipt]";
-    const prepared = await prepareChatSendUserTurn({
+    const prepared = prepareChatSendUserTurn({
       request: {
         inboundMessage: "inspect",
         clientInfo: createClientInfo(),
@@ -575,7 +575,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("persists video then image as claim-only facts with the image at fact index one", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    await prepareChatSendUserTurn({
+    prepareChatSendUserTurn({
       request: {
         inboundMessage: "hello",
         clientInfo: createClientInfo(),
@@ -647,7 +647,7 @@ describe("prepareChatSendUserTurn", () => {
       .mockResolvedValueOnce({ entries: [], omission: "inline-image-save-failed" });
     try {
       const { controller, readInput } = createUserTurnInputController();
-      const prepared = await prepareChatSendUserTurn({
+      const prepared = prepareChatSendUserTurn({
         request: {
           inboundMessage: "hello",
           clientInfo: createClientInfo(),
@@ -709,7 +709,7 @@ describe("prepareChatSendUserTurn", () => {
       });
     try {
       const { controller } = createUserTurnInputController();
-      const prepared = await prepareChatSendUserTurn({
+      const prepared = prepareChatSendUserTurn({
         request: {
           inboundMessage: "inspect",
           clientInfo: createClientInfo({
@@ -767,141 +767,7 @@ describe("prepareChatSendUserTurn", () => {
     }
   });
 
-  it.each([
-    { kind: "audio" as const, mimeType: "audio/mpeg", fileName: "voice.mp3" },
-    { kind: "video" as const, mimeType: "video/mp4", fileName: "clip.mp4" },
-  ])("persists structured inbound $kind history facts", async ({ kind, mimeType, fileName }) => {
-    const { controller, readInput } = createUserTurnInputController();
-    const mediaRef = `media://inbound/${fileName}`;
-    await prepareChatSendUserTurn({
-      request: {
-        inboundMessage: "play this",
-        clientInfo: createClientInfo(),
-        suppressCommandInterpretation: false,
-        systemInputProvenance: undefined,
-        systemProvenanceReceipt: undefined,
-      },
-      session: {
-        agentId: "main",
-        clientRunId: `run-${kind}`,
-        sessionKey: "agent:main:main",
-      },
-      admission: {
-        originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
-      },
-      attachments: createAttachments({
-        offloadedRefs: [
-          {
-            mediaRef,
-            id: fileName,
-            path: `/media/inbound/${fileName}`,
-            kind,
-            mimeType,
-            label: fileName,
-            sizeBytes: 12,
-            sourceIndex: 0,
-          },
-        ],
-        parsedMessage: `play this\n[media attached: ${mediaRef}]`,
-      }),
-      client: null,
-      logGateway: { warn: vi.fn() } as never,
-      userTurn: controller,
-    });
-
-    const input = await readInput();
-    expect(input.media).toEqual([
-      {
-        url: mediaRef,
-        contentType: mimeType,
-        kind,
-        fileName,
-        sizeBytes: 12,
-        hydrationSuppressed: true,
-      },
-    ]);
-    const persisted = buildPersistedUserTurnMessage({ ...input, text: "play this" });
-    expect(
-      ((persisted as unknown as Record<string, unknown>)["__openclaw"] as { media?: unknown })
-        .media,
-    ).toEqual(input.media);
-  });
-
-  it("persists and prunes the managed PDF claim as structured ownership", async () => {
-    const { controller, readInput } = createUserTurnInputController();
-    const mediaRef = "media://inbound/report.pdf";
-    await prepareChatSendUserTurn({
-      request: {
-        inboundMessage: "read this",
-        clientInfo: createClientInfo(),
-        suppressCommandInterpretation: false,
-        systemInputProvenance: undefined,
-        systemProvenanceReceipt: undefined,
-      },
-      session: {
-        agentId: "main",
-        clientRunId: "run-1",
-        sessionKey: "agent:main:main",
-      },
-      admission: {
-        originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
-      },
-      attachments: createAttachments({
-        offloadedRefs: [
-          {
-            mediaRef,
-            id: "report.pdf",
-            path: "/media/inbound/report.pdf",
-            kind: "document",
-            mimeType: "application/pdf",
-            label: "report.pdf",
-            sizeBytes: 10,
-            sourceIndex: 0,
-          },
-        ],
-        parsedMessage: `read this\n[media attached: ${mediaRef}]`,
-      }),
-      client: null,
-      logGateway: { warn: vi.fn() } as never,
-      userTurn: controller,
-    });
-
-    const input = await readInput();
-    expect(input.media).toEqual([
-      {
-        url: mediaRef,
-        contentType: "application/pdf",
-        kind: "document",
-        fileName: "report.pdf",
-        sizeBytes: 10,
-        hydrationSuppressed: true,
-      },
-    ]);
-    const persisted = buildPersistedUserTurnMessage({
-      ...input,
-      text: `read this\n[media attached: ${mediaRef}]`,
-    });
-    const history = [
-      persisted,
-      { role: "assistant", content: "ack" },
-      { role: "user", content: "more" },
-      { role: "assistant", content: "ack" },
-      { role: "user", content: "more" },
-      { role: "assistant", content: "ack" },
-      { role: "user", content: "more" },
-      { role: "assistant", content: "ack" },
-    ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
-    expect(pruneProcessedHistoryImages(history)).toBeNull();
-    history.push({ role: "user", content: "next turn", timestamp: 5 });
-    const pruned = pruneProcessedHistoryImages(history);
-    const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
-    expect(first?.content).toBe(
-      "read this\n[media reference removed - already processed by model]",
-    );
-    expect((first?.["__openclaw"] as Record<string, unknown> | undefined)?.media).toBeUndefined();
-  });
-
-  it("hydrates and prunes a staged image claim-check alias as structured ownership", async () => {
+  it("hydrates a staged image claim-check alias as structured ownership", async () => {
     const id = `gateway-image-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
     const imagePath = path.join(resolveStateDir(), "media", "inbound", id);
     const mediaRef = `media://inbound/${id}`;
@@ -912,7 +778,7 @@ describe("prepareChatSendUserTurn", () => {
 
     try {
       const { controller, readInput } = createUserTurnInputController();
-      await prepareChatSendUserTurn({
+      prepareChatSendUserTurn({
         request: {
           inboundMessage: "inspect",
           clientInfo: createClientInfo(),
@@ -986,39 +852,8 @@ describe("prepareChatSendUserTurn", () => {
         { type: "text", text },
         expect.objectContaining({ type: "image", mimeType: "image/png" }),
       ]);
-
-      const history = [
-        persisted,
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "more" },
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "more" },
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "more" },
-        { role: "assistant", content: "ack" },
-      ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
-      expect(pruneProcessedHistoryImages(history)).toBeNull();
-      history.push({ role: "user", content: "next turn", timestamp: 5 });
-      const pruned = pruneProcessedHistoryImages(history);
-      const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
-      expect(first?.content).toBe(
-        `inspect\n[media reference removed - already processed by model]\n[media attached: ${unownedRef}]`,
-      );
-      expect((first?.["__openclaw"] as Record<string, unknown> | undefined)?.media).toBeUndefined();
     } finally {
       await fs.rm(imagePath, { force: true });
     }
-  });
-});
-
-describe("applyChatSendManagedMedia", () => {
-  it("does not replace pre-staged facts", () => {
-    const ctx = {
-      media: [{ path: "uploads/report.pdf", workspaceDir: "/workspace" }],
-    } as MsgContext;
-
-    applyChatSendManagedMedia(ctx, [{ path: "managed/image.png", contentType: "image/png" }]);
-
-    expect(ctx.media).toEqual([{ path: "uploads/report.pdf", workspaceDir: "/workspace" }]);
   });
 });

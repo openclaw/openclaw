@@ -7,6 +7,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
 } from "../../daemon/windows-task-supervisor-contract.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
+import { captureEnv } from "../../test-utils/env.js";
 
 const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -15,7 +16,6 @@ const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   bindWindowsTaskLauncher: vi.fn(),
 }));
 
-vi.mock("koffi", () => ({ default: {} }));
 vi.mock("../../process/supervisor/service-child-windows-task-launcher.js", () => ({
   bindWindowsTaskLauncher,
 }));
@@ -49,7 +49,7 @@ describe("Windows Gateway task supervisor", () => {
   const argv = [...process.argv];
   const execArgv = [...process.execArgv];
   const exitCode = process.exitCode;
-  const launcherMarker = process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
+  const originalEnv = captureEnv(["OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER"]);
 
   beforeEach(() => {
     process.argv = [
@@ -68,11 +68,7 @@ describe("Windows Gateway task supervisor", () => {
     process.argv = [...argv];
     process.execArgv = [...execArgv];
     process.exitCode = exitCode;
-    if (launcherMarker === undefined) {
-      delete process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
-    } else {
-      process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = launcherMarker;
-    }
+    originalEnv.restore();
     vi.restoreAllMocks();
     vi.clearAllMocks();
     spawn.mockReset();
@@ -95,7 +91,7 @@ describe("Windows Gateway task supervisor", () => {
       const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
       await runWindowsGatewayTaskSupervisor();
       expect(spawn).toHaveBeenCalledOnce();
-      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(expect.anything(), launcher);
+      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(launcher);
     },
   );
 
@@ -161,8 +157,13 @@ describe("Windows Gateway task supervisor", () => {
       return {
         cancel: vi.fn(),
         wait: async () => result,
-        waitForExtinction: async () => {},
+        waitForExtinction: async () => {
+          expect(process.exitCode).toBeUndefined();
+        },
       };
+    });
+    flushLogger.mockImplementationOnce(async () => {
+      expect(process.exitCode).toBeUndefined();
     });
 
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");

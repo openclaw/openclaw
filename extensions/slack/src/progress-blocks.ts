@@ -94,12 +94,8 @@ function compactDetail(value: string, maxChars: number): string {
     .trimStart()}`;
 }
 
-function compactTitle(value: string): string {
-  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_TASK_TITLE_MAX);
-}
-
-function compactChunkText(value: string): string {
-  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_CHUNK_TEXT_MAX);
+function compactTitle(value: string, maxChars = SLACK_PROGRESS_TASK_TITLE_MAX): string {
+  return truncateSlackText(value.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 // Card text is transient status: render authored Markdown as mrkdwn, but never
@@ -296,11 +292,12 @@ export function buildSlackProgressStreamChunks(params: {
         ? "Completed"
         : "Working";
   const newest = tasks.at(-1);
-  const title = compactChunkText(
+  const title = compactTitle(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
       (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
+    SLACK_PROGRESS_CHUNK_TEXT_MAX,
   );
   const diffOutput = formatTaskDiffOutput(params.diffStat);
   if (tasks.length === 0 && (params.summaryRow || params.sessionLinks?.length || diffOutput)) {
@@ -325,22 +322,13 @@ export function buildSlackProgressStreamChunks(params: {
   const finalTaskIndex = tasks.length - 1;
   const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {
     const recovered = params.finalInProgressStatus === "complete" && task.status === "error";
-    const chunk: TaskUpdateChunk = {
-      type: "task_update",
-      id: task.id,
-      title: recovered ? compactTitle(`Recovered: ${task.title}`) : task.title,
-      status: recovered
-        ? "complete"
-        : task.status === "in_progress"
-          ? (params.finalInProgressStatus ?? task.status)
-          : task.status,
-    };
-    if (task.details) {
-      chunk.details = task.details;
-    }
-    if (task.output) {
-      chunk.output = task.output;
-    }
+    const chunk: TaskUpdateChunk = Object.assign({ type: "task_update" as const }, task);
+    chunk.title = recovered ? compactTitle(`Recovered: ${task.title}`) : task.title;
+    chunk.status = recovered
+      ? "complete"
+      : task.status === "in_progress"
+        ? (params.finalInProgressStatus ?? task.status)
+        : task.status;
     if (index === finalTaskIndex && diffOutput) {
       chunk.output = [task.output, diffOutput].filter(Boolean).join(" · ");
     }
@@ -554,17 +542,26 @@ export function reconcileSlackNativeTaskChunks(params: {
       continue;
     }
     const previousRow = params.previous.tasks.get(chunk.id);
-    const details = resolveTaskFieldDelta(previousRow?.details, chunk.details);
-    const output = resolveTaskFieldDelta(previousRow?.output, chunk.output);
+    const row: SlackNativeTaskRow = { title: chunk.title, status: chunk.status };
+    const update: TaskUpdateChunk = {
+      type: "task_update",
+      id: chunk.id,
+      title: chunk.title,
+      status: chunk.status,
+    };
+    let fieldsChanged = false;
+    for (const key of ["details", "output"] as const) {
+      const { field: nextField, delta } = resolveTaskFieldDelta(previousRow?.[key], chunk[key]);
+      if (nextField) {
+        row[key] = nextField;
+      }
+      if (delta) {
+        update[key] = delta;
+        fieldsChanged = true;
+      }
+    }
     // The session source is a per-turn constant; deliver it once.
     const sourcesChanged = Boolean(chunk.sources) && !previousRow?.sourcesSent;
-    const row: SlackNativeTaskRow = { title: chunk.title, status: chunk.status };
-    if (details.field) {
-      row.details = details.field;
-    }
-    if (output.field) {
-      row.output = output.field;
-    }
     if (sourcesChanged || previousRow?.sourcesSent) {
       row.sourcesSent = true;
     }
@@ -573,23 +570,10 @@ export function reconcileSlackNativeTaskChunks(params: {
       !previousRow ||
       previousRow.title !== chunk.title ||
       previousRow.status !== chunk.status ||
-      Boolean(details.delta) ||
-      Boolean(output.delta) ||
+      fieldsChanged ||
       sourcesChanged;
     if (!rowChanged) {
       continue;
-    }
-    const update: TaskUpdateChunk = {
-      type: "task_update",
-      id: chunk.id,
-      title: chunk.title,
-      status: chunk.status,
-    };
-    if (details.delta) {
-      update.details = details.delta;
-    }
-    if (output.delta) {
-      update.output = output.delta;
     }
     if (sourcesChanged) {
       update.sources = chunk.sources;

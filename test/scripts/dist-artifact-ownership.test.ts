@@ -11,7 +11,7 @@ import {
 } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.mts";
@@ -317,11 +317,9 @@ describe("native check launchers in paths with spaces", () => {
           ],
           {
             compiler: false,
-            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "koffi"],
+            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "@openclaw/proc-safe"],
           },
         );
-        const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
-        write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
         const compiler = script === "run-tsgo-core-test-shards.mts";
         const workload = compiler
           ? "node_modules/typescript/compiler.mjs"
@@ -727,7 +725,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           script === "write-plugin-sdk-entry-dts.ts"
             ? TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS
             : script === "write-unified-entry-dts.ts"
-              ? TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
+              ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS
               : undefined;
         // Declaration writers need their real generator graph; this lifetime still
         // owns the root so timed-out children are joined before inputs are removed.

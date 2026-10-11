@@ -18,30 +18,77 @@ import {
 import { storeTargetKey } from "./combined-store-paths.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import {
+  captureIncognitoSessionTopology,
+  withIncognitoSessionStoreEntries,
+} from "./session-incognito-binding.js";
+import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
-  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
 } from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
 
-/** Descriptive listings retain federation policy while durable rows are read by its worker. */
 export async function loadCombinedSessionStoreForGatewayCoreAsync(
   cfg: OpenClawConfig,
   opts: Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded"> = {},
 ): Promise<GatewayCombinedSessionStore> {
   const ambientStateDir = resolveStateDir(process.env);
-  const options = { ...opts };
-  const env = cloneEnvWithPlatformSemantics(options.discovery?.env ?? process.env);
+  const topology = opts.includeIncognito === false ? undefined : captureIncognitoSessionTopology();
+  const env = cloneEnvWithPlatformSemantics(opts.discovery?.env ?? topology?.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  if (topology && env.OPENCLAW_STATE_DIR !== resolveStateDir(topology.env)) {
+    throw new Error("Combined discovery belongs to another incognito state root");
+  }
+  const options = { ...opts, ...(opts.discovery && { discovery: { ...opts.discovery, env } }) };
+  const captured = { env, ambientStateDir };
+  const result = topology
+    ? withIncognitoSessionStoreEntries(
+        (stores) => loadCombinedSessionStore(cfg, options, captured, stores),
+        options.projection ?? "list",
+      )
+    : loadCombinedSessionStore(cfg, options, captured);
+  return result.then((value) => {
+    if (resolveStateDir(process.env) !== ambientStateDir) {
+      throw new Error("Session stores changed while preparing the listing. Retry the request.");
+    }
+    return value;
+  });
+}
+
+/** Descriptive listings retain federation policy while durable rows are read by its worker. */
+async function loadCombinedSessionStore(
+  cfg: OpenClawConfig,
+  options: Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded">,
+  captured: { env: NodeJS.ProcessEnv; ambientStateDir: string },
+  incognitoStores?: readonly {
+    agentId: string;
+    storePath: string;
+    entries: SessionEntrySummary[];
+  }[],
+): Promise<GatewayCombinedSessionStore> {
+  const { env, ambientStateDir } = captured;
   const read = async (
     config: OpenClawConfig,
     readOptions: typeof options,
     capturedIdentities: ReturnType<typeof captureSessionStoreCandidateIdentities>,
   ): Promise<GatewayCombinedSessionStore> => {
-    const prepared = prepareCombinedSessionStore(config, readOptions);
+    const prepared = prepareCombinedSessionStore(
+      config,
+      incognitoStores ? { ...readOptions, includeIncognito: false } : readOptions,
+    );
+    if (incognitoStores) {
+      prepared.targets = {
+        ...prepared.targets,
+        incognitoTargets: incognitoStores.filter(
+          (store) =>
+            !prepared.targets.requestedAgentId ||
+            store.agentId === prepared.targets.requestedAgentId,
+        ),
+      };
+    }
     const identities = prepared.reads.map(
       ({ storeTarget }) =>
         capturedIdentities.get(storeTarget.storePath) ??
@@ -62,7 +109,7 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
         const entries = new Map<string, SessionEntrySummary[]>();
         for (const [index, { storeTarget }] of prepared.reads.entries()) {
           const owner = expectDefined(owners[index], "retained session store");
-          const rows = await owner.readEntries(
+          const { entries: rows } = await owner.readEntries(
             { ...storeTarget, env: transferEnv, projection: prepared.projection, clone: false },
             undefined,
             identities[index],
@@ -83,13 +130,23 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
         if (
           resolveStateDir(process.env) !== ambientStateDir ||
           registryToken !== readOpenClawAgentDatabaseRegistryToken() ||
-          incognitoGeneration !== readOpenIncognitoAgentDatabaseGeneration()
+          (!incognitoStores && incognitoGeneration !== readOpenIncognitoAgentDatabaseGeneration())
         ) {
           throw new Error("Session stores changed while preparing the listing. Retry the request.");
         }
         // The merger rechecks admission and reads process-local incognito handles at consumption.
-        return mergeCombinedSessionStore(config, readOptions, prepared, (target) =>
-          expectDefined(entries.get(storeTargetKey(target)), "prepared session entries"),
+        return mergeCombinedSessionStore(
+          config,
+          readOptions,
+          prepared,
+          (target) =>
+            expectDefined(entries.get(storeTargetKey(target)), "prepared session entries"),
+          incognitoStores &&
+            ((target) =>
+              expectDefined(
+                incognitoStores.find((store) => store.storePath === target.storePath),
+                "captured actor",
+              ).entries),
         );
       },
     );
@@ -113,10 +170,7 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
       const assertCaptured = () => {
         owner.assertCurrent();
         for (const candidate of inventory.candidates) {
-          if (
-            captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-            candidate.physicalPath
-          ) {
+          if (!isSessionStoreReadCandidateCurrent(candidate)) {
             throw new Error(
               `Session database target changed outside captured discovery custody: ${candidate.path}`,
             );

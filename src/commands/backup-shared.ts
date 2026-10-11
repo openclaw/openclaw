@@ -29,15 +29,14 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
+import { recordBackupRunOutcomeWithOwner } from "./backup-outcome.js";
 import {
   createBackupResourcePlan,
   type BackupAgentRoot,
   type BackupRegenerableKind,
-  type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -48,12 +47,12 @@ export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 
 export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,
-  params: Parameters<typeof recordBackupRunOutcome>[0],
+  params: Parameters<typeof recordBackupRunOutcomeWithOwner>[0],
 ): Promise<void> {
   try {
     // A rejected private input must not be reopened for best-effort outcome writes.
     assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
-    await recordBackupRunOutcome(params);
+    await recordBackupRunOutcomeWithOwner(params);
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
@@ -89,17 +88,6 @@ type SkippedBackupAsset = {
   displayPath: string;
   reason: BackupSkipReason;
   coveredBy?: string;
-};
-
-type BackupPlan = {
-  configCapture?: BackupConfigCapture;
-  stateDir: string;
-  configPath: string;
-  oauthDir: string;
-  workspaceDirs: string[];
-  resources: BackupResourcePlan;
-  included: BackupAsset[];
-  skipped: SkippedBackupAsset[];
 };
 
 type BackupAssetCandidate = {
@@ -173,7 +161,7 @@ async function resolveBackupPlanFromPaths(params: {
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = params.stateDir;
@@ -240,7 +228,7 @@ async function resolveBackupPlanFromPaths(params: {
       included: exists
         ? [{ ...asset, archivePath: buildBackupArchivePath(archiveRoot, sourcePath) }]
         : [],
-      skipped: exists ? [] : [{ ...asset, reason: "missing" }],
+      skipped: exists ? [] : [{ ...asset, reason: "missing" as const }],
     };
   }
 
@@ -318,7 +306,7 @@ async function resolveBackupPlanFromPaths(params: {
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const skipped: SkippedBackupAsset[] = [];
   const seenCanonicalPaths = new Set<string>();
-  for (const candidate of [...candidates].toSorted(compareCandidates)) {
+  for (const candidate of candidates.toSorted(compareCandidates)) {
     // Check both the original selection and the already resolved target before deduplication.
     const privateSelection = isUpdateCapturePath(candidate.sourcePath, stateDir);
     const privateTarget =
@@ -419,15 +407,11 @@ async function resolveBackupPlanFromPaths(params: {
 }
 
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
-  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
-  if (depthDelta !== 0) {
-    return depthDelta;
-  }
-  const priorityDelta = BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind];
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.canonicalPath.localeCompare(right.canonicalPath);
+  return (
+    left.canonicalPath.length - right.canonicalPath.length ||
+    BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind] ||
+    left.canonicalPath.localeCompare(right.canonicalPath)
+  );
 }
 
 // Managed skill roots support operator-created directory links outside the root.
@@ -551,7 +535,7 @@ export async function resolveBackupPlanFromDisk(
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
-): Promise<BackupPlan> {
+) {
   if (params.onlyConfig) {
     return await resolveBackupPlanFromState(params);
   }
@@ -563,7 +547,7 @@ async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();
@@ -584,7 +568,8 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot =
+    (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(

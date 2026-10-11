@@ -39,15 +39,13 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     const sessionAgentId = params.agentId;
     const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, sessionAgentId);
 
+    const rejectQuestion = (text: string) =>
+      commandReply({ text, btw: { question }, isError: true });
+
     if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
-          btw: { question },
-          isError: true,
-        },
-      };
+      return rejectQuestion(
+        "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
+      );
     }
 
     try {
@@ -162,20 +160,12 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       } finally {
         revokeMessageActionTurnCapability(messageActionTurnCapability);
       }
-      return {
-        shouldContinue: false,
-        reply: reply ? { ...reply, btw: { question } } : reply,
-      };
+      return commandReply(reply ? { ...reply, btw: { question } } : reply);
     } catch (error) {
       log.warn(`Side question failed: ${formatErrorMessage(error)}`);
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-          btw: { question },
-          isError: true,
-        },
-      };
+      return rejectQuestion(
+        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      );
     }
   },
 );

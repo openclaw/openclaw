@@ -162,6 +162,35 @@ export async function waitForScenarioObservedMessage(
   return message;
 }
 
+export async function waitForWhatsAppQuotedMessage(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    textMarker: string;
+    quotedMessageId: string | undefined;
+    diagnosticLabels: readonly [string, string];
+    distinctFrom?: WhatsAppQaDriverObservedMessage;
+    observedAfter: Date;
+    timeoutMs?: number;
+  },
+) {
+  const hasMarker = (message: WhatsAppQaDriverObservedMessage) =>
+    message.text.includes(params.textMarker);
+  const quotesMessage = (message: WhatsAppQaDriverObservedMessage) =>
+    message.quoted?.messageId === params.quotedMessageId;
+  return await waitForScenarioObservedMessage(context, {
+    observedAfter: params.observedAfter,
+    timeoutMs: params.timeoutMs,
+    diagnosticChecks: [
+      { label: params.diagnosticLabels[0], match: hasMarker },
+      { label: params.diagnosticLabels[1], match: quotesMessage },
+    ],
+    match: (message) =>
+      (!params.distinctFrom || message.messageId !== params.distinctFrom.messageId) &&
+      hasMarker(message) &&
+      quotesMessage(message),
+  });
+}
+
 export async function waitForWhatsAppObservedMessage(
   driver: Pick<WhatsAppQaMessageScenarioContext["driver"], "waitForMessage">,
   params: Parameters<typeof driver.waitForMessage>[0],

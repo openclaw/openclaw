@@ -1,8 +1,3 @@
-/**
- * Exec tool display summaries.
- *
- * Turns common shell commands into short redacted labels for tool timelines and transcripts.
- */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -212,11 +207,8 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
     }
     const side = bin === "head" ? "first" : "last";
     const unit = lines === "1" ? "line" : "lines";
-    if (lines && target) {
-      return `show ${side} ${lines} ${unit} of ${target}`;
-    }
     if (lines) {
-      return `show ${side} ${lines} ${unit}`;
+      return `show ${side} ${lines} ${unit}${target ? ` of ${target}` : ""}`;
     }
     if (target) {
       return `show ${target}`;
@@ -232,15 +224,10 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
 
     if (script) {
       const compact = (stripOuterQuotes(script) ?? script).replace(/\s+/g, "");
-      const range = compact.match(/^([0-9]+),([0-9]+)p$/);
+      const range = compact.match(/^([0-9]+)(?:,([0-9]+))?p$/);
       if (range) {
-        return target
-          ? `print lines ${range[1]}-${range[2]} from ${target}`
-          : `print lines ${range[1]}-${range[2]}`;
-      }
-      const single = compact.match(/^([0-9]+)p$/);
-      if (single) {
-        return target ? `print line ${single[1]} from ${target}` : `print line ${single[1]}`;
+        const selection = range[2] ? `lines ${range[1]}-${range[2]}` : `line ${range[1]}`;
+        return `print ${selection}${target ? ` from ${target}` : ""}`;
       }
     }
 

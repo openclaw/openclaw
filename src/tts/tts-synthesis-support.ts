@@ -101,7 +101,7 @@ function resolveReadySpeechProvider(params: {
   config: ResolvedTtsConfig;
   persona?: ResolvedTtsPersona;
   voiceModel?: VoiceModelRef;
-  requireTelephony?: boolean;
+  target: SpeechSynthesisTarget;
   providerRegistry: TtsProviderRegistry;
 }): TtsProviderReadyResolution {
   const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
@@ -148,7 +148,7 @@ function resolveReadySpeechProvider(params: {
       message: `${params.provider}: not configured`,
     };
   }
-  if (params.requireTelephony && !resolvedProvider.synthesizeTelephony) {
+  if (params.target === "telephony" && !resolvedProvider.synthesizeTelephony) {
     return {
       kind: "skip",
       reasonCode: "unsupported_for_telephony",
@@ -165,31 +165,6 @@ function resolveReadySpeechProvider(params: {
         ? undefined
         : params.persona,
     personaBinding: merged.personaBinding,
-  };
-}
-
-async function prepareSpeechSynthesis({
-  provider,
-  ...request
-}: SpeechProviderPrepareSynthesisContext & { provider: SpeechProviderPlugin }): Promise<
-  Pick<SpeechSynthesisRequest, "text" | "providerConfig" | "providerOverrides">
-> {
-  if (!provider.prepareSynthesis) {
-    return {
-      text: request.text,
-      providerConfig: request.providerConfig,
-      providerOverrides: request.providerOverrides,
-    };
-  }
-  const prepared = await provider.prepareSynthesis({ ...request });
-  return {
-    text: prepared?.text ?? request.text,
-    providerConfig: prepared?.providerConfig
-      ? { ...request.providerConfig, ...prepared.providerConfig }
-      : request.providerConfig,
-    providerOverrides: prepared?.providerOverrides
-      ? { ...request.providerOverrides, ...prepared.providerOverrides }
-      : request.providerOverrides,
   };
 }
 
@@ -390,7 +365,6 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   timeoutMs?: number;
   target: SpeechSynthesisTarget;
   logLabel: string;
-  requireTelephony?: boolean;
   prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
   selectOperation: (params: {
     provider: TtsProvider;
@@ -439,7 +413,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         config,
         persona,
         voiceModel,
-        requireTelephony: params.requireTelephony,
+        target: params.target,
         providerRegistry,
       });
       if (resolvedProvider.kind === "skip") {
@@ -464,8 +438,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const prepared = await prepareSpeechSynthesis({
-        provider: resolvedProvider.provider,
+      const request: SpeechProviderPrepareSynthesisContext = {
         text: params.synthesisText,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
@@ -474,7 +447,17 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: params.target,
         timeoutMs,
-      });
+      };
+      const overrides = await resolvedProvider.provider.prepareSynthesis?.({ ...request });
+      const prepared = {
+        text: overrides?.text ?? request.text,
+        providerConfig: overrides?.providerConfig
+          ? { ...request.providerConfig, ...overrides.providerConfig }
+          : request.providerConfig,
+        providerOverrides: overrides?.providerOverrides
+          ? { ...request.providerOverrides, ...overrides.providerOverrides }
+          : request.providerOverrides,
+      };
       const synthesis = await operation.synthesize({
         text: prepared.text,
         cfg,

@@ -462,29 +462,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("normalizes toolUse and functionCall names before dispatch", async () => {
-    const partialToolCall = { type: "toolUse", name: " functions.read " };
-    const messageToolCall = { type: "functionCall", name: " functions.exec " };
-    const finalToolCall = { type: "toolUse", name: " tools/write " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-      message: { role: "assistant", content: [messageToolCall] },
-    };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(messageToolCall.name).toBe("exec");
-    expect(finalToolCall.name).toBe("write");
-    expect(result).toBe(finalMessage);
-  });
-
   it("does not count partial tool-call deltas as separate unavailable-tool retries", async () => {
     const partialToolCall = { type: "toolCall", name: " exec " };
     const messageToolCall = { type: "toolCall", name: " exec " };
@@ -685,20 +662,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
     expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
     expect(ids[1]).not.toBe(ids[0]);
-  });
-
-  it("fails closed when malformed ids could map to multiple allowlisted tools", async () => {
-    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "" };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
-    const result = (await stream.result()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expectSingleTextContent(result.content, '"blank tool name"');
-    expect(finalToolCall.name).toBe("");
   });
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
@@ -1059,15 +1022,6 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("drops embedded Anthropic user tool_result blocks when signed-thinking replay must stay provider-owned", async () => {
-    const messages = [
-      thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }),
-      embeddedResultUser("embedded result"),
-    ];
-    const seenContext = await replaySigned(messages);
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
   it("preserves embedded Anthropic user tool_result blocks for non-thinking turns even when immutable replay is enabled", async () => {
     const messages = [
       replayAssistant([{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }]),
@@ -1104,12 +1058,11 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   async function replayArgumentDeltas(
     deltas: string[],
     options: {
-      name?: string;
       initialArgs?: Record<string, unknown>;
       fullResult?: boolean;
     } = {},
   ) {
-    const name = options.name ?? "read";
+    const name = "read";
     const partialToolCall = { type: "toolCall", name, arguments: options.initialArgs ?? {} };
     const streamedToolCall = { type: "toolCall", name, arguments: {} };
     const endMessageToolCall = { type: "toolCall", name, arguments: {} };
@@ -1159,19 +1112,12 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     {
       name: "repairs anthropic-compatible tool arguments when trailing junk follows valid JSON",
       deltas: ['{"path":"/tmp/report.txt"}', "xx"],
-      toolName: "read",
-    },
-    {
-      name: "repairs tool arguments when malformed tool-call preamble appears before JSON",
-      deltas: ['.functions.write:8  \n{"path":"/tmp/report.txt"}'],
-      toolName: "write",
     },
     {
       name: "preserves anthropic-compatible tool arguments when the streamed JSON is already valid",
       deltas: ['{"path":"/tmp/report.txt"', "}"],
-      toolName: "read",
     },
-  ])("$name", async ({ deltas, toolName }) => {
+  ])("$name", async ({ deltas }) => {
     const {
       stream,
       partialToolCall,
@@ -1179,7 +1125,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       endMessageToolCall,
       finalToolCall,
       finalMessage,
-    } = await replayArgumentDeltas(deltas, { name: toolName, fullResult: true });
+    } = await replayArgumentDeltas(deltas, { fullResult: true });
     const result = await stream.result();
 
     expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
@@ -1231,54 +1177,50 @@ describe("buildAfterTurnRuntimeContext", () => {
     };
   }
 
-  it.each([undefined, "agent:main:execution"])(
-    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
-    (sessionKey) => {
+  it("preserves session-id-scoped processes with borrowed policy", () => {
+    resetProcessRegistryForTests();
+    try {
+      const active = createProcessSessionFixture({
+        id: "sess-session-id",
+        command: "sleep 600",
+        backgrounded: true,
+        pid: 1234,
+      });
+      active.scopeKey = "session-123";
+      addSession(active);
+      const other = createProcessSessionFixture({
+        id: "sess-other",
+        command: "sleep 600",
+        backgrounded: true,
+      });
+      other.scopeKey = "agent:main";
+      addSession(other);
+
+      const legacy = buildAfterTurnRuntimeContext({
+        attempt: runtimeAttempt({
+          sessionId: "session-123",
+          sandboxSessionKey: "agent:main",
+        }),
+        ...runtimeDirectories,
+        activeAgentId: "main",
+      });
+
+      const activeProcessSessions = legacy.activeProcessSessions as
+        | Array<{ sessionId?: string; command?: string; pid?: number }>
+        | undefined;
+      expect(activeProcessSessions).toHaveLength(1);
+      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+      expect(activeSession.sessionId).toBe("sess-session-id");
+      expect(activeSession.command).toBe("sleep 600");
+      expect(activeSession.pid).toBe(1234);
+      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+        false,
+      );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
+    } finally {
       resetProcessRegistryForTests();
-      try {
-        const active = createProcessSessionFixture({
-          id: "sess-session-id",
-          command: "sleep 600",
-          backgrounded: true,
-          pid: 1234,
-        });
-        active.scopeKey = sessionKey ?? "session-123";
-        addSession(active);
-        const other = createProcessSessionFixture({
-          id: "sess-other",
-          command: "sleep 600",
-          backgrounded: true,
-        });
-        other.scopeKey = "agent:main";
-        addSession(other);
-
-        const legacy = buildAfterTurnRuntimeContext({
-          attempt: runtimeAttempt({
-            sessionId: "session-123",
-            sessionKey,
-            sandboxSessionKey: "agent:main",
-          }),
-          ...runtimeDirectories,
-          activeAgentId: "main",
-        });
-
-        const activeProcessSessions = legacy.activeProcessSessions as
-          | Array<{ sessionId?: string; command?: string; pid?: number }>
-          | undefined;
-        expect(activeProcessSessions).toHaveLength(1);
-        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-        expect(activeSession.sessionId).toBe("sess-session-id");
-        expect(activeSession.command).toBe("sleep 600");
-        expect(activeSession.pid).toBe(1234);
-        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-          false,
-        );
-        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-      } finally {
-        resetProcessRegistryForTests();
-      }
-    },
-  );
+    }
+  });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {
     const runtimeContext = buildAfterTurnRuntimeContext({

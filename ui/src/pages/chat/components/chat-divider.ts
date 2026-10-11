@@ -8,7 +8,7 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { renderChatTimestamp } from "./chat-message-timestamp.ts";
+import "./chat-skill-learned-notice.tsx";
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -98,16 +98,12 @@ export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) 
 }
 
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
-  if (item.sessionsYield) {
+  if (item.skillChanges) {
     return html`
-      <div
-        class="chat-notice chat-yield-marker"
-        data-chat-row-key=${item.key}
-        data-ts=${String(item.timestamp)}
-      >
-        <span class="chat-divider__icon" aria-hidden="true">${toolIcons.hourglass}</span>
-        <span>${item.label}</span>
-        ${item.timestamp > 0 ? renderChatTimestamp(item.timestamp) : nothing}
+      <div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+        <openclaw-chat-skill-learned-notice
+          .notice=${item.skillChanges}
+        ></openclaw-chat-skill-learned-notice>
       </div>
     `;
   }

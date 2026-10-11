@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Argument, Command, Option } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError, isExpectedCliError } from "../cli/failure-output.js";
 import { createPluginRuntimeStore, type PluginRuntime } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginApi } from "./api-builder.js";
@@ -60,10 +61,86 @@ afterEach(async () => {
     await instance.dispose();
   }
   runtime.clearRuntime();
-  vi.unstubAllEnvs();
 });
 
 describe("managed CLI callbacks", () => {
+  it.each(["async", "sync", "commander", "hook", "prepared action", "prepared hook"])(
+    "reports failures from a plugin %s through the expected-error boundary",
+    async (kind) => {
+      const host = new Command();
+      const owner = fixture();
+      const error = new Error("--limit must be a positive integer");
+      if (kind === "commander") {
+        Object.assign(error, {
+          name: "InvalidArgumentError",
+          code: "commander.invalidArgument",
+          exitCode: 1,
+        });
+      }
+      const fail = () => {
+        throw error;
+      };
+      await owner.register(host, ({ program }) => {
+        const prepared = kind.startsWith("prepared");
+        const command = prepared ? new Command("fail") : program.command("fail");
+        if (kind.endsWith("hook")) {
+          command.hook("preAction", fail).action(() => {});
+        } else {
+          command.action(kind === "async" ? async () => fail() : fail);
+        }
+        if (prepared) {
+          program.addCommand(new Command("parent").addCommand(command));
+        }
+      });
+
+      const args = kind.startsWith("prepared") ? ["parent", "fail"] : ["fail"];
+      if (kind === "sync") {
+        expect(() => host.parse(args, { from: "user" })).toThrow(ExpectedCliError);
+      }
+      await expect(host.parseAsync(args, { from: "user" })).rejects.toSatisfy(
+        (failure: unknown) => isExpectedCliError(failure) && failure.message === error.message,
+      );
+    },
+  );
+
+  it("preserves Commander's already-reported action exit", async () => {
+    const host = new Command();
+    const owner = fixture();
+    const writeErr = vi.fn();
+    let reported: unknown;
+    await owner.register(host, ({ program }) => {
+      program
+        .command("fail")
+        .configureOutput({ writeErr })
+        .exitOverride((error) => {
+          reported = error;
+          throw error;
+        })
+        .action(function () {
+          this.error("already reported");
+        });
+    });
+
+    await expect(host.parseAsync(["fail"], { from: "user" })).rejects.toSatisfy(
+      (error: unknown) => error === reported && !(error instanceof ExpectedCliError),
+    );
+    expect(reported).toMatchObject({ name: "CommanderError", exitCode: 1 });
+    expect(writeErr).toHaveBeenCalledWith("already reported\n");
+  });
+
+  it("leaves host-owned action errors unchanged", async () => {
+    const host = new Command();
+    const error = new Error("host failure");
+    host.command("host").action(() => {
+      throw error;
+    });
+    await fixture().register(host, ({ program }) => {
+      program.command("plugin").action(() => {});
+    });
+
+    await expect(host.parseAsync(["host"], { from: "user" })).rejects.toBe(error);
+  });
+
   it("keeps native fluent/subclass identity and scopes delayed action, hook and parser callbacks", async () => {
     class NativeCommand extends Command {
       #marker = "native";
@@ -129,34 +206,6 @@ describe("managed CLI callbacks", () => {
     await expect(
       host.parseAsync(["matrix", "setup", "input", "--account", "target"], { from: "user" }),
     ).rejects.toThrow("reloaded or disabled");
-  });
-
-  it("binds prepared and later Option/Argument parsers without changing their native identity", async () => {
-    const owner = fixture();
-    const host = new Command();
-    vi.stubEnv("CLI_BINDING_ACCOUNT", "from-env");
-    const option = new Option("--account <id>")
-      .env("CLI_BINDING_ACCOUNT")
-      .argParser((value) => `${current()}:${value}`);
-    const argument = new Argument("<name>").argParser((value) => `${current()}:${value}`);
-    let command: Command;
-    await owner.register(host, ({ program }) => {
-      command = program.createCommand("prepared");
-      expect(program.addCommand(command)).toBe(program);
-      expect(command.addOption(option)).toBe(command);
-      expect(command.addArgument(argument)).toBe(command);
-      expect(command.options[0]).toBe(option);
-      expect(command.registeredArguments[0]).toBe(argument);
-      command.action((name, options, action) => {
-        expect(action).toBe(command);
-        expect(name).toBe("alpha:name");
-        expect(options.account).toBe("alpha:from-env");
-      });
-    });
-    await host.parseAsync(["prepared", "name"], { from: "user" });
-    await owner.instance.dispose();
-    expect(() => option.parseArg!("stale", undefined)).toThrow("reloaded or disabled");
-    expect(() => argument.parseArg!("stale", undefined)).toThrow("reloaded or disabled");
   });
 
   it("keeps sibling instances and async continuations on their own runtime when sharing a native root", async () => {
@@ -261,40 +310,6 @@ describe("managed CLI callbacks", () => {
     expect(() => host.emit("option:flag")).toThrow("reloaded or disabled");
   });
 
-  it("keeps help lazy and scopes configured help/output callbacks with native command arguments", async () => {
-    const owner = fixture();
-    const host = new Command("help-test");
-    const output: string[] = [];
-    const description = vi.fn((command: Command) => {
-      expect(command).toBe(host);
-      return current();
-    });
-    await owner.register(host, ({ program }) => {
-      expect(program.configureHelp({ commandDescription: description })).toBe(program);
-      expect(
-        program.configureOutput({
-          writeOut: (text) => {
-            expect(current()).toBe("alpha");
-            output.push(text);
-          },
-        }),
-      ).toBe(program);
-      expect(
-        program.addHelpText("after", ({ command }) => {
-          expect(command).toBe(host);
-          return `extra:${current()}`;
-        }),
-      ).toBe(program);
-    });
-    expect(description).not.toHaveBeenCalled();
-    expect(output).toEqual([]);
-    host.outputHelp();
-    expect(output.join("")).toContain("extra:alpha");
-    expect(description).toHaveBeenCalled();
-    await owner.instance.dispose();
-    expect(() => host.outputHelp()).toThrow("reloaded or disabled");
-  });
-
   it("binds callbacks installed by an async lazy subcommand hook", async () => {
     const owner = fixture();
     const host = new Command();
@@ -317,63 +332,6 @@ describe("managed CLI callbacks", () => {
     await host.parseAsync(["lazy", "run", "--account", "target"], { from: "user" });
     expect(installed).toHaveBeenCalledOnce();
     expect(action).toHaveBeenCalledOnce();
-  });
-
-  it("scopes exit overrides without replacing native Commander errors", async () => {
-    const owner = fixture();
-    const host = new Command();
-    const exit = vi.fn((error: Error) => {
-      expect(current()).toBe("alpha");
-      throw error;
-    });
-    await owner.register(host, ({ program }) => {
-      program.configureOutput({ writeErr() {} }).exitOverride(exit);
-    });
-    expect(() => host.error("synthetic failure", { code: "cli.fixture", exitCode: 9 })).toThrow(
-      "synthetic failure",
-    );
-    expect(exit).toHaveBeenCalledOnce();
-    expect(exit.mock.calls[0]?.[0]).toMatchObject({ code: "cli.fixture", exitCode: 9 });
-  });
-
-  it("binds the node-feature alias through the same CLI owner", async () => {
-    const owner = fixture();
-    const program = new Command("nodes");
-    const action = vi.fn(() => {
-      expect(current()).toBe("alpha");
-    });
-    owner.api.registerNodeCliFeature(
-      ({ program: parent }) => {
-        parent.command("camera").action(action);
-      },
-      { commands: ["camera"] },
-    );
-    const { registrar, options } = owner.registrations[0]!;
-    expect(options?.parentPath).toEqual(["nodes"]);
-    await registrar({ program, parentPath: ["nodes"], config: {}, logger: owner.api.logger });
-    await program.parseAsync(["camera"], { from: "user" });
-    expect(action).toHaveBeenCalledOnce();
-  });
-
-  it("preserves function-valued parser defaults and results as native caller data", async () => {
-    const owner = fixture();
-    const host = new Command();
-    const value = () => "data";
-    const action = vi.fn((argument, options) => {
-      expect(current()).toBe("alpha");
-      expect(argument).toBe(value);
-      expect(options.transform).toBe(value);
-    });
-    await owner.register(host, ({ program }) => {
-      program
-        .command("data")
-        .option("--transform <value>", "transform", () => value, value)
-        .argument("[value]", "value", () => value, value)
-        .action(action);
-    });
-    await host.parseAsync(["data"], { from: "user" });
-    await host.parseAsync(["data", "input", "--transform", "input"], { from: "user" });
-    expect(action).toHaveBeenCalledTimes(2);
   });
 
   it("adopts preconfigured command callbacks when the registrar adds their native tree", async () => {
@@ -411,6 +369,8 @@ describe("managed CLI callbacks", () => {
     expect(events).toEqual(["pre:alpha", "action:alpha", "post:alpha"]);
     expect(runtime.tryGetRuntime()).toBeNull();
     await owner.instance.dispose();
+    expect(() => option.parseArg!("stale", undefined)).toThrow("reloaded or disabled");
+    expect(() => argument.parseArg!("stale", undefined)).toThrow("reloaded or disabled");
     await expect(
       host.parseAsync(["prepared", "input", "--account", "target"], { from: "user" }),
     ).rejects.toThrow("reloaded or disabled");

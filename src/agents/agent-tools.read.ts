@@ -1,7 +1,3 @@
-// Read/write/edit tool wrappers for host and sandbox workspaces.
-// Adds workspace-root guards, adaptive read paging, image validation, memory
-// append-only writes, and parameter cleanup around the session file tools.
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
@@ -44,6 +40,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { assertNewMemoryFlushContent } from "./memory-flush-content.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -580,7 +577,6 @@ function mapContainerPathToWorkspaceRoot(params: {
   return mapped?.hostPath ?? candidate;
 }
 
-/** Resolve a model-supplied file path against the host workspace root. */
 function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
@@ -669,15 +665,6 @@ async function appendMemoryFlushContent(params: {
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
-  const parent = path.posix.dirname(params.relativePath);
-  params.assertCurrent();
-  if (parent && parent !== ".") {
-    await params.sandbox.bridge.mkdirp({
-      filePath: parent,
-      cwd: params.sandbox.root,
-      signal: params.signal,
-    });
-  }
   params.assertCurrent();
   await params.sandbox.bridge.writeFile({
     filePath: params.relativePath,
@@ -696,7 +683,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
   return {
     ...tool,
-    description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    description: `Append new memory notes to ${options.relativePath}; creates parent directories. The content is appended verbatim. Send only new text, never existing entries or a rewritten file.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
       const record = getToolParamsRecord(args);
@@ -735,6 +722,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      assertNewMemoryFlushContent(contentBefore, content);
       const separator =
         contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
           ? "\n"
@@ -960,7 +948,6 @@ export function wrapSandboxFileToolPath(
   };
 }
 
-/** Create a sandbox-backed read tool with OpenClaw result normalization. */
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createReadTool(params.root, {
@@ -978,7 +965,6 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   });
 }
 
-/** Create a sandbox-backed write tool with required-parameter validation. */
 export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createWriteTool(params.root, {
@@ -991,7 +977,6 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   );
 }
 
-/** Create a sandbox-backed edit tool with required-parameter validation. */
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createEditTool(params.root, {
@@ -1001,43 +986,34 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit);
 }
 
-/** Create a host workspace write tool using guarded filesystem operations. */
-export function createHostWorkspaceWriteTool(
+type HostWorkspaceMutationOptions = {
+  containmentRoot?: string;
+  workspaceOnly?: boolean;
+  abortSignal?: AbortSignal;
+  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+};
+
+function createHostWorkspaceMutationTool(
+  kind: "write" | "edit",
   root: string,
-  options?: {
-    containmentRoot?: string;
-    workspaceOnly?: boolean;
-    abortSignal?: AbortSignal;
-    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  },
+  options?: HostWorkspaceMutationOptions,
 ) {
-  const base = eraseSessionFileTool(
-    createWriteTool(root, {
-      operations: createHostMutationOperations(options?.containmentRoot ?? root, options),
-    }),
-  );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
+  const operations = createHostMutationOperations(options?.containmentRoot ?? root, options);
+  const base =
+    kind === "write"
+      ? eraseSessionFileTool(createWriteTool(root, { operations }))
+      : eraseSessionFileTool(createEditTool(root, { operations }));
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS[kind], root);
 }
 
-/** Create a host workspace edit tool using guarded filesystem operations. */
-export function createHostWorkspaceEditTool(
-  root: string,
-  options?: {
-    containmentRoot?: string;
-    workspaceOnly?: boolean;
-    abortSignal?: AbortSignal;
-    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  },
-) {
-  const base = eraseSessionFileTool(
-    createEditTool(root, {
-      operations: createHostMutationOperations(options?.containmentRoot ?? root, options),
-    }),
-  );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
+export function createHostWorkspaceWriteTool(root: string, options?: HostWorkspaceMutationOptions) {
+  return createHostWorkspaceMutationTool("write", root, options);
 }
 
-/** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
+export function createHostWorkspaceEditTool(root: string, options?: HostWorkspaceMutationOptions) {
+  return createHostWorkspaceMutationTool("edit", root, options);
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -1252,7 +1228,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
         ? decodeWindowsTextFileBuffer({ buffer })
-        : buffer.toString("utf8"),
+        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

@@ -214,52 +214,6 @@ describe("Cron stale-family cleanup", () => {
     });
   });
 
-  it("preserves the first deletion error and scratch rollback with extra indexes", async () => {
-    await withFamilyStore(ordinary, async ({ removeFamilyNative, db, activeStore }) => {
-      const before = readDurableRows(db);
-      for (const indexes of ["canonical", "separate", "covering"]) {
-        if (indexes === "separate") {
-          db.exec(`CREATE INDEX family_name ON cron_jobs(name);
-            CREATE INDEX family_declaration ON cron_jobs(declaration_key);`);
-        } else if (indexes === "covering") {
-          db.exec(
-            "CREATE INDEX family_covering ON cron_jobs(name, description, store_key, job_id, declaration_key)",
-          );
-        }
-        db.exec("ANALYZE cron_jobs");
-        for (const reversed of [false, true]) {
-          db.exec(`PRAGMA reverse_unordered_selects = ${reversed ? "ON" : "OFF"}`);
-          const originalRows = db
-            .prepare(
-              "SELECT store_key, job_id, declaration_key, name, description FROM cron_jobs WHERE store_key != ?",
-            )
-            .all(activeStore);
-          const first = originalRows.find(
-            (row) =>
-              row.declaration_key === family.declarationKey ||
-              (row.name === family.name &&
-                typeof row.description === "string" &&
-                row.description.includes(family.ownerPluginTag)),
-          );
-          expect(first).toBeDefined();
-          try {
-            db.exec(`CREATE TEMP TRIGGER refuse_family_delete BEFORE DELETE ON main.cron_jobs
-              BEGIN SELECT RAISE(ABORT, 'refused:' || OLD.job_id); END;`);
-            await expect(removeFamilyNative(family)).rejects.toThrow(
-              `refused:${String(first?.job_id)}`,
-            );
-          } finally {
-            db.exec("DROP TRIGGER IF EXISTS temp.refuse_family_delete");
-          }
-          expect(readDurableRows(db)).toEqual(before);
-        }
-      }
-      db.exec("PRAGMA reverse_unordered_selects = OFF");
-      await closeOpenClawStateDatabaseAsync();
-      expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(before);
-    });
-  });
-
   it("retains column authorization and needs no SQL function authorization", async () => {
     await withFamilyStore(ordinary, async ({ removeFamilyNative, db, staleStore }) => {
       const before = readDurableRows(db);

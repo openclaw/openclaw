@@ -1780,7 +1780,7 @@ describe("capability cli", () => {
         });
       }
       expect(mocks.setTtsProvider).not.toHaveBeenCalled();
-      expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected);
+      expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected, undefined);
     },
   );
 

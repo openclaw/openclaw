@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiAssetManifest } from "../../../src/gateway/control-ui-asset-manifest.ts";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 
@@ -270,15 +268,13 @@ describe("Control UI Vite build", () => {
       const result = build(config);
       if (failure === "unresolved import") {
         await expect(result).rejects.toThrow(/Could not resolve.*missing-module\.js/u);
-        await expect(result).rejects.not.toThrow(/ENOENT|asset-manifest/u);
+        await expect(result).rejects.not.toThrow(/ENOENT/u);
         await expect(fs.stat(outDir)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         await expect(result).rejects.toThrow(/blocked/u);
-        await expect(result).rejects.not.toThrow(/scandir|asset-manifest/u);
+        await expect(result).rejects.not.toThrow(/scandir/u);
         expect(await fs.readFile(path.join(outDir, "blocked"), "utf8")).toBe("output obstruction");
-        for (const file of ["asset-manifest.json", "sw.js"]) {
-          await expect(fs.stat(path.join(outDir, file))).rejects.toMatchObject({ code: "ENOENT" });
-        }
+        await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(info.mock.calls.flat().join("\n")).not.toMatch(/precompression complete|built in/u);
     },
@@ -311,7 +307,7 @@ describe("Control UI Vite build", () => {
         sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
       });
       // The logger observes real disk writes while build() is still finalizing.
-      expect(fsSync.existsSync(path.join(outDir, "asset-manifest.json"))).toBe(false);
+      expect(fsSync.existsSync(path.join(outDir, "sw.js"))).toBe(false);
     });
     config.plugins = [
       ...(config.plugins ?? []),
@@ -349,7 +345,7 @@ describe("Control UI Vite build", () => {
       expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
     }
     expect(activity.at(-1)?.message).toContain("precompression complete");
-    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(outDir, "sw.js"))).resolves.toBeDefined();
   });
 
   it.each([
@@ -388,19 +384,8 @@ describe("Control UI Vite build", () => {
       await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
     }
 
-    const manifest: ControlUiAssetManifest = JSON.parse(
-      await fs.readFile(path.join(outDir, "asset-manifest.json"), "utf8"),
-    );
     const emitted = (await fs.readdir(path.join(outDir, "assets"))).toSorted();
     expect(emitted.some((name) => name.endsWith(".map"))).toBe(true);
-    expect(manifest.assets.map((entry) => entry.path).toSorted()).toEqual(
-      emitted.filter((name) => !name.endsWith(".map")).map((name) => `assets/${name}`),
-    );
-    for (const entry of manifest.assets) {
-      const source = await fs.readFile(path.join(outDir, entry.path));
-      expect(entry.size).toBe(source.byteLength);
-      expect(entry.sha256).toBe(createHash("sha256").update(source).digest("hex"));
-    }
 
     const scripts = emitted.filter((name) => name.endsWith(".js"));
     expect(scripts.length).toBeGreaterThan(1);
@@ -486,18 +471,6 @@ describe("Control UI Vite build", () => {
     expect(cacheIds[0]).not.toBe(cacheIds[1]);
   });
 
-  it("fails when a completed build emits outside the required assets directory", async () => {
-    const config = createConfig();
-    config.build = { ...config.build, assetsDir: "bundles" };
-
-    await expect(build(config)).rejects.toThrow(/ENOENT.*assets/u);
-    expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain("bundles/");
-    expect((await fs.readdir(path.join(outDir, "bundles"))).length).toBeGreaterThan(0);
-    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("does not count an asset or report completion when its second sidecar write fails", async () => {
     const config = createConfig("info");
     const writeFileSync = fsSync.writeFileSync;
@@ -516,7 +489,7 @@ describe("Control UI Vite build", () => {
     const emitted = await fs.readdir(path.join(outDir, "assets"));
     expect(emitted.filter((name) => name.endsWith(".br"))).toHaveLength(1);
     expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
-    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });

@@ -4,10 +4,21 @@ import type {
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import {
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import type {
+  SessionTranscriptAccessScope,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  readSessionEntryRow,
+  readSessionEntrySelectionSnapshot,
+  writeSessionEntry,
+} from "./session-accessor.sqlite-entry-store.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
   ensureSessionEntryInTransaction,
   ensureSessionEntrySync,
@@ -15,6 +26,7 @@ import {
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
+  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { requireTranscriptEventAppendSnapshot } from "./session-accessor.sqlite-transcript-append-result.js";
@@ -33,10 +45,14 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { trimIncognitoTranscript } from "./session-incognito-manual-compact.js";
 import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
 } from "./session-manager-write-contract.js";
+import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
+import type { PreparedSessionSourceAuthority } from "./session-source-authority.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -194,5 +210,84 @@ function persistCompactionBoundary(
     },
     toDatabaseOptions(resolved),
     { operationLabel: "session.compaction-boundary" },
+  );
+}
+
+export async function trimTranscriptForManualCompact(
+  scope: SessionTranscriptAccessScope,
+  selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
+  options: {
+    nowMs?: number;
+    preparation?: {
+      snapshot?: SqliteLifecycleTargetSnapshot;
+      source?: PreparedSessionSourceAuthority;
+      assertEntryCurrent: (
+        entry: SqliteLifecycleTargetSnapshot[number]["entry"] | undefined,
+      ) => void;
+      restore: () => Promise<void>;
+      assertCurrent: () => void;
+      assertCommitCurrent: () => void;
+    };
+  } = {},
+): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
+  const binding = captureIncognitoSessionOperation(scope);
+  if (binding) {
+    return trimIncognitoTranscript(binding, scope, selectRetainedLines, options);
+  }
+  const resolved = resolveSqliteTranscriptScope(scope);
+  if (options.preparation) {
+    options.preparation.assertCurrent();
+    await options.preparation.restore();
+    options.preparation.assertCurrent();
+  } else {
+    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+    await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
+  }
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      options.preparation?.assertCurrent();
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+      const snapshotRows = readTranscriptEventRows(database, resolved.sessionId);
+      const sessionSnapshot =
+        options.preparation?.snapshot ??
+        readSessionEntrySelectionSnapshot(database, resolved.sessionKey, true);
+      options.preparation?.assertEntryCurrent(sessionSnapshot[0]?.entry);
+      const lines = snapshotRows.map((row) => row.eventJson);
+      const retainedLines = selectRetainedLines(lines);
+      if (!retainedLines) {
+        return { trimmed: false };
+      }
+      if (sessionSnapshot[0]?.entry.sessionId !== resolved.sessionId) {
+        throw new Error(
+          `Cannot compact SQLite transcript ${resolved.sessionId} without its current session entry`,
+        );
+      }
+      // SAFETY: Retained lines are canonical transcript rows selected by the compaction owner.
+      const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
+      const publish = runOpenClawAgentWriteTransaction(
+        (writeDatabase) => {
+          options.preparation?.assertCommitCurrent();
+          const identity = applyManualCompactInTransaction(writeDatabase, resolved, {
+            rows: snapshotRows,
+            entries: sessionSnapshot,
+            events: retainedEvents,
+            nowMs: options.nowMs,
+          });
+          options.preparation?.assertCommitCurrent();
+          return prepareSessionIdentityPublication(
+            writeDatabase,
+            resolved.agentId,
+            identity.previous,
+            identity.current,
+          );
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.manual-compact" },
+      );
+      publish();
+      return { kept: retainedLines.length, trimmed: true };
+    },
+    "session.transcript.compact",
   );
 }

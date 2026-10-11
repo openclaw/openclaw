@@ -3,7 +3,11 @@ import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type OpenClawPluginApi,
+  type PluginCommandContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -29,28 +33,12 @@ type DevicePairPluginConfig = {
   publicUrl?: string;
 };
 
-type SetupPayload = {
-  url: string;
-  bootstrapToken: string;
-  expiresAtMs: number;
-  access: "full" | "limited";
-  accessDowngraded?: true;
-};
+type SetupPayload = Awaited<ReturnType<typeof issueSetupPayload>>;
 
-type ResolveUrlResult = {
-  url?: string;
-  source?: string;
-  error?: string;
-};
-
-type QrCommandContext = {
-  channel: string;
-  senderId?: string;
-  from?: string;
-  to?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-};
+type QrCommandContext = Pick<
+  PluginCommandContext,
+  "channel" | "senderId" | "from" | "to" | "accountId" | "messageThreadId"
+>;
 
 const QR_SUPPORTED_CHANNELS = new Set([
   "telegram",
@@ -192,7 +180,7 @@ function isFullAccessMobilePairingUrl(url: string): boolean {
   );
 }
 
-async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
+async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi) {
   const { resolvePairingGatewayUrl, runPluginCommandWithTimeout } = await loadDevicePairApiModule();
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
   const result = await resolvePairingGatewayUrl(api.config, {
@@ -344,7 +332,7 @@ async function issueSetupPayload(params: {
   url: string;
   allowFullAccess: boolean;
   assertCurrent?: () => void;
-}): Promise<SetupPayload> {
+}) {
   const assertCurrent = params.assertCurrent;
   const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
     await loadDevicePairApiModule();
@@ -366,8 +354,8 @@ async function issueSetupPayload(params: {
     url: params.url,
     bootstrapToken: issuedBootstrap.token,
     expiresAtMs: issuedBootstrap.expiresAtMs,
-    access: fullAccess ? "full" : "limited",
-    ...(accessDowngraded ? { accessDowngraded: true } : {}),
+    access: fullAccess ? ("full" as const) : ("limited" as const),
+    ...(accessDowngraded ? { accessDowngraded: true as const } : {}),
   };
 }
 
@@ -528,6 +516,11 @@ export default definePluginEntry({
           return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };
         }
         const authLabel = authLabelResult.label ?? "auth";
+        const setupRequest = {
+          url: urlResult.url,
+          allowFullAccess: authState.canIssueFullAccessSetup,
+          assertCurrent: assertOwnerCurrent,
+        };
 
         if (action === "qr") {
           const channel = ctx.channel;
@@ -548,11 +541,7 @@ export default definePluginEntry({
             }
           }
 
-          let payload = await issueSetupPayload({
-            url: urlResult.url,
-            allowFullAccess: authState.canIssueFullAccessSetup,
-            assertCurrent: assertOwnerCurrent,
-          });
+          let payload = await issueSetupPayload(setupRequest);
           let setupCode = encodeSetupCode(payload);
 
           const infoLines = buildQrInfoLines({
@@ -596,11 +585,7 @@ export default definePluginEntry({
                 `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload({
-                url: urlResult.url,
-                allowFullAccess: authState.canIssueFullAccessSetup,
-                assertCurrent: assertOwnerCurrent,
-              });
+              payload = await issueSetupPayload(setupRequest);
               setupCode = encodeSetupCode(payload);
             } finally {
               if (qrFilePath) {
@@ -622,11 +607,7 @@ export default definePluginEntry({
                 `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload({
-                url: urlResult.url,
-                allowFullAccess: authState.canIssueFullAccessSetup,
-                assertCurrent: assertOwnerCurrent,
-              });
+              payload = await issueSetupPayload(setupRequest);
               return {
                 text:
                   "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.\n\n" +
@@ -663,11 +644,7 @@ export default definePluginEntry({
           normalizeOptionalString(ctx.from) ||
           normalizeOptionalString(ctx.to) ||
           "";
-        const payload = await issueSetupPayload({
-          url: urlResult.url,
-          allowFullAccess: authState.canIssueFullAccessSetup,
-          assertCurrent: assertOwnerCurrent,
-        });
+        const payload = await issueSetupPayload(setupRequest);
 
         if (channel === "telegram" && target) {
           try {

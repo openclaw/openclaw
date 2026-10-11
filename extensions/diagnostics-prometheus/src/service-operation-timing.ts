@@ -19,19 +19,73 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const CHAT_SEND_PHASE =
+  /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" | "diagnostic.phase.completed" }>,
+  evt: Extract<
+    DiagnosticEventPayload,
+    {
+      type:
+        | "gateway.rpc"
+        | "diagnostic.phase.completed"
+        | "gateway.http.cancelled"
+        | "diagnostic.gc"
+        | "gateway.event_loop.sample";
+    }
+  >,
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "gateway.http.cancelled":
+      store.counter(
+        "openclaw_gateway_http_cancelled_total",
+        "Gateway HTTP requests cancelled before completion.",
+        { source: evt.source },
+      );
+      return;
+    case "diagnostic.gc":
+      store.histogram(
+        "openclaw_gc_duration_seconds",
+        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
+        {},
+        seconds(evt.durationMs),
+      );
+      return;
+    case "gateway.event_loop.sample":
+      store.histogram(
+        "openclaw_gateway_event_loop_delay_max_seconds",
+        "Maximum event-loop delay per completed Gateway observation window in seconds.",
+        {},
+        seconds(evt.delayMaxMs),
+      );
+      store.counter(
+        "openclaw_gateway_event_loop_observed_seconds_total",
+        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
+        {},
+        evt.intervalMs / 1000,
+      );
+      return;
     case "diagnostic.phase.completed": {
       if (!metadata.trusted) {
         return;
       }
       if (evt.name === "worktree.preparation") {
         recordWorktreePreparation(store, evt);
+        return;
+      }
+      const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
+      if (sendPhase) {
+        const stage = evt.details?.stage;
+        if (stage === "request" || stage === "startup" || stage === "steer" || stage === "queued") {
+          store.histogram(
+            "openclaw_chat_send_phase_seconds",
+            "Elapsed chat.send owner phases before acknowledgement, during startup, or awaiting steering and queued follow-up delivery.",
+            { phase: sendPhase, stage },
+            seconds(evt.durationMs),
+          );
+        }
         return;
       }
       if (!evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {

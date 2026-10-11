@@ -1,16 +1,13 @@
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
 const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
 
-type UrbitAuthenticateOptions = {
-  ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  beforeRequest?: () => void;
-};
+type UrbitAuthenticateOptions = Pick<
+  Parameters<typeof urbitFetch>[0],
+  "ssrfPolicy" | "lookupFn" | "fetchImpl" | "beforeRequest"
+>;
 
 export async function authenticate(
   url: string,

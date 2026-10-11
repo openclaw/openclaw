@@ -2,6 +2,8 @@ import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { SkillsSearchResult } from "../../packages/gateway-protocol/src/schema/skills-search.js";
 import {
   ClawHubRequestError,
   createClawHubError,
@@ -30,33 +32,7 @@ export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
 export const CLAWHUB_SKILLS_SH_REF_PREFIX = "skills-sh:" as const;
 export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 
-export type ClawHubSkillSearchResult = {
-  score: number;
-  slug: string;
-  registry: string;
-  /**
-   * Reference install must send back. Search returns the same slug for several publishers, so
-   * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
-   * source: rewriting an external reference into `@owner/slug` would install a different skill.
-   */
-  installRef: string;
-  /**
-   * Set only for sources ClawHub serves install-only, so clients install directly instead of
-   * opening a detail card that cannot resolve. Absence means the ordinary review-then-install
-   * flow, which is what every released Gateway already implies by omitting this field.
-   */
-  installOnly?: true;
-  trustState?: ClawHubSkillsShTrustState;
-  // Search may return the same slug for multiple publishers; exact install refs need this handle.
-  ownerHandle?: string | null;
-  /** Official status comes from ClawHub's canonical search result, never the handle. */
-  official?: boolean;
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
-};
+export type ClawHubSkillSearchResult = SchemaContract<SkillsSearchResult["results"][number]>;
 
 /** Source variants ClawHub resolves search results from. Anything else is unidentifiable. */
 const CLAWHUB_NATIVE_SOURCE_KIND = "clawhub";
@@ -191,14 +167,11 @@ function buildVersionOrTagSearch(params: {
 }): { version?: string; tag?: string; ownerHandle?: string } | undefined {
   const version = normalizeOptionalString(params.version);
   const ownerHandle = normalizeOptionalString(params.ownerHandle);
-  if (version) {
-    return { version, ...(ownerHandle ? { ownerHandle } : {}) };
-  }
-  const tag = normalizeOptionalString(params.tag);
-  if (tag) {
-    return { tag, ...(ownerHandle ? { ownerHandle } : {}) };
-  }
-  return ownerHandle ? { ownerHandle } : undefined;
+  const tag = version ? undefined : normalizeOptionalString(params.tag);
+  const selection = version ? { version } : tag ? { tag } : undefined;
+  return selection || ownerHandle
+    ? { ...selection, ...(ownerHandle ? { ownerHandle } : {}) }
+    : undefined;
 }
 
 export async function searchClawHubSkills(
@@ -241,10 +214,7 @@ export async function searchClawHubSkills(
       updatedAt: entry.metrics?.updatedAt ?? undefined,
     }));
   }
-  return entries.flatMap((entry) => {
-    const mapped = toClawHubSkillSearchResult(entry, registry);
-    return mapped ? [mapped] : [];
-  });
+  return entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
 }
 
 export async function fetchClawHubSkillCatalog(
@@ -297,6 +267,7 @@ export async function fetchClawHubSkillCatalog(
     const official = readClawHubBooleanField(value, trending ? "official" : "isOfficial", context);
     const summary = readClawHubStringField(value, "summary", context) ?? undefined;
     const icon = readClawHubStringField(value, "icon", context);
+    const entry = { score: 0, slug, displayName, official, summary, icon };
     if (trending) {
       const publisher = value.publisher;
       const metrics = value.metrics;
@@ -308,13 +279,7 @@ export async function fetchClawHubSkillCatalog(
       ) {
         throw new Error(`Malformed ClawHub ${context}: invalid trending identity or metrics.`);
       }
-      return {
-        score: 0,
-        slug,
-        displayName,
-        official,
-        summary,
-        icon,
+      return Object.assign(entry, {
         source: readRequiredClawHubStringField(value, "source", context),
         install: {
           kind: readRequiredClawHubStringField(install, "kind", context),
@@ -324,28 +289,20 @@ export async function fetchClawHubSkillCatalog(
         updatedAt: metrics
           ? readRequiredClawHubNumberField(metrics, "updatedAt", context)
           : undefined,
-      };
+      });
     }
     if (value.family !== "skill") {
       throw new Error(`Malformed ClawHub ${context}: expected skill family.`);
     }
-    return {
-      score: query ? readRequiredClawHubNumberField(row, "score", context) : 0,
-      slug,
-      displayName,
-      official,
-      summary,
-      icon,
+    entry.score = query ? readRequiredClawHubNumberField(row, "score", context) : 0;
+    return Object.assign(entry, {
       source: CLAWHUB_NATIVE_SOURCE_KIND,
       ownerHandle: readClawHubStringField(value, "ownerHandle", context),
       version: readClawHubStringField(value, "latestVersion", context) ?? undefined,
       updatedAt: readRequiredClawHubNumberField(value, "updatedAt", context),
-    };
+    });
   });
-  const items = entries.flatMap((entry) => {
-    const mapped = toClawHubSkillSearchResult(entry, registry);
-    return mapped ? [mapped] : [];
-  });
+  const items = entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
   if (trending) {
     // Canonical trending combines publisher and listing official status. Bulk discovery
     // needs the listing flag, which only the package metadata endpoint exposes.
@@ -385,10 +342,10 @@ export async function fetchClawHubSkillCatalog(
  * unknown, or whose external reference is missing, is dropped rather than published under
  * `@owner/slug`: that spelling would point install at a different publisher's skill.
  */
-function toClawHubSkillSearchResult(
+function mapClawHubSkillSearchEntry(
   entry: ClawHubSkillSearchWireEntry,
   registry: string,
-): ClawHubSkillSearchResult | undefined {
+): ClawHubSkillSearchResult | [] {
   const { install: _install, source: _source, ...rest } = entry;
   const base = { ...rest, registry, icon: resolveClawHubImageUrl(entry.icon, registry) };
   const source = normalizeOptionalString(entry.source);
@@ -397,14 +354,14 @@ function toClawHubSkillSearchResult(
   // Source identifies the catalog row. Install kind only describes how ClawHub will deliver it:
   // native ClawHub rows may legitimately be GitHub-backed.
   if (installKind && !CLAWHUB_SUPPORTED_INSTALL_KINDS.has(installKind)) {
-    return undefined;
+    return [];
   }
   switch (source) {
     case CLAWHUB_SKILLS_SH_SOURCE_KIND: {
       // An external row is only installable as itself. Without its own reference there is no
       // identity to install, so the row cannot be offered at all.
       if (!reference?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
-        return undefined;
+        return [];
       }
       return {
         ...base,
@@ -417,10 +374,10 @@ function toClawHubSkillSearchResult(
       // Native rows report `owner/slug`; this repo's reference grammar is `@owner/slug`. Without
       // a publisher the bare slug answers 409 AMBIGUOUS_SKILL_SLUG for every action.
       const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : undefined;
+      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : [];
     }
     default:
-      return undefined;
+      return [];
   }
 }
 

@@ -300,7 +300,7 @@ describe("doctor.memory.status", () => {
       await invokeDoctorMemory("doctor.memory.status", respond, { params: { probe: true } });
       expectEmbeddingErrorResponse(
         respond,
-        mode === "missing" ? "memory search unavailable" : "gateway memory probe failed: timeout",
+        mode === "missing" ? "memory search unavailable" : "gateway memory check failed: timeout",
       );
       if (close) {
         expect(close).toHaveBeenCalled();

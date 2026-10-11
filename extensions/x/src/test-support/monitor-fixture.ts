@@ -83,9 +83,20 @@ export function fixture(options: {
     getPosts: vi.fn(async (ids: string[]) =>
       page(options.posts.filter((value) => ids.includes(value.id))),
     ),
+    getPublicPosts: vi.fn(async (ids: string[]): Promise<XPage> => ({
+      ...page(
+        [post("500", "10", "Original thread"), ...options.posts].filter((value) =>
+          ids.includes(value.id),
+        ),
+      ),
+      includes: { tweets: [], users: [{ id: "10", username: "author", protected: false }] },
+    })),
     searchConversation: vi.fn(async () => page([post("500", "10", "Original thread")])),
     getUserByUsername: vi.fn(async () => {
       throw new Error("Unexpected user lookup");
+    }),
+    getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(async () => {
+      throw new Error("Unexpected batch user lookup");
     }),
     reply: vi.fn(async (params: Parameters<XApiClient["reply"]>[0]) => {
       const assertCurrent = await params.assertActive?.();

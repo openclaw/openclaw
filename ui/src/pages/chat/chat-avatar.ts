@@ -39,6 +39,7 @@ import {
   readSessionDefaults,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { renderChatAuthorAvatar, renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
 
 export function renderChatAvatar(
@@ -204,13 +205,6 @@ const chatAvatarDisplayedAgents = new WeakMap<object, string>();
 const senderAvatarRequests = new WeakMap<object, object>();
 const senderAvatarInputs = new WeakMap<object, unknown[]>();
 
-type ChatAvatarSnapshot = {
-  reason: string | null;
-  status: "none" | "local" | "remote" | "data" | null;
-  url: string | null;
-  release: () => void;
-};
-
 const CHAT_AVATAR_CACHE_LIMIT = 24;
 const currentAvatarReference = Symbol("current-chat-avatar");
 const chatAvatarReferences = new WeakMap<
@@ -273,12 +267,9 @@ export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
   clearChatAvatarState(host);
 }
 
-async function loadChatAvatarSnapshot(
-  host: ChatAvatarHost,
-  agentId: string,
-): Promise<ChatAvatarSnapshot | null> {
+async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
   const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const sessionAgentId = resolveAgentIdForSession(host);
   if (!client || !host.connected) {
     return null;
@@ -286,13 +277,7 @@ async function loadChatAvatarSnapshot(
   let release: () => void = () => undefined;
   try {
     const identity = await fetchAssistantIdentity(client, agentId);
-    if (
-      !identity ||
-      !host.connected ||
-      host.client !== client ||
-      host.connectionEpoch !== epoch ||
-      resolveAgentIdForSession(host) !== sessionAgentId
-    ) {
+    if (!identity || !connectionIsCurrent() || resolveAgentIdForSession(host) !== sessionAgentId) {
       return null;
     }
     const avatar = identity.avatar?.trim() ?? "";
@@ -345,8 +330,7 @@ export async function refreshSenderAgentAvatars(
   senderAvatarRequests.set(host, request);
   const sessionKey = host.sessionKey;
   const agentId = resolveAgentIdForSession(host);
-  const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const agents = host.agentsList?.agents;
   const remainingIds = new Set(agents?.map((agent) => agent.id));
   // Consume each sender once, reserving one cache slot for the current agent.
@@ -372,9 +356,7 @@ export async function refreshSenderAgentAvatars(
     : [];
   if (
     ids.length &&
-    (!host.connected ||
-      host.client !== client ||
-      host.connectionEpoch !== epoch ||
+    (!connectionIsCurrent() ||
       host.agentsList?.agents !== agents ||
       host.sessionKey !== sessionKey ||
       resolveAgentIdForSession(host) !== agentId ||
@@ -401,7 +383,7 @@ export async function refreshSenderAgentAvatars(
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
   );
-  // Leases and identity TTL refresh independently; unchanged URLs keep settled rows memoized.
+  // Identity invalidation and image leases refresh independently; unchanged URLs keep rows memoized.
   if (
     avatars.size !== (previousAvatars?.size ?? 0) ||
     [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
@@ -417,8 +399,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     return;
   }
   const sessionKey = host.sessionKey;
-  const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   const showingSameAgent = chatAvatarDisplayedAgents.get(host) === agentId;
@@ -427,9 +408,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   }
   const snapshot = await loadChatAvatarSnapshot(host, agentId);
   if (
-    !host.connected ||
-    host.client !== client ||
-    host.connectionEpoch !== epoch ||
+    !connectionIsCurrent() ||
     chatAvatarRequestVersions.get(host) !== requestVersion ||
     host.sessionKey !== sessionKey ||
     resolveAgentIdForSession(host) !== agentId

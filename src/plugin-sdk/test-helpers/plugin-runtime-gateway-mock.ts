@@ -9,7 +9,8 @@ export function createPluginGatewayRuntimeMock(): PluginRuntime["gateway"] {
     readSessionFacts: vi.fn<PluginRuntime["gateway"]["readSessionFacts"]>(async () => ({
       sessions: [],
     })),
-    withSessionReadScope: async (run) => run(undefined),
+    withSessionFacts: async (_select, run) =>
+      run({ scope: undefined, revision: "mock", redactionRevision: "mock", sessions: [] }),
     subscribeSessionChanges: vi.fn(() => () => {}),
   };
 }

@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   captureControlUiE2eFailureDiagnostics,
+  controlUiBundledSettingsStorageKey,
   navigateToControlUiSession,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -14,6 +15,7 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
+  openSessionMenuSubmenu,
   requireRecord,
   sessionsListResponse,
   submitInputDialog,
@@ -162,7 +164,7 @@ suite.define(() => {
         expect(await send.isDisabled()).toBe(true);
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.isDisabled()).toBe(true);
-        const create = page.locator(".sidebar-brand__new-thread");
+        const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
         expect(await create.isDisabled()).toBe(!canOrganize);
         if (!canOrganize) {
           await create.click({ force: true });
@@ -198,13 +200,17 @@ suite.define(() => {
         expect((await archive.getAttribute("disabled")) === null).toBe(canOrganize);
         expect(await fork.getAttribute("disabled")).not.toBeNull();
         for (const action of [
-          menu.getByRole("menuitem", { name: "Icon & color" }),
           menu.locator('wa-dropdown-item[value="toggle-unread"]'),
           menu.getByRole("menuitem", { name: "Move to group" }),
         ]) {
           expect(await action.getAttribute("disabled")).not.toBeNull();
           await action.click({ force: true });
         }
+        await openSessionMenuSubmenu(page, "Advanced");
+        const appearance = menu.getByRole("menuitem", { name: "Icon & color", exact: true });
+        expect(await appearance.getAttribute("disabled")).not.toBeNull();
+        await appearance.click({ force: true });
+        await page.keyboard.press("ArrowLeft");
         if (canOrganize) {
           await rename.click();
           await submitInputDialog(page, "Organized workspace");
@@ -215,7 +221,7 @@ suite.define(() => {
           await expect.poll(() => ownRow.textContent()).toContain("Organized workspace");
           await ownRow.hover();
           await ownRow.getByRole("button", { name: "Pin session", exact: true }).click();
-          await waitForPatch(gateway, (params) => params.key === own.key && params.pinned === true);
+          await ownRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
           await ownRow.click({ button: "right" });
           await activateSelfRemovingControl(archive);
           await waitForPatch(
@@ -234,6 +240,7 @@ suite.define(() => {
             .filter({ hasText: "Organized workspace" });
           await archivedRow.waitFor();
           await archivedRow.getByRole("button", { name: "Open session menu", exact: true }).click();
+          await openSessionMenuSubmenu(page, "Advanced");
           const remove = menu.locator('wa-dropdown-item[value="delete"]');
           await remove.waitFor();
           expect(await remove.getAttribute("disabled")).not.toBeNull();
@@ -245,6 +252,7 @@ suite.define(() => {
             menu.locator('[part="menu"]'),
             [remove, archive],
           );
+          await page.keyboard.press("ArrowLeft");
           await activateSelfRemovingControl(archive);
           await waitForPatch(
             gateway,
@@ -263,9 +271,25 @@ suite.define(() => {
           await page.keyboard.press("Escape");
           await ownRow.hover();
           const pin = ownRow.getByRole("button", { name: "Pin session", exact: true });
-          expect(await pin.isDisabled()).toBe(true);
-          await pin.click({ force: true });
+          // Personal navigation remains available without shared-session mutation authority.
+          expect(await pin.isDisabled()).toBe(false);
+          await pin.click();
+          await ownRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
         }
+        const pinRef = `session:${own.key}`;
+        await expect
+          .poll(() => page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`).count())
+          .toBe(1);
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) =>
+                JSON.parse(localStorage.getItem(key) ?? "{}").navigationByProfile?.["scope-reader"]
+                  ?.sidebarEntries,
+              controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            ),
+          )
+          .toContain(pinRef);
         const forbiddenMethods = new Set([
           "sessions.create",
           "sessions.dispatch",
@@ -276,6 +300,9 @@ suite.define(() => {
           "sessions.catalog.startTerminal",
           "sessions.groups.put",
           "sessions.assignOwner",
+          // Narrow session scopes retain pins locally, without broader profile/config writes.
+          "users.prefs.set",
+          "config.patch",
         ]);
         const requests = await gateway.getRequests();
         if (!canOrganize) {
@@ -295,7 +322,6 @@ suite.define(() => {
             ? [
                 { key: own.key, label: "List workspace" },
                 { key: own.key, label: "Organized workspace" },
-                { key: own.key, pinned: true },
                 { key: own.key, archived: true },
                 { key: own.key, archived: false },
               ]

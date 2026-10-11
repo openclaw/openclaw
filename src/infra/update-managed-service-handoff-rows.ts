@@ -47,6 +47,12 @@ type LeaseRead =
   | { kind: "unreadable"; error: unknown }
   | { kind: "current"; lease: ManagedHandoffLease };
 
+export function managedHandoffLeaseRow(
+  lease: Pick<ManagedHandoffLease, "owner" | "payload" | "updatedAt">,
+): LeaseRow {
+  return { owner: lease.owner, payload_json: lease.payload, updated_at: lease.updatedAt };
+}
+
 export function createManagedHandoffLeaseRows(
   options: { databasePath: string; existingIdentity?: ManagedUpdateLeaseDatabaseIdentity },
   withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>,

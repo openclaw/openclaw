@@ -29,7 +29,6 @@ import {
   isUpdateCompatibilityChunk,
   listUpdateCompatibilityChunkPaths,
   readUpdateCompatibilityInventory,
-  UPDATE_COMPATIBILITY_INVENTORY_FILE,
   writeUpdateCompatibilityChunks,
 } from "./lib/update-compat-chunks.mts";
 import { buildUpdateConfigRuntimeAlias } from "./lib/update-config-runtime-compat.mts";
@@ -244,7 +243,6 @@ export function listCoreRuntimePostBuildOutputs(params: RuntimeFsParams = {}) {
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...LEGACY_CLI_EXIT_COMPAT_CHUNKS.map(({ dest }) => dest),
-    `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
     ...listUpdateCompatibilityChunkPaths(
       readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
     ).map((fileName) => `dist/${fileName}`),

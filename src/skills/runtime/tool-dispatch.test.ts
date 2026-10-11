@@ -1,10 +1,11 @@
 // Skill tool dispatch tests cover policy-filtered tool surfaces.
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
@@ -42,6 +43,14 @@ const dispatchDefaults = {
   model: "gpt-5.5",
   senderIsOwner: true,
 } satisfies Parameters<typeof resolveSkillDispatchTools>[0];
+
+beforeEach(() => {
+  // Exercise auth-source preparation even on hosts with configured search providers.
+  for (const name of listKnownProviderAuthEnvVarNamesCore({ config: {} })) {
+    vi.stubEnv(name, undefined);
+  }
+});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("resolveSkillDispatchTools", () => {
   it.each([

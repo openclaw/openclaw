@@ -7,6 +7,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
 import type { PendingInputScope } from "./session-pending-input-store.js";
 import {
@@ -24,6 +25,7 @@ export async function readPendingInputSource(
 ) {
   const captured = {
     ...scope,
+    incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const logical = resolveSqliteScope({ ...captured, storePath: undefined });
@@ -48,6 +50,7 @@ export async function readPendingInputSource(
     const claim = actor.sessions.captureCurrent(logical.sessionKey);
     const assertCurrent = () => {
       actor.assertCurrent();
+      actor.assertReadable();
       authority.assertCurrent();
       claim.assertCurrent();
     };

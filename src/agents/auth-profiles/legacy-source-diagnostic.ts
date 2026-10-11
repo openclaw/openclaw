@@ -184,24 +184,20 @@ export class AuthProfileMigrationRequiredError extends Error {
       | AuthProfileMigrationRequiredError,
     previous?: AuthProfileMigrationRequiredError,
   ) {
-    const ownerId =
+    const source =
       params instanceof AuthProfileMigrationRequiredError
-        ? params.ownerId
-        : shortenHomePath(
-            params.databasePath ?? resolveAuthProfileOwnerPath(params.agentDir, params.env),
-          );
+        ? params
+        : {
+            ownerId: shortenHomePath(
+              params.databasePath ?? resolveAuthProfileOwnerPath(params.agentDir, params.env),
+            ),
+            sourceKinds: params.sources.map((candidate) => candidate.kind),
+            affectedProviders: readLegacyAuthProfileProviders(params.sources),
+          };
+    const { ownerId, affectedProviders: providers } = source;
     const sourceKinds = [
-      ...new Set([
-        ...(previous?.sourceKinds ?? []),
-        ...(params instanceof AuthProfileMigrationRequiredError
-          ? params.sourceKinds
-          : params.sources.map((source) => source.kind)),
-      ]),
+      ...new Set([...(previous?.sourceKinds ?? []), ...source.sourceKinds]),
     ].toSorted();
-    const providers =
-      params instanceof AuthProfileMigrationRequiredError
-        ? params.affectedProviders
-        : readLegacyAuthProfileProviders(params.sources);
     const affectedProviders =
       providers && previous?.affectedProviders !== null
         ? [...new Set([...(previous?.affectedProviders ?? []), ...providers])].toSorted()

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqlite from "../../infra/node-sqlite.js";
-import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -28,6 +27,7 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
@@ -38,7 +38,17 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 const hook = vi.hoisted(() => ({
   beforePlan: undefined as (() => Promise<void>) | undefined,
   afterMaterialize: undefined as (() => Promise<void>) | undefined,
+  integrityGate: undefined as ReturnType<typeof createWorkerSqliteIntegrityGate> | undefined,
 }));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  const { observeWorkerSqliteIntegrity } =
+    await import("./session-accessor.sqlite-integrity-counter.test-support.js");
+  return {
+    ...actual,
+    Worker: observeWorkerSqliteIntegrity(actual.Worker, () => hook.integrityGate),
+  };
+});
 vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../sessions/session-lifecycle-admission.js")>();
@@ -61,10 +71,10 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    materializeSessionStateDeletePlans: async (
-      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
+    materializeSessionHistoryEvictionPlan: async (
+      ...args: Parameters<typeof actual.materializeSessionHistoryEvictionPlan>
     ) => {
-      const result = await actual.materializeSessionStateDeletePlans(...args);
+      const result = await actual.materializeSessionHistoryEvictionPlan(...args);
       await hook.afterMaterialize?.();
       return result;
     },
@@ -75,7 +85,6 @@ let testState: OpenClawTestState;
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const realOpen = sqlite.openNodeSqliteDatabase;
-const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -92,6 +101,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await testState.cleanup();
+  if (hook.integrityGate) {
+    expect([...hook.integrityGate.workers].every((worker) => worker.threadId === -1)).toBe(true);
+    hook.integrityGate = undefined;
+  }
 });
 
 function own<T>(promise: Promise<T>): Promise<T> {
@@ -110,7 +123,7 @@ it.each([
   { boundary: "initial", cold: true, outcome: "revoked" },
   { boundary: "replan", cold: true, outcome: "revoked" },
 ] as const)(
-  "keeps $boundary history preparation and $outcome inside its writer FIFO (cold: $cold)",
+  "keeps $boundary history preparation and $outcome ordered at worker admission (cold: $cold)",
   async ({ boundary: preparationBoundary, cold, outcome }) => {
     const sessionsDir = testState.sessionsDir();
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -137,6 +150,8 @@ it.each([
     });
     const target = resolveSqliteTargetFromSessionStorePath(storePath);
     const options = { agentId: target.agentId ?? "main", path: target.path };
+    // Instrument the next executor before discovery retains it for preparation.
+    await closeOpenClawAgentDatabaseByPathAsync(options.path);
     const database = openOpenClawAgentDatabase(options);
     const historyBefore = loadTranscriptEventsSync({
       sessionKey,
@@ -159,17 +174,13 @@ it.each([
     const events: string[] = [];
     let observingAdmission = false;
     let parentChecks = 0;
-    let childChecks = 0;
     let laterWriterRan = false;
     const preparationReady = createDeferred();
     const blockerEntered = createDeferred();
     const releaseBlocker = createDeferred();
-    const childEntered = createDeferred();
-    const releaseChild = createDeferred();
-    releases.push(
-      () => releaseBlocker.resolve(),
-      () => releaseChild.resolve(),
-    );
+    const integrityGate = createWorkerSqliteIntegrityGate(database.path);
+    hook.integrityGate = integrityGate;
+    releases.push(() => releaseBlocker.resolve(), integrityGate.release);
 
     vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
       const opened = realOpen(pathname, openOptions);
@@ -195,17 +206,6 @@ it.each([
       }
       return opened;
     });
-    vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
-      const check = realIntegrity(...args);
-      if (!observingAdmission || args[0] !== database.path) {
-        return check;
-      }
-      childChecks += 1;
-      events.push("child-integrity-entered");
-      childEntered.resolve();
-      return Promise.all([check, releaseChild.promise]).then(() => undefined);
-    });
-
     const beforePreparation = async () => {
       hook.beforePlan = undefined;
       hook.afterMaterialize = undefined;
@@ -219,6 +219,9 @@ it.each([
         events.push("parent-handle-closed");
       }
       observingAdmission = true;
+      if (cold) {
+        integrityGate.arm();
+      }
       void own(
         runExclusiveSqliteSessionWrite(
           options,
@@ -266,15 +269,31 @@ it.each([
     expect(laterWriterRan).toBe(false);
     releaseBlocker.resolve();
     const boundary = await Promise.race([
-      childEntered.promise.then(() => "child" as const),
+      integrityGate.entered.then(() => "worker" as const),
       work.then(() => "completed" as const),
     ]);
-    if (boundary === "child") {
+    let followingWriter: Promise<void> | undefined;
+    if (boundary === "worker") {
+      await laterWriter;
+      let followingWriterRan = false;
+      followingWriter = own(
+        runExclusiveSqliteSessionWrite(
+          options,
+          async () => {
+            followingWriterRan = true;
+            events.push("following-writer");
+          },
+          "session.history.eviction-prepare",
+        ),
+      );
       await yieldToEventLoop();
-      expect(laterWriterRan).toBe(false);
+      // Both archive reads and cold integrity validation release writer admission;
+      // transaction ordering resumes only when the reclaimer requests its write.
+      expect(laterWriterRan).toBe(true);
+      expect(followingWriterRan).toBe(true);
       expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(true);
       if (outcome === "protected") {
-        // A peer connection can refresh the live entry while the parent validates.
+        // A peer connection can refresh the live entry while its worker validates.
         const peer = realOpen(database.path);
         try {
           const updatedAt = Date.now();
@@ -303,9 +322,9 @@ it.each([
         closeOpenClawAgentDatabaseByPath(database.path);
       }
     }
-    releaseChild.resolve();
+    integrityGate.release();
     if (outcome === "revoked") {
-      await expect(work).rejects.toThrow(/revoked/);
+      await expect(work).rejects.toThrow(/revoked|admission is closed/);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
     } else {
       await expect(work).resolves.toMatchObject({
@@ -313,11 +332,12 @@ it.each([
       });
     }
     await laterWriter;
+    await followingWriter;
     observingAdmission = false;
-    expect(boundary).toBe(cold ? "child" : "completed");
+    expect(boundary).toBe(cold ? "worker" : "completed");
     expect(events.indexOf("later-writer")).toBeGreaterThan(events.indexOf("blocker-released"));
     expect(parentChecks).toBe(0);
-    expect(childChecks).toBe(cold ? 1 : 0);
+    expect(integrityGate.count()).toBe(cold ? 1 : 0);
     expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(false);
     if (outcome === "revoked") {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);

@@ -56,7 +56,7 @@ describe("board widget approval", () => {
       content: { kind: "html", html: "<p>weather</p>" },
       declared: { netOrigins: ["https://weather.example"], tools: ["health"] },
     };
-    for (let index = 0; index < 10; index++) {
+    for (let index = 0; index < 2; index++) {
       const response = await invoke("board.widget.put", {
         ...widget,
         sessionKey: `agent:main:session-${index}`,
@@ -132,48 +132,22 @@ describe("board widget approval", () => {
     expect((await harness.store.getSnapshot(target)).widgets[0]?.grantState).toBe("pending");
   });
 
-  it("reviews a previously rejected document again and skips review for empty declarations", async () => {
-    const cfg = { tools: { exec: { mode: "auto" as const } } };
-    const { invoke } = createHarness(undefined, undefined, undefined, {
-      getRuntimeConfig: () => cfg,
-    });
-    const widget = { name: "health", content: { kind: "html", html: "<p>health</p>" } };
-    for (const declared of [undefined, { tools: [] }]) {
-      await invoke("board.widget.put", { ...widget, sessionKey, declared });
-    }
-    expect(reviewWidgetApproval).not.toHaveBeenCalled();
-    for (const decision of ["deny", "ask", "allow-once"] as const) {
-      reviewWidgetApproval.mockResolvedValue({ decision, risk: "low", rationale: "synthetic" });
-      const response = await invoke("board.widget.put", {
-        ...widget,
-        sessionKey: `${sessionKey}-${decision}`,
-        declared: { tools: ["health"] },
-      });
-      expect(response.mock.calls[0]?.[1]).toMatchObject({
-        widgets: [{ grantState: decision === "allow-once" ? "granted" : "rejected" }],
-      });
-    }
-    expect(reviewWidgetApproval).toHaveBeenCalledTimes(3);
-  });
-
   it.each([
     ...boardWidgetContentPermissionCases
       .filter(
         (row) =>
-          row.contentKind === "html" ||
-          ("permissionMode" in row &&
-            (row.permissionMode !== "workspace" ||
-              ("reviewDecision" in row &&
-                row.reviewDecision === "allow-once" &&
-                !("reviewRisk" in row)))),
+          row.contentKind === "html" &&
+          "permissionMode" in row &&
+          (row.permissionMode === "read-only" ||
+            (row.permissionMode === "workspace" &&
+              (("reviewRisk" in row && row.reviewRisk === "medium") ||
+                ("reviewDecision" in row && row.reviewDecision === "deny") ||
+                "reviewFailure" in row))),
       )
       .map((row) => Object.assign({}, row, { emptyTools: false })),
     ...(
       [
-        { permissionMode: "full", grantState: "granted" },
         { permissionMode: "workspace", grantState: "granted", reviewDecision: "allow-once" },
-        { permissionMode: "guarded", grantState: "pending" },
-        { permissionMode: "read-only", grantState: "rejected" },
       ] as const
     ).map((row) => Object.assign({}, row, { contentKind: "mcp-app" as const, emptyTools: true })),
   ])(

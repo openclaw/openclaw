@@ -4,7 +4,6 @@ import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
-import { resolveEmbeddedAuthCooldownProbePolicy as resolveEmbeddedAuthCooldownProbePolicyActual } from "./embedded-agent-runner/run/auth-controller.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -161,17 +160,22 @@ const installRunEmbeddedMocks = () => {
         resolveModelAsyncMock(...args),
     };
   });
-  vi.doMock("./embedded-agent-runner/run/auth-controller.js", () => ({
-    createEmbeddedRunAuthController: () => ({
-      advanceAuthProfile: vi.fn(async () => false),
-      initializeAuthProfile: vi.fn(async () => undefined),
-      maybeRefreshRuntimeAuthForAuthError: vi.fn(async (_errorText: string, runtimeAuthRetry) => {
-        return refreshRuntimeAuthOnFirstPromptError && runtimeAuthRetry !== true;
+  vi.doMock("./embedded-agent-runner/run/auth-controller.js", async () => {
+    const actual = await vi.importActual<
+      typeof import("./embedded-agent-runner/run/auth-controller.js")
+    >("./embedded-agent-runner/run/auth-controller.js");
+    return {
+      ...actual,
+      createEmbeddedRunAuthController: () => ({
+        advanceAuthProfile: vi.fn(async () => false),
+        initializeAuthProfile: vi.fn(async () => undefined),
+        maybeRefreshRuntimeAuthForAuthError: vi.fn(async (_errorText: string, runtimeAuthRetry) => {
+          return refreshRuntimeAuthOnFirstPromptError && runtimeAuthRetry !== true;
+        }),
+        stopRuntimeAuthRefreshTimer: vi.fn(),
       }),
-      stopRuntimeAuthRefreshTimer: vi.fn(),
-    }),
-    resolveEmbeddedAuthCooldownProbePolicy: resolveEmbeddedAuthCooldownProbePolicyActual,
-  }));
+    };
+  });
   vi.doMock("./models-config.js", () => ({
     ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
       ensureOpenClawModelsJsonMock(...args),
@@ -900,7 +904,7 @@ describe("runEmbeddedAgent", () => {
 
     expect(
       loggerWarnMock.mock.calls.some(([message]) =>
-        String(message ?? "").includes("[backfillSessionKey] Failed to resolve sessionKey"),
+        String(message ?? "").includes("[backfillSessionIdentity] Failed to resolve sessionKey"),
       ),
     ).toBe(true);
   });

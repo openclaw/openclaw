@@ -1,4 +1,3 @@
-// Shared admission for OpenAI-compatible POST JSON endpoints.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   readJsonBodyOrError,
@@ -13,7 +12,6 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
-/** Returns a parsed body after authorizing an OpenAI-compatible request. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,

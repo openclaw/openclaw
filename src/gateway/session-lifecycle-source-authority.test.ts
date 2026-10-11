@@ -27,7 +27,7 @@ import {
   getAgentRunContext,
   readAgentRunDelegatedAuthorityFailure,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -81,7 +81,6 @@ async function recoveryFixture(name: string) {
     sessionId,
     lifecycleRevision: claim.lifecycleRevision,
     lifecycleRunId: runId,
-    status: "running",
     startedAt: 1_000,
     updatedAt: 1_000,
     restartRecoveryHarnessCompletion: claim,
@@ -115,7 +114,7 @@ async function recoveryFixture(name: string) {
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lifecycle-source", source);
   const admittedRunContext = await admission.admit("embedded");
   const writeContext = expectDefined(
-    captureAgentRunTerminalWriteContext(runId),
+    captureAgentRunTerminalPersistence(runId).writeContext,
     "The recovery must retain its exact delegated terminal writer",
   );
   const authority = expectDefined(
@@ -136,7 +135,13 @@ async function recoveryFixture(name: string) {
         sessionKey,
         agentId: "main",
         assertCommitAllowed: writeContext.assertCurrent,
-        event: { runId, sessionId, ts: 2_000, data: { phase: "start", startedAt: 2_000 } },
+        event: {
+          runId,
+          sessionId,
+          lifecycleGeneration: authority.lifecycleGeneration,
+          ts: 2_000,
+          data: { phase: "start", startedAt: 2_000 },
+        },
       }),
     finish: () =>
       owner.observe({
@@ -146,6 +151,7 @@ async function recoveryFixture(name: string) {
         event: {
           runId,
           sessionId,
+          lifecycleGeneration: authority.lifecycleGeneration,
           seq: 2,
           stream: "lifecycle",
           ts: 3_000,
@@ -213,10 +219,10 @@ it("refuses a changed same-store recovery source before lifecycle commit with th
       SessionWorkStartChangedError,
     );
     expect(loadSessionEntry(fixture.target)).toMatchObject({
-      status: "running",
       startedAt: 1_000,
       updatedAt: 1_000,
     });
+    expect(loadSessionEntry(fixture.target)?.status).toBeUndefined();
     expect(loadSessionEntry(fixture.target)?.endedAt).toBeUndefined();
   } finally {
     await fixture.close();
@@ -244,7 +250,7 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
           workerGuard: { source: fixture.source },
         }),
       ).resolves.toMatchObject({ label: "native cross-store write" });
-      expect(sql.queries.some((query) => /^update "session_nodes" set\b/i.test(query))).toBe(true);
+      expect(sql.queries).toContainEqual(expect.stringMatching(/^insert into "session_nodes" /i));
       // The statement execution observer distinguishes native work from worker-only writes.
       expect(sql.calls[4]).toHaveBeenCalled();
     } finally {
@@ -289,7 +295,6 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       startedAt: 1_000,
       lifecycleRunId: runId,
       activeWriterRunId: runId,
-      status: "running",
     });
     routing.loadSessionEntry.mockReturnValue({
       ...target,
@@ -354,6 +359,7 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
           event: {
             runId,
             sessionId,
+            lifecycleGeneration: fixture.authority.lifecycleGeneration,
             ts: 3_000,
             data: {
               phase: "end",

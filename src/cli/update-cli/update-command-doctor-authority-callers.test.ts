@@ -3,6 +3,7 @@ import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -175,19 +176,6 @@ function createResumingRun(params: Omit<Parameters<typeof createUpdateRun>[0], "
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
   vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
   return run;
-}
-
-function createMaintenance(finish: () => Promise<void> = async () => {}) {
-  return {
-    signal: new AbortController().signal,
-    run: <T>(operation: () => T) => operation(),
-    repairSqliteNoCow: async () => {},
-    enableSqliteReclamation: async () => {},
-    cleanupRetainedRuntimes: async () => {},
-    releaseState: vi.fn(async () => {}),
-    finish: vi.fn(finish),
-    release: vi.fn(async () => {}),
-  };
 }
 
 function firstRefusal() {
@@ -370,7 +358,7 @@ describe("unproved Doctor authority callers", () => {
           ? { kind: "data-at-risk", reason: "incomplete-migration" }
           : { kind: "deferred", reason: "coordinator-contention" },
       );
-      const maintenance = createMaintenance();
+      const maintenance = createDoctorMaintenanceFixture();
       vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async () => {
         if (boundary === "parent-admission" || unsafe) {
           throw refusal;
@@ -472,9 +460,11 @@ describe("unproved Doctor authority callers", () => {
       vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
       let restored = false;
       const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
-        createMaintenance(async () => {
-          await Promise.resolve();
-          restored = true;
+        createDoctorMaintenanceFixture({
+          finish: vi.fn(async () => {
+            await Promise.resolve();
+            restored = true;
+          }),
         }),
       );
       let phasePath: string | undefined;

@@ -16,11 +16,8 @@ export type UserProfile = Omit<
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 
-export type UserProfileDisplay = {
-  id: string;
-  displayName: string | null;
+export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" | "hasAvatar"> & {
   avatarRevision: string;
-  hasAvatar: boolean;
 };
 
 export type UserProfileAuthority = {
@@ -31,7 +28,15 @@ export type UserProfileAuthority = {
   display: UserProfileDisplay;
 };
 
+export type UserProfileRoleAuthority = Pick<
+  UserProfileAuthority,
+  "profileId" | "role" | "githubLogin"
+>;
+
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
+
+/** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */
+export type CachedGitHubIdentityBinding = { accountId: number; email: string } | { login: string };
 
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
@@ -109,10 +114,7 @@ export type UserProfileAccessFacts = Readonly<{
   githubLogin?: string | null;
 }>;
 
-export type UserProfileIdentity = {
-  profileId: string;
-  role: string | null;
-  githubLogin?: string | null;
+export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "display"> & {
   aliases: ReadonlySet<string>;
 };
 

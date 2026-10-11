@@ -5,7 +5,7 @@ import {
   applySessionEntryLifecycleMutation,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
-import { withSessionRegistryEntriesInWorker } from "./session-entry-read-runtime.js";
+import { withSessionRegistryEntriesInWorker } from "./session-entry-read-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { pruneStaleEntries } from "./store-maintenance.js";
@@ -13,8 +13,6 @@ import type { SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionRegistryMaintenanceStoreSummary = {
-  afterCount: number;
-  beforeCount: number;
   preservedRunning: number;
   pruned: number;
 };
@@ -50,12 +48,7 @@ function buildSessionRegistryPreserveKeys(params: {
   let preservedRunning = 0;
   for (const key of Object.keys(params.store)) {
     const jobId = parseCronRunSessionJobId(key);
-    if (!jobId) {
-      // This sweep owns only cron-run rows; all ordinary sessions are preserved.
-      preserveKeys.add(key);
-      continue;
-    }
-    if (params.runningCronJobIds.has(jobId)) {
+    if (jobId && params.runningCronJobIds.has(jobId)) {
       preserveKeys.add(key);
       preservedRunning += 1;
     }
@@ -69,7 +62,7 @@ function pruneSessionRegistryStore(params: {
   runningCronJobIds: ReadonlySet<string>;
   storePath: string;
   store: Record<string, SessionEntry>;
-}): Omit<SessionRegistryMaintenanceStoreSummary, "beforeCount"> {
+}): SessionRegistryMaintenanceStoreSummary {
   const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
     runningCronJobIds: params.runningCronJobIds,
     storePath: params.storePath,
@@ -89,7 +82,6 @@ function pruneSessionRegistryStore(params: {
     preserveKeys,
   });
   return {
-    afterCount: Object.keys(params.store).length,
     preservedRunning,
     pruned,
   };
@@ -108,8 +100,6 @@ export async function runSessionRegistryMaintenanceForStore(
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
   if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
     return {
-      beforeCount: 0,
-      afterCount: 0,
       preservedRunning: 0,
       pruned: 0,
     };
@@ -123,9 +113,7 @@ export async function runSessionRegistryMaintenanceForStore(
       };
       assertCurrent();
       const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const beforeCount = Object.keys(store).length;
       const removals: SessionEntryLifecycleRemoval[] = [];
-      // Preserved ordinary entries never reach pruning's in-place archive branch.
       const planned = pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
         removals: params.apply ? removals : undefined,
@@ -143,16 +131,11 @@ export async function runSessionRegistryMaintenanceForStore(
         });
         assertCurrent();
         return {
-          afterCount: mutation.afterCount,
-          beforeCount,
           preservedRunning: planned.preservedRunning,
           pruned: mutation.removedEntries,
         };
       }
-      return {
-        beforeCount,
-        ...planned,
-      };
+      return planned;
     },
   );
 }

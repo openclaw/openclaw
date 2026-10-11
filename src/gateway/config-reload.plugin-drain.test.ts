@@ -85,21 +85,14 @@ describe("plugin drain recovery", () => {
       ...initialConfig,
       plugins: { entries: { codex: codex("workspace-write") } },
     };
-    // This Gateway's Codex generation holds admitted work, as during a long agent turn, while
-    // another Gateway in the process owns the default registry with an idle Codex.
-    const registryOwners: ReturnType<typeof createPluginRegistryOwner>[] = [];
-    const [instance, otherGatewayInstance] = [0, 1].map(() => {
-      const builder = createTestPluginRegistry();
-      const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
-      builder.registry.plugins.push(record);
-      builder.createApi(record, { config: {} });
-      setActivePluginRegistry(builder.registry);
-      registryOwners.push(createPluginRegistryOwner(builder.registry));
-      const pluginInstance = getPluginInstance(record);
-      assert(pluginInstance);
-      return pluginInstance;
-    });
-    assert(instance && otherGatewayInstance !== instance);
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
+    builder.registry.plugins.push(record);
+    builder.createApi(record, { config: {} });
+    setActivePluginRegistry(builder.registry);
+    const registryOwner = createPluginRegistryOwner(builder.registry);
+    const instance = getPluginInstance(record);
+    assert(instance);
     const releaseWork = instance.retainWork();
     const cleanup = createDeferredCore();
     let cleanupCall: Promise<void> | undefined;
@@ -168,9 +161,7 @@ describe("plugin drain recovery", () => {
       releaseWork();
       cleanup.resolve();
       await cleanupCall;
-      for (const owner of registryOwners.toReversed()) {
-        await owner.close();
-      }
+      await registryOwner.close();
     }
   });
 

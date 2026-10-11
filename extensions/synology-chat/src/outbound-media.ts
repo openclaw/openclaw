@@ -53,11 +53,6 @@ export type SynologyHostedMediaUrl = string & {
   readonly [synologyHostedMediaUrlBrand]: true;
 };
 
-type PreparedSynologyHostedMedia = {
-  url: SynologyHostedMediaUrl;
-  cleanup: () => Promise<void>;
-};
-
 type ServedByteWindow = { startedAt: number; bytes: number };
 
 function createHostedMediaLimits() {
@@ -451,7 +446,7 @@ export async function prepareSynologyHostedMedia(params: {
   mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
-}): Promise<PreparedSynologyHostedMedia> {
+}) {
   const route = resolveSynologyHostedMediaRoute(params.account);
   // Capture limits after synchronizing the runtime; old work settles against
   // the same counter owner that admitted it, even after runtime replacement.

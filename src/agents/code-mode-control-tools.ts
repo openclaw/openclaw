@@ -1,7 +1,3 @@
-/**
- * Tags Code Mode exec/wait control tools and normalizes hook params for the
- * exec-compatible before-tool-call surface.
- */
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
@@ -12,7 +8,6 @@ export const CODE_MODE_WAIT_TOOL_NAME = "wait";
 const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
 type CodeModeExecToolInputKind = "javascript";
-/** Metadata attached to before-tool-call events for Code Mode exec. */
 type CodeModeExecHookMetadata = {
   toolKind: typeof CODE_MODE_EXEC_TOOL_KIND;
   toolInputKind?: CodeModeExecToolInputKind;
@@ -29,13 +24,11 @@ const codeModeExecDescriptionTargets = new WeakMap<
   { state: CodeModeExecDescriptionState; reference: WeakRef<CodeModeExecDescriptionTarget> }
 >();
 
-/** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
   codeModeControlTools.add(tool);
   return tool;
 }
 
-/** Replicate code-mode identity from an original tool object to a wrapper. */
 export function copyCodeModeControlToolIdentity(
   original: object,
   wrapper: CodeModeExecDescriptionTarget,
@@ -94,10 +87,6 @@ export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   );
 }
 
-export function isCodeModeExecToolKind(toolKind: unknown): boolean {
-  return toolKind === CODE_MODE_EXEC_TOOL_KIND;
-}
-
 export function resolveCodeModeExecToolInputKind(
   params: unknown,
 ): CodeModeExecToolInputKind | undefined {
@@ -124,7 +113,6 @@ function normalizeCodeModeExecParams(params: unknown): unknown {
   return params;
 }
 
-/** Build before-tool-call metadata for a marked code-mode exec tool. */
 export function getCodeModeExecBeforeHookMetadata(params: {
   tool: AnyAgentTool;
   params: unknown;
@@ -138,7 +126,6 @@ export function getCodeModeExecBeforeHookMetadata(params: {
   });
 }
 
-/** Build before-tool-call metadata when only the tool kind is available. */
 export function getCodeModeExecBeforeHookMetadataForToolKind(params: {
   toolKind: unknown;
   params: unknown;
@@ -153,7 +140,6 @@ export function getCodeModeExecBeforeHookMetadataForToolKind(params: {
   };
 }
 
-/** Normalize before-hook params for a marked code-mode exec tool. */
 export function normalizeCodeModeExecBeforeHookParams(params: {
   tool: AnyAgentTool;
   params: unknown;

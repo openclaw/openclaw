@@ -389,11 +389,6 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
       clearEnvironment: () => {},
       rotateCredential: () => true,
     },
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "cancelled by boundary fixture",
-    }),
   });
   workerService = environmentService;
   const dispatch = createWorkerPlacementDispatchService({

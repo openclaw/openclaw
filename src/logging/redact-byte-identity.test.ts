@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   redactLogRecordForTransport,
   redactModelVisibleToolPayloadText,
+  redactModelVisibleToolPayloadTextWithConfig,
+  redactSensitiveFieldValue,
   redactSensitiveText,
   redactToolPayloadText,
+  redactToolPayloadTextWithConfig,
 } from "./redact.js";
 
 // Recorded outputs from the pre-fix implementation (git HEAD before the boundary-leak fix)
@@ -44,5 +48,28 @@ it("redacts short texts byte-identically to the pre-fix implementation", () => {
     expect(JSON.stringify(redactLogRecordForTransport({ message: sample, level: "info" }))).toBe(
       logRecord,
     );
+  }
+});
+
+it("preserves baseline bytes across secret families, near misses, and ordered compositions", () => {
+  // Recorded from the untouched baseline named in the fixture, before prefilter changes.
+  // Hash the complete outputs together to keep the seven-mode corpus small without
+  // deriving expected values from the current implementation or storing masked duplicates.
+  // JSON escapes keep synthetic PEM markers out of repository bytes; parsing restores them.
+  const corpus = JSON.parse(
+    readFileSync(new URL("./redact-prefilter-fixture.json", import.meta.url), "utf8"),
+  ) as { cases: [name: string, input: string, sha256: string][] };
+  for (const [name, input, sha256] of corpus.cases) {
+    const text = restoreSchemes(input);
+    const outputs = [
+      redactSensitiveText(text),
+      redactSensitiveText(text, { mode: "tools" }),
+      redactSensitiveText(text, { mode: "off" }),
+      redactSensitiveFieldValue("content", text, { mode: "tools" }),
+      redactSensitiveFieldValue("token", text, { mode: "tools" }),
+      redactToolPayloadTextWithConfig(text, {}),
+      redactModelVisibleToolPayloadTextWithConfig(text, {}),
+    ];
+    expect(createHash("sha256").update(JSON.stringify(outputs)).digest("hex"), name).toBe(sha256);
   }
 });

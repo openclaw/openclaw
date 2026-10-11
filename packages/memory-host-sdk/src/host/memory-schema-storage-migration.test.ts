@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import { constants, DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
+import { trackSqliteStatementExecutions } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { decodeMemoryEmbedding, encodeMemoryEmbedding } from "./embedding-vector.js";
 import {
@@ -68,7 +71,134 @@ function snapshot(db: DatabaseSync) {
   };
 }
 
+function binaryDatabase(
+  location = ":memory:",
+  cacheTable = "memory_embedding_cache",
+  tracked = true,
+): DatabaseSync {
+  const db = tracked ? openNodeSqliteDatabase(location) : new DatabaseSync(location);
+  onTestFinished(() => db.close());
+  db.exec(MEMORY_INDEX_CHUNKS_SCHEMA_SQL + buildMemoryEmbeddingCacheSchema(cacheTable));
+  db.prepare(
+    `INSERT INTO memory_index_chunks
+       (chunk_rowid, id, path, start_line, end_line, hash, model, text, embedding, updated_at)
+       VALUES (7, 'chunk', 'memory/a.md', 1, 2, 'h', 'model', 'retained text', ?, 123)`,
+  ).run(encodeMemoryEmbedding([1, 2]));
+  db.prepare(
+    `INSERT INTO ${cacheTable}
+       (provider, model, provider_key, hash, embedding, dims, updated_at)
+       VALUES ('provider', 'model', 'key', 'h', ?, 2, 121)`,
+  ).run(encodeMemoryEmbedding([1, 2]));
+  return db;
+}
+
+function countStorageCatalogReads(db: DatabaseSync) {
+  return trackSqliteStatementExecutions(db, ["catalog"], (sql) =>
+    /^\s*SELECT\b[\s\S]*?\bFROM main\.sqlite_schema\s+WHERE type = 'table'\s+AND name NOT LIKE 'sqlite_%'/i.test(
+      sql,
+    )
+      ? "catalog"
+      : null,
+  );
+}
+
 describe("memory storage migration", () => {
+  it.each([
+    { label: "tracked transaction", tracked: true, transaction: true, reads: 1 },
+    { label: "standalone", tracked: true, transaction: false, reads: 2 },
+    { label: "untracked transaction", tracked: false, transaction: true, reads: 2 },
+    {
+      label: "custom cache transaction",
+      tracked: true,
+      transaction: true,
+      reads: 1,
+      cacheTable: "custom_cache",
+    },
+  ])("validates both storage tables with bounded catalog reads in $label", (testCase) => {
+    const cacheTable = testCase.cacheTable ?? "memory_embedding_cache";
+    const db = binaryDatabase(":memory:", cacheTable, testCase.tracked);
+    if (testCase.transaction) {
+      db.exec("BEGIN IMMEDIATE");
+    }
+    const reads = countStorageCatalogReads(db);
+    try {
+      migrateMemoryIndexStorage(db, { embeddingCacheTable: cacheTable });
+      expect(reads.counts.catalog).toBe(testCase.reads);
+      expect(db.prepare("SELECT chunk_rowid, text FROM memory_index_chunks").get()).toEqual({
+        chunk_rowid: 7,
+        text: "retained text",
+      });
+      expect(db.prepare(`SELECT dims, updated_at FROM ${cacheTable}`).get()).toEqual({
+        dims: 2,
+        updated_at: 121,
+      });
+      expect(db.prepare("SELECT total_changes() AS changes").get()).toEqual({ changes: 2 });
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("rereads storage contracts after local schema changes and rollback", () => {
+    const db = binaryDatabase();
+    db.exec("BEGIN IMMEDIATE");
+    migrateMemoryIndexStorage(db);
+    db.exec("CREATE UNIQUE INDEX local_cache_dims ON memory_embedding_cache(dims)");
+    expect(() => migrateMemoryIndexStorage(db)).toThrow(/unexpected unique index local_cache_dims/);
+    db.exec("ROLLBACK; BEGIN IMMEDIATE");
+    expect(() => migrateMemoryIndexStorage(db)).not.toThrow();
+    db.exec("ROLLBACK");
+  });
+
+  it("rereads storage contracts after a foreign schema commit", () => {
+    const location = path.join(tempDirs.make("memory-storage-catalog-"), "memory.sqlite");
+    const db = binaryDatabase(location);
+    db.exec("BEGIN IMMEDIATE");
+    migrateMemoryIndexStorage(db);
+    db.exec("COMMIT");
+    const foreign = new DatabaseSync(location);
+    try {
+      foreign.exec("CREATE UNIQUE INDEX foreign_cache_dims ON memory_embedding_cache(dims)");
+    } finally {
+      foreign.close();
+    }
+    db.exec("BEGIN IMMEDIATE");
+    expect(() => migrateMemoryIndexStorage(db)).toThrow(
+      /unexpected unique index foreign_cache_dims/,
+    );
+    db.exec("ROLLBACK");
+  });
+
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
+    "keeps both catalog reads under a changing authorizer",
+    () => {
+      const db = binaryDatabase();
+      db.exec("BEGIN IMMEDIATE");
+      let allow = true;
+      db.setAuthorizer((action, table, column) =>
+        !allow &&
+        action === constants.SQLITE_READ &&
+        (table === "sqlite_master" || table === "sqlite_schema") &&
+        column === "sql"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      const reads = countStorageCatalogReads(db);
+      try {
+        migrateMemoryIndexStorage(db);
+        expect(reads.counts.catalog).toBe(2);
+        allow = false;
+        expect(() => migrateMemoryIndexStorage(db)).toThrow(/prohibited|not authorized/i);
+        db.setAuthorizer(null);
+        reads.counts.catalog = 0;
+        migrateMemoryIndexStorage(db);
+        expect(reads.counts.catalog).toBe(1);
+      } finally {
+        db.setAuthorizer(null);
+        reads.restore();
+      }
+    },
+  );
+
   it("skips oversized and invalid cache rows visibly across three batches and reruns without writes", () => {
     const db = legacyDatabase();
     db.exec("DELETE FROM memory_embedding_cache");

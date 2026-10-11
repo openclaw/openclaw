@@ -260,8 +260,8 @@ agents may still use them.
 ## Host readiness
 
 Before registering the sandbox backend, the plugin runs the MXC executor's own
-host probe (`wxc-exec --probe`) and requires it to select an isolation tier
-(`base-container`, `appcontainer-bfs`, or `appcontainer-dacl`). It probes the
+host check (`wxc-exec --probe`) and requires it to select an isolation tier
+(`base-container`, `appcontainer-bfs`, or `appcontainer-dacl`). It checks the
 same executor it launches, including an `mxcBinaryPath` override. MXC's tier
 degradation warnings are logged but do not block activation. To inspect a host,
 run the executor directly:
@@ -274,7 +274,7 @@ Use `bin\arm64` on Arm64 hosts.
 
 An existing `mxcBinaryPath` override must point to an MXC 0.8.0-compatible
 executor that supports `--probe`. An older executor stops plugin activation;
-the plugin cannot safely infer readiness from a Windows service name or probe a
+the plugin cannot safely infer readiness from a Windows service name or check a
 different binary. If the override fails, run that exact executable with
 `--probe` to see its error. Update the override to a compatible executor, or
 remove it to use the `@microsoft/mxc-sdk@0.8.0` executor installed with the

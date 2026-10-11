@@ -1,4 +1,3 @@
-// Builds the gateway-visible combined session store across agent-specific stores.
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
@@ -191,15 +190,18 @@ function mergeOpenIncognitoStores(params: {
   modelSources: ReturnType<typeof createSessionModelSources>;
   projection: GatewaySessionEntryProjection;
   targets: ReadonlyArray<{ agentId: string; storePath: string }>;
+  readEntries?: (target: SessionStoreTarget) => SessionEntrySummary[];
 }): string[] {
   const storePaths: string[] = [];
   for (const target of params.targets) {
-    const store = loadGatewayStoreEntries({
-      agentId: target.agentId,
-      includeOpenDatabases: true,
-      projection: params.projection,
-      storePath: target.storePath,
-    });
+    const store =
+      params.readEntries?.(target) ??
+      loadGatewayStoreEntries({
+        agentId: target.agentId,
+        includeOpenDatabases: true,
+        projection: params.projection,
+        storePath: target.storePath,
+      });
     let merged = false;
     const addModelEntry = params.modelSources.prepareStore(target);
     const modelTarget = { agentId: target.agentId, storeTarget: target };
@@ -525,7 +527,6 @@ export function resolveGatewaySessionStoreTargets(
   };
 }
 
-/** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
 export type GatewayCombinedSessionStore = {
   diagnostics?: readonly string[];
   durableStorePath?: string;
@@ -555,6 +556,7 @@ export function mergeCombinedSessionStore(
   opts: GatewaySessionStoreOptions,
   prepared: ReturnType<typeof prepareCombinedSessionStore>,
   readEntries: (target: SessionStoreTarget) => SessionEntrySummary[],
+  incognitoEntries?: (target: SessionStoreTarget) => SessionEntrySummary[],
 ): GatewayCombinedSessionStore {
   const env = opts.discovery?.env;
   // Store-wide metadata reads must not materialize saved prompts for every row.
@@ -656,6 +658,7 @@ export function mergeCombinedSessionStore(
     modelSources,
     projection,
     targets: incognitoTargets,
+    readEntries: incognitoEntries,
   });
   if (configuredAgentIds) {
     filterCombinedStoreToConfiguredAgents({

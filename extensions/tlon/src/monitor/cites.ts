@@ -3,11 +3,8 @@ import {
   asNullableRecord as asRecord,
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { UrbitSSEClient } from "../urbit/sse-client.js";
 import { extractMessageText } from "./utils.js";
-
-type TlonScryApi = {
-  scry: (path: string) => Promise<unknown>;
-};
 
 // Citations arrive inside remote channel/DM content, so `nest` and `postId` are
 // attacker-controlled components of an authenticated Urbit scry path. Keep each one a
@@ -49,7 +46,7 @@ function buildCitedPostScryPath(nest: string, postId: string): string | null {
 
 export async function resolveTlonCitations(
   content: unknown,
-  api: TlonScryApi,
+  api: Pick<UrbitSSEClient, "scry">,
   runtime: RuntimeEnv,
 ): Promise<string> {
   if (!Array.isArray(content)) {

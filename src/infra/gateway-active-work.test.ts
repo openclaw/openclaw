@@ -8,6 +8,11 @@ import {
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
+import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -149,6 +154,24 @@ describe("waitForGatewayActiveWork", () => {
     }
   });
 
+  it("names the command lane holding queued work", async () => {
+    const lane = "session:shutdown-queued-owner";
+    setCommandLaneConcurrency(lane, 0);
+    const queued = enqueueCommandInLane(lane, async () => {});
+    const rejected = expect(queued).rejects.toThrow("cleared");
+    try {
+      const result = await waitForGatewayActiveWork(0);
+      expect(result.snapshot.blockers).toContainEqual({
+        kind: "queue",
+        count: 1,
+        message: `1 queued or active operation(s): ${lane} (active=0, queued=1)`,
+      });
+    } finally {
+      clearCommandLane(lane);
+      await rejected;
+    }
+  });
+
   it("publishes a separate recorded custody category through the suspension wire shape", () => {
     const release = beginLifecycleWriteCustody("migration");
     try {
@@ -179,6 +202,25 @@ describe("waitForGatewayActiveWork", () => {
       release();
     }
     expect(createGatewayActiveWorkSnapshot().writeCustody).toEqual([]);
+  });
+
+  it("bounds holder details without dropping blocker counts", () => {
+    const admissions = Array.from({ length: 10 }, (_, index) =>
+      tryBeginGatewayRootWorkAdmission(`request-${index}`),
+    );
+    try {
+      const snapshot = createGatewayActiveWorkSnapshot();
+      expect(snapshot.blockers).toContainEqual({
+        kind: "root-request",
+        count: 10,
+        message:
+          "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
+      });
+    } finally {
+      for (const admission of admissions) {
+        admission?.release();
+      }
+    }
   });
 
   it("does not mix default holders into an overridden root count", () => {

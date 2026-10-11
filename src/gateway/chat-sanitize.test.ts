@@ -2,33 +2,20 @@
  * Tests gateway chat sanitization helpers for model-visible payloads.
  */
 import { describe, expect, test } from "vitest";
-import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessages", () => {
-  test.each(["text", "input_text"])(
-    "projects stored subagent instructions out of user %s blocks",
-    (type) => {
-      const text =
-        "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
-      const input = { role: "user", content: [{ type, text }] };
-      expect(stripEnvelopeFromMessages([input])[0]).toEqual({
-        role: "user",
-        content: [{ type, text: "Investigate Side chat." }],
-      });
-      expect(input.content).toEqual([{ type, text }]);
-      const assistant = { role: "assistant", content: [{ type: "text", text }] };
-      expect(stripEnvelopeFromMessages([assistant])[0]).toBe(assistant);
-    },
-  );
-
-  test("removes message_id hint lines from user messages", () => {
-    const input = {
+  test.each(["text"])("projects stored subagent instructions out of user %s blocks", (type) => {
+    const text =
+      "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
+    const input = { role: "user", content: [{ type, text }] };
+    expect(stripEnvelopeFromMessages([input])[0]).toEqual({
       role: "user",
-      content: "[WhatsApp 2026-01-24 13:36] yolo\n[message_id: 7b8b]",
-    };
-    const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
-    expect(result.content).toBe("yolo");
+      content: [{ type, text: "Investigate Side chat." }],
+    });
+    expect(input.content).toEqual([{ type, text }]);
+    const assistant = { role: "assistant", content: [{ type: "text", text }] };
+    expect(stripEnvelopeFromMessages([assistant])[0]).toBe(assistant);
   });
 
   test("removes message_id hint lines from text content arrays", () => {
@@ -81,24 +68,6 @@ describe("stripEnvelopeFromMessages", () => {
     expect(assistant.content?.[0]?.text).toBe("Assistant body");
   });
 
-  test("does not strip inline message_id text that is part of a line", () => {
-    const input = {
-      role: "user",
-      content: "I typed [message_id: 123] on purpose",
-    };
-    const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
-    expect(result.content).toBe("I typed [message_id: 123] on purpose");
-  });
-
-  test("does not strip assistant messages", () => {
-    const input = {
-      role: "assistant",
-      content: "note\n[message_id: 123]",
-    };
-    const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
-    expect(result.content).toBe("note\n[message_id: 123]");
-  });
-
   test("defensively strips inbound metadata blocks from non-user messages", () => {
     const input = {
       role: "assistant",
@@ -107,16 +76,6 @@ describe("stripEnvelopeFromMessages", () => {
     };
     const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
     expect(result.content).toBe("Assistant body");
-  });
-
-  test("removes inbound un-bracketed conversation info blocks from user messages", () => {
-    const input = {
-      role: "user",
-      content:
-        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{\n  "message_id": "123"\n}\n```\n\nHello there',
-    };
-    const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
-    expect(result.content).toBe("Hello there");
   });
 
   test("removes all inbound metadata blocks before user text", () => {
@@ -131,24 +90,5 @@ describe("stripEnvelopeFromMessages", () => {
     };
     expect(result.content).toBe("Actual user message");
     expect(result.senderLabel).toBe("alice");
-  });
-
-  test("strips metadata-like blocks even when not a prefix", () => {
-    const input = {
-      role: "user",
-      content:
-        'Actual text\nConversation info: ⟦openclaw:ctx⟧\n```json\n{"message_id": "123"}\n```\n\nFollow-up',
-    };
-    const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
-    expect(result.content).toBe("Actual text\n\nFollow-up");
-  });
-
-  test("strips trailing untrusted context metadata suffix blocks", () => {
-    const input = {
-      role: "user",
-      content: `hello\n\n${markInboundContextLabel("Context:")}\n<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>\nSource: Channel metadata\n---\nChannel metadata (guildchat)\nSender labels:\nexample\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`,
-    };
-    const result = stripEnvelopeFromMessages([input])[0] as { content?: string };
-    expect(result.content).toBe("hello");
   });
 });

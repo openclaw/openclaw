@@ -1,15 +1,8 @@
-import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import {
-  createManagedUpdateRequesterContinuationAuthority,
-  UpdateRequesterRevokedError,
-} from "../../infra/update-requester-authority.js";
+import { createManagedUpdateRequesterContinuationAuthority } from "../../infra/update-requester-authority.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { defaultRuntime } from "../../runtime.js";
 import {
   captureTargetDatabaseSchemaContext,
   updateConfigSource,
@@ -25,11 +18,9 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 
-export type OwnedManagedUpdateContext = {
-  env: NodeJS.ProcessEnv;
-  configSnapshot: ConfigFileSnapshot;
-  pluginInstallRecords: Record<string, PluginInstallRecord>;
-};
+export type OwnedManagedUpdateContext = NonNullable<
+  Awaited<ReturnType<typeof captureOwnedManagedUpdateContext>>
+>;
 
 /** Resolve the service's selectors without reading or validating its configuration. */
 export function resolveOwnedManagedUpdatePreflightEnv(params: {
@@ -63,27 +54,11 @@ export async function captureOwnedManagedUpdatePreflightContext(
   return env ? captureTargetDatabaseSchemaContext(env, params) : undefined;
 }
 
-export async function revalidateUpdateDatabaseContext(
-  expected: Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>,
-) {
-  const current = await captureTargetDatabaseSchemaContext(expected.readEnv, {
-    legacyConfigPlan: expected.legacyConfigPlan,
-    configValidation: expected.configValidation,
-  });
-  const before = expected.configSnapshot;
-  if (!isDeepStrictEqual(updateConfigSource(before), updateConfigSource(current.configSnapshot))) {
-    defaultRuntime.error(
-      `Warning: Configuration changed during database admission at ${before.path}; continuing with the current configuration.`,
-    );
-  }
-  return current;
-}
-
 export async function captureOwnedManagedUpdateContext(params: {
   stopState: PreManagedServiceStop | undefined;
   processEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
-}): Promise<OwnedManagedUpdateContext | undefined> {
+}) {
   const stopState = params.stopState;
   if (stopState?.inspected !== true) {
     return undefined;
@@ -110,25 +85,18 @@ export async function readUpdateCandidateSource(
   legacyConfigPlan?: LegacyConfigUpdatePlan,
   options?: Pick<TargetDatabaseSchemaContextOptions, "configValidation">,
 ) {
-  if (legacyConfigPlan) {
-    const context = await captureTargetDatabaseSchemaContext(env, {
-      legacyConfigPlan,
-      ...options,
-    });
-    if (context.legacyConfigPlan) {
-      return {
-        config: context.config,
-        hash: hashConfigRaw(context.configSnapshot.raw),
-        source: updateConfigSource(context.configSnapshot),
-      };
-    }
-  }
-  const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-    readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-  );
+  const context = legacyConfigPlan
+    ? await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan, ...options })
+    : undefined;
+  const snapshot = context?.legacyConfigPlan
+    ? context.configSnapshot
+    : await withOwnedManagedUpdateEnv(env, () =>
+        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+      );
   return {
-    config:
-      options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
+    config: context?.legacyConfigPlan
+      ? context.config
+      : options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
         ? snapshot.sourceConfig
         : snapshot.config,
     hash: hashConfigRaw(snapshot.raw),
@@ -149,26 +117,14 @@ export async function admitUpdateRequesterContinuation(
     return;
   }
   const runId = run.runId;
-  const previousFence = run.executorFence;
   const fence = await executor.enter(root, { preflight: true, serviceRoot });
-  const assertRunCurrent = () => {
-    if (
-      run.runId !== runId ||
-      run.requesterAuthority !== original ||
-      run.executorFence !== previousFence ||
-      (previousFence && previousFence !== fence)
-    ) {
-      throw new UpdateRequesterRevokedError();
-    }
-    fence.assertCurrent();
-  };
-  assertRunCurrent();
+  fence.assertCurrent();
   const continued = await createManagedUpdateRequesterContinuationAuthority(
     requester,
     { runId, executor: fence },
     run.env,
   );
-  assertRunCurrent();
+  fence.assertCurrent();
   run.requesterAuthority = continued;
   run.executorFence = fence;
 }

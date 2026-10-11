@@ -12,7 +12,10 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
-async function resolveCandidateNode(env: NodeJS.ProcessEnv, engine: string | null) {
+async function resolveCandidateNode(
+  env: NodeJS.ProcessEnv,
+  acceptNodeVersion: (version: string | null) => boolean,
+) {
   let firstAvailable: Awaited<ReturnType<typeof resolveSystemNodeInfo>> = null;
   const directories = (resolveEnvironmentValue(env, "PATH") ?? "")
     .split(path.delimiter)
@@ -23,20 +26,13 @@ async function resolveCandidateNode(env: NodeJS.ProcessEnv, engine: string | nul
       continue;
     }
     const runtime = { ...(await resolveNodeRuntimeInfo(executable, env)), path: executable };
-    if (
-      runtime.status === "supported" &&
-      nodeVersionSatisfiesEngine(runtime.version, engine) !== false
-    ) {
+    if (runtime.status === "supported" && acceptNodeVersion(runtime.version)) {
       return runtime;
     }
     firstAvailable ??= runtime;
   }
-  const systemNode = await resolveSystemNodeInfo({
-    env,
-    acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) !== false,
-  });
-  return systemNode?.status === "supported" &&
-    nodeVersionSatisfiesEngine(systemNode.version, engine) !== false
+  const systemNode = await resolveSystemNodeInfo({ env, acceptNodeVersion });
+  return systemNode?.status === "supported" && acceptNodeVersion(systemNode.version)
     ? systemNode
     : (firstAvailable ?? systemNode);
 }
@@ -54,6 +50,8 @@ export async function prepareGitCandidateNodeRuntime(
     }),
   );
   const engine = normalizeNullableString(asNullableRecord(manifest?.engines)?.node);
+  const acceptNodeVersion = (version: string | null) =>
+    nodeVersionSatisfiesEngine(version, engine) !== false;
   let currentVersion = process.versions.node;
   let currentPath = process.execPath;
   let capabilityError = process.versions.bun
@@ -66,11 +64,11 @@ export async function prepareGitCandidateNodeRuntime(
     (mode === "package-tooling" &&
       path.basename(currentPath) !== (process.platform === "win32" ? "node.exe" : "node") &&
       !capabilityError &&
-      nodeVersionSatisfiesEngine(currentVersion, engine) !== false)
+      acceptNodeVersion(currentVersion))
   ) {
     // Tooling follows the updater's PATH, which can contain an operator-managed
     // Node outside daemon installation paths. Bun's emulated Node version is not proof.
-    systemNode = await resolveCandidateNode(env, engine);
+    systemNode = await resolveCandidateNode(env, acceptNodeVersion);
     currentPath = systemNode?.path ?? "system Node";
     currentVersion =
       systemNode?.status === "supported" || systemNode?.status === "unsupported"
@@ -87,7 +85,7 @@ export async function prepareGitCandidateNodeRuntime(
               "Node requires WAL-reset-safe SQLite.")
             : null;
   }
-  if (!capabilityError && nodeVersionSatisfiesEngine(currentVersion, engine) !== false) {
+  if (!capabilityError && acceptNodeVersion(currentVersion)) {
     const pathKey =
       Object.keys(env)
         .toSorted()
@@ -116,17 +114,11 @@ export async function prepareGitCandidateNodeRuntime(
     };
   }
 
-  systemNode ??= await resolveSystemNodeInfo({
-    env,
-    acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) !== false,
-  });
+  systemNode ??= await resolveSystemNodeInfo({ env, acceptNodeVersion });
   let systemDiagnostic: string;
   if (systemNode?.status === "probe-failed") {
-    systemDiagnostic = `System Node compatibility remains unknown because its probe failed: ${systemNode.error.message}`;
-  } else if (
-    systemNode?.status === "supported" &&
-    nodeVersionSatisfiesEngine(systemNode.version, engine) !== false
-  ) {
+    systemDiagnostic = `System Node compatibility remains unknown because its check failed: ${systemNode.error.message}`;
+  } else if (systemNode?.status === "supported" && acceptNodeVersion(systemNode.version)) {
     systemDiagnostic =
       "OpenClaw did not select or activate another runtime. " +
       `Existing compatible Node ${systemNode.version}: ${systemNode.path}`;

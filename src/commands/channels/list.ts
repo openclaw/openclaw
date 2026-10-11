@@ -157,65 +157,39 @@ export async function channelsListCommand(
   // the manifest snapshot above because no plugin projection exists for them.
   const isInstalled = (channelId: string): boolean => installedByChannelId.get(channelId) ?? true;
 
-  type AccountLineSource = {
-    plugin: ChannelPlugin;
-    snapshot: ChannelAccountSnapshot;
-    installed: boolean;
-  };
-  const accountLines: AccountLineSource[] = [];
+  const accountLines: Parameters<typeof formatAccountLine>[0][] = [];
   const accountIdsByPlugin = new Map(
     plugins.map((plugin) => [plugin.id, plugin.config.listAccountIds(cfg) ?? []]),
   );
-  const renderedChannelIds = new Set(
-    plugins
-      .filter(
-        (plugin) =>
-          (accountIdsByPlugin.get(plugin.id)?.length ?? 0) > 0 ||
-          (showAll && isChannelVisibleInConfiguredLists(plugin.meta)),
-      )
-      .map((plugin) => plugin.id),
+  const renderedPlugins = plugins.filter(
+    (plugin) =>
+      (accountIdsByPlugin.get(plugin.id)?.length ?? 0) > 0 ||
+      (showAll && isChannelVisibleInConfiguredLists(plugin.meta)),
   );
+  const renderedChannelIds = new Set(renderedPlugins.map((plugin) => plugin.id));
 
-  for (const plugin of opts.json ? [] : plugins) {
+  for (const plugin of opts.json ? [] : renderedPlugins) {
     const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
+    let rows: Array<{ snapshot: ChannelAccountSnapshot }>;
     if (accountIds.length > 0) {
       const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
-      const rows = await resolveChannelAccountStatusRows({
+      rows = await resolveChannelAccountStatusRows({
         localAccountIds: accountIds,
         runtimeAccounts,
         resolveLocalSnapshot: (accountId) =>
           resolveChannelAccountSnapshot({ plugin, cfg, accountId }),
       });
-      for (const row of rows) {
-        accountLines.push({
-          plugin,
-          snapshot: row.snapshot,
-          installed: isInstalled(plugin.id),
-        });
-      }
-      continue;
+    } else {
+      // Unconfigured --all rows still inspect the default account before applying runtime facts.
+      const snapshot = await resolveChannelAccountSnapshot({ plugin, cfg, accountId: "default" });
+      const runtimeSnapshot = runtimeAccountsByChannel
+        .get(plugin.id)
+        ?.find((account) => account.accountId === "default");
+      rows = [{ snapshot: runtimeSnapshot ?? snapshot }];
     }
-    if (!showAll || !isChannelVisibleInConfiguredLists(plugin.meta)) {
-      continue;
+    for (const { snapshot } of rows) {
+      accountLines.push({ plugin, snapshot, installed: isInstalled(plugin.id) });
     }
-    // --all: surface installed-but-unconfigured plugins (bundled, or
-    // catalog plugins that already landed on disk) so users can see the
-    // full set of channels they could enable without first running
-    // `channels add`. Use the channel's default account so the snapshot
-    // can reflect "not configured / not enabled" state.
-    const snapshot = await resolveChannelAccountSnapshot({
-      plugin,
-      cfg,
-      accountId: "default",
-    });
-    const runtimeSnapshot = runtimeAccountsByChannel
-      .get(plugin.id)
-      ?.find((account) => account.accountId === "default");
-    accountLines.push({
-      plugin,
-      snapshot: runtimeSnapshot ?? snapshot,
-      installed: isInstalled(plugin.id),
-    });
   }
 
   // --all includes installed and installable catalog-only channels; ordinary lists
@@ -251,7 +225,7 @@ export async function channelsListCommand(
     };
     const chat: Record<string, JsonChannelEntry> = {};
     const catalogById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
-    for (const plugin of plugins) {
+    for (const plugin of renderedPlugins) {
       const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
       const installed = isInstalled(plugin.id);
       const catalog = catalogById.get(plugin.id);
@@ -259,14 +233,12 @@ export async function channelsListCommand(
         label: catalog?.meta.label ?? plugin.meta.label,
         ...(catalog?.officialDocsPath ? { docsPath: catalog.officialDocsPath } : {}),
       };
-      if (accountIds.length > 0 || (showAll && isChannelVisibleInConfiguredLists(plugin.meta))) {
-        chat[plugin.id] = {
-          accounts: accountIds,
-          ...metadata,
-          installed,
-          origin: accountIds.length > 0 ? "configured" : "available",
-        };
-      }
+      chat[plugin.id] = {
+        accounts: accountIds,
+        ...metadata,
+        installed,
+        origin: accountIds.length > 0 ? "configured" : "available",
+      };
     }
     for (const line of catalogOnlyLines) {
       chat[line.entry.id] = {

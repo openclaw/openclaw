@@ -7,14 +7,7 @@ const X_STREAM_HEADROOM_MICRO_USD = 500_000;
 const MICRO_USD = 1_000_000;
 const RETENTION_MS = 70 * 24 * 60 * 60_000;
 
-export type XSpendStatus = {
-  dayUsd: number;
-  cycleUsd: number;
-  dailyLimitUsd: number;
-  monthlyLimitUsd: number;
-  cycleStart: string;
-  exhaustedUntil?: string;
-};
+export type XSpendStatus = Awaited<ReturnType<XSpend["status"]>>;
 
 // Shared owners can outlive a module copy; their errors must retain instanceof identity.
 export const XBudgetExceededError = resolveGlobalSingleton(
@@ -303,7 +296,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
       });
     },
     status: () =>
-      serialized(async (): Promise<XSpendStatus> => {
+      serialized(async () => {
         const view = await snapshot();
         const exhausted = updateNotice(view);
         const dollars = (amount: number) => Math.round(amount / 10_000) / 100;

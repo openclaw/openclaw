@@ -19,7 +19,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
-  resolveDeletedAgentIdFromSessionKey,
+  prepareDeletedAgentSessionCheck,
 } from "../session-utils.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -76,16 +76,15 @@ async function createAgentMainSessionForSend(
     "sessions.create handler",
   )(createOptions);
 
-  if (!createResult) {
+  if (!createResult?.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    };
-  }
-  if (!createResult.ok) {
-    return {
-      ok: false,
-      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+      error:
+        createResult?.error ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          createResult ? "failed to create session" : "sessions.create did not respond",
+        ),
     };
   }
 
@@ -127,10 +126,19 @@ async function handleSessionSend(
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const sessionAuthorization = options.sessionMutationAuthorization;
+  const deletedAgent = prepareDeletedAgentSessionCheck({
+    cfg,
+    sessionKey: canonicalKey,
+    entry,
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
+    assertCurrent: requestAuthority.assertPreparationCurrent,
   });
+  const deletedAgentId = deletedAgent instanceof Promise ? await deletedAgent : deletedAgent;
+  if (deletedAgent instanceof Promise) {
+    requestAuthority.assertPreparationCurrent();
+  }
   if (deletedAgentId !== null) {
     options.respond(
       false,
@@ -145,8 +153,6 @@ async function handleSessionSend(
   const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
-  const requestAuthority = readGatewayRequestMutationAuthority(options);
-  const sessionAuthorization = options.sessionMutationAuthorization;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
     const forwarded = bindGatewayRequestHandlerMutationAuthority(
       options,

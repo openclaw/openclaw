@@ -1,4 +1,6 @@
 // Matrix tests cover client bootstrap plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
@@ -15,6 +17,12 @@ const {
 } = matrixClientResolverMocks;
 
 const TEST_CFG = {};
+const captureAuthority = vi.hoisted(() => vi.fn<() => (() => void) | undefined>(() => undefined));
+
+// mock-isolation: Supply the caller assertion without starting host/network runtime.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  captureChannelReadAuthority: captureAuthority,
+}));
 
 vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
@@ -36,6 +44,7 @@ describe("client bootstrap", () => {
 
   beforeEach(() => {
     primeMatrixClientResolverMocks({ resolved: {} });
+    captureAuthority.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -143,5 +152,54 @@ describe("client bootstrap", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
     expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it("settles accepted crypto persistence before refusing a revoked caller's result", async () => {
+    const persistenceEntered = createDeferred<void>();
+    const persist = createDeferred<void>();
+    const events: string[] = [];
+    let current = true;
+    captureAuthority.mockReturnValue(() => {
+      if (!current) {
+        throw new Error("fixture caller revoked");
+      }
+    });
+    sharedLeaseReleaseMock.mockImplementationOnce(async () => {
+      persistenceEntered.resolve();
+      await persist.promise;
+      events.push("crypto persisted");
+    });
+    let settled = false;
+    const operation = withResolvedRuntimeMatrixClient(
+      { cfg: TEST_CFG, accountId: "default", readiness: "none" },
+      async () => {
+        current = false;
+        return "must not disclose";
+      },
+      "persist",
+    ).then(
+      () => {
+        throw new Error("Revoked result escaped");
+      },
+      (error: unknown) => {
+        settled = true;
+        events.push("request rejected");
+        return error;
+      },
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        persistenceEntered.promise,
+        operation,
+        "Persistence did not begin",
+      );
+      expect(settled).toBe(false);
+      expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
+    } finally {
+      persist.resolve();
+      await Promise.allSettled([operation]);
+    }
+    expect(await operation).toMatchObject({ message: "fixture caller revoked" });
+    expect(events).toEqual(["crypto persisted", "request rejected"]);
   });
 });

@@ -30,6 +30,71 @@ describe("runMessageAction plugin dispatch", () => {
   });
   describe("alias-based plugin action dispatch", () => {
     useActionHubPluginFixture();
+    it("mirrors an inherited reply through its canonical root", async () => {
+      const sessionKey = "agent:main:forum:channel:123:thread:root-42";
+      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+        sessionKey,
+        baseSessionKey: "base",
+        peer: { id: "123", kind: "channel" },
+        chatType: "channel",
+        from: "forum:123",
+        to: "forum:123",
+        threadId: "root-42",
+      });
+      setTestPlugin(
+        createGatewayActionPlugin({
+          pluginId: "forum",
+          label: "Forum",
+          blurb: "Thread routing test plugin.",
+          actions: ["send"],
+          gatewayActions: [],
+          messaging: { targetResolver: { looksLikeId: () => true } },
+          threading: {
+            resolveAutoThreadId: ({ replyToId }) => (replyToId ? undefined : "root-42"),
+            resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
+              replyToId: replyToIsExplicit || threadId == null ? replyToId : String(threadId),
+              threadId: threadId ?? null,
+            }),
+          },
+          handleAction: vi.fn(async () => jsonResult({ ok: true })),
+        }),
+        "forum",
+      );
+      mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
+
+      await runMessageAction({
+        cfg: createEnabledMessageActionConfig("forum"),
+        action: "send",
+        params: { channel: "forum", target: "forum:123", message: "Reply" },
+        agentId: "main",
+        toolContext: {
+          currentChannelId: "forum:123",
+          currentChannelProvider: "forum",
+          currentMessageId: "child-777",
+          currentThreadTs: "42",
+          replyToMode: "all",
+        },
+      });
+
+      expect(resolveOutboundSessionRoute).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ replyToId: "root-42", threadId: "root-42" }),
+      );
+      expect(mocks.executeSendAction).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          reply: { replyToId: "root-42", source: "implicit", mode: "all" },
+          threadId: "root-42",
+          ctx: expect.objectContaining({
+            params: expect.objectContaining({
+              replyTo: "root-42",
+              threadId: "root-42",
+              __sessionKey: sessionKey,
+              __agentId: "main",
+            }),
+            mirror: expect.objectContaining({ sessionKey }),
+          }),
+        }),
+      );
+    });
     it.each([
       {
         name: "suppressed",
@@ -643,16 +708,13 @@ describe("runMessageAction plugin dispatch", () => {
         handledBy: "core",
         payload: { ok: true },
       });
-      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
-        resolvedThreadId: undefined,
-        outboundRoute: {
-          sessionKey: "agent:main:cardchat:channel:test-card",
-          baseSessionKey: "agent:main:cardchat:channel:test-card",
-          peer: { kind: "channel", id: "test-card" },
-          chatType: "channel",
-          from: "cardchat:channel:test-card",
-          to: "channel:test-card",
-        },
+      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+        sessionKey: "agent:main:cardchat:channel:test-card",
+        baseSessionKey: "agent:main:cardchat:channel:test-card",
+        peer: { kind: "channel", id: "test-card" },
+        chatType: "channel",
+        from: "cardchat:channel:test-card",
+        to: "channel:test-card",
       });
       setTestPlugin(
         {

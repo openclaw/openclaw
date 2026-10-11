@@ -15,8 +15,8 @@ enum ExecShellWrapperParser {
         case powershell
     }
 
-    private static let posixInlineFlags = Set(["-lc", "-c", "--command"])
-    private static let powershellInlineFlags = Set(["-c", "-command", "--command"])
+    static let posixInlineFlags = Set(["-lc", "-c", "--command"])
+    static let powershellInlineFlags = Set(["-c", "-command", "--command"])
 
     private static func kind(for name: String) -> Kind? {
         switch name {
@@ -161,10 +161,11 @@ enum ExecShellWrapperParser {
         }
     }
 
-    private static func extractCmdInlineCommand(_ command: [String]) -> String? {
-        guard let idx = command
-            .firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "/c" })
-        else {
+    static func extractCmdInlineCommand(_ command: [String], allowKeepAlive: Bool = false) -> String? {
+        guard let idx = command.firstIndex(where: {
+            let token = $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return token == "/c" || (allowKeepAlive && token == "/k")
+        }) else {
             return nil
         }
         let tail = command.suffix(from: command.index(after: idx)).joined(separator: " ")

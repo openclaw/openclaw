@@ -61,7 +61,7 @@ export type MediaUnderstandingDecision = {
   attachments: MediaUnderstandingAttachmentDecision[];
   // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
   // inbound-reply dispatch and may hold legacy decision literals. Core producers
-  // (runner, apply-capability, runtime) always populate it; absence renders no
+  // (runner, apply, runtime) always populate it; absence renders no
   // markers rather than breaking plugin compilation.
   attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
   // CLI/provider completion is independent of usable output or a rendered marker.
@@ -79,10 +79,7 @@ export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
   query?: Record<string, string | number | boolean>;
 };
 
-type MediaUnderstandingProviderRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
+type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {
   /** Compatibility field for existing providers; prefer auth.kind/apiKey. */
   apiKey: string;
   auth?: MediaUnderstandingProviderRequestAuth;
@@ -159,22 +156,16 @@ export type StructuredExtractionInput =
   | StructuredExtractionTextInput
   | StructuredExtractionImageInput;
 
-export type StructuredExtractionRequest = {
+export type StructuredExtractionRequest = Omit<
+  ImagesDescriptionRequest,
+  "images" | "prompt" | "maxTokens" | "agentId" | "workspaceDir" | "preparedModelRuntime"
+> & {
   /** Image-first extraction input; callers must include at least one image. */
   input: StructuredExtractionInput[];
   instructions: string;
   schemaName?: string;
   jsonSchema?: unknown;
   jsonMode?: boolean;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  profile?: string;
-  preferredProfile?: string;
-  authStore?: AuthProfileStore;
-  agentDir: string;
-  cfg: OpenClawConfig;
-  model: string;
-  provider: string;
 };
 
 export type StructuredExtractionResult = {

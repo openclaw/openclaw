@@ -34,6 +34,7 @@ export type ControlUiSessionPrTarget = {
   readSource: { agentId: string; path: string };
   source: string | GitCheckoutContext | null;
   githubHost?: string;
+  refreshIndex?: boolean;
   assertCurrent?: () => void;
 };
 
@@ -86,6 +87,7 @@ export function resolveControlUiSessionPrTarget(
       githubHost,
     ]),
     source,
+    refreshIndex: Boolean(entry.worktree && !entry.repositoryWorkspaceId),
   };
 }
 

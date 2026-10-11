@@ -47,7 +47,6 @@ export const WorkerProcessObservationRequestSchema = workerProtocolObject({
   ...binding,
   operation,
 });
-export type WorkerProcessObservationRequest = z.infer<typeof WorkerProcessObservationRequestSchema>;
 export const WorkerProcessObservationResultSchema = workerProtocolObject({
   type: z.literal("process-result"),
   requestId: identifier("requestId"),

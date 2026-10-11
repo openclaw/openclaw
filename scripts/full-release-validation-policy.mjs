@@ -15,6 +15,7 @@ import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
 import {
+  FULL_RELEASE_CHILD_EVIDENCE_JOB,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
 } from "./lib/full-release-evidence.mjs";
@@ -25,6 +26,7 @@ import {
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact, buildReleaseValidationManifest };
@@ -122,17 +124,19 @@ export function isSplitChangelogEvidenceDelta(paths, version) {
   try {
     const targetVersion = version.replace(/^v/u, "");
     const parsedVersion = parseReleaseVersion(targetVersion);
-    // Beta release notes and contribution records use the stable base section.
-    const sectionVersion =
-      parsedVersion?.channel === "beta" && parsedVersion.version === targetVersion
-        ? parsedVersion.baseVersion
-        : version;
-    return (
-      Array.isArray(paths) &&
-      paths.length > 0 &&
-      new Set(paths).size === paths.length &&
-      paths.includes(changelogEntryPath(sectionVersion)) &&
-      paths.every((name) => isReleaseChangelogPath(name, { version: sectionVersion }))
+    // Historical beta receipts selected the base section; new beta receipts
+    // may select their exact delta. A receipt still binds only one section.
+    const versions = [targetVersion];
+    if (parsedVersion?.channel === "beta") {
+      versions.push(parsedVersion.baseVersion);
+    }
+    return versions.some(
+      (sectionVersion) =>
+        Array.isArray(paths) &&
+        paths.length > 0 &&
+        new Set(paths).size === paths.length &&
+        paths.includes(changelogEntryPath(sectionVersion)) &&
+        paths.every((name) => isReleaseChangelogPath(name, { version: sectionVersion })),
     );
   } catch {
     return false;
@@ -185,7 +189,7 @@ const HARD_GH_TRANSPORT_PATTERN =
 const RATE_LIMITED_403_PATTERN =
   /HTTP 403\b[\s\S]*(?:rate limit|abuse detection)|(?:rate limit|abuse detection)[\s\S]*HTTP 403\b/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
-  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|timed out|\btimeout\b|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
+  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|timed out|\btimeout\b|network is unreachable|unexpected EOF|stream error: stream ID \d+; CANCEL; received from peer|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
 const RELEASE_GH_ARTIFACT_MISSING_LINE_PATTERN =
   /^(?:no valid artifacts found(?: to download)?|no artifact matches any of the names(?: or patterns)? provided|could not find any artifacts|artifact .+ not found)$/iu;
 const RELEASE_GH_ARTIFACT_CONTENT_ERROR_PATTERN =
@@ -380,9 +384,34 @@ function releaseGhTransportErrorText(error) {
   return parts.join("\n");
 }
 
+export function releaseGhRateLimitRetryAt(error, now = Date.now(), failures = 0) {
+  // gh retains successful pages before the failed response. Its final frame owns
+  // the throttle deadline; earlier quota headers must not override that failure.
+  const output = String(error?.stdout ?? "");
+  const response = parseGithubResponse(
+    output.split(/(?=^HTTP\/\d+(?:\.\d+)? [1-5]\d{2}\b)/mu).at(-1),
+  );
+  const text = releaseGhTransportErrorText(error);
+  const limited =
+    response.status === "429" ||
+    (response.status === "403" &&
+      (response.remaining === 0 || response.retryAfter !== undefined)) ||
+    RATE_LIMITED_403_PATTERN.test(text) ||
+    /HTTP 429\b|secondary rate limit|API rate limit|abuse detection/iu.test(text);
+  if (!limited || (response.status && !["403", "429"].includes(response.status))) {
+    return undefined;
+  }
+  const reset = response.remaining === 0 ? Date.parse(response.resetUtc) : Number.NaN;
+  const delay =
+    response.retryAfter === undefined
+      ? Math.min(60_000 * 2 ** failures, 15 * 60_000)
+      : response.retryAfter * 1000;
+  return Math.max(now + delay, Number.isFinite(reset) ? reset : 0);
+}
+
 export function classifyReleaseGhTransportError(error) {
   const text = releaseGhTransportErrorText(error);
-  if (RATE_LIMITED_403_PATTERN.test(text)) {
+  if (releaseGhRateLimitRetryAt(error) !== undefined) {
     return "transient";
   }
   if (HARD_GH_TRANSPORT_PATTERN.test(text)) {
@@ -675,16 +704,15 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     }
     const names = new Set();
     const completedNames = new Set(
-      expectedAttempt < effectiveRunAttempt
-        ? attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name)
-        : [],
+      attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Skipped jobs and GitHub's runnerless, stepless queued rerun copies (beside a
-      // completed sibling in a superseded attempt) never executed, so they carry no
-      // evidence. Drop them before identity checks because such copies may collide.
-      const ghost = job.status === "queued" && !rawJob.runner_name && rawJob.steps?.length === 0;
+      // Skipped jobs and GitHub's runnerless queued rerun copies (beside a completed
+      // sibling in the same attempt) carry no independent evidence. GitHub may
+      // mirror the completed sibling's steps onto these copies, so runner identity is
+      // the stable discriminator. Drop them before identity checks because they collide.
+      const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && completedNames.has(job.name))) {
         continue;
@@ -809,8 +837,6 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
   switch (spec.key) {
     case "npmTelegram":
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
-    case "pluginPrereleaseCandidate":
-      return spec.rerunGroups.includes(input.rerunGroup);
     case "releaseChecksCandidate":
       return (
         ["all", "cross-os", "package"].includes(input.rerunGroup) ||
@@ -1477,7 +1503,6 @@ export function terminalPolicyPass(child) {
   return child.status === "completed" && child.conclusion === "success" && failures.length === 0;
 }
 
-/** Choose the single GitHub rerun request that can repair a terminal child's blocking jobs. */
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = jobs
     .filter(isFailedJob)
@@ -1485,6 +1510,11 @@ export function planReleaseChildRerun({ childKey, jobs }) {
     .toSorted();
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
+  }
+  // Receipt publication is best-effort at the workflow boundary. A green child
+  // can therefore need only this failed metadata job, never its passing workloads.
+  if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
+    return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
   }
   // These consumers bind their producer's artifact to the current run attempt, so a
   // failed-jobs rerun that leaves the green producer behind stays red (#161317).

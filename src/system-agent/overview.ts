@@ -1,5 +1,4 @@
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-// OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
 import { listAgentEntries } from "../agents/agent-scope.js";
 import {
   OPENCLAW_DOCS_URL,
@@ -15,7 +14,6 @@ import {
   readConfigFileSnapshot,
   resolveConfigPath,
   resolveGatewayPort,
-  type ConfigFileSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -68,13 +66,6 @@ export type SystemAgentOverview = {
     sourceUrl: string;
   };
 };
-
-function issueMessages(snapshot: ConfigFileSnapshot): string[] {
-  return snapshot.issues.map((issue) => {
-    const path = issue.path ? `${issue.path}: ` : "";
-    return `${path}${issue.message}`;
-  });
-}
 
 function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): SystemAgentSummary[] {
   const entries = listAgentEntries(cfg);
@@ -163,7 +154,9 @@ export async function loadSystemAgentOverview(
       path: configPath,
       exists: snapshot.exists,
       valid: snapshot.valid,
-      issues: issueMessages(snapshot),
+      issues: snapshot.issues.map(
+        (issue) => `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
+      ),
       hash: snapshot.hash ?? null,
     },
     agents: buildAgentSummaries(cfg, defaultAgentId),
@@ -336,7 +329,7 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
     `Config: ${configStatus}. Default agent: ${agentLabel}.`,
     overview.gateway.reachable
       ? `Gateway: reachable at ${overview.gateway.url}.`
-      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`,
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first check.`,
     formatStartupAction(overview),
   ]
     .filter((line): line is string => line !== undefined)

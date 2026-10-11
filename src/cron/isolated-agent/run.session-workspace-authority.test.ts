@@ -10,7 +10,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.js";
+import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.test-support.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -228,6 +228,11 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
         }
         const result = await read.execute("scheduled-read", { path: "sentinel.txt" });
         reads.push(JSON.stringify(result));
+        if (worktree) {
+          await expect(
+            read.execute("outside", { path: path.join(foreignWorkspace, "sentinel.txt") }),
+          ).rejects.toThrow(/outside|escapes sandbox root/i);
+        }
         return { payloads: [{ text: "Read complete" }], meta: { agentMeta: {} } };
       });
     });

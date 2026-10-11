@@ -54,11 +54,7 @@ interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 export const streamAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   AzureOpenAIResponsesOptions
-> = (
-  model: Model<"azure-openai-responses">,
-  context: Context,
-  options?: AzureOpenAIResponsesOptions,
-) => {
+> = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model, "azure-openai-responses");
 
@@ -91,7 +87,7 @@ export const streamAzureOpenAIResponses: StreamFunction<
 export const streamSimpleAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   SimpleStreamOptions
-> = (model: Model<"azure-openai-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);

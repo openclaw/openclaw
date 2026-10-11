@@ -21,7 +21,11 @@ const state = await setupAgentRunnerExecutionTestState();
 it("announces a remote native run before its worker starts writing replies", async () => {
   const { executeAgentTurn } = await import("./agent-runner-execution.js");
   const onAgentRunStart = vi.fn();
-  const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
+  const finishObservation = vi.fn(() => {
+    throw new Error("synthetic timing sink failure");
+  });
+  const turn = createMinimalRunAgentTurnParams();
+  turn.opts = { onAgentRunStart, onTranscriptStartPreparation: () => finishObservation };
   turn.followupRun.run.config = {
     agents: {
       defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } },
@@ -50,6 +54,7 @@ it("announces a remote native run before its worker starts writing replies", asy
     expect(result.outcome.kind).toBe("settled");
     expect(startsBeforeReply).toBe(1);
     expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
+    expect(finishObservation).toHaveBeenCalledOnce();
   } finally {
     prepare.mockRestore();
   }
@@ -61,7 +66,19 @@ it.each(["settled", "pending"] as const)(
     const { executeAgentTurn } = await import("./agent-runner-execution.js");
     const onAgentRunStart = vi.fn();
     const fallbackModel = "claude-opus-4-6";
-    const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
+    const pendingObservations = new Set<number>();
+    let nextObservation = 0;
+    const turn = createMinimalRunAgentTurnParams();
+    turn.opts = {
+      onAgentRunStart,
+      onTranscriptStartPreparation: () => {
+        const observation = ++nextObservation;
+        pendingObservations.add(observation);
+        return () => {
+          pendingObservations.delete(observation);
+        };
+      },
+    };
     turn.followupRun.run.thinkingCatalog = [
       ...(turn.followupRun.run.thinkingCatalog ?? []),
       { provider: "anthropic", id: fallbackModel, input: ["text"] },
@@ -106,6 +123,7 @@ it.each(["settled", "pending"] as const)(
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (params: RunEmbeddedAgentInternalParams) => {
         const currentPreparation = params.onExecutionStarted?.();
+        expect([...pendingObservations]).toEqual(preparationState === "pending" ? [1, 2] : [2]);
         retiredRead.resolve(priorStart);
         await retiredEvent;
         await currentPreparation;
@@ -135,6 +153,7 @@ it.each(["settled", "pending"] as const)(
       expect(startsBeforeCurrentPhase).toBe(0);
       expect(onAgentRunStart).toHaveBeenCalledTimes(1);
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(currentStart);
+      expect(pendingObservations.size).toBe(0);
     } finally {
       retiredRead.resolve(priorStart);
       await retiredEvent.finally(() => prepare.mockRestore());
@@ -226,7 +245,7 @@ it.each(["embedded preparation", "fallback preparation"])(
       emitAgentEvent({ runId: params.runId, sessionKey: "main", stream: "lifecycle", data });
       await params.onAgentEvent?.({ stream: "lifecycle", data, transcriptStart });
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
-      expect(session).toMatchObject({ status: "running", startedAt: now });
+      expect(session).toMatchObject({ status: undefined, startedAt: now });
       expect(session.lastRunError).toBeUndefined();
       expect(session.runtimeMs).toBeUndefined();
       expect(session.endedAt).toBeUndefined();

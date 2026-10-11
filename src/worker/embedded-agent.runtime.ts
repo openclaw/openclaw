@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { getSupportedThinkingLevels } from "@openclaw/ai/internal/runtime";
 import { projectSessionEntryMessage } from "../../packages/agent-core/src/harness/session/session.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
@@ -30,6 +31,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
@@ -41,6 +43,8 @@ import {
 } from "./embedded-agent-transcript.runtime.js";
 import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
 import type { WorkerLaunchPlan } from "./launch-descriptor.js";
+import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
+import type { NativeRuntimeResolved } from "./native-runtime.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placement-tools.js";
@@ -51,7 +55,13 @@ function toWorkerAgentError(value: unknown, fallback: string): Error {
 
 type RunWorkerEmbeddedTurnParams = Omit<
   WorkerLaunchPlan["assignment"],
-  "workspaceDir" | "github" | "transcript" | "liveEvents" | "computer" | "toolAuthority"
+  | "workspaceDir"
+  | "github"
+  | "transcript"
+  | "liveEvents"
+  | "computer"
+  | "toolAuthority"
+  | "inference"
 > & {
   cwd: string;
   workerContainmentRoot: string;
@@ -60,6 +70,7 @@ type RunWorkerEmbeddedTurnParams = Omit<
   sessionId: string;
   sessionKey: string;
   inference: { stream: ReturnType<typeof createWorkerInferenceStreamAdapter> };
+  nativeInference?: NativeRuntimeResolved;
   transcript: WorkerTranscriptClient;
   live: WorkerLiveClient;
   gatewayTools: Parameters<typeof createWorkerGatewayToolProxies>[1];
@@ -91,13 +102,39 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       throw new Error("worker operational run instance disagrees with the admitted turn");
     }
     const toolSurface = params.toolSurface;
-    const model = createNativeModelOwnedRuntimeModel({
-      provider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    });
-    model.contextWindow = toolSurface.policy.modelContextWindowTokens ?? model.contextWindow;
-    if (toolSurface.policy.modelHasVision !== undefined) {
-      model.input = toolSurface.policy.modelHasVision ? ["text", "image"] : ["text"];
+    const model =
+      params.nativeInference?.model ??
+      createNativeModelOwnedRuntimeModel({
+        provider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      });
+    if (!params.nativeInference) {
+      model.contextWindow = toolSurface.policy.modelContextWindowTokens ?? model.contextWindow;
+      if (toolSurface.policy.modelHasVision !== undefined) {
+        model.input = toolSurface.policy.modelHasVision ? ["text", "image"] : ["text"];
+      }
+    }
+    const requestedReasoning = params.inferenceOptions?.reasoning;
+    if (params.nativeInference && requestedReasoning === "adaptive") {
+      throw new Error("Adaptive thinking is not supported by runtime-local worker inference");
+    }
+    const thinkingLevel = params.nativeInference
+      ? requestedReasoning === "adaptive"
+        ? "off"
+        : (requestedReasoning ?? "off")
+      : "medium";
+    if (params.nativeInference && !getSupportedThinkingLevels(model).includes(thinkingLevel)) {
+      throw new Error("Requested thinking level is not supported by the node-local model");
+    }
+    if (
+      params.nativeInference &&
+      ((params.inferenceOptions?.maxTokens !== undefined &&
+        params.inferenceOptions.maxTokens !== model.maxTokens) ||
+        Object.values(params.inferenceOptions?.thinkingBudgets ?? {}).some(
+          (budget) => budget !== undefined && budget > model.maxTokens,
+        ))
+    ) {
+      throw new Error("Worker inference options exceed or override the node-local model budget");
     }
     const authStorage = AuthStorage.inMemory({});
     const modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -162,7 +199,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       params.browser && activeToolNames.has("browser")
         ? await createWorkerBrowserToolRuntime({
             descriptor: params.browser,
-            sessionKey: params.sessionKey,
+            sessionKey: toAgentStoreSessionKey({
+              agentId: params.agentId,
+              requestKey: params.sessionKey,
+            }),
             stateDir: params.stateDir,
             workspaceDir: params.cwd,
             ...(params.browserRuntime ? { runtime: params.browserRuntime } : {}),
@@ -288,7 +328,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           cwd: params.cwd,
           modelRegistry,
           model,
-          thinkingLevel: "medium",
+          thinkingLevel,
           tools: projected.tools.map((tool) => tool.name),
           customTools: toToolDefinitions(projected.tools),
           sessionManager,
@@ -301,7 +341,22 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
     })();
     session.agent.sessionId = params.sessionId;
-    session.agent.streamFn = (_model, context, options) => {
+    const guardNativeStream = params.nativeInference
+      ? createNativeInferenceStreamGuard(params.nativeInference)
+      : undefined;
+    session.agent.streamFn = async (_model, context, options) => {
+      if (params.nativeInference && guardNativeStream) {
+        const native = params.nativeInference;
+        return guardNativeStream(
+          () =>
+            native.streamFn(model, context, {
+              ...params.inferenceOptions,
+              reasoning: thinkingLevel,
+              signal: options?.signal,
+            }),
+          options?.signal,
+        );
+      }
       const projected = toWorkerInferenceContext(context);
       if (projected.kind === "provider-replay-unavailable") {
         throw new Error(

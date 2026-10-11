@@ -167,7 +167,7 @@ describe("reply payload source occurrence", () => {
 it("retains private delivery authority across independently loaded reply module graphs", async () => {
   let open = true;
   const capability = {
-    adopt: async () => open,
+    adopt: () => open,
     close: () => {
       open = false;
     },
@@ -186,16 +186,10 @@ it("retains private delivery authority across independently loaded reply module 
   vi.resetModules();
   const reloaded = await import("./reply-payload.js");
   const adopt = reloaded.getReplyPayloadMetadata(payload)?.progressContinuation?.adopt;
-  const receipt = {
-    channel: "synthetic",
-    to: "original-recipient",
-    messageId: "existing-card",
-    text: payload.text,
-    snapshot: { lines: [] },
-  };
-  await expect(adopt?.(receipt)).resolves.toBe(true);
+  const draft = { push: () => undefined, retire: () => undefined };
+  expect(adopt?.(draft)).toBe(true);
   capability.close();
-  await expect(adopt?.(receipt)).resolves.toBe(false);
+  expect(adopt?.(draft)).toBe(false);
   expect(
     reloaded.isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
       sessionId: "replacement-session",

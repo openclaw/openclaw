@@ -16,7 +16,12 @@ In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image p
 
 All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (machine-readable output), and `--account <id>` (multi-account setups). Output is concise by default.
 
-When the Gateway is using an encrypted account, a local CLI command that needs the same crypto state waits for the Gateway monitor to finish its current work, save state, and yield the account. The command runs locally; the Gateway reloads a fresh client after it finishes. Waiting is cancelable and times out after two minutes. If you see a timeout, retry when the monitor can drain its work. No Gateway command RPC is needed.
+`verify status`, `verify bootstrap`, and `verify device` use the running local
+Gateway's account and crypto owner. Other commands on this page require stopping
+the local Gateway through its service owner first, then restarting it afterward.
+Account preparation and shutdown can persist crypto data, so offline commands
+retain exclusive ownership through that cleanup. Unsupported Gateway versions
+and failed routed requests never fall back to local writes.
 
 For a managed installation, use the normal [`openclaw update` flow](/install/updating). The updater stops and restarts the managed Gateway and updates the official npm Matrix plugin with OpenClaw. If separate Gateway or CLI installations share the account state, stop their older processes and upgrade those installations before resuming concurrent use. An older process does not honor the crypto-store owner lock.
 
@@ -24,7 +29,7 @@ The first upgrade still depends on the installed version completing its final sa
 
 Once the upgraded version owns the account, a failed final save or abnormal process exit makes OpenClaw refuse another crypto owner. Run `openclaw matrix doctor inspect` to list blocked account stores; `openclaw doctor` also reports them but `--fix` never clears this refusal. Preserve a copy of the state directory for investigation. Once **all** Gateway and CLI processes are stopped, inspect the canonical SQLite snapshot and any backup. If you accept that keys received after the last successful snapshot may be lost, run `openclaw matrix doctor recover --account <id> --accept-snapshot-rollback`, then restart the Gateway. Recovery requires exactly one blocked store for that account, an exclusive owner lock, and a structurally valid SQLite snapshot. It does not prove the snapshot contains the failed owner's latest keys. If the snapshot is absent/invalid or the account has multiple blocked stores, recovery refuses; seek storage-owner assistance. Do not delete `.owner.poisoned` manually.
 
-An invalid canonical SQLite snapshot also stops startup and prevents snapshot replacement, even without a blocked-owner marker. Missing metadata with leftover chunks, malformed metadata or payloads, missing chunks, and checksum failures are errors, not a new account. Preserve the account state and backups, stop all processes using it, and restore a valid backup or seek storage-owner assistance. Doctor recovery does not repair corrupt snapshots.
+An invalid canonical SQLite snapshot also stops startup and prevents snapshot replacement, even without a blocked-owner marker. Missing metadata with leftover chunks, malformed metadata or payloads, missing chunks, and checksum failures are errors, not a new account. Preserve the account state and backups, stop all processes using it, and restore a valid backup or seek storage-owner assistance. Doctor recovery does not repair corrupt snapshots. Startup also replays the complete candidate snapshot in isolation before replacing retained account databases; invalid keys, schemas, or index constraints refuse startup without changing those databases.
 
 ### Enable encryption
 
@@ -47,7 +52,7 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config; restart the Gateway after the command completes. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
 
 Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
 
@@ -84,7 +89,7 @@ With `--include-recovery-key`, text output confirms when a raw recovery key is a
 
 `Verified by owner` is `yes` only when `Cross-signing verified` is `yes`; local trust or an owner signature alone is not enough.
 
-`--allow-degraded-local-state` returns best-effort diagnostics without preparing the Matrix account first; useful for offline or partially-configured probes.
+`--allow-degraded-local-state` returns best-effort diagnostics without preparing the Matrix account first; useful for offline or partially-configured checks.
 
 ### Verify this device with a recovery key
 

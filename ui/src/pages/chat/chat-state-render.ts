@@ -1,7 +1,5 @@
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-type ChatPageUpdateMode = "immediate" | "animation-frame";
-
 export function cancelChatStreamRenderFrame(state: ChatPageHost): void {
   const frame = state.chatStreamRenderFrame;
   if (frame == null) {
@@ -15,7 +13,7 @@ export function cancelChatStreamRenderFrame(state: ChatPageHost): void {
 
 export function requestChatPageUpdate(
   state: ChatPageHost,
-  mode: ChatPageUpdateMode = "immediate",
+  mode: "immediate" | "animation-frame" = "immediate",
 ): void {
   const hidden = globalThis.document?.visibilityState === "hidden";
   if (hidden || mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {

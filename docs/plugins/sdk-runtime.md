@@ -83,6 +83,23 @@ Every `api.runtime` namespace and the page that documents it.
 
 ## Storing runtime references
 
+Synchronous storage compatibility calls retain their synchronous return contract.
+Managed commits install their available facts before public change notifications;
+a notification failure does not roll back the stored change. The private
+[receipt/completeness contract](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+adds no public capability or deprecation. Plugins must still use the owning
+runtime operation and its live authority checks: a prior receipt or cached row
+does not certify raw-handle writers, foreign changes, or a later effect.
+
+The Gateway context's GitHub publication service has V2 request methods with
+required host-owned requester capabilities, plus awaited deferral and reporting
+methods. Forward those capabilities intact and await committed results before
+releasing request resources. Released opaque-requester and synchronous lifecycle
+methods remain deprecated compatibility routes; actual use shares one warning
+budget per plugin and publication family. See
+[GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
+for the method mapping, callback ordering, and next-major removal contract.
+
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
 <Steps>
@@ -155,6 +172,14 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+Host-created request scopes borrow their plugin registry. A direct registry-scope
+callback keeps its registry until its returned operation settles; detached async
+resources do not extend that lifetime. Access to a released registry fails instead
+of silently selecting the current generation. Admitted turns and explicitly
+retained consumers keep their selected generation until they settle.
+Registry-dependent runtime APIs re-enter their live plugin owner after adoption
+and preserve an explicitly prepared registry, including an empty selection.
+
 Submitting a SessionManager append transfers its ordinary JSON payload to the
 manager by reference. Treat the payload as immutable from submission, including
 while an asynchronous append is pending; nested objects and arrays are frozen.
@@ -187,7 +212,11 @@ callbacks while cleanup finishes.
 
 Replacement validates metadata and configuration first, then stops services and
 channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
-before invoking the new registration. Pre-publication failure triggers automatic
+before invoking the new registration. Session-extension and runtime-lifecycle
+`cleanup` callbacks receive `reason: "restart"` before the replacement registers,
+so they can unsubscribe observers and release in-memory buffers. Persistent
+session-state and scheduler reconciliation remain part of registry retirement.
+Pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown
@@ -205,6 +234,27 @@ fields are optional in the SDK type because an API host without a managed
 instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
+
+### Instance-bound background context
+
+Managed instances also expose the additive
+`api.lifecycle.runInBackgroundContext<T>(run: () => T): T` capability. It runs
+immediately and returns the callback's value or promise. It detaches the calling
+turn, request, and unrelated async-local context while preserving the instance's
+host resource bindings. Each call selects that exact instance's current adopted
+registry, so a retained plugin sees replacement providers after a reload.
+
+Use it when installing timers, watchers, and listeners, and again when delivering
+each background callback. Keep the runner with the resource that owns it; an old
+manager must not look up a replacement plugin instance. Return asynchronous work
+from the callback so the instance retains it until it settles. Disposal does not
+wait for this work before running `onDispose`, so cleanup can stop the work and
+safely await it; module teardown still waits for it to settle, and work that
+outlives the cleanup budget is force-retired like other calls. New calls reject after admission
+closes; already admitted host cleanup retains its teardown authority. The runner
+does not schedule work or cancel native resources: release those in the existing
+cleanup owner. Like the other instance lifecycle fields, it can be absent on an
+API host without a managed instance.
 
 Inspection release reports settled disposal failures without marking the managed
 resources as still retained. Prepared-model shutdown records those failures and
@@ -270,13 +320,57 @@ SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
 [Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
 
-For a bounded, accepted persistence sequence,
-`openOpenClawAgentSqliteWorkerStore` from `openclaw/plugin-sdk/sqlite-runtime`
-accepts `retainExecutionUntilClose: true` in its worker options. The caller must
-close that store when the sequence settles, including on failure. This retains
-the existing executor between commands without holding a writer turn across
-preparation. Each command keeps its own live authority checks. Omit the option
-for cached stores whose lifetime can outlast accepted work.
+First-party bounded persistence sequences retain their original agent executor
+before asynchronous preparation and release it after publication cleanup. The
+private `sqlite-runtime` facade exposes that existing owner and its recorded
+native identity; each worker command keeps its own FIFO turn and live authority
+checks. Native maintenance and private shadow stores keep their existing owners.
+
+SQLite worker backends set connection lock-wait policy with
+`setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
+temporary changes. The connection owner retains the current timeout, skips
+unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
+connection would bypass that policy.
+
+`readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
+reads the existing physical database identity and in-process writer receipt without
+issuing SQL or a worker request. Retained row caches may reuse results only when
+the token is defined and unchanged before and after reading. An undefined token
+means cache reuse is unproven, including while a write is unsettled; it does not
+deny an ordinary read or grant effect authority. A changed token invalidates every
+derived cache that depends on that database, including caches in sibling plugin
+instances. The helper does not observe writes by other processes.
+
+First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
+same subpath to admit cold agent storage without receiving a writable native
+handle. Its required live authority runs inside worker grants and must not read
+the same database or do blocking work. Put same-database predicates in the paired
+worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
+missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+`withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
+ordering, including the latter's post-integrity, pre-repair checkpoint, until
+the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.
+
+Transcript assertion composition preserves prepared source checks independently
+of opaque SDK callbacks. Cold restoration can recheck those prepared components
+and their stored predicates while retaining the full synchronous assertion for
+native commit. Custom SDK assertion wrappers are not executed in restoration
+worker grants; existing writer adapter selection remains unchanged.
+
+`await api.runtime.agent.session.createSessionEntryListReader({ agentId, storePath, env? })`
+creates a read-only metadata inventory reader for a durable session store.
+Await the returned function to read `{ entries, assertCurrent }`. It reuses
+entries only after a worker verifies the same database connection and revision;
+foreign commits and reopened databases invalidate them. Entries exclude saved
+prompt snapshots and derived participants. Treat them as immutable. The returned
+assertion checks physical source identity, not sharing permissions or row freshness;
+revalidate access before publishing data after an await. Keep the reader within
+its consumer's lifecycle and discard it when configuration changes.
+
+`cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
+joins the selected database owner's pending startup preparation before capturing
+its physical identity. Prepared agents do not wait. Failed preparation still
+surfaces through normal database admission checks; Gateway shutdown cancels the wait.
 
 ### Memory runtime replacement
 
@@ -477,3 +571,13 @@ for provider selection, lifecycle, failure handling, limits, and diagnostics.
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.
+
+### Bounded stale reads
+
+`openclaw/plugin-sdk/collection-runtime` exports `createStaleWhileRevalidateCache`
+for metadata readers. It coalesces refreshes, bounds retained entries and active
+loads, and returns `{ value, stale }`. Loads retain their credential and service authority checks before external requests.
+Revalidate each caller before delivering any result.
+`allowStale: false` waits for freshness; `refresh: true` replaces an older load.
+`clear()` retires pending cache publications. Cache keys must include the owning
+identity or revision; the cache never provides authorization.

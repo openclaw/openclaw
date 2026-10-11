@@ -1,5 +1,4 @@
 import { getBackgroundWorkSnapshot, isBackgroundWorkLane } from "./background-work.js";
-// Bounded diagnostics composition over the command queue's lane totals.
 // Static lanes get full snapshots; per-session (dynamic) lanes collapse into
 // one aggregate so a saturation snapshot can never become an unbounded payload.
 import {

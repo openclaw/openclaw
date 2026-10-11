@@ -1871,7 +1871,7 @@ EOF
       });
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe(expected);
-      expect(result.stderr).toContain(`timed out during installer finalization probe: ${name}`);
+      expect(result.stderr).toContain(`timed out during installer finalization check: ${name}`);
     },
   );
 

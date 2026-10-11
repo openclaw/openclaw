@@ -13,6 +13,10 @@ import {
   resolveGitHubActionsRequest,
 } from "../boards/github-actions-capability.js";
 import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import {
   capturePluginRegistryLifecycleEpoch,
   isPluginRegistryLifecycleEpochActive,
 } from "../plugins/registry-lifecycle.js";
@@ -145,30 +149,35 @@ export function captureBoardRequestAuthority(
   const pluginRegistryEpoch = pluginRegistry
     ? capturePluginRegistryLifecycleEpoch(pluginRegistry)
     : undefined;
-  const assertActive = () => {
-    try {
-      // Retained board work also belongs to the requesting caller and session authorization.
-      invocation.signal?.throwIfAborted();
-      invocation.sessionMutationCommitGuard?.();
-      invocation.sessionMutationAuthorization?.assertCurrent();
-      if (
-        isGatewaySubordinateWorkAdmissionClosed() ||
-        resolveGatewayContext() !== context ||
-        context.resolveGatewayContext !== resolveGatewayContext ||
-        (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
-        (pluginRegistry &&
-          (!pluginRegistryEpoch ||
-            !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
-      ) {
+  const assertActive = composeSessionSourceAssertion(
+    [
+      captureExternalSessionCommitGuard(invocation.sessionMutationCommitGuard),
+      captureExternalSessionCommitGuard(invocation.sessionMutationAuthorization?.assertCurrent),
+    ],
+    (assertSources) => {
+      try {
+        // Retained board work also belongs to the requesting caller and session authorization.
+        invocation.signal?.throwIfAborted();
+        assertSources();
+        if (
+          isGatewaySubordinateWorkAdmissionClosed() ||
+          resolveGatewayContext() !== context ||
+          context.resolveGatewayContext !== resolveGatewayContext ||
+          (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
+          (pluginRegistry &&
+            (!pluginRegistryEpoch ||
+              !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
+        ) {
+          throw new BoardGatewayUnavailableError();
+        }
+      } catch (error) {
+        if (error instanceof BoardGatewayUnavailableError) {
+          throw error;
+        }
         throw new BoardGatewayUnavailableError();
       }
-    } catch (error) {
-      if (error instanceof BoardGatewayUnavailableError) {
-        throw error;
-      }
-      throw new BoardGatewayUnavailableError();
-    }
-  };
+    },
+  );
   assertActive();
   return {
     assertActive,

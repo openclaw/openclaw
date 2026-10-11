@@ -108,9 +108,9 @@ function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number
   return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
 }
 
-async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
+function releaseUnreadResponseBody(res: Response | undefined): void {
   if (res?.bodyUsed !== true) {
-    await res?.body?.cancel().catch(() => undefined);
+    void res?.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -144,7 +144,7 @@ export async function containerCheck(
       error: coerceErrorMessage(err),
     };
   } finally {
-    await releaseUnreadResponseBody(res);
+    releaseUnreadResponseBody(res);
   }
 }
 
@@ -334,7 +334,7 @@ async function containerFetchAttachment(
         onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
       });
     } finally {
-      await releaseUnreadResponseBody(res);
+      releaseUnreadResponseBody(res);
     }
   });
 }

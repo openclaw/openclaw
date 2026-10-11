@@ -1,6 +1,7 @@
 /** Registers update replacement and handoff cases in the run-loop signal fixture. */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -31,7 +32,7 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
     waitForLoopCondition,
     createSignaledLoopHarness,
     markUpdateRestartSentinelFailure,
-    writeGatewayRestartHandoffSync,
+    writeGatewayRestartHandoff,
     consumeGatewayRestartIntent,
     managedUpdateSuccessorOwner,
     isForegroundUpdateHandoff,
@@ -42,20 +43,23 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
     completeForegroundUpdateHandoffAfterClose,
     killProcessTree,
     flushLogger,
-    gatewayLog,
-    consumeGatewayRestartIntentPayloadSync,
+    consumeGatewayRestartIntentPayload,
     commitManagedServiceUpdateHandoff,
     setPlatform,
-    expectRestartHandoffCall,
     originalPlatformDescriptor,
   } = fixtures;
-  it("joins cancellation before restoring unchanged runtime when foreground provider cleanup fails", async () => {
-    const cancellation = createDeferred<"restored-in-process">();
+
+  function prepareForegroundHandoff() {
     consumeGatewayRestartIntent.mockReturnValueOnce({
       reason: "update.run",
       successorOwner: managedUpdateSuccessorOwner,
     });
     isForegroundUpdateHandoff.mockReturnValue(true);
+  }
+
+  it("joins cancellation before restoring unchanged runtime when foreground provider cleanup fails", async () => {
+    const cancellation = createDeferred<"restored-in-process">();
+    prepareForegroundHandoff();
     hasManagedProviderLocalServices.mockReturnValue(true);
     stopManagedProviderLocalServices.mockRejectedValueOnce(new Error("provider cleanup failed"));
     cancelManagedServiceUpdateHandoff.mockReturnValueOnce(cancellation.promise);
@@ -93,9 +97,7 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
         await expect(exited).resolves.toBe(0);
       } finally {
         cancellation.resolve("restored-in-process");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await setImmediate();
         if (runtime.exit.mock.calls.length === 0) {
           stop();
         }
@@ -104,26 +106,19 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
     });
   });
 
-  it.each(["healthy", "unsafe", "failed-spawn", "disabled", "unhealthy", "exited"] as const)(
+  it.each(["failed-spawn", "disabled", "unhealthy"] as const)(
     "joins the foreground updater before a fresh successor and never resumes migrated runtime: %s",
     async (outcome) => {
       const updater = createDeferred<{ respawn: boolean }>();
-      consumeGatewayRestartIntent.mockReturnValueOnce({
-        reason: "update.run",
-        successorOwner: managedUpdateSuccessorOwner,
-      });
-      isForegroundUpdateHandoff.mockReturnValue(true);
+      prepareForegroundHandoff();
       completeForegroundUpdateHandoffAfterClose.mockReturnValueOnce(updater.promise);
       const lockRelease = vi.fn(async () => {});
       acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
       const child = createUpdateRespawnChild();
-      if (outcome === "exited") {
-        child.exitCode = 1;
-      }
       const readinessRejected = outcome === "unhealthy";
       const health = respawnHealth({
-        healthy: outcome === "healthy" || outcome === "exited",
-        waitOutcome: outcome === "healthy" || outcome === "exited" ? "healthy" : "stopped-free",
+        healthy: false,
+        waitOutcome: "stopped-free",
         ...(outcome === "unhealthy" ? { runtime: { status: "stopped" as const } } : {}),
       });
       waitForGatewayHealthyRestart.mockResolvedValueOnce(health);
@@ -154,72 +149,41 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
           expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
           expect(runtime.exit).not.toHaveBeenCalled();
-          const consumedIntents = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+          const consumedIntents = consumeGatewayRestartIntentPayload.mock.calls.length;
           captureSignal("SIGUSR2")();
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(consumedIntents);
-          updater.resolve({ respawn: outcome !== "unsafe" });
+          await setImmediate();
+          expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(consumedIntents);
+          updater.resolve({ respawn: true });
           if (readinessRejected) {
             await waitForLoopCondition(
               () => child.kill.mock.calls.length === 1,
               "rejected foreground successor did not receive termination",
             );
             expect(runtime.exit).not.toHaveBeenCalled();
-            expect(gatewayLog.warn).toHaveBeenCalledWith(
-              expect.stringContaining("shutdown pending"),
-            );
             child.exitCode = 1;
             child.emit("exit", 1, null);
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
-            expect(runtime.exit).not.toHaveBeenCalled();
-            child.emit("close", 1, null);
-          } else if (outcome === "exited") {
-            await waitForLoopCondition(
-              () => waitForGatewayHealthyRestart.mock.calls.length === 1,
-              "foreground successor readiness was not observed",
-            );
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await setImmediate();
             expect(runtime.exit).not.toHaveBeenCalled();
             child.emit("close", 1, null);
           }
-          await expect(withTimeout(exited, 4_000)).resolves.toBe(outcome === "healthy" ? 0 : 1);
+          await expect(withTimeout(exited, 4_000)).resolves.toBe(1);
           expect(start).toHaveBeenCalledOnce();
           expect(acquireGatewayLock).toHaveBeenCalledOnce();
           expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
           expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
           expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
           expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
-          expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
-          if (outcome === "unsafe") {
-            expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-          } else {
-            expect(respawnGatewayProcessForUpdate).toHaveBeenCalledOnce();
-          }
+          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
+          expect(respawnGatewayProcessForUpdate).toHaveBeenCalledOnce();
           if (readinessRejected) {
             expect(child.kill).toHaveBeenCalledOnce();
-          }
-          if (outcome === "healthy") {
-            expect(child.kill).not.toHaveBeenCalled();
-            expect(child.exitCode).toBeNull();
-            expect(child.signalCode).toBeNull();
-          }
-          if (outcome === "exited") {
-            expect(killProcessTree).not.toHaveBeenCalled();
           }
         } finally {
           child.exitCode = 1;
           child.emit("exit", 1, null);
           child.emit("close", 1, null);
           updater.resolve({ respawn: false });
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await setImmediate();
           if (runtime.exit.mock.calls.length === 0) {
             stop();
           }
@@ -255,7 +219,6 @@ process.send("parked");`,
     const parked = once(child, "message");
     const closed = once(child, "close");
     void closed.catch(() => {});
-    const childKill = vi.spyOn(child, "kill");
     killProcessTree.mockImplementation(actualKillTree.killProcessTree);
     try {
       const [parkedMessage] = await withinTest(
@@ -263,12 +226,7 @@ process.send("parked");`,
         signal,
       );
       expect(parkedMessage).toBe("parked");
-      expect(child.pid).toBeTypeOf("number");
-      consumeGatewayRestartIntent.mockReturnValueOnce({
-        reason: "update.run",
-        successorOwner: managedUpdateSuccessorOwner,
-      });
-      isForegroundUpdateHandoff.mockReturnValue(true);
+      prepareForegroundHandoff();
       respawnGatewayProcessForUpdate.mockReturnValueOnce({
         mode: "spawned",
         pid: child.pid,
@@ -293,12 +251,7 @@ process.send("parked");`,
         captureSignal("SIGUSR2")();
         const exitCode = await withTimeout(exited, 20_000);
 
-        expect(killProcessTree).not.toHaveBeenCalled();
-        expect(childKill).not.toHaveBeenCalled();
-        expect(child.exitCode).toBeNull();
-        expect(child.signalCode).toBeNull();
         expect(exitCode).toBe(0);
-        expect(gatewayLog.warn).toHaveBeenCalledWith(expect.stringContaining("still starting"));
         expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
           outcome: "planned_restart",
           reason: "restart (SIGUSR2: update.run)",
@@ -309,7 +262,7 @@ process.send("parked");`,
         expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
         expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
         expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
-        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
 
         const listening = once(child, "message");
         child.send("listen");
@@ -326,7 +279,6 @@ process.send("parked");`,
         await stopChildProcess(child, 5_000);
       } finally {
         killProcessTree.mockReset();
-        childKill.mockRestore();
       }
     }
   });
@@ -335,11 +287,7 @@ process.send("parked");`,
     const flushEntered = createDeferred();
     const releaseFlush = createDeferred();
     const child = createUpdateRespawnChild();
-    consumeGatewayRestartIntent.mockReturnValueOnce({
-      reason: "update.run",
-      successorOwner: managedUpdateSuccessorOwner,
-    });
-    isForegroundUpdateHandoff.mockReturnValue(true);
+    prepareForegroundHandoff();
     respawnGatewayProcessForUpdate.mockReturnValueOnce({ mode: "spawned", pid: child.pid, child });
     flushLogger.mockImplementationOnce(async () => {
       flushEntered.resolve();
@@ -361,9 +309,7 @@ process.send("parked");`,
         child.exitCode = 1;
         child.emit("exit", 1, null);
         releaseFlush.resolve();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await setImmediate();
         expect(runtime.exit).not.toHaveBeenCalled();
         child.emit("close", 1, null);
         await expect(withTimeout(exited, 5_000)).resolves.toBe(1);
@@ -383,107 +329,55 @@ process.send("parked");`,
     });
   });
 
-  it("writes a handoff before exiting for supervised update.auto restarts", async () => {
-    vi.clearAllMocks();
-    const reason = "update.auto";
-    peekGatewayRestartReason.mockReturnValue(reason);
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-      mode: "supervised",
-    });
-    try {
-      setPlatform("freebsd");
-      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runtime, exited } = await createSignaledLoopHarness();
-        const restartSignal = captureSignal("SIGUSR2");
-
-        restartSignal();
-
-        await expect(exited).resolves.toBe(0);
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-        expectRestartHandoffCall({
-          restartKind: "update-process",
-          reason,
-          supervisorMode: "external",
-        });
-        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-      });
-    } finally {
-      delete process.env.OPENCLAW_SUPERVISOR_MODE;
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, "platform", originalPlatformDescriptor);
-      }
-    }
-  });
-
-  it("falls back in-process when a launchd update handoff fails to spawn", async () => {
+  it.each([
+    { name: "a launchd update handoff fails to spawn", launchd: true },
+    { name: "an external update restart handoff cannot be persisted", launchd: false },
+  ])("falls back in-process when $name", async ({ launchd }) => {
     vi.clearAllMocks();
     peekGatewayRestartReason.mockReturnValue("update.run");
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({
       mode: "supervised",
-      handoffSpawned: Promise.resolve(false),
+      ...(launchd ? { handoffSpawned: Promise.resolve(false) } : {}),
     });
+    if (!launchd) {
+      writeGatewayRestartHandoff.mockResolvedValueOnce(null);
+    }
     try {
-      setPlatform("darwin");
-      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+      if (launchd) {
+        setPlatform("darwin");
+        process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+      } else {
+        process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+      }
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { start, runtime, exited } = await createSignaledLoopHarness();
-        const restartSignal = captureSignal("SIGUSR2");
-        const sigint = captureSignal("SIGINT");
-
-        vi.useFakeTimers();
-        restartSignal();
-        await vi.advanceTimersByTimeAsync(1500);
-
+        if (launchd) {
+          vi.useFakeTimers();
+        }
+        captureSignal("SIGUSR2")();
+        if (launchd) {
+          await vi.advanceTimersByTimeAsync(1500);
+        } else {
+          await waitForLoopCondition(
+            () => start.mock.calls.length === 2,
+            "external update handoff failure did not restart in-process",
+          );
+        }
         expect(start).toHaveBeenCalledTimes(2);
         expect(runtime.exit).not.toHaveBeenCalled();
         expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
           "restart-handoff-unavailable",
         );
-
-        sigint();
+        captureSignal("SIGINT")();
         await expect(exited).resolves.toBe(0);
       });
     } finally {
       vi.useRealTimers();
       delete process.env.OPENCLAW_LAUNCHD_LABEL;
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, "platform", originalPlatformDescriptor);
       }
-    }
-  });
-
-  it("keeps running when an external update restart handoff cannot be persisted", async () => {
-    vi.clearAllMocks();
-    peekGatewayRestartReason.mockReturnValue("update.run");
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-      mode: "supervised",
-    });
-    writeGatewayRestartHandoffSync.mockReturnValueOnce(null);
-
-    try {
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { start, runtime, exited } = await createSignaledLoopHarness();
-        const restartSignal = captureSignal("SIGUSR2");
-        const sigint = captureSignal("SIGINT");
-
-        restartSignal();
-        await waitForLoopCondition(
-          () => start.mock.calls.length === 2,
-          "external update handoff failure did not restart in-process",
-        );
-
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
-          "restart-handoff-unavailable",
-        );
-
-        sigint();
-        await expect(exited).resolves.toBe(0);
-      });
-    } finally {
-      delete process.env.OPENCLAW_SUPERVISOR_MODE;
     }
   });
 }

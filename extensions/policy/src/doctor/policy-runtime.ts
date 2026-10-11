@@ -61,25 +61,6 @@ function isNotFoundPathError(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
 }
 
-export function parseExecApprovalsFile(
-  raw: string,
-):
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly message: string } {
-  try {
-    const value = JSON.parse(raw);
-    if (!isRecord(value) || value.version !== 1) {
-      return { ok: false, message: "unsupported exec approvals version" };
-    }
-    return { ok: true, value };
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
 export function parsePolicyFile(
   raw: string,
 ):
@@ -99,15 +80,7 @@ export function workspaceRepairsEnabled(ctx: HealthCheckContext): boolean {
   return policySettings(ctx).workspaceRepairs === true;
 }
 
-export function readChannelDenyRules(
-  policy: unknown,
-  policyDocName: string,
-): readonly {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-  readonly requirement: string;
-}[] {
+export function readChannelDenyRules(policy: unknown, policyDocName: string) {
   if (
     !isRecord(policy) ||
     !isRecord(policy.channels) ||
@@ -197,9 +170,7 @@ export function requiredAuthProfileMetadata(
   const entries = readPolicyStringArray(policy, ["auth", "profiles", "requireMetadata"]) ?? [];
   return new Set(
     entries.filter((entry): entry is (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number] =>
-      SUPPORTED_AUTH_PROFILE_METADATA.includes(
-        entry as (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number],
-      ),
+      SUPPORTED_AUTH_PROFILE_METADATA.some((metadata) => metadata === entry),
     ),
   );
 }
@@ -211,9 +182,7 @@ export function authProfileHasMetadata(
   if (metadata === "provider") {
     return profile.provider !== undefined && profile.provider.trim() !== "";
   }
-  return SUPPORTED_AUTH_PROFILE_MODES.includes(
-    profile.mode as (typeof SUPPORTED_AUTH_PROFILE_MODES)[number],
-  );
+  return SUPPORTED_AUTH_PROFILE_MODES.some((mode) => mode === profile.mode);
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

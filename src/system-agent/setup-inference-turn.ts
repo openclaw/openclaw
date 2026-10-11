@@ -29,7 +29,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -93,7 +92,7 @@ export async function runSetupInferenceTurn(params: {
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
   const failed = (status: SetupInferenceFailureStatus, error: string): SetupTurnFailure => {
-    setupInferenceLog.warn("Inference setup probe failed.", {
+    setupInferenceLog.warn("Inference setup check failed.", {
       event: "setup_inference_probe_failed",
       provider: route.provider,
       model: route.model,
@@ -248,11 +247,6 @@ export async function runSetupInferenceTurn(params: {
   }
 }
 
-type RevalidationDeps = SystemAgentVerifiedInferenceDeps & {
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
-};
-
 /** Setup owns fresh package facts without replacing the Gateway's startup generation. */
 export function loadSetupInferencePluginGeneration(params: {
   cache: PluginCache;
@@ -311,7 +305,7 @@ async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   ownerPluginIds?: readonly string[];
-  deps: RevalidationDeps;
+  deps: ActivateSetupInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const configuredHarnessId =
     params.route.runner === "embedded"
@@ -482,7 +476,7 @@ export async function verifySetupInference(
   const latestRoute = latestConfig
     ? await projectInferenceRoute(latestConfig, params.agentId, routeOptions)
     : undefined;
-  if (!latestRoute || !sameDefaultInferenceRoute(baselineRoute, latestRoute)) {
+  if (!latestRoute || !isDeepStrictEqual(baselineRoute, latestRoute)) {
     return {
       ok: false,
       status: "unknown",
@@ -545,8 +539,7 @@ export async function resolvePersistentApplyInference(params: {
       executionRouteIdentity(params.binding.execution),
     ) ||
     !isDeepStrictEqual(live.binding.executionFingerprint, params.binding.executionFingerprint) ||
-    !isDeepStrictEqual(live.binding.ownerPluginIds, params.binding.ownerPluginIds) ||
-    !isDeepStrictEqual(live.binding.ownerPluginArtifacts, params.binding.ownerPluginArtifacts) ||
+    !hasSameOwnerPluginArtifacts(live.binding, params.binding) ||
     !isDeepStrictEqual(live.binding.auth, params.binding.auth)
   ) {
     return null;
@@ -646,7 +639,7 @@ export async function verifySetupInferenceConfig(
       );
       if (
         !currentRoute ||
-        !sameDefaultInferenceRoute(
+        !isDeepStrictEqual(
           baselineRoute!,
           await projectInferenceRoute(currentConfig, route.agentId, {
             modelTarget: params.modelTarget,

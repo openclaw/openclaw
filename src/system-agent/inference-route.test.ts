@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
@@ -6,9 +7,8 @@ import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
 } from "./inference-route.js";
 
 function devConfig(agentRuntime?: string): OpenClawConfig {
@@ -118,8 +118,8 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       meta: { migrations: { utilityModelSeparation: true } },
     };
 
-    const primary = await projectDefaultInferenceRoute(legacy);
-    const utility = await projectDefaultInferenceRoute(separated);
+    const primary = await projectInferenceRoute(legacy);
+    const utility = await projectInferenceRoute(separated);
 
     expect(primary.route).toMatchObject({ modelLabel: "local-utility/tiny", agentId: "dev" });
     expect(primary.route).not.toHaveProperty("modelTarget");
@@ -127,11 +127,11 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       modelLabel: "local-utility/tiny",
       modelTarget: "utility",
     });
-    expect(sameDefaultInferenceRoute(primary, utility)).toBe(false);
+    expect(isDeepStrictEqual(primary, utility)).toBe(false);
     expect(
-      sameDefaultInferenceRoute(
-        await projectDefaultInferenceRoute(legacy, { modelTarget: "utility" }),
-        await projectDefaultInferenceRoute(separated, { modelTarget: "utility" }),
+      isDeepStrictEqual(
+        await projectInferenceRoute(legacy, undefined, { modelTarget: "utility" }),
+        await projectInferenceRoute(separated, undefined, { modelTarget: "utility" }),
       ),
     ).toBe(true);
   });
@@ -191,37 +191,34 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       };
 
       expect(
-        sameDefaultInferenceRoute(
-          await projectDefaultInferenceRoute(before, { modelTarget: "utility" }),
-          await projectDefaultInferenceRoute(after, { modelTarget: "utility" }),
+        isDeepStrictEqual(
+          await projectInferenceRoute(before, undefined, { modelTarget: "utility" }),
+          await projectInferenceRoute(after, undefined, { modelTarget: "utility" }),
         ),
       ).toBe(false);
       expect(
-        sameDefaultInferenceRoute(
-          await projectDefaultInferenceRoute(before),
-          await projectDefaultInferenceRoute(after),
-        ),
+        isDeepStrictEqual(await projectInferenceRoute(before), await projectInferenceRoute(after)),
       ).toBe(true);
     },
   );
 
   it("retires the first-run utility route when a primary becomes configured", async () => {
-    const utility = await projectDefaultInferenceRoute(utilityConfig());
-    const primary = await projectDefaultInferenceRoute(utilityConfig("openai/gpt-5.5"));
+    const utility = await projectInferenceRoute(utilityConfig());
+    const primary = await projectInferenceRoute(utilityConfig("openai/gpt-5.5"));
 
     expect(utility.route).toMatchObject({ modelTarget: "utility", model: "tiny" });
     expect(primary.route).toMatchObject({ model: "gpt-5.5" });
     expect(primary.route).not.toHaveProperty("modelTarget");
-    expect(sameDefaultInferenceRoute(utility, primary)).toBe(false);
+    expect(isDeepStrictEqual(utility, primary)).toBe(false);
   });
 
   it("does not reuse a primary verification for the same model selected as utility", async () => {
     const config = utilityConfig("local-utility/tiny");
 
     expect(
-      sameDefaultInferenceRoute(
-        await projectDefaultInferenceRoute(config),
-        await projectDefaultInferenceRoute(config, { modelTarget: "utility" }),
+      isDeepStrictEqual(
+        await projectInferenceRoute(config),
+        await projectInferenceRoute(config, undefined, { modelTarget: "utility" }),
       ),
     ).toBe(false);
   });
@@ -243,9 +240,9 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     };
 
     expect(
-      sameDefaultInferenceRoute(
-        await projectDefaultInferenceRoute(withoutRoster),
-        await projectDefaultInferenceRoute(withFirstAgent),
+      isDeepStrictEqual(
+        await projectInferenceRoute(withoutRoster),
+        await projectInferenceRoute(withFirstAgent),
       ),
     ).toBe(true);
   });

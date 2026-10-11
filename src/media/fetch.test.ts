@@ -588,6 +588,21 @@ describe("readRemoteMediaBuffer", () => {
 
   it.each([
     {
+      name: "unquoted filename retains its leading apostrophe",
+      header: "attachment; filename='report.csv",
+      fileName: "'report.csv",
+    },
+    {
+      name: "unquoted filename retains its trailing apostrophe",
+      header: "attachment; filename=report.csv'",
+      fileName: "report.csv'",
+    },
+    {
+      name: "unquoted filename retains surrounding apostrophes",
+      header: "attachment; filename='report.csv'",
+      fileName: "'report.csv'",
+    },
+    {
       name: "filename text inside an unrelated quoted parameter is ignored",
       header: 'attachment; note="x; filename=spoof.csv; y"; filename=safe.csv',
       fileName: "safe.csv",

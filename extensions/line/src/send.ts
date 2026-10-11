@@ -6,6 +6,7 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   readProviderJsonResponse,
@@ -184,10 +185,7 @@ function normalizeTarget(to: string): string {
   return normalized;
 }
 
-function resolveLineMessagingAccount(opts: LineClientOpts): {
-  account: ReturnType<typeof resolveLineAccount>;
-  token: string;
-} {
+function resolveLineMessagingAccount(opts: LineClientOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "LINE send");
   const account = resolveLineAccount({
     cfg,
@@ -283,11 +281,14 @@ async function postLineProviderMessages(
     const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
       () => "",
     );
+    // A proxy or LINE-compatible endpoint can reflect the request's Authorization
+    // token in the error body; mask it before the error reaches logs or diagnostics.
+    const redactedBody = redactToolPayloadText(body);
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      body,
+      body: redactedBody,
     });
   }
 

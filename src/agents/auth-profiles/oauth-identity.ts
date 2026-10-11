@@ -1,8 +1,3 @@
-/**
- * OAuth identity comparison and mirroring decisions.
- * Guards cross-agent credential copy/adoption so refreshed credentials cannot
- * overwrite a different account's local auth state.
- */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -18,7 +13,6 @@ type GithubCopilotOAuthSurface = {
   normalizeGithubCopilotOAuthScope: (raw: string | undefined) => string | undefined;
 };
 
-/** Returns whether OAuth credentials target the same provider-owned tenant. */
 export function isSafeToCopyOAuthRoutingScope(
   existing: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
   incoming: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
@@ -133,7 +127,6 @@ type OAuthMirrorDecision =
       reason: Exclude<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;
     };
 
-/** Decide whether a refreshed OAuth credential should mirror into another store. */
 export function shouldMirrorRefreshedOAuthCredential(params: {
   existing: AuthProfileCredential | undefined;
   refreshed: OAuthCredential;

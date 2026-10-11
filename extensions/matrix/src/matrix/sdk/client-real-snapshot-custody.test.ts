@@ -83,11 +83,11 @@ describe("Matrix client custody at the real SQLite snapshot boundary", () => {
     await persistIdbToDisk({ snapshotPath, databasePrefix: prefix });
     await clearAllIndexedDbState({ databasePrefix: prefix });
 
-    const actualOpen = getMatrixRuntime().state.openKeyedStore;
+    const actualOpen = getMatrixRuntime().state.openKeyedStoreV2;
     let snapshotOpens = 0;
     let rejectSnapshotWrites = false;
     const stateRuntime = {
-      openKeyedStore: ((options: Parameters<typeof actualOpen>[0]) => {
+      openKeyedStoreV2: ((options: Parameters<typeof actualOpen>[0]) => {
         if (options.namespace === "idb-snapshot") {
           snapshotOpens++;
           if (rejectSnapshotWrites) {

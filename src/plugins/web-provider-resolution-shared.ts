@@ -76,9 +76,7 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   const manifestRecords =
     params.manifestRecords ??
     loadInstalledWebProviderManifestRecords({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...params,
       pluginIds: scopedPluginIds,
     });
   const ids = manifestRecords
@@ -136,11 +134,7 @@ export function resolveBundledWebProviderResolutionConfig(params: {
       : {}),
     ...(currentSnapshot?.discovery ? { discovery: currentSnapshot.discovery } : {}),
     resolveBundledPluginIds: () => {
-      manifestRecords ??= loadInstalledWebProviderManifestRecords({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      });
+      manifestRecords ??= loadInstalledWebProviderManifestRecords(params);
       return manifestRecords
         .filter(
           (plugin) =>

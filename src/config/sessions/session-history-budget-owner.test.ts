@@ -217,13 +217,11 @@ it.each([
       },
     );
     const order: string[] = [];
-    const materialize = archives.materializeSessionStateDeletePlans;
-    vi.spyOn(archives, "materializeSessionStateDeletePlans").mockImplementation(async (plans) => {
-      const result = await materialize(plans);
-      if (victim === "history" && plans.some((plan) => plan.sessionId === originalId)) {
-        expect(
-          result.find((plan) => plan.sessionId === originalId)?.archive?.bytes.byteLength,
-        ).toBeGreaterThan(0);
+    const materialize = archives.materializeSessionHistoryEvictionPlan;
+    vi.spyOn(archives, "materializeSessionHistoryEvictionPlan").mockImplementation(async (plan) => {
+      const result = await materialize(plan);
+      if (victim === "history" && plan.sessionId === originalId) {
+        expect(result?.archive?.bytes.byteLength).toBeGreaterThan(0);
         expect(
           readRow(
             databasePath,

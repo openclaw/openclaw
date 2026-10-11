@@ -1,7 +1,7 @@
 import "../../../styles/chat/composer-surface.css";
-import "../../../components/mcp-app-catalog.ts";
-import "../../../components/mcp-app-context-strip.ts";
-import "../../../components/mcp-app-resources.ts";
+import "../../../components/mcp-app-catalog.tsx";
+import "../../../components/solid/mcp-app-context-strip.tsx";
+import "../../../components/mcp-app-resources.tsx";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
@@ -50,11 +50,7 @@ import {
   type SlashMenuHost,
 } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
-import {
-  renderChatRunStatusIndicator,
-  renderFallbackIndicator,
-  type ComposerRunStatus,
-} from "./chat-composer-status.ts";
+import { renderFallbackIndicator } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
@@ -73,7 +69,6 @@ type ChatComposerViewContext = {
   showAbortableUi: boolean;
   visibleDraft: string;
   runStatusAnnouncement: string;
-  composerRunStatus: ComposerRunStatus | null | undefined;
   requestUpdate: () => void;
   sendShortcut: "enter" | "modifier-enter";
   questionPanelProps: ReturnType<typeof createGatewayQuestionPanelProps> | null;
@@ -121,7 +116,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     showAbortableUi,
     visibleDraft,
     runStatusAnnouncement,
-    composerRunStatus,
     requestUpdate,
     sendShortcut,
     questionPanelProps,
@@ -152,11 +146,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     menuListboxId: slashMenuListboxId,
   } = menus;
   const activeSession = props.selectedSession;
-  const contextNotice = renderContextNotice(
-    activeSession,
-    props.sessions?.defaults?.contextTokens ?? null,
-    { messages: props.messages, providerUsage: props.providerUsage },
-  );
+  const contextNotice = renderContextNotice(activeSession, {
+    messages: props.messages,
+    providerUsage: props.providerUsage,
+  });
   const composerControls = props.composerControls ?? nothing;
   const composerLeadControl = props.permissionPicker
     ? renderChatPermissionPicker(props.permissionPicker)
@@ -272,6 +265,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     props.offline && props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
       : null;
+  const composerError = mentionError || state.dictationError;
   const primaryComposerStatus = props.disabledReason
     ? {
         text: props.disabledReason,
@@ -282,13 +276,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             ? icons.alertTriangle
             : icons.shieldQuestion,
       }
-    : mentionError
-      ? { text: mentionError, tone: "danger" as const, icon: icons.alertTriangle }
-      : state.dictationError
-        ? { text: state.dictationError, tone: "danger" as const, icon: icons.alertTriangle }
-        : offlineText
-          ? { text: offlineText, tone: "info" as const, icon: icons.inbox }
-          : null;
+    : composerError
+      ? { text: composerError, tone: "danger" as const, icon: icons.alertTriangle }
+      : offlineText
+        ? { text: offlineText, tone: "info" as const, icon: icons.inbox }
+        : null;
   const composerStatus =
     showComposerInput && primaryComposerStatus
       ? html`<div class="agent-chat__composer-status" data-tone=${primaryComposerStatus.tone}>
@@ -317,9 +309,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       ).value
     : visibleDraft;
   const draftDirection = detectTextDirection(dictationPreviewDraft);
-  const interruptedStatus = props.runError
-    ? nothing
-    : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
   const progressCard = props.progressCard
     ? html`<div class="agent-chat__progress-float" ?hidden=${!showComposer}>
@@ -373,11 +362,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ${props.footerContent ?? nothing}
         <div class="agent-chat__composer-notices">
           ${props.notices ?? nothing} ${composerStatus} ${composerAlerts} ${fallbackStatus}
-          ${
-            interruptedStatus === nothing
-              ? nothing
-              : html`<div class="agent-chat__composer-run-status">${interruptedStatus}</div>`
-          }
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
@@ -423,15 +407,21 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   : nothing
               }
               <div class="agent-chat__composer-lede">
-                <openclaw-mcp-app-catalog
-                  surface="thread"
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-catalog>
-                <openclaw-mcp-app-resources
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-resources>
+                ${
+                  props.sessionAdmitted === false
+                    ? nothing
+                    : html`
+                        <openclaw-mcp-app-catalog
+                          surface="thread"
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-catalog>
+                        <openclaw-mcp-app-resources
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-resources>
+                      `
+                }
                 ${goalComposer.render()}
                 ${renderSelectedHumanMentions(
                   visibleDraft,
@@ -474,10 +464,16 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       `
                     : nothing
                 }
-                <openclaw-mcp-app-context-strip
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-context-strip>
+                ${
+                  props.sessionAdmitted === false
+                    ? nothing
+                    : html`
+                        <openclaw-mcp-app-context-strip
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-context-strip>
+                      `
+                }
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}

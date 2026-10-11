@@ -66,7 +66,7 @@ async function seedChannelMessage() {
   if (!identity) {
     throw new Error("reaction fixture conversation identity missing");
   }
-  registerConversationAddresses({ agentId: "main" }, [identity]);
+  await registerConversationAddresses({ agentId: "main" }, [identity]);
   const messageId = await appendMessage({
     role: "user",
     content: [{ type: "text", text: "Channel prompt" }],

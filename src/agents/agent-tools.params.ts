@@ -8,7 +8,6 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { preserveAtPrefixedRelativePath } from "./path-policy.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
-/** Return a record view of model-supplied tool params when possible. */
 export { getToolParamsRecord };
 
 export type RequiredParamGroup = {
@@ -82,7 +81,6 @@ function hasValidEditReplacements(record: Record<string, unknown>): boolean {
   return Array.isArray(edits) && edits.length > 0 && edits.every(isValidEditReplacement);
 }
 
-/** Required parameter groups for file-style tools that need retry guidance. */
 export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
   write: [
@@ -95,7 +93,6 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
-/** Strip extra closing markers sometimes produced in XML arg_value path params. */
 function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
@@ -185,7 +182,6 @@ export function missingRequiredParamLabels(
     .map((group) => group.label ?? group.keys.join(" or "));
 }
 
-/** Throw actionable retry guidance when required tool params are missing. */
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
@@ -205,7 +201,6 @@ export function assertRequiredParams(
   }
 }
 
-/** Wrap a tool execute function with required-parameter validation. */
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],

@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
+import { resolveMessageToolDiscoveryAsync } from "../../agents/tools/message-tool-discovery.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -11,14 +12,12 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import * as bundled from "./bundled.js";
 import {
-  channelSupportsMessageCapability,
-  channelSupportsMessageCapabilityForChannel,
-  listCrossChannelSchemaSupportedMessageActions,
-  resolveChannelMessageToolMediaSourceParamKeys,
-  resolveChannelMessageToolSchemaProperties,
+  listCrossChannelSchemaSupportedMessageActionsSteps,
+  resolveChannelMessageToolMediaSourceParamKeysAsync,
+  resolveChannelMessageToolSchemaPropertiesSteps,
+  runMessageActionDiscoveryAsync,
 } from "./message-action-discovery.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
-import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type {
   ChannelMessageActionContext,
   ChannelMessageToolSchemaContribution,
@@ -610,58 +609,69 @@ function activateCapabilities() {
 
 describe("message action discovery", () => {
   it.each([
-    { name: "all plugins", all: true, channel: undefined, presentation: true, pin: true },
+    { name: "all plugins", channel: undefined, presentation: true, pin: true },
     {
       name: "channel alias",
-      all: false,
       channel: "demo-cards-alias",
       presentation: false,
       pin: true,
     },
-    { name: "missing channel", all: false, channel: undefined, presentation: false, pin: false },
-  ])("scopes capabilities to $name", ({ all, channel, presentation, pin }) => {
+    { name: "missing channel", channel: "demo-missing", presentation: false, pin: false },
+  ])("scopes capability fields to $name", async ({ channel, presentation, pin }) => {
     activateCapabilities();
-    const supports = (capability: ChannelMessageCapability) =>
-      all
-        ? channelSupportsMessageCapability({}, capability)
-        : channelSupportsMessageCapabilityForChannel({ cfg: {}, channel }, capability);
-    expect(supports("presentation")).toBe(presentation);
-    expect(supports("delivery-pin")).toBe(pin);
+    const { schema } = await resolveMessageToolDiscoveryAsync({
+      cfg: {},
+      currentChannelProvider: channel,
+    });
+    expect(Object.hasOwn(schema.properties, "presentation")).toBe(presentation);
+    expect(Object.hasOwn(schema.properties, "delivery")).toBe(pin);
   });
 
-  it("does not replace an explicitly empty prepared catalog", () => {
+  it("does not replace an explicitly empty prepared catalog", async () => {
     activateCapabilities();
     const preparedMessageToolCatalog = { version: 0, channels: [], getChannel: () => undefined };
-    expect(channelSupportsMessageCapability({}, "presentation", preparedMessageToolCatalog)).toBe(
-      false,
-    );
+    const { schema } = await resolveMessageToolDiscoveryAsync({
+      cfg: {},
+      preparedMessageToolCatalog,
+    });
+    expect(schema.properties).not.toHaveProperty("presentation");
+    expect(schema.properties).not.toHaveProperty("delivery");
     expect(
-      resolveChannelMessageToolSchemaProperties({
-        cfg: {},
-        channel: "demo-buttons",
-        preparedMessageToolCatalog,
-      }),
+      await runMessageActionDiscoveryAsync(
+        resolveChannelMessageToolSchemaPropertiesSteps({
+          cfg: {},
+          channel: "demo-buttons",
+          preparedMessageToolCatalog,
+        }),
+      ),
     ).toEqual({});
   });
 
-  it("evaluates prepared discovery against each account context", () => {
+  it("evaluates prepared discovery against each account context", async () => {
     const plugin = discoveryPlugin("demo-account-scoped", ({ accountId }) => ({
       actions: ["send"],
       capabilities: accountId === "first" ? ["presentation"] : ["delivery-pin"],
     }));
     activate(plugin);
     const preparedMessageToolCatalog = getPreparedMessageToolCatalog();
-    const supports = (accountId: string, capability: ChannelMessageCapability) =>
-      channelSupportsMessageCapabilityForChannel(
-        { cfg: {}, channel: plugin.id, accountId, preparedMessageToolCatalog },
-        capability,
-      );
-    expect(supports("first", "presentation")).toBe(true);
-    expect(supports("second", "presentation")).toBe(false);
-    expect(supports("second", "delivery-pin")).toBe(true);
+    const first = await resolveMessageToolDiscoveryAsync({
+      cfg: {},
+      currentChannelProvider: plugin.id,
+      currentAccountId: "first",
+      preparedMessageToolCatalog,
+    });
+    const second = await resolveMessageToolDiscoveryAsync({
+      cfg: {},
+      currentChannelProvider: plugin.id,
+      currentAccountId: "second",
+      preparedMessageToolCatalog,
+    });
+    expect(first.schema.properties).toHaveProperty("presentation");
+    expect(second.schema.properties).not.toHaveProperty("presentation");
+    expect(second.schema.properties).toHaveProperty("delivery");
   });
 
-  it("keeps all-configured schema account-neutral from another current channel", () => {
+  it("keeps all-configured schema account-neutral from another current channel", async () => {
     const schema: ChannelMessageToolSchemaContribution[] = [
       { actions: ["react"], properties: { emoji: Type.Optional(Type.String()) } },
       {
@@ -681,16 +691,18 @@ describe("message action discovery", () => {
       ),
       discoveryPlugin("slack", () => ({ actions: [] })),
     );
-    const properties = resolveChannelMessageToolSchemaProperties({
-      cfg: {},
-      channel: "slack",
-      accountId: "slack-workspace",
-    });
+    const properties = await runMessageActionDiscoveryAsync(
+      resolveChannelMessageToolSchemaPropertiesSteps({
+        cfg: {},
+        channel: "slack",
+        accountId: "slack-workspace",
+      }),
+    );
     expect(properties).toHaveProperty("components");
     expect(properties).not.toHaveProperty("emoji");
   });
 
-  it("keeps required and serialized contributed properties optional", () => {
+  it("keeps required and serialized contributed properties optional", async () => {
     activate(
       discoveryPlugin("demo-contrib", () => ({
         actions: ["send"],
@@ -704,10 +716,12 @@ describe("message action discovery", () => {
         },
       })),
     );
-    const properties = resolveChannelMessageToolSchemaProperties({
-      cfg: {},
-      channel: "demo-contrib",
-    });
+    const properties = await runMessageActionDiscoveryAsync(
+      resolveChannelMessageToolSchemaPropertiesSteps({
+        cfg: {},
+        channel: "demo-contrib",
+      }),
+    );
     expect(Type.Object({ action: Type.String(), ...properties }).required).toEqual(["action"]);
   });
 
@@ -726,7 +740,7 @@ describe("message action discovery", () => {
     expected: string[];
   }[])(
     "filters cross-channel actions for $name current-channel schema",
-    ({ actions, scope, expected }) => {
+    async ({ actions, scope, expected }) => {
       activate(
         discoveryPlugin("demo-scoped-schema", () => ({
           actions,
@@ -734,7 +748,12 @@ describe("message action discovery", () => {
         })),
       );
       expect(
-        listCrossChannelSchemaSupportedMessageActions({ cfg: {}, channel: "demo-scoped-schema" }),
+        await runMessageActionDiscoveryAsync(
+          listCrossChannelSchemaSupportedMessageActionsSteps({
+            cfg: {},
+            channel: "demo-scoped-schema",
+          }),
+        ),
       ).toStrictEqual(expected);
     },
   );
@@ -750,7 +769,7 @@ describe("message action discovery", () => {
       mediaSourceParams: ["avatarUrl", "avatarPath"],
       sendParams: ["avatarUrl", "avatarPath"],
     },
-  ])("discovers $name media-source parameters", ({ mediaSourceParams, sendParams }) => {
+  ])("discovers $name media-source parameters", async ({ mediaSourceParams, sendParams }) => {
     activate(
       discoveryPlugin("demo-media", () => ({
         actions: ["send", "set-profile"],
@@ -758,21 +777,29 @@ describe("message action discovery", () => {
       })),
     );
     const paramsFor = (action: "send" | "set-profile") =>
-      resolveChannelMessageToolMediaSourceParamKeys({ cfg: {}, action, channel: "demo-media" });
-    expect(paramsFor("set-profile")).toEqual(["avatarUrl", "avatarPath"]);
-    expect(paramsFor("send")).toStrictEqual(sendParams);
+      resolveChannelMessageToolMediaSourceParamKeysAsync({
+        cfg: {},
+        action,
+        channel: "demo-media",
+      });
+    expect(await paramsFor("set-profile")).toEqual(["avatarUrl", "avatarPath"]);
+    expect(await paramsFor("send")).toStrictEqual(sendParams);
   });
 
-  it("skips crashing discovery and logs once", () => {
+  it("skips crashing discovery and logs once", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     activate(
       discoveryPlugin("demo-crashing", () => {
         throw new Error("boom");
       }),
     );
-    expect(channelSupportsMessageCapability({}, "presentation")).toBe(false);
+    expect(
+      (await resolveMessageToolDiscoveryAsync({ cfg: {} })).schema.properties,
+    ).not.toHaveProperty("presentation");
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(channelSupportsMessageCapability({}, "presentation")).toBe(false);
+    expect(
+      (await resolveMessageToolDiscoveryAsync({ cfg: {} })).schema.properties,
+    ).not.toHaveProperty("presentation");
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });

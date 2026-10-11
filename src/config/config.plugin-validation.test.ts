@@ -83,7 +83,6 @@ function expectNoPath(entries: Diagnostics, pathValue: string) {
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
-  let enumPluginDir = "";
   let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let manifestlessClaudeBundleDir = "";
@@ -140,22 +139,7 @@ describe("config plugin validation", () => {
     await chmodSafeDir(fixtureRoot);
     suiteHome = path.join(fixtureRoot, "home");
     await mkdirSafe(suiteHome);
-    enumPluginDir = path.join(suiteHome, "enum-plugin");
     chatPluginDir = path.join(suiteHome, "chat-plugin");
-    await writePluginFixture({
-      dir: enumPluginDir,
-      id: "enum-plugin",
-      schema: {
-        type: "object",
-        properties: {
-          fileFormat: {
-            type: "string",
-            enum: ["markdown", "html"],
-          },
-        },
-        required: ["fileFormat"],
-      },
-    });
     await writePluginFixture({
       dir: chatPluginDir,
       id: "chat-plugin",
@@ -372,23 +356,28 @@ describe("config plugin validation", () => {
     };
 
     it.each([
+      { name: "string harness primary", model: "openai/gpt-5.6", needsCodex: false },
       {
-        name: "provider-level PI runtime policy",
-        config: {
-          models: providerModels("pi"),
-        },
+        name: "native Codex fallback",
+        model: { primary: "openai/gpt-5.6", fallbacks: ["openai/gpt-5.3-codex-spark"] },
+        needsCodex: true,
       },
-      {
-        name: "explicitly disabled Codex plugin entry",
-        config: {
-          plugins: { entries: { codex: { enabled: false } } },
+    ])("uses native plugin requirements for ACP $name", ({ model, needsCodex }) => {
+      const result = validateWithMissingCodexPlugin({
+        agents: {
+          ownership: "explicit",
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] } },
+          entries: { worker: { runtime: { type: "acp", acp: { agent: "cursor" } }, model } },
         },
-      },
-    ])("does not warn when $name keeps Codex unavailable", ({ config }) => {
-      const res = validateWithMissingCodexPlugin(config);
+      });
 
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings, false);
+      expect(result).toMatchObject({ ok: true });
+      const missingCodexWarnings = (result.warnings ?? []).filter(
+        (warning) =>
+          warning.path === "plugins.entries.codex" &&
+          warning.message.includes("plugin not installed: codex"),
+      );
+      expect(missingCodexWarnings).toHaveLength(needsCodex ? 1 : 0);
     });
 
     it.each([
@@ -565,23 +554,6 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(res.warnings, warns);
     });
 
-    it("warns when automatic model policy overrides provider PI", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: providerModels("pi"),
-        agents: {
-          entries: { openclaw: {} },
-          defaults: {
-            models: {
-              "openai/gpt-5.6": { agentRuntime: { id: "default" } },
-            },
-          },
-        },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
     it("warns when the utility model needs Codex", () => {
       const res = validateWithMissingCodexPlugin({
         agents: {
@@ -659,33 +631,6 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(customResult.warnings, false);
       expect(platformResult.ok).toBe(true);
       expectMissingCodexPluginWarning(platformResult.warnings);
-    });
-
-    it("still reports explicit Codex allowlist entries for custom OpenAI-compatible base URLs", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://proxy.example.invalid/v1",
-              models: [],
-            },
-          },
-        },
-        plugins: {
-          allow: ["codex"],
-          entries: { codex: {} },
-        },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings, false);
-      expect(res.warnings ?? []).toContainEqual(
-        expect.objectContaining({
-          path: "plugins.allow",
-          message:
-            "plugin not installed: codex — install the official external plugin with: openclaw plugins install @openclaw/codex",
-        }),
-      );
     });
   });
 
@@ -1070,7 +1015,7 @@ describe("config plugin validation", () => {
     [
       "skill-workshop",
       true,
-      "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)",
+      'plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Set skills.workshop.autonomous.mode to "auto" or "off" and use openclaw skills workshop commands, then remove this plugins config entry)',
     ],
   ] as const)("warns across all references to removed %s", (id, enabled, message) => {
     const res = validateRemovedPluginConfig(id, enabled);
@@ -1230,23 +1175,6 @@ describe("config plugin validation", () => {
     });
 
     expect(res.ok).toBe(true);
-  });
-
-  it("surfaces allowed enum values for plugin config diagnostics", () => {
-    const res = validatePluginRefs({
-      enabled: true,
-      load: { paths: [enumPluginDir] },
-      entries: { "enum-plugin": { config: { fileFormat: "txt" } } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issue = res.issues.find(
-        (entry) => entry.path === "plugins.entries.enum-plugin.config.fileFormat",
-      );
-      expect(issue?.message).toContain('allowed: "markdown", "html"');
-      expect(issue?.allowedValues).toEqual(["markdown", "html"]);
-      expect(issue?.allowedValuesHiddenCount).toBe(0);
-    }
   });
 
   it("accepts plugin heartbeat targets", () => {

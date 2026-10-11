@@ -107,12 +107,42 @@ describe("projects vitest config", () => {
     });
   });
 
-  it("resolves the complete root watch project graph", () => {
+  it("keeps the resolved root and generated projects in their explicit environments", () => {
     const result = spawnNodeEvalSync(
       `
+        import assert from "node:assert/strict";
         import { resolveConfig } from "vitest/node";
         import rootConfig from "./vitest.config.ts";
+        import { sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
         const resolved = await resolveConfig({ config: false }, rootConfig);
+        const generated = await resolveConfig({ config: false }, {
+          plugins: sharedVitestConfig.plugins,
+          test: {
+            projects: [undefined, "jsdom", "happy-dom"].map(environment => ({
+              extends: false,
+              plugins: sharedVitestConfig.plugins,
+              test: {
+                name: environment ? "ui-" + environment : "generated-node",
+                ...(environment ? { environment } : {}),
+              },
+            })),
+          },
+        });
+        const projects = [
+          resolved.test,
+          ...resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+          generated.test,
+          ...generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+        ];
+        for (const project of projects) {
+          if (!/^ui(?:-|$)/u.test(project.name ?? "")) {
+            assert.equal(project.environment, "node", project.name || "root");
+          }
+        }
+        assert.deepEqual(
+          generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig.environment),
+          ["node", "jsdom", "happy-dom"],
+        );
         console.log("ROOT_PROJECT_RESOLUTION " + resolved.test.resolvedProjects.length);
       `,
       {
@@ -262,8 +292,8 @@ describe("projects vitest config", () => {
     [
       "fake-timer unit-fast",
       createUnitFastFakeTimersVitestConfig,
-      ["src/acp/translator.stop-reason.test.ts"],
-      ["src/acp/translator.stop-reason.test.ts"],
+      ["src/utils.test.ts"],
+      ["src/utils.test.ts"],
     ],
   ] as const)(
     "limits %s include files to the project's owned tests",
@@ -273,7 +303,7 @@ describe("projects vitest config", () => {
         ...owned,
         "src/plugin-sdk/text-chunking.test.ts",
         "src/system-agent/assistant.configured.test.ts",
-        "src/acp/translator.stop-reason.test.ts",
+        "src/utils.test.ts",
         "src/gateway/openresponses-http.test.ts",
         unrelated,
       ]);
@@ -529,17 +559,21 @@ describe("projects vitest config", () => {
     },
   );
 
-  it.each(["extensions/agentsapi/agentsapi-attempt.test.ts"])(
-    "routes real extension database consumer %s to its fork owner",
-    (file) => {
-      const project = "test/vitest/vitest.extension-database-workers.config.ts";
-      const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
-      expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-      expect(config.include).toContain(file.replace(/^extensions\//u, ""));
-      expect(config.pool).toBe(diagnosticForksPool);
-      expect(config.isolate).toBe(true);
-    },
-  );
+  it.each([
+    "extensions/agentsapi/agentsapi-attempt.test.ts",
+    "extensions/litellm/index.test.ts",
+    "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
+    "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
+    "extensions/qa-lab/src/gateway-child.test.ts",
+    "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
+  ])("routes real extension database consumer %s to its fork owner", (file) => {
+    const project = "test/vitest/vitest.extension-database-workers.config.ts";
+    const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+    expect(config.include).toContain(file.replace(/^extensions\//u, ""));
+    expect(config.pool).toBe(diagnosticForksPool);
+    expect(config.isolate).toBe(true);
+  });
 
   it.each([
     {

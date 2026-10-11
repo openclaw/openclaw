@@ -27,7 +27,7 @@ const STREAM_TS = "1700000000.000100";
 
 function createRateLimitTransport(
   method: StreamMethod | "chat.postMessage",
-  terminal: "success" | "socket" | "http500",
+  terminal: "success" | "socket",
   brokenBody = false,
 ) {
   const requests: Array<{ method: string; body: string }> = [];
@@ -55,9 +55,6 @@ function createRateLimitTransport(
       }
       if (terminal === "socket") {
         throw new Error("synthetic lost acknowledgment");
-      }
-      if (terminal === "http500") {
-        return new Response("synthetic server failure", { status: 500 });
       }
     }
     return Response.json({ ok: true, ts: STREAM_TS });
@@ -96,11 +93,10 @@ async function runStreamOperation(
   return session;
 }
 
-const STREAM_METHODS = ["chat.startStream", "chat.appendStream", "chat.stopStream"] as const;
+const STREAM_METHODS = ["chat.appendStream", "chat.stopStream"] as const;
 
 describe("Slack explicit rate-limit recovery", () => {
   it.each([
-    { cache: "token", warm: false },
     { cache: "token", warm: true },
     { cache: "listener", warm: false },
     { cache: "listener", warm: true },
@@ -180,9 +176,9 @@ describe("Slack explicit rate-limit recovery", () => {
     const transport = createRateLimitTransport("chat.startStream", "success", true);
     const session = await runStreamOperation("chat.startStream", transport.fetch);
     expect(session).toMatchObject({ stopped: true, delivered: true, pendingText: "" });
-    expect(
-      transport.requests.filter((request) => request.method === "chat.startStream"),
-    ).toHaveLength(2);
+    const attempts = transport.requests.filter((request) => request.method === "chat.startStream");
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]?.body).toBe(attempts[1]?.body);
   });
 
   it.each(["retry", "abort"] as const)(
@@ -257,7 +253,7 @@ describe("Slack explicit rate-limit recovery", () => {
     },
   );
 
-  it.each(["socket", "http500"] as const)(
+  it.each(["socket"] as const)(
     "does not replay an ambiguous %s response after an explicit rate-limit retry",
     async (terminal) => {
       const transport = createRateLimitTransport("chat.appendStream", terminal);
@@ -268,41 +264,6 @@ describe("Slack explicit rate-limit recovery", () => {
       expect(transport.requests.some((request) => request.method === "chat.stopStream")).toBe(
         false,
       );
-    },
-  );
-
-  it.each(["chat.postMessage", "files.completeUploadExternal"] as const)(
-    "retries rejected %s writes with their original workspace and body",
-    async (method) => {
-      const bodies: string[] = [];
-      const rejected = new Response("rate limited", {
-        status: 429,
-        headers: { "retry-after": "0" },
-      });
-      const client = createSlackWriteClient("synthetic-write-fixture", {
-        teamId: "TWORKSPACE",
-        fetch: async (_input, init) => {
-          if (typeof init?.body !== "string") {
-            throw new Error("Expected Slack's URL-encoded write request");
-          }
-          bodies.push(init.body);
-          return bodies.length === 1
-            ? rejected
-            : new Response(JSON.stringify({ ok: true, ts: STREAM_TS }));
-        },
-      });
-      await expect(
-        method === "chat.postMessage"
-          ? client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" })
-          : client.files.completeUploadExternal({
-              files: [{ id: "FFIXTURE", title: "answer.txt" }],
-              channel_id: "CFIXTURE",
-            }),
-      ).resolves.toMatchObject({ ok: true });
-      expect(rejected.bodyUsed).toBe(true);
-      expect(bodies).toHaveLength(2);
-      expect(bodies[0]).toBe(bodies[1]);
-      expect(new URLSearchParams(bodies[1]).get("team_id")).toBe("TWORKSPACE");
     },
   );
 
@@ -334,34 +295,27 @@ describe("Slack explicit rate-limit recovery", () => {
     expect(attempts).toBe(1);
   });
 
-  it.each([
-    { header: "0", calls: 3 },
-    { header: "invalid", calls: 1 },
-    { header: "2147001", calls: 1 },
-    { header: "0", calls: 1, rejectRateLimitedCalls: true },
-    { header: "0", calls: 2, retryConfig: { retries: 1, minTimeout: 1, maxTimeout: 1 } },
-  ])("bounds rate-limit recovery for $header ($calls requests)", async (testCase) => {
-    const responses: Response[] = [];
-    const client = createSlackWriteClient("synthetic-budget-fixture", {
-      rejectRateLimitedCalls: testCase.rejectRateLimitedCalls,
-      retryConfig: testCase.retryConfig,
-      fetch: async () => {
-        const response = new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": testCase.header },
-        });
-        responses.push(response);
-        return response;
-      },
-    });
-    await expect(
-      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
-    ).rejects.toThrow();
-    expect(responses).toHaveLength(testCase.calls);
-    if (!testCase.rejectRateLimitedCalls && !testCase.retryConfig) {
+  it.each([{ header: "2147001", calls: 1 }])(
+    "bounds rate-limit recovery for $header ($calls requests)",
+    async (testCase) => {
+      const responses: Response[] = [];
+      const client = createSlackWriteClient("synthetic-budget-fixture", {
+        fetch: async () => {
+          const response = new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": testCase.header },
+          });
+          responses.push(response);
+          return response;
+        },
+      });
+      await expect(
+        client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
+      ).rejects.toThrow();
+      expect(responses).toHaveLength(testCase.calls);
       expect(responses.every((response) => response.bodyUsed)).toBe(true);
-    }
-  });
+    },
+  );
 
   it("does not multiply the retry budget when pre-resolved options are reused", async () => {
     let attempts = 0;

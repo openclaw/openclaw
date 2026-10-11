@@ -1,6 +1,6 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
-import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";

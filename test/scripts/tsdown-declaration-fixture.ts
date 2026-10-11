@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
@@ -142,8 +143,8 @@ export function createFixture(groups: readonly string[], root: string) {
   for (const name of [
     ".bin",
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@silvia-odwyer/photon-node",
-    "koffi",
     "playwright-core",
     "web-tree-sitter",
     "tree-sitter-bash",
@@ -159,7 +160,7 @@ export function createFixture(groups: readonly string[], root: string) {
       "junction",
     );
   }
-  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
+  materializeDeclarationPackages(root, groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -200,13 +201,15 @@ export function createFixture(groups: readonly string[], root: string) {
     recursive: true,
   });
   // Keep the generator's source owners and import.meta.url lookups inside the fixture.
+  // Plain paths are deliberate: owner edits do not select these suites in product PRs
+  // (see "Declaration-fixture owner selection" in .agents/skills/openclaw-ci-limits).
   const runtimeEntryOwners = new Set([
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",
-    "src/process/supervisor/service-child-windows-job-native.ts",
     "src/process/exec-result.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/update-managed-service-handoff-native-loader.ts",
+    "src/infra/package-update-activation-native-loader.ts",
     "src/shared/deferred.ts",
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
@@ -252,9 +255,9 @@ export function createFixture(groups: readonly string[], root: string) {
   ]) {
     write(source, "export {};\n");
   }
-  if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
-    // Exercise every real extension partition, even in the small compiler fixture.
-    for (const id of ["fixture-a", "fixture-b", "fixture-c", "fixture-d", "fixture-e"]) {
+  if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
+    // Exercise shared contracts across multiple plugin entries.
+    for (const id of ["fixture-a", "fixture-b"]) {
       write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
       write(
         `extensions/${id}/package.json`,
@@ -384,7 +387,11 @@ import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFi
 import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
 await withDistArtifactOwnership(process.cwd(), async () => {
   const steps = resolveBuildAllSteps("full").filter(step =>
-    ["tsdown-unified", "write-unified-entry-dts"].includes(step.label));
+    ["tsdown", "write-unified-entry-dts"].includes(step.label)).map(step =>
+      step.label === "tsdown"
+        // This fixture materializes only the unified source graph.
+        ? { ...step, args: [...step.args, "--config", "tsdown.config.ts", "--filter", ${JSON.stringify(TSDOWN_UNIFIED_CONFIG_GROUP)}] }
+        : step);
   const result = await runBuildAllSteps("full", { steps });
   process.exitCode = result.exitCode;
 });

@@ -126,7 +126,7 @@ describe("Matrix crypto unsafe-state Doctor", () => {
       snapshotJson: JSON.stringify([{ name: "crypto", version: 1, stores: [] }]),
       databaseCount: 1,
     });
-    const store = getMatrixRuntime().state.openKeyedStore<Record<string, unknown>>(
+    const store = getMatrixRuntime().state.openKeyedStoreV2<Record<string, unknown>>(
       openMatrixIdbSnapshotStoreOptions(storageRootDir),
     );
     const meta = await store.lookup("current:meta");

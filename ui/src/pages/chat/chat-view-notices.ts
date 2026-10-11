@@ -12,6 +12,8 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
+import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
+import "./components/chat-child-attention.tsx";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -31,16 +33,20 @@ type ChatViewNoticesProps = {
   onDismissError?: () => void;
 };
 
-type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
-  connected?: boolean;
-  messages: readonly unknown[];
-  providerPolicyNotice?: ProviderPolicyNotice | null;
-  providerReviewNotice?: TemplateResult | typeof nothing;
-  runError?: ChatRunError | null;
-  onRefresh?: () => void;
-  onDismissWorkspaceConflict?: () => void;
-  workspaceConflict?: WorkspaceResultConflict | null;
-};
+type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
+  SubagentRowContext &
+  Pick<SubagentRoster, "subagentSessionsRead"> & {
+    sessionKey?: string;
+    onSessionSelect?: (key: string) => void;
+    connected?: boolean;
+    messages: readonly unknown[];
+    providerPolicyNotice?: ProviderPolicyNotice | null;
+    providerReviewNotice?: TemplateResult | typeof nothing;
+    runError?: ChatRunError | null;
+    onRefresh?: () => void;
+    onDismissWorkspaceConflict?: () => void;
+    workspaceConflict?: WorkspaceResultConflict | null;
+  };
 
 function renderStatusNotice(
   className: string,
@@ -193,6 +199,17 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       </button>`
     : nothing;
   return html`
+    ${
+      // Seeded rows can name children the gateway no longer links; wait for its child read.
+      props.subagentParentKey && props.subagentSessionsRead
+        ? html`<openclaw-chat-child-attention
+            .sessionKey=${props.subagentParentKey}
+            .sessions=${props.subagentSessions ?? []}
+            .onOpenSubagent=${props.onOpenSubagent}
+            .onOpenSession=${props.onSessionSelect}
+          ></openclaw-chat-child-attention>`
+        : nothing
+    }
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
     ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}

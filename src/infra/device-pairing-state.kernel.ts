@@ -19,12 +19,10 @@ export function loadDevicePairingStateForMutation(
   return state;
 }
 
-/** Resolve the expiry timestamp for one pending device-pairing request. */
 export function resolvePairingRequestExpiry(timestampMs: number): number {
   return timestampMs + DEVICE_PAIRING_PENDING_TTL_MS;
 }
 
-/** Normalize one requested or approved pairing role. */
 export function normalizeDevicePairingRole(role: string | undefined): string | null {
   const trimmed = role?.trim();
   return trimmed ? trimmed : null;
@@ -55,7 +53,6 @@ export function preserveDeviceRoleScopes(role: string, scopes: string[] | undefi
   );
 }
 
-/** Compare pairing role or scope lists as unordered sets. */
 export function sameDevicePairingStringSet(
   left: readonly string[],
   right: readonly string[],
@@ -67,7 +64,6 @@ export function sameDevicePairingStringSet(
   return left.every((value) => rightSet.has(value));
 }
 
-/** Resolve the normalized role set requested by a pairing record. */
 export function resolveRequestedDeviceRoles(input: { role?: string; roles?: string[] }): string[] {
   return mergeDevicePairingRoles(input.roles, input.role) ?? [];
 }

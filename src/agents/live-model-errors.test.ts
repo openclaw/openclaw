@@ -84,4 +84,22 @@ describe("live model error helpers", () => {
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
+
+  it("treats a hard model deprecation as model-unavailable, not deprecation warnings", () => {
+    for (const message of [
+      "Internal error: Model exo-free has been deprecated.",
+      "The model `text-davinci-003` has been deprecated, learn more here: https://example.com",
+      "This model is deprecated.",
+    ]) {
+      expect(isModelNotFoundErrorMessage(message), message).toBe(true);
+    }
+    for (const message of [
+      "The model parameter `max_tokens` is deprecated; use `max_completion_tokens`.",
+      "The `model` field is deprecated.",
+      "Parameter top_k is deprecated for this model.",
+      "Warning: model gpt-4o-2024-05-13 is deprecated and will be removed on 2026-12-01.",
+    ]) {
+      expect(isModelNotFoundErrorMessage(message), message).toBe(false);
+    }
+  });
 });

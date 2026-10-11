@@ -405,7 +405,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
       let acknowledged: ManagedWorktreeRecord | undefined;
       const withSource: WorktreeSourceStage = async (run) => {
         const result = await run({ assertCurrent: () => {} });
-        const record = service.findLiveByOwner("session", ownerId);
+        const record = await service.findLiveByOwner("session", ownerId);
         if (!record) {
           return result;
         }
@@ -431,14 +431,14 @@ describe("ManagedWorktreeService repository code isolation", () => {
       const published = acknowledged;
       if (mode === "new") {
         expect(failure).toBe(sourceFailure);
-        expect(service.findLiveByOwner("session", ownerId)).toBeUndefined();
+        expect(await service.findLiveByOwner("session", ownerId)).toBeUndefined();
         const retained = (await service.listRegistryRecords()).find(
           (record) => record.id === published.id,
         );
         expect(retained?.removedAt).toBeDefined();
         await expect(fs.stat(published.path)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
-        const current = service.findLiveByOwner("session", ownerId);
+        const current = await service.findLiveByOwner("session", ownerId);
         expect(current).toMatchObject({
           id: published.id,
           path: published.path,

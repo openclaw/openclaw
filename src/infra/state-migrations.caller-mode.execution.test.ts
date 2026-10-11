@@ -11,9 +11,10 @@ import {
 } from "../plugins/legacy-session-surfaces.types.js";
 import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { createSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   createCallerModeExecutionFixture,
   createCallerModeSnapshot,
@@ -27,6 +28,7 @@ import {
   planLegacyStateMigrationsReadOnly,
   runLegacyStateMigrations,
 } from "./state-migrations.doctor.js";
+import * as mediaPersistence from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
 import {
   readLegacyMigrationReceipt,
@@ -36,6 +38,7 @@ import {
   resetAutoMigrateLegacyStateDirForTest,
   resolveLegacyProfileWorkspaceMigrationPaths,
 } from "./state-migrations.state-dir.js";
+import type { LegacyStateMigrationStepReceipt } from "./state-migrations.types.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
@@ -122,11 +125,90 @@ afterEach(async () => {
   vi.restoreAllMocks();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  stateDatabase.closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
 describe("legacy state migration caller execution", () => {
+  it.each([
+    { caller: "preflight", failure: "interruption" },
+    { caller: "preflight", failure: "independent error" },
+    { caller: "direct", failure: "interruption" },
+    { caller: "direct", failure: "independent error" },
+  ] as const)(
+    "settles $caller receipts before forwarding $failure during cancellation",
+    async ({ caller, failure }) => {
+      const fixture = await makeFixture();
+      // These receipt checks need no bundled plugins; both discovery routes use this root.
+      const extensions = path.join(fixture.root, "extensions");
+      fs.unlinkSync(extensions);
+      fs.mkdirSync(extensions);
+      fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = extensions;
+      const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
+      const plan = caller === "preflight" ? await planFixture(fixture) : undefined;
+      const detected =
+        caller === "direct"
+          ? await detectLegacyStateMigrations({
+              cfg: {},
+              mode: "doctor",
+              env: fixture.env,
+              homedir: () => fixture.homeDir,
+              doctorOnlyStateMigrations: true,
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            })
+          : undefined;
+      const controller = new AbortController();
+      const interruption = new Error("Doctor interrupted by SIGINT");
+      const error = failure === "interruption" ? interruption : new Error("SQLite repair failed");
+      const fail = () => {
+        controller.abort(interruption);
+        throw error;
+      };
+      const owner = detected
+        ? vi.spyOn(stateDatabase, "prepareOpenClawStateDatabaseSchema").mockImplementationOnce(fail)
+        : vi.spyOn(mediaPersistence, "migrateLegacyMediaPersistence").mockImplementationOnce(fail);
+      const receipts: LegacyStateMigrationStepReceipt[] = [];
+      const scope = createSqliteReadOnlyWorkerScope({
+        signal: controller.signal,
+        deadlineOwnedByCaller: false,
+      });
+      try {
+        const options = {
+          env: fixture.env,
+          doctorOnlyStateMigrations: true,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+          onStepReceipt: (receipt: LegacyStateMigrationStepReceipt) => receipts.push(receipt),
+        };
+        const operation = scope.run(() =>
+          detected
+            ? runLegacyStateMigrations({ ...options, detected, config: {} })
+            : autoMigrateLegacyState({ ...options, cfg: {}, homedir: () => fixture.homeDir }),
+        );
+        if (failure === "interruption") {
+          await expect(operation).rejects.toBe(interruption);
+        } else {
+          await expect(operation).resolves.toMatchObject({ warnings: [error.message] });
+        }
+      } finally {
+        await scope.close();
+      }
+      expect(owner).toHaveBeenCalledOnce();
+      const blockerId = detected ? "state-schema" : "media-persistence";
+      expect(receipts.find((receipt) => receipt.id === blockerId)).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "step-threw", message: error.message },
+      });
+      if (plan) {
+        expectBlockedTailInPlanOrder({ plan, receipts, blockerId });
+      }
+      expect(receipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "blocked-by-prior-refusal" },
+      });
+      expect(fs.existsSync(execPath)).toBe(true);
+    },
+  );
+
   it.each(["automatic", "doctor", "direct", "detected-directory", "detected-config"] as const)(
     "refuses retired OAuth sidecars before %s schema preparation on every attempt",
     async (mode) => {

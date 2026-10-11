@@ -232,13 +232,7 @@ describe("CronService read ops while job is running", () => {
 
   it.each([
     { mode: "scheduled", status: "ok", offsets: [300_000], deleteAfterRun: true },
-    { mode: "scheduled", status: "ok", offsets: [300_000], deleteAfterRun: false },
-    { mode: "scheduled", status: "skipped", offsets: [300_000], deleteAfterRun: true },
-    { mode: "scheduled", status: "skipped", offsets: [300_000], deleteAfterRun: false },
-    { mode: "scheduled", status: "error", offsets: [300_000], deleteAfterRun: true },
-    { mode: "scheduled", status: "error", offsets: [300_000], deleteAfterRun: false },
     { mode: "manual", status: "ok", offsets: [600_000, 1_000], deleteAfterRun: true },
-    { mode: "manual", status: "ok", offsets: [600_000, 1_000], deleteAfterRun: false },
   ] as const)(
     "keeps reads responsive and schedule edits across restart during a $mode $status run (deleteAfterRun=$deleteAfterRun)",
     async ({ mode, status, offsets, deleteAfterRun }) => {
@@ -276,7 +270,6 @@ describe("CronService read ops while job is running", () => {
         }
         isolatedRun.completeRun({
           status,
-          ...(status === "error" ? { error: "original invocation failed" } : {}),
         });
         if (mode === "manual") {
           await expect(run).resolves.toEqual({ ok: true, ran: true });

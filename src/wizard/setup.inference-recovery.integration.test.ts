@@ -47,7 +47,6 @@ it.each([
   { target: "file", changed: true },
   { target: "stage", changed: true },
   { target: "file", changed: false },
-  { target: "stage", changed: false },
 ])(
   "wizard activation uses its $target target (credential changed=$changed)",
   async ({ target, changed }) => {

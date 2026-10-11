@@ -54,8 +54,12 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
     let primaryRevision: UInt64?
     let requests = LockIsolated<[String]>([])
     let failures = LockIsolated<[GatewayTLSValidationFailure]>([])
+    let handshakes = LockIsolated<[(fingerprint: String?, accepted: Bool)]>([])
+    let handshakeRecorded = AsyncTestSignal()
+    let sockets = LockIsolated<[GatewayTestWebSocketTask]>([])
     let beforeTrust: (@Sendable () async -> Void)?
     let certificate: Data
+    let presentedCertificate: LockIsolated<Data>
     let root: Data
     let trusted: Bool
     let expired: Bool
@@ -78,6 +82,7 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
         self.primaryRevision = primaryRevision
         self.configuredFingerprint = configuredFingerprint
         self.certificate = certificate
+        self.presentedCertificate = LockIsolated(certificate)
         self.root = root
         self.trusted = trusted
         self.expired = expired
@@ -111,7 +116,7 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
     func sessionBox(route: GatewayTLSRoute) -> WebSocketSessionBox {
         let pinning = GatewayTLSPinningSession(params: route.params)
         let session = GatewayTestWebSocketSession(taskFactory: {
-            GatewayTestWebSocketTask(sendHook: { socket, message, index in
+            let socket = GatewayTestWebSocketTask(sendHook: { socket, message, index in
                 guard index > 0,
                       let method = GatewayWebSocketTestSupport.requestMethod(from: message),
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
@@ -122,10 +127,13 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
                 if index == 0 {
                     await self.beforeTrust?()
                     let trust = try RenewalCertificates.trust(
-                        certificate: self.certificate, root: self.root,
+                        certificate: self.presentedCertificate.value, root: self.root,
                         trusted: self.trusted, expired: self.expired,
                         verificationDate: self.verificationDate)
-                    guard pinning.validateServerTrust(trust, for: self.url) else {
+                    let accepted = pinning.validateServerTrust(trust, for: self.url)
+                    self.handshakes.withValue { $0.append((route.params.expectedFingerprint, accepted)) }
+                    self.handshakeRecorded.notify()
+                    guard accepted else {
                         let failure = try #require(pinning.consumeLastTLSFailure())
                         self.failures.withValue { $0.append(failure) }
                         throw GatewayTLSValidationError(failure: failure, context: "renewal fixture")
@@ -135,6 +143,8 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
                 return .data(GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect"))
             })
+            self.sockets.withValue { $0.append(socket) }
+            return socket
         })
         return WebSocketSessionBox(session: session)
     }
@@ -450,6 +460,58 @@ struct GatewayCertificateRenewalTests {
                     .fingerprint(fixture.certificate))
                 #expect(fixture.requests.value == ["health"])
                 #expect(fixture.failures.value.count == 1)
+                result = .success(())
+            } catch { result = .failure(error) }
+            await connection.shutdown()
+            try result.get()
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `automatic reconnect renews a learned pin but never a configured pin`(configured: Bool) async throws {
+        try await withRenewalIdentity {
+            let old = RenewalCertificates.fingerprint(RenewalCertificates.old)
+            let renewed = RenewalCertificates.fingerprint(RenewalCertificates.renewed)
+            let fixture = try RenewalConnectionFixture(
+                url: #require(URL(string: "wss://gateway.example.com")),
+                configuredFingerprint: configured ? old : nil,
+                certificate: RenewalCertificates.old)
+            try fixture.learnOriginalCertificate()
+            let connection = fixture.connection()
+            let pushes = await connection.subscribe()
+            let result: Result<Void, Error>
+            do {
+                _ = try await connection.acquireServerLease()
+                #expect(fixture.requests.value == ["health"])
+                fixture.presentedCertificate.withValue { $0 = RenewalCertificates.renewed }
+                try #require(fixture.sockets.value.last).emitReceiveFailure()
+                if configured {
+                    try await fixture.handshakeRecorded.wait("configured pin reconnect refusals") {
+                        fixture.handshakes.value.filter { !$0.accepted }.count >= 2
+                    }
+                    #expect(GatewayTLSStore.loadFingerprint(stableID: fixture.storeKey) == old)
+                    #expect(!fixture.handshakes.value.dropFirst().contains { $0.accepted })
+                    #expect(fixture.requests.value == ["health"])
+                } else {
+                    try await fixture.handshakeRecorded.wait("learned pin automatic renewal") {
+                        let handshakes = fixture.handshakes.value
+                        return handshakes.contains { $0.accepted && $0.fingerprint == renewed } ||
+                            handshakes.filter { !$0.accepted }.count >= 3
+                    }
+                    try #require(fixture.handshakes.value.contains { $0.accepted && $0.fingerprint == renewed })
+                    #expect(GatewayTLSStore.loadFingerprint(stableID: fixture.storeKey) == renewed)
+                    #expect(fixture.requests.value == ["health"])
+                    var renewedSnapshot = false
+                    for await delivery in pushes {
+                        if case .push(.snapshot) = delivery.event,
+                           delivery.serverLease.route.tls?.params.expectedFingerprint == renewed
+                        {
+                            renewedSnapshot = true
+                            break
+                        }
+                    }
+                    #expect(renewedSnapshot)
+                }
                 result = .success(())
             } catch { result = .failure(error) }
             await connection.shutdown()

@@ -113,8 +113,7 @@ function captureChromeMcpProcessTarget(
   rootPid: number,
   snapshots: ChromeMcpProcessSnapshot[],
 ): ChromeMcpProcessCleanupTarget {
-  const byPid = new Map(snapshots.map((snapshot) => [snapshot.pid, snapshot]));
-  const root = byPid.get(rootPid);
+  const root = snapshots.findLast((snapshot) => snapshot.pid === rootPid);
   if (!root) {
     throw new ChromeMcpProcessSnapshotError(
       `Chrome MCP process identity unavailable for pid ${rootPid}.`,
@@ -128,9 +127,8 @@ function captureChromeMcpProcessTarget(
   }
   const descendants: ChromeMcpOwnedProcess[] = [];
   const queue = [...(childrenByParent.get(rootPid) ?? [])];
-  while (queue.length > 0) {
-    const next = queue.shift();
-    if (!next || next.pid === process.pid || next.pid === rootPid) {
+  for (const next of queue) {
+    if (next.pid === process.pid || next.pid === rootPid) {
       continue;
     }
     descendants.push({ pid: next.pid, identity: next.identity });
@@ -237,50 +235,32 @@ async function terminateChromeMcpProcessTree(
   if (surviving.length === 0) {
     return;
   }
-  if (process.platform === "win32") {
-    let firstError: Error | undefined;
-    if (surviving.some(({ pid }) => pid === target.root.pid)) {
-      try {
-        await taskkillChromeMcpProcessTree(target.root.pid);
-      } catch (err) {
-        firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
+  let firstError: Error | undefined;
+  const windows = process.platform === "win32";
+  for (const secondPass of [false, true]) {
+    if (windows) {
+      // Taskkill the root tree first, then any retained descendants it missed.
+      const candidates = secondPass
+        ? surviving.filter(({ pid }) => pid !== target.root.pid)
+        : surviving.filter(({ pid }) => pid === target.root.pid).slice(0, 1);
+      for (const owned of candidates) {
+        // An earlier awaited taskkill can recycle the next descendant's PID.
+        if (secondPass && (await currentChromeMcpProcesses([owned])).length === 0) {
+          continue;
+        }
+        try {
+          await taskkillChromeMcpProcessTree(owned.pid);
+        } catch (err) {
+          firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
+        }
       }
-    }
-    await sleepTimeout(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
-    surviving = await currentChromeMcpProcesses(targets);
-    if (surviving.length === 0) {
-      return;
-    }
-    for (const descendant of surviving.filter(({ pid }) => pid !== target.root.pid)) {
-      // An earlier awaited taskkill can recycle the next descendant's PID.
-      if ((await currentChromeMcpProcesses([descendant])).length === 0) {
-        continue;
-      }
-      try {
-        await taskkillChromeMcpProcessTree(descendant.pid);
-      } catch (err) {
-        firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
-      }
-    }
-    await sleepTimeout(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
-    surviving = await currentChromeMcpProcesses(targets);
-    if (surviving.length > 0) {
-      throw (
-        firstError ??
-        new Error(
-          `Chrome MCP process cleanup failed for pid ${surviving.map(({ pid }) => pid).join(", ")}.`,
-        )
-      );
-    }
-    return;
-  }
-
-  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    for (const owned of surviving) {
-      try {
-        process.kill(owned.pid, signal);
-      } catch {
-        // An owned process can exit after its identity was revalidated.
+    } else {
+      for (const owned of surviving) {
+        try {
+          process.kill(owned.pid, secondPass ? "SIGKILL" : "SIGTERM");
+        } catch {
+          // An owned process can exit after its identity was revalidated.
+        }
       }
     }
     await sleepTimeout(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
@@ -289,8 +269,11 @@ async function terminateChromeMcpProcessTree(
       return;
     }
   }
-  throw new Error(
-    `Chrome MCP process cleanup failed for pid ${surviving.map(({ pid }) => pid).join(", ")}.`,
+  throw (
+    firstError ??
+    new Error(
+      `Chrome MCP process cleanup failed for pid ${surviving.map(({ pid }) => pid).join(", ")}.`,
+    )
   );
 }
 

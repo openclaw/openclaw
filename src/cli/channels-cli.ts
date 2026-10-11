@@ -32,10 +32,7 @@ type AddChannelSetupOptionsParams = {
   includeAll?: boolean;
 };
 
-type ChannelSetupOptionRegistration = {
-  preserveLegacyDefaults: boolean;
-  dropEmptyLegacyDefaultsForAttributeNames: ReadonlySet<string>;
-};
+type ChannelSetupOptionRegistration = Awaited<ReturnType<typeof addChannelSetupOptions>>;
 
 const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   { flags: "--token <token>", description: "Channel token or credential payload" },
@@ -105,10 +102,7 @@ function shouldRegisterChannelSetupOptions(
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
-async function addChannelSetupOptions(
-  command: Command,
-  params: AddChannelSetupOptionsParams = {},
-): Promise<ChannelSetupOptionRegistration> {
+async function addChannelSetupOptions(command: Command, params: AddChannelSetupOptionsParams = {}) {
   const { resolveChannelSetupCliOptionMetadata } =
     await import("../channels/plugins/cli-add-options.js");
   const selected = params.channelId?.trim().toLowerCase();
@@ -154,7 +148,7 @@ export async function registerChannelsCli(
           ["openclaw channels list", "List configured channels."],
           ["openclaw channels list --all", "Show configured, bundled, and installable channels."],
           ["openclaw channels add", "Open guided channel setup."],
-          ["openclaw channels status --probe", "Run channel status checks and probes."],
+          ["openclaw channels status --probe", "Check channel status and connectivity."],
           [
             "openclaw channels add --channel telegram --token <token>",
             "Add or update a channel account non-interactively.",
@@ -179,7 +173,7 @@ export async function registerChannelsCli(
     .command("status")
     .description("Show channel status (use openclaw status --deep for a full connection check)")
     .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
-    .option("--probe", "Probe channel credentials", false)
+    .option("--probe", "Check channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {

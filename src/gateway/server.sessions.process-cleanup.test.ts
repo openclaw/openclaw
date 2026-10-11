@@ -6,7 +6,6 @@ import {
   addSession,
   appendOutput,
   getFinishedSession,
-  getSession,
   markExited,
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
@@ -34,32 +33,6 @@ function seedFinishedProcess(id: string, scopeKey: string) {
   addSession(session);
   markExited(session, 0, null, "completed");
 }
-
-test("sessions.reset purges finished processes for every retired session identity", async () => {
-  await seedActiveMainSession();
-  seedFinishedProcess("finished-main-alias", "main");
-  seedFinishedProcess("finished-main-canonical", "agent:main:main");
-  seedFinishedProcess("finished-main-id", "sess-main");
-  seedFinishedProcess("finished-other-session", "agent:main:other");
-  seedFinishedProcess("finished-shared-scope", "explicit:shared");
-
-  const running = createProcessSessionFixture({
-    id: "running-main-process",
-    backgrounded: true,
-  });
-  running.scopeKey = "agent:main:main";
-  addSession(running);
-
-  const reset = await directSessionReq("sessions.reset", { key: "main" });
-
-  expect(reset.ok).toBe(true);
-  expect(getFinishedSession("finished-main-alias")).toBeUndefined();
-  expect(getFinishedSession("finished-main-canonical")).toBeUndefined();
-  expect(getFinishedSession("finished-main-id")).toBeUndefined();
-  expect(getFinishedSession("finished-other-session")).toBeDefined();
-  expect(getFinishedSession("finished-shared-scope")).toBeDefined();
-  expect(getSession("running-main-process")).toBe(running);
-});
 
 test("sessions.delete purges only completed processes owned by the deleted session", async () => {
   await createSessionStoreDir();

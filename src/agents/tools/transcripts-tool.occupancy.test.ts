@@ -208,6 +208,10 @@ describe("occupancy-driven transcript lifecycle", () => {
         await first.start().settled;
         h.watches[0]!.onOccupied();
         const original = await h.started(1);
+        expect(await h.store.readSession(original.session.sessionId)).toMatchObject({
+          source: { agentId: "agent-a", accountId: "default" },
+          metadata: { agentId: "agent-a" },
+        });
         await original.onUtterance({ text: "Agent A's meeting" });
         await first.stop();
         const saved = await h.store.readSession(original.session.sessionId);

@@ -1,8 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -16,12 +18,10 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -40,9 +40,28 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+
+const custodyFault = useSqliteWorkerFault([
+  {
+    name: "reject_pending_consume",
+    match: /^delete from session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_pending_consume BEFORE DELETE ON main.session_pending_inputs
+      BEGIN SELECT RAISE(ABORT, 'consume failed'); END`,
+  },
+  {
+    name: "reject_collect_consume",
+    match: /^update session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON main.session_pending_inputs
+      WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END`,
+  },
+]);
 
 describe("accepted input custody", () => {
   const fixture = useTempSessionsFixture("openclaw-pending-inputs-");
@@ -270,17 +289,11 @@ describe("accepted input custody", () => {
   it("rolls transcript promotion and custody consumption back together", async () => {
     const receipt = await stage("atomic");
     const before = await loadTranscriptEvents(scope());
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec(
-        "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
-      );
-    });
+    custodyFault.enable();
     await expect(promote(receipt)).rejects.toThrow("consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe("queued");
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec("DROP TRIGGER reject_pending_consume");
-    });
+    custodyFault.disable();
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
     expect(await readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
   });
@@ -338,6 +351,12 @@ describe("accepted input custody", () => {
     const receipt = await stage("relocation-observer");
     await promote(receipt);
     const appendCopy = createRelocation(receipt);
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => {
+      errorLog.mockRestore();
+      resetLogger();
+    });
 
     expect(() =>
       runOpenClawAgentWriteTransaction(
@@ -349,7 +368,10 @@ describe("accepted input custody", () => {
         },
         toDatabaseOptions(resolveSqliteScope(scope())),
       ),
-    ).toThrow("injected observer failure");
+    ).not.toThrow();
+    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("SQLite post-commit notification failed"),
+    );
 
     expect(() =>
       receipt.run(() => appendCopy(receipt.inputId, "stale-source-after-observer")),
@@ -402,22 +424,6 @@ describe("accepted input custody", () => {
     expect(
       receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
     ).toMatchObject({ ok: true, value: { appended: false } });
-  });
-
-  it("does not use a dirty projection to excuse an inactive admitted user", async () => {
-    const receipt = await stage("dirty-off-path");
-    await promote(receipt);
-    expect(
-      appendTranscriptMessageSync(scope(), {
-        eventId: "other-root",
-        message: message("other-root"),
-        parentId: null,
-      }),
-    ).toMatchObject({ ok: true, value: { appended: true, messageId: "other-root" } });
-
-    expect(() =>
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toThrow("no longer active");
   });
 
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {
@@ -482,11 +488,7 @@ describe("accepted input custody", () => {
     const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
     receipts.push(aggregate);
     const before = await loadTranscriptEvents(scope());
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec(
-        "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
-      );
-    });
+    custodyFault.enable(1);
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
@@ -494,9 +496,7 @@ describe("accepted input custody", () => {
       { runId: "atomic-a", state: "pending" },
       { runId: "atomic-b", state: "pending" },
     ]);
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec("DROP TRIGGER reject_collect_consume");
-    });
+    custodyFault.disable();
     expect(await promote(aggregate)).toMatchObject({
       appended: true,
       messageId: aggregate.inputId,

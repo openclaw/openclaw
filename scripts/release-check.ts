@@ -293,30 +293,12 @@ export function resolveReleaseNpmCommand(
   return resolveNpmRunner({ ...params, npmArgs: args });
 }
 
-function execNpm(
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: BufferEncoding;
-    env?: NodeJS.ProcessEnv;
-    maxBuffer?: number;
-    stdio: "inherit" | ["ignore", "pipe", "pipe"];
-  },
-): string {
+function execNpm(args: string[], options: Parameters<typeof runReleaseCheckCommand>[1]): string {
   const invocation = resolveReleaseNpmCommand(args, { env: options.env ?? process.env });
   return runReleaseCheckCommand(invocation, options);
 }
 
-function execPnpm(
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: BufferEncoding;
-    env?: NodeJS.ProcessEnv;
-    maxBuffer?: number;
-    stdio: "inherit" | ["ignore", "pipe", "pipe"];
-  },
-): string {
+function execPnpm(args: string[], options: Parameters<typeof runReleaseCheckCommand>[1]): string {
   const invocation = resolvePnpmRunner({ env: options.env ?? process.env, pnpmArgs: args });
   return runReleaseCheckCommand(invocation, options);
 }
@@ -339,8 +321,6 @@ async function packRootPackage(packDestination: string): Promise<string> {
       new URL("./openclaw-prepack.ts", import.meta.url).href,
       import.meta.url,
     )) as typeof OpenClawPrepack;
-  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
-  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
   const errors = collectPreparedPrepackErrorsFromDisk();
   if (errors.length > 0) {
     throw new Error(
@@ -895,24 +875,15 @@ function runPackedCliSmoke(params: {
   const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
-    if (process.platform === "win32") {
-      runReleaseCheckCommand(
-        {
-          command: trustedCmdPath,
-          args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
-          shell: false,
-          windowsVerbatimArguments: true,
-        },
-        {
-          cwd: params.cwd,
-          stdio: "inherit",
-          env,
-        },
-      );
-      continue;
-    }
     runReleaseCheckCommand(
-      { command: binaryPath, args: [...args], shell: false },
+      process.platform === "win32"
+        ? {
+            command: trustedCmdPath,
+            args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+            shell: false,
+            windowsVerbatimArguments: true,
+          }
+        : { command: binaryPath, args: [...args], shell: false },
       {
         cwd: params.cwd,
         stdio: "inherit",

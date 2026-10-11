@@ -87,10 +87,7 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.updateConfigChannel,
-    update: params.update,
-  });
+  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
     channelInfo,
     channelLabel: channelInfo.label,
@@ -116,21 +113,15 @@ function formatStatusTailscaleValue(params: {
     const suffix = params.includeDnsNameWhenOff ? params.dnsName : null;
     return decorateOff(suffix ? `off · ${suffix}` : "off");
   }
-  if (params.dnsName && params.httpsUrl) {
-    const parts = [
-      params.tailscaleMode,
-      params.includeBackendStateWhenOn ? "unknown" : null,
-      params.dnsName,
-      params.httpsUrl,
-    ].filter(Boolean);
-    return parts.join(" · ");
-  }
-  const parts = [
+  const hasAddress = params.dnsName && params.httpsUrl;
+  const value = [
     params.tailscaleMode,
     params.includeBackendStateWhenOn ? "unknown" : null,
-    "magicdns unknown",
-  ].filter(Boolean);
-  return decorateWarn(parts.join(" · "));
+    ...(hasAddress ? [params.dnsName, params.httpsUrl] : ["magicdns unknown"]),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return hasAddress ? value : decorateWarn(value);
 }
 
 function formatStatusServiceValue(params: StatusManagedService): string {
@@ -318,23 +309,17 @@ function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null
     : null;
 }
 
-export function buildGatewayStatusJsonPayload(params: {
-  gatewayMode: "local" | "remote";
-  gatewayConnection: StatusGatewayConnection;
-  remoteUrlMissing: boolean;
-  gatewayReachable: boolean;
-  gatewayProbe:
-    | {
-        connectLatencyMs?: number | null;
-        error?: string | null;
-        health?: unknown;
-        startupPhase?: string;
-      }
-    | null
-    | undefined;
-  gatewaySelf: StatusGatewaySelf;
-  gatewayProbeAuthWarning?: string | null;
-}) {
+export function buildGatewayStatusJsonPayload(
+  params: Pick<
+    Parameters<typeof buildStatusOverviewSurfaceRows>[0],
+    | "gatewayMode"
+    | "gatewayConnection"
+    | "remoteUrlMissing"
+    | "gatewayReachable"
+    | "gatewaySelf"
+    | "gatewayProbeAuthWarning"
+  > & { gatewayProbe: StatusGatewayProbe | undefined },
+) {
   return {
     mode: params.gatewayMode,
     url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),

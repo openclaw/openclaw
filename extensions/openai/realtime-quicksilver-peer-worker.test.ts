@@ -197,6 +197,20 @@ describe("GPT-Live audio thread", () => {
           weriftUrl: pathToFileURL(createRequire(import.meta.url).resolve("werift")).href,
         },
       });
+      // The receiver outlives each hang-up under test. On Linux, Bun reports the
+      // ICMP refusal of its next echo or RTCP send as a socket error that werift
+      // leaves uncaught, which fails the receiver thread. Only that is expected.
+      let hungUp = false;
+      const receiverErrors: { hungUp: boolean; error: unknown }[] = [];
+      receiver.on("error", (error) => receiverErrors.push({ hungUp, error }));
+      const expectReceiverHealthy = () =>
+        expect(
+          receiverErrors.filter(
+            ({ hungUp: afterHangUp, error }) =>
+              !afterHangUp ||
+              !(error instanceof Error && "code" in error && error.code === "ECONNREFUSED"),
+          ),
+        ).toEqual([]);
       const errors: Error[] = [];
       let audibleSamples = 0;
       let failAudioSink = false;
@@ -264,6 +278,7 @@ describe("GPT-Live audio thread", () => {
             "PCM messages reaching the playback worker during stall: " + mediaDuringStall,
           );
           expect(mediaDuringStall).toBeGreaterThanOrEqual(10);
+          hungUp = true;
           peer.close();
           expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
           const afterClose = Atomics.load(counts, 1);
@@ -271,8 +286,11 @@ describe("GPT-Live audio thread", () => {
             setTimeout(resolve, 80);
           });
           expect(Atomics.load(counts, 1)).toBe(afterClose);
+          expectReceiverHealthy();
           return;
         }
+        // The next PCM batch fails the sink, which hangs up the peer.
+        hungUp = true;
         failAudioSink = true;
         const failureDeadline = Date.now() + 2_000;
         while (errors.length === 0 && Date.now() < failureDeadline) {
@@ -282,6 +300,7 @@ describe("GPT-Live audio thread", () => {
         }
         expect(errors).toEqual([sinkError]);
         await expect(peer.createOffer()).rejects.toThrow("closed");
+        expectReceiverHealthy();
       } finally {
         peer?.close();
         await receiver.terminate();

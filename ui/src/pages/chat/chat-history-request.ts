@@ -35,10 +35,14 @@ import {
 } from "./chat-history-state.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  projectChatTranscriptMetadata,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
+const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
 const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Keep startup small, then amortize older-history reads and prepend work across
@@ -107,45 +111,17 @@ function updateChatHistoryOwnerRequestCount(
   requestKey: string,
   delta: 1 | -1,
 ) {
-  let counts = registry.ownerRequestCounts.get(owner);
-  const nextCount = (counts?.get(requestKey) ?? 0) + delta;
+  const counts = registry.ownerRequestCounts.get(owner) ?? new Map<string, number>();
+  const nextCount = (counts.get(requestKey) ?? 0) + delta;
   if (nextCount <= 0) {
-    counts?.delete(requestKey);
-    if (counts?.size === 0) {
+    counts.delete(requestKey);
+    if (counts.size === 0) {
       registry.ownerRequestCounts.delete(owner);
     }
     return;
   }
-  if (!counts) {
-    counts = new Map();
-    registry.ownerRequestCounts.set(owner, counts);
-  }
+  registry.ownerRequestCounts.set(owner, counts);
   counts.set(requestKey, nextCount);
-}
-
-async function requestChatHistory<T extends ChatHistoryResponse>(
-  method: "chat.history" | "chat.startup",
-  attempt: () => Promise<T>,
-  shouldContinue: () => boolean,
-  shouldRetry: () => boolean,
-  signal: AbortSignal,
-  onRetry: (error: unknown) => void,
-): Promise<T> {
-  let attemptNumber = 0;
-  for (;;) {
-    try {
-      return await attempt();
-    } catch (err) {
-      if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(err, method)) {
-        throw err;
-      }
-      onRetry(err);
-      await sleepWithAbort(resolveGatewayReadRetryDelayMs(err, attemptNumber++), signal);
-      if (!shouldContinue() || !shouldRetry()) {
-        throw err;
-      }
-    }
-  }
 }
 
 type SharedChatHistoryArgs = [
@@ -209,6 +185,7 @@ export function requestSharedHistory(
   if (!shared || existingOwner) {
     const params = {
       sessionKey,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
       ...budget,
@@ -216,42 +193,50 @@ export function requestSharedHistory(
     };
     const controller = new AbortController();
     const consumers = new Set([consumer]);
-    const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
     // A pane joining older shared work still owns a full retry window. Otherwise
     // it could inherit the first consumer's nearly expired startup deadline.
     const shouldRetry = () =>
       [...consumers].some((entry) => entry.isCurrent() && Date.now() < entry.retryDeadlineMs);
-    const promise = requestChatHistory(
-      method,
-      async () => {
-        // Each attempt observes only its present consumers and their current runs.
-        // A late join acquires custody on a retry, never from an earlier read.
-        const consumersAtIssue = new Map(
-          [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
-        );
-        const observation = sessions
-          ? { owner: sessions, reconcile: sessions.captureReconcile() }
-          : undefined;
-        const response = attachHistoryActivity(
-          await client.request<ChatHistoryResponse>(method, params, {
-            signal: controller.signal,
-            timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-          }),
-        );
-        return { ...response, observation, consumersAtIssue };
-      },
-      shouldContinue,
-      shouldRetry,
-      controller.signal,
-      (error) => {
-        for (const entry of consumers) {
-          if (entry.isCurrent()) {
-            entry.lastRetryableError = error;
-            entry.onRetry?.();
+    const attempt = async () => {
+      // Each attempt observes only its present consumers and their current runs.
+      // A late join acquires custody on a retry, never from an earlier read.
+      const consumersAtIssue = new Map(
+        [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
+      );
+      const observation = sessions
+        ? { owner: sessions, reconcile: sessions.captureReconcile() }
+        : undefined;
+      const response = attachHistoryActivity(
+        await client.request<ChatHistoryResponse>(method, params, {
+          signal: controller.signal,
+          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+        }),
+      );
+      return { ...response, observation, consumersAtIssue };
+    };
+    const signal = controller.signal;
+    const promise = (async () => {
+      let attemptNumber = 0;
+      for (;;) {
+        try {
+          return await attempt();
+        } catch (error) {
+          if (!shouldRetry() || !isRetryableChatReadError(error, method)) {
+            throw error;
+          }
+          for (const entry of consumers) {
+            if (entry.isCurrent()) {
+              entry.lastRetryableError = error;
+              entry.onRetry?.();
+            }
+          }
+          await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attemptNumber++), signal);
+          if (!shouldRetry()) {
+            throw error;
           }
         }
-      },
-    ).finally(() => {
+      }
+    })().finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
       }
@@ -346,6 +331,7 @@ export async function requestChatSessionSnapshot(
       ...(Object.hasOwn(sessionInfo ?? {}, "activeLeafEntryId")
         ? { displayedLeafEntryId: sessionInfo?.activeLeafEntryId?.trim() || null }
         : {}),
+      transcriptMetadata: sessionInfo ? projectChatTranscriptMetadata(sessionInfo) : undefined,
       messages: visibleChatHistoryMessages(result.messages),
       pagination: resolveChatHistoryPagination(result),
       sessionId: historySessionId(result),
@@ -362,6 +348,7 @@ async function requestOlderChatHistoryPage(
   const result = attachHistoryActivity(
     await client.request<ChatHistoryResult>("chat.history", {
       sessionKey,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
       offset,
@@ -399,29 +386,15 @@ export async function loadOlderChatHistoryPage(
   return result;
 }
 
-export type StagedOlderHistoryPage = {
-  claim: {
-    client: GatewayBrowserClient;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-    /** Projection fence: any later history request or reset (tail reload,
-     * rewind, branch switch) advances the version and voids this page even
-     * when the replacement projection lands on the same cursor. */
-    historyVersion: number;
-  };
-  requestedOffset: number;
-  result: ChatHistoryResult;
-};
+export type StagedOlderHistoryPage = NonNullable<
+  Awaited<ReturnType<typeof fetchStagedOlderHistoryPage>>
+>;
 
 // The staged prefetch deliberately skips beginHistoryRequest: request
 // ownership is last-writer-wins, so a background fetch bumping the version
 // could invalidate a concurrent tail load's apply. The claim below carries the
 // same facts and the pane validates it at consume time instead.
-export async function fetchStagedOlderHistoryPage(
-  state: ChatState,
-  offset: number,
-): Promise<StagedOlderHistoryPage | undefined> {
+export async function fetchStagedOlderHistoryPage(state: ChatState, offset: number) {
   if (!state.client || !state.connected) {
     return undefined;
   }
@@ -438,6 +411,7 @@ export async function fetchStagedOlderHistoryPage(
       client,
       connectionEpoch,
       sessionKey,
+      // Any later history request or reset voids this page even on the same cursor.
       historyVersion,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
     },

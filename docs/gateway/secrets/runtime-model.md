@@ -11,16 +11,16 @@ This page covers how secrets behave at runtime: owner isolation, egress-time sen
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
-- Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, fail-closed owners, and refs whose runtime owner is not mapped still fail startup.
+- Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, owners that require startup to stop on failure, and refs whose runtime owner is not mapped still fail startup.
 - Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
 - Config reload also reconciles channel connections when a secret-provider edit changes resolved credentials. Plugins that support account-scoped reload restart only the affected named accounts; shared, default, removed, or unresolved account changes use the plugin's whole-channel restart policy. Cold accounts stop, eligible stale accounts keep using their last-known-good credentials, and recovery preserves manual stops.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
-- Read-only channel capability discovery evaluates accounts independently. A configured-but-unavailable account does not hide healthy sibling accounts' message actions, while direct sends through the unavailable account still fail closed.
+- Read-only channel capability discovery evaluates accounts independently. A configured-but-unavailable account does not hide healthy sibling accounts' message actions, while direct sends through the unavailable account are still blocked.
 
 This keeps secret-provider outages off hot request paths.
 
-Gateway ingress protection, structurally invalid config or resolved values, policy violations, and unknown ownership still fail closed. Isolated owners never fall through to a lower-precedence credential source.
+Gateway ingress protection, structurally invalid config or resolved values, policy violations, and unknown ownership still block startup or reload. Isolated owners never fall through to a lower-precedence credential source.
 
 When startup database admission marks an agent unavailable, secrets preparation
 omits that exact database's auth store without substituting an empty credential
@@ -31,11 +31,15 @@ preparation. Failed inspections and ownership refusals remain cold store owners
 with repair guidance. Unreadable stores without a matching admission refusal still
 fail preparation; a secrets reload alone cannot readmit the agent.
 
+Background preparation preserves the saved model configuration separately from
+runtime catalog defaults, so recovery does not disable otherwise compatible
+runtime choices such as Codex.
+
 ## Egress-time injection (sentinels)
 
-For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health probes replace known sentinels in URL and header values immediately before each request leaves the process.
+For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health checks replace known sentinels in URL and header values immediately before each request leaves the process.
 
-Unknown sentinel-shaped values fail closed before network activity. OpenClaw refuses to send the request rather than forwarding an unresolved sentinel to a provider. Resolved secret values are also registered for exact-value log redaction as a defense in depth measure.
+Unknown sentinel-shaped values block requests before network activity. OpenClaw refuses to send the request rather than forwarding an unresolved sentinel to a provider. Resolved secret values are also registered for exact-value log redaction as a defense in depth measure.
 
 Provider adapters use the latest injection point their SDK supports:
 
@@ -67,7 +71,7 @@ SecretRefs do not make arbitrary readable files safe. Backups, copied configs, o
 
 SecretRefs are validated only on effectively active surfaces:
 
-- **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict, fail-closed, Gateway-required, or unmapped failures block startup/reload.
+- **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict failures, failures that must stop startup, Gateway-required failures, and unmapped failures block startup/reload.
 - **Inactive surfaces**: unresolved refs do not block startup/reload; they emit a non-fatal `SECRETS_REF_IGNORED_INACTIVE_SURFACE` diagnostic.
 
 <Accordion title="Examples of inactive surfaces">
@@ -100,7 +104,7 @@ In interactive onboarding, choosing SecretRef storage runs preflight validation 
 
 - Env refs: validates the env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
-- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
+- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before check/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
 - Generated gateway token: setup mints `gateway.auth.token` itself, so reference mode has nothing to prompt for. With `OPENCLAW_GATEWAY_TOKEN` exported it writes an `env` ref to that variable, keeping a later rotation authoritative; otherwise it writes the token to the secret store under `OPENCLAW_GATEWAY_TOKEN` and stores a `store` ref. An existing store entry is reused rather than rotated, so re-running setup never invalidates already-paired clients.
 
 Validation failure shows the error and lets you retry.

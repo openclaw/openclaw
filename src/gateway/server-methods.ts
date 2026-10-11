@@ -26,6 +26,7 @@ import {
 import { errorShapeFromError } from "./error-shape.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
+import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -33,6 +34,10 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+import {
+  bindChatSendDiagnostics,
+  startChatSendDiagnostics,
+} from "./server-methods/chat-send-diagnostics.js";
 import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
@@ -74,7 +79,6 @@ import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
 
-/** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
@@ -114,7 +118,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
-  methodRegistry: GatewayMethodRegistry;
+  methodRegistry: GatewayMethodRegistryView;
   requestParams?: unknown;
   admission?: "continuation";
   reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
@@ -274,6 +278,9 @@ export async function handleGatewayRequest(
   let respondCancelled = opts.respond;
   const dispatch = async (retainRoot?: () => void) => {
     const observationSignal = observation ? getAsyncWorkSignal() : undefined;
+    using chatSendDiagnostics =
+      req.method === "chat.send" ? startChatSendDiagnostics(context.logGateway) : undefined;
+    const chatSendPhase = chatSendDiagnostics?.scope("authority");
     using subscribeDiagnostics =
       req.method === "sessions.messages.subscribe"
         ? startSlowRequestDiagnostics<SessionSubscribePhase>(
@@ -338,7 +345,13 @@ export async function handleGatewayRequest(
         : captureGatewayRequestOperatorGuard(opts);
       const assertOperatorCurrent = () =>
         (capturedOperatorGuard ??= captureGatewayRequestOperatorGuard(opts))();
-      const requestFacts = { method: req.method, requestParams: req.params, client, context };
+      const requestFacts = {
+        method: req.method,
+        requestParams: req.params,
+        client,
+        context,
+        signal,
+      };
       const authorization = await authorizeGatewayRequestPreDispatch({
         ...requestFacts,
         methodRegistry,
@@ -445,6 +458,7 @@ export async function handleGatewayRequest(
       const invokeHandler = async () => {
         retainRoot?.();
         subscribeDiagnostics?.mark("handlerPreparation");
+        chatSendPhase?.mark("preparation");
         const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
         // Lazy preparation may yield across a hot config change. Keep the router fence
         // unless the canonical owner reconciles accepted input before new admission.
@@ -476,6 +490,7 @@ export async function handleGatewayRequest(
           profileBinding,
           authorization.sessionScope,
         );
+        bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         sessionMutationCommitGuard?.();
         assertOperatorCurrent();
         authorization.sessionAccessAuthority?.assertCurrent();
@@ -491,6 +506,7 @@ export async function handleGatewayRequest(
         const sharing = opts.acceptsSerializedJson
           ? methodRegistry.getReadSharing?.(req.method)
           : undefined;
+        chatSendPhase?.finish();
         return GatewayRpcDiagnostics.runHandler(
           () =>
             sharing

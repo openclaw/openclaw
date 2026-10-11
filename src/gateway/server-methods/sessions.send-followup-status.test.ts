@@ -2,6 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  buildProjectedAgentRunIndex,
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -9,19 +14,20 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
 const loadGatewaySessionEntryReadOnlyMock = vi.fn();
-const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
+const prepareDeletedAgentSessionCheckMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const terminateAcceptedCollectorRunMock = vi.fn();
 const chatSendMock = vi.fn();
 
+// mock-isolation: Follow-up routing uses synthetic entries instead of real session stores.
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
   loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
     loadGatewaySessionEntryReadOnlyMock(...args),
-  resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
-    resolveDeletedAgentIdFromSessionKeyMock(...args),
+  prepareDeletedAgentSessionCheck: (...args: unknown[]) =>
+    prepareDeletedAgentSessionCheckMock(...args),
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -116,7 +122,7 @@ function completedRun(childSessionKey: string) {
       outcome: { status: "ok" as const },
     },
   };
-  getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(run);
+  getLatestSubagentRunByChildSessionKeyMock.mockResolvedValue(run);
   getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(run);
   return run;
 }
@@ -126,7 +132,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
     loadGatewaySessionEntryReadOnlyMock.mockReset();
-    resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
+    prepareDeletedAgentSessionCheckMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
@@ -139,7 +145,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   it("rejects keys belonging to a deleted agent", async () => {
     const key = "agent:deleted-agent:main";
     loadSession(key, "sess-orphan");
-    resolveDeletedAgentIdFromSessionKeyMock.mockReturnValue("deleted-agent");
+    prepareDeletedAgentSessionCheckMock.mockReturnValue("deleted-agent");
     const respond = await send({ key, message: "hi" });
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: ErrorCodes.INVALID_REQUEST,
@@ -158,6 +164,17 @@ describe("sessions.send completed subagent follow-up status", () => {
     loadSession(childSessionKey, "sess-followup", storePath);
     completedRun(childSessionKey);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
+    chatSendMock.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
+      registerAgentRunContext("run-new", {
+        agentId: "main",
+        sessionKey: childSessionKey,
+        sessionId: "sess-followup",
+        projectSessionActive: true,
+      });
+      projection.state.rowContext.projectedAgentRuns = buildProjectedAgentRunIndex();
+      respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
+    });
+    onTestFinished(() => clearAgentRunContext("run-new"));
     const broadcastToConnIds = vi.fn();
     const projection = createSessionRowProjectionFixture({
       cfg: {},
@@ -167,7 +184,6 @@ describe("sessions.send completed subagent follow-up status", () => {
         [childSessionKey]: {
           sessionId: "sess-followup",
           updatedAt: 123,
-          status: "running",
           startedAt: 123,
           runtimeMs: 10,
         },

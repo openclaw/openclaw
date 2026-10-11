@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -9,9 +10,9 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import * as registryDeps from "../registry/subagent-registry-deps.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { mutateRequesterSettleWakeBatch } from "./subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
   admitCompletionFixtureDatabase,
@@ -48,27 +49,15 @@ it.each(["transition", "complete"] as const)(
       });
       const acknowledged = createDeferred();
       const releaseAcknowledgement = createDeferred();
-      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-      const worker = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, run, options) =>
-          runWorker(
-            context,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const receipt = await scope.execute(command, executeOptions);
-                  if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                    acknowledged.resolve();
-                    await releaseAcknowledgement.promise;
-                  }
-                  return receipt;
-                },
-              }),
-            options,
-          ),
-        );
-      const publication = mutateRequesterSettleWakeBatch({
+      const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const receipt = await scope.execute(command, executeOptions);
+        if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+          acknowledged.resolve();
+          await releaseAcknowledgement.promise;
+        }
+        return receipt;
+      });
+      const publication = mutateRequesterCompletionBatch({
         entries: [input.subagent],
         operation:
           operation === "complete"

@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -26,7 +27,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        storePath: path.join(tempDir, "agent-end-context.sqlite"),
+        storePath: path.join(realpathSync(tempDir), "agent-end-context.sqlite"),
       };
       const sessionFile = formatSqliteSessionFileMarker(source);
       await upsertSessionEntry({

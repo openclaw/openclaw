@@ -68,12 +68,8 @@ type DeliveryDiagnosticsLike = {
   }>;
 };
 
-type AgentStatusLike = {
+type AgentStatusLike = Parameters<typeof countActiveStatusAgents>[0]["agentStatus"] & {
   totalSessions: number;
-  agents: Array<{
-    id: string;
-    lastActiveAgeMs?: number | null;
-  }>;
 };
 
 const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
@@ -155,11 +151,19 @@ export async function appendStatusAllDiagnosis(params: {
 }) {
   const { lines, muted, ok, warn, fail } = params;
   const emitDetail = (text: string) => lines.push(`  ${muted(text)}`);
+  const emitLimited = <T>(items: T[], limit: number, format: (item: T) => string) => {
+    for (const item of items.slice(0, limit)) {
+      lines.push(format(item));
+    }
+    if (items.length > limit) {
+      emitDetail(`… +${items.length - limit} more`);
+    }
+  };
 
   const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
-    const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
-    const colored = status === "ok" ? ok(label) : status === "warn" ? warn(label) : fail(label);
-    lines.push(`${icon} ${colored}`);
+    const decorate = status === "ok" ? ok : status === "warn" ? warn : fail;
+    const icon = status === "ok" ? "✓" : status === "warn" ? "!" : "✗";
+    lines.push(`${decorate(icon)} ${decorate(label)}`);
   };
   const emitUnavailableDiagnostics = (diagnostic: {
     label: string;
@@ -190,12 +194,7 @@ export async function appendStatusAllDiagnosis(params: {
       [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])],
       (issue) => `${issue.path.length}:${issue.path}${issue.message}`,
     );
-    for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
-    }
-    if (uniqueIssues.length > 12) {
-      emitDetail(`… +${uniqueIssues.length - 12} more`);
-    }
+    emitLimited(uniqueIssues, 12, (issue) => `  ${formatConfigIssueLine(issue, "-")}`);
   } else {
     emitCheck("Config: read failed", "warn");
   }
@@ -210,12 +209,11 @@ export async function appendStatusAllDiagnosis(params: {
     `Secret diagnostics (${params.secretDiagnostics.length})`,
     params.secretDiagnostics.length === 0 ? "ok" : "warn",
   );
-  for (const diagnostic of params.secretDiagnostics.slice(0, 10)) {
-    lines.push(`  - ${muted(redactStatusSecrets(diagnostic))}`);
-  }
-  if (params.secretDiagnostics.length > 10) {
-    emitDetail(`… +${params.secretDiagnostics.length - 10} more`);
-  }
+  emitLimited(
+    params.secretDiagnostics,
+    10,
+    (diagnostic) => `  - ${muted(redactStatusSecrets(diagnostic))}`,
+  );
 
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
@@ -241,7 +239,7 @@ export async function appendStatusAllDiagnosis(params: {
   const isTrivialLastErr = lastErrClean.length < 8;
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
-    lines.push(muted("Gateway last log line:"));
+    lines.push(muted("Recent Gateway log error (may be from an earlier run):"));
     emitDetail(redactStatusSecrets(lastErrClean));
   }
 
@@ -297,13 +295,10 @@ export async function appendStatusAllDiagnosis(params: {
     `Plugin compatibility (${params.pluginCompatibility.length || "none"})`,
     params.pluginCompatibility.length === 0 ? "ok" : "warn",
   );
-  for (const notice of params.pluginCompatibility.slice(0, 12)) {
+  emitLimited(params.pluginCompatibility, 12, (notice) => {
     const severity = notice.severity === "warn" ? "warn" : "info";
-    lines.push(`  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`);
-  }
-  if (params.pluginCompatibility.length > 12) {
-    emitDetail(`… +${params.pluginCompatibility.length - 12} more`);
-  }
+    return `  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`;
+  });
 
   if (params.agentStatus) {
     const recentSessions = countActiveStatusAgents({
@@ -341,9 +336,18 @@ export async function appendStatusAllDiagnosis(params: {
     }
   }
 
-  if (!params.nodeOnlyGateway && params.deliveryDiagnostics?.ok) {
-    if (isDeliveryDiagnosticsLike(params.deliveryDiagnostics.value)) {
-      const deliveryDiagnostics = params.deliveryDiagnostics.value;
+  if (!params.nodeOnlyGateway && params.deliveryDiagnostics) {
+    const diagnostic = params.deliveryDiagnostics;
+    if (!diagnostic.ok || !isDeliveryDiagnosticsLike(diagnostic.value)) {
+      emitUnavailableDiagnostics({
+        label: "Inbound delivery telemetry",
+        detail: diagnostic.ok
+          ? "Delivery diagnostics returned an invalid response."
+          : `Delivery diagnostics failed: ${diagnostic.error}`,
+        retry: "openclaw gateway stability",
+      });
+    } else {
+      const deliveryDiagnostics = diagnostic.value;
       const received = countDeliveryEvent(deliveryDiagnostics, "message.received");
       const dispatchStarted = countDeliveryEvent(deliveryDiagnostics, "message.dispatch.started");
       const dispatchCompleted = countDeliveryEvent(
@@ -380,23 +384,7 @@ export async function appendStatusAllDiagnosis(params: {
           "Multiple gateway dispatches have not completed yet; if this persists, inspect stuck sessions or model runs.",
         );
       }
-    } else {
-      emitUnavailableDiagnostics({
-        label: "Inbound delivery telemetry",
-        detail: "Delivery diagnostics returned an invalid response.",
-        retry: "openclaw gateway stability",
-      });
     }
-  } else if (
-    !params.nodeOnlyGateway &&
-    params.deliveryDiagnostics &&
-    !params.deliveryDiagnostics.ok
-  ) {
-    emitUnavailableDiagnostics({
-      label: "Inbound delivery telemetry",
-      detail: `Delivery diagnostics failed: ${params.deliveryDiagnostics.error}`,
-      retry: "openclaw gateway stability",
-    });
   }
 
   params.progress.setLabel("Reading logs…");
@@ -447,15 +435,10 @@ export async function appendStatusAllDiagnosis(params: {
       `Channel issues (${params.channelIssues.length || "none"})`,
       params.channelIssues.length === 0 ? "ok" : "warn",
     );
-    for (const issue of params.channelIssues.slice(0, 12)) {
+    emitLimited(params.channelIssues, 12, (issue) => {
       const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-      lines.push(
-        `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`,
-      );
-    }
-    if (params.channelIssues.length > 12) {
-      emitDetail(`… +${params.channelIssues.length - 12} more`);
-    }
+      return `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`;
+    });
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,

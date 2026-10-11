@@ -589,6 +589,17 @@ enum WatchClawStyle {
         endPoint: .bottomTrailing)
 }
 
+@MainActor
+private func watchPanelBackground(
+    _ shape: some InsettableShape,
+    fill: Color,
+    border: Color = WatchClawStyle.border) -> some View
+{
+    shape.fill(fill).overlay {
+        shape.strokeBorder(border, lineWidth: 1)
+    }
+}
+
 private struct WatchFaceScroll<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -761,12 +772,9 @@ private struct WatchHeroCard: View {
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(WatchClawStyle.raised)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 17, style: .continuous),
+                fill: WatchClawStyle.raised)
         }
     }
 }
@@ -858,12 +866,7 @@ private struct WatchSecondaryLabel: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
             .background {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                    }
+                watchPanelBackground(Capsule(style: .continuous), fill: Color.white.opacity(0.08))
             }
     }
 }
@@ -923,12 +926,9 @@ private struct WatchStackCard: View {
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(self.isProminent ? WatchClawStyle.raised : WatchClawStyle.surface)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 17, style: .continuous),
+                fill: self.isProminent ? WatchClawStyle.raised : WatchClawStyle.surface)
         }
     }
 }
@@ -1012,12 +1012,9 @@ private struct WatchApprovalCommandReview: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.055))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 14, style: .continuous),
+                fill: Color.white.opacity(0.055))
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Command to review")
@@ -1293,12 +1290,9 @@ private struct WatchChatEmptyState: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(WatchClawStyle.surface)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 17, style: .continuous),
+                fill: WatchClawStyle.surface)
         }
     }
 }
@@ -1342,12 +1336,10 @@ private struct WatchChatComposer: View {
                 .padding(.horizontal, 11)
                 .padding(.vertical, 10)
                 .background {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.09))
-                        .overlay {
-                            Capsule(style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
-                        }
+                    watchPanelBackground(
+                        Capsule(style: .continuous),
+                        fill: Color.white.opacity(0.09),
+                        border: Color.white.opacity(0.16))
                 }
             }
             .buttonStyle(.plain)

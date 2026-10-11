@@ -1,8 +1,29 @@
+import { stat as fsStat } from "node:fs/promises";
+
 export type PersistedFileStat = {
   type: "file" | "directory" | "other";
   size: number;
   mtimeMs?: number;
 };
+
+export async function readPersistedFileStat(
+  absolutePath: string,
+  isMissing: (error: unknown) => boolean,
+): Promise<PersistedFileStat | null> {
+  try {
+    const stat = await fsStat(absolutePath);
+    return {
+      type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } catch (error) {
+    if (isMissing(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
 
 type PersistedUtf8FileOperations = {
   readFile: (absolutePath: string) => Promise<Buffer | string>;

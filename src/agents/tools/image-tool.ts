@@ -80,30 +80,6 @@ function isExecutionAliasCandidateForProvider(
   );
 }
 
-function isCanonicalCandidateShadowedByExecutionAlias(
-  candidate: string | null | undefined,
-  candidates: readonly (string | null | undefined)[],
-): boolean {
-  const candidateProvider = modelRefProvider(candidate);
-  if (!candidateProvider || candidateProvider !== normalizeMediaProviderId(candidateProvider)) {
-    return false;
-  }
-  if (!isMinimaxVlmProvider(candidateProvider)) {
-    return false;
-  }
-  return candidates.some((shadowCandidate) =>
-    isExecutionAliasCandidateForProvider(shadowCandidate, candidateProvider),
-  );
-}
-
-/**
- * Resolve the effective image model config for the `view_image` tool.
- *
- * - Prefer explicit config (`agents.defaults.imageModel`).
- * - Otherwise, try to "pair" the primary model with an image-capable model:
- *   - same provider (best effort)
- *   - fall back to OpenAI/Anthropic when available
- */
 function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -209,13 +185,16 @@ function resolveImageModelConfigForTool(params: {
       ? resolveImplicitOpenAiImageCandidate(modelId)
       : `${providerId}/${modelId}`;
   });
-  const autoCandidates = rawAutoCandidates.filter(
-    (candidate) =>
-      !isCanonicalCandidateShadowedByExecutionAlias(candidate, [
-        ...primaryCandidates,
-        ...rawAutoCandidates,
-      ]),
-  );
+  const allCandidates = [...primaryCandidates, ...rawAutoCandidates];
+  const autoCandidates = rawAutoCandidates.filter((candidate) => {
+    const provider = modelRefProvider(candidate);
+    return (
+      !provider ||
+      provider !== normalizeMediaProviderId(provider) ||
+      !isMinimaxVlmProvider(provider) ||
+      !allCandidates.some((other) => isExecutionAliasCandidateForProvider(other, provider))
+    );
+  });
   const defaultPrimaryIsImplicit = !resolveAgentModelPrimaryValue(
     params.cfg?.agents?.defaults?.model,
   );
@@ -246,12 +225,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
     resolveImageModelConfigForTool,
   };
-}
-
-function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
-  const limit =
-    asPositiveFiniteNumber(maxBytesMb) ?? asPositiveFiniteNumber(cfg?.agents?.defaults?.mediaMaxMb);
-  return limit === undefined ? undefined : Math.floor(limit * 1024 * 1024);
 }
 
 export function createImageTool(options?: {
@@ -294,15 +267,17 @@ export function createImageTool(options?: {
       : null;
   const shouldResolveAutoImageModel =
     !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
+  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
+    resolveImageModelConfigForTool({
+      cfg: options?.config,
+      agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      authProfileStoreSource,
+      preparedModelRuntime: options?.preparedModelRuntime,
+    });
   const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveImageModelConfigForTool({
-        cfg: options?.config,
-        agentDir,
-        workspaceDir: options?.workspaceDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
-        preparedModelRuntime: options?.preparedModelRuntime,
-      })
+    ? resolveInitialModelConfig(options?.authProfileStoreSource)
     : explicitImageModelConfig;
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
@@ -378,12 +353,14 @@ export function createImageTool(options?: {
           record,
           DEFAULT_PROMPT,
         );
-        const maxBytesMb = readFiniteNumberParam(record, "maxBytesMb", {
-          min: 0,
-          minExclusive: true,
-          message: "maxBytesMb must be greater than 0",
-        });
-        const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
+        const maxBytesMb =
+          readFiniteNumberParam(record, "maxBytesMb", {
+            min: 0,
+            minExclusive: true,
+            message: "maxBytesMb must be greater than 0",
+          }) ?? asPositiveFiniteNumber(options?.config?.agents?.defaults?.mediaMaxMb);
+        const maxBytes =
+          maxBytesMb === undefined ? undefined : Math.floor(maxBytesMb * 1024 * 1024);
         let imageRoute:
           | { kind: "native" }
           | {
@@ -403,14 +380,7 @@ export function createImageTool(options?: {
           if (!imageModelConfig) {
             const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
             assertCurrent();
-            imageModelConfig = resolveImageModelConfigForTool({
-              cfg: options?.config,
-              agentDir,
-              workspaceDir: options?.workspaceDir,
-              authStore: options?.authProfileStore,
-              authProfileStoreSource,
-              preparedModelRuntime: options?.preparedModelRuntime,
-            });
+            imageModelConfig = resolveInitialModelConfig(authProfileStoreSource);
           }
           if (!imageModelConfig) {
             throw new Error(
@@ -444,12 +414,9 @@ export function createImageTool(options?: {
           // Stop before starting the next sequential download/decode when the run
           // was aborted, so a dead run cannot keep pulling up to maxImages remote images.
           signal?.throwIfAborted();
-          const trimmed = pathRawInput.trim();
-          const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-          if (!imageRaw) {
-            throw new Error("path required (empty string in paths)");
-          }
-
+          const imageRaw = pathRawInput.startsWith("@")
+            ? pathRawInput.slice(1).trim()
+            : pathRawInput;
           const normalizedRef = normalizeMediaReferenceSource(imageRaw);
 
           // Pseudo-URIs such as image:0 have no registry here; reject them before filesystem access.
@@ -491,34 +458,34 @@ export function createImageTool(options?: {
           const imageWebMedia = await import("../../media/web-media.js");
           signal?.throwIfAborted();
 
-          const media = isDataUrl
-            ? await (async () => {
-                const decoded = decodeDataUrl(resolvedImage, { maxBytes });
-                return await imageWebMedia.optimizeImageBufferForWebMedia({
-                  buffer: decoded.buffer,
-                  contentType: decoded.mimeType,
-                  maxBytes,
-                  imageCompression,
-                });
-              })()
-            : sandboxConfig
-              ? await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
-                  maxBytes,
-                  sandboxValidated: true,
-                  readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-                  imageCompression,
-                })
-              : await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
-                  maxBytes,
-                  localRoots: mediaLocalRoots,
-                  inboundRoots: mediaInboundRoots,
-                  ssrfPolicy: remoteMediaSsrfPolicy,
-                  ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
-                  // Forward the run abort signal into the fetch layer so an abort
-                  // mid-download disconnects the in-flight socket.
-                  ...(signal ? { requestInit: { signal } } : {}),
-                  imageCompression,
-                });
+          const decoded = isDataUrl ? decodeDataUrl(resolvedImage, { maxBytes }) : undefined;
+          const media = decoded
+            ? await imageWebMedia.optimizeImageBufferForWebMedia({
+                buffer: decoded.buffer,
+                contentType: decoded.mimeType,
+                maxBytes,
+                imageCompression,
+              })
+            : await imageWebMedia.loadWebMedia(resolvedImage, {
+                maxBytes,
+                imageCompression,
+                ...(sandboxConfig
+                  ? {
+                      sandboxValidated: true,
+                      readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+                    }
+                  : {
+                      localRoots: mediaLocalRoots,
+                      inboundRoots: mediaInboundRoots,
+                      ssrfPolicy: remoteMediaSsrfPolicy,
+                      ...(isHttpUrl
+                        ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
+                        : {}),
+                      // Forward the run abort signal into the fetch layer so an abort
+                      // mid-download disconnects the in-flight socket.
+                      ...(signal ? { requestInit: { signal } } : {}),
+                    }),
+              });
           signal?.throwIfAborted();
           if (media.kind !== "image") {
             throw new Error(`Unsupported media type: ${media.kind}`);

@@ -26,17 +26,16 @@ export function resolveMemorySearchSourcePolicy(params: {
   sources: MemorySearchSource[];
   searchSources: MemorySearchSource[];
   sessionMemory: boolean;
+  sessionSourceExcluded: boolean;
 } {
   const { configuredSources, rememberAcrossConversations, configuredSessionMemory } = params;
   const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
-  const searchSources = normalizeSources(
-    configuredSources,
-    configuredSessionMemory ||
-      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
-  );
+  const searchSources = normalizeSources(configuredSources, sessionMemory);
   const sources = normalizeSources(
     rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
     sessionMemory,
   );
-  return { sources, searchSources, sessionMemory };
+  const sessionSourceExcluded =
+    configuredSources?.includes("sessions") === true && !searchSources.includes("sessions");
+  return { sources, searchSources, sessionMemory, sessionSourceExcluded };
 }

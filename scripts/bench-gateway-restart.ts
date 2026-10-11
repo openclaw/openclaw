@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,10 +13,12 @@ import {
   readProcessRssMb,
   readProcessTreeCpuMs,
   requestProbeStatus,
+  startGatewayRssSampling,
 } from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
+  buildGatewayBenchCommand,
   classifyGatewayReadyLog,
   CliArgumentError,
   collectOutputLines,
@@ -26,6 +29,7 @@ import {
   formatMs,
   formatStats,
   hasHelpFlag,
+  parseGatewayBenchRuntimeOptions,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveCases as resolveGatewayBenchCases,
@@ -34,6 +38,7 @@ import {
   summarizeNumbers,
   summarizeTraceStats,
   type SummaryStats,
+  type GatewayBenchRuntimeOptions,
   parseCliArgs,
   waitForInitialProbe,
   writeGatewayBenchConfig,
@@ -145,7 +150,7 @@ type BenchmarkEvidenceFailure = {
   sampleIndex: number | null;
 };
 
-type CliOptions = {
+type CliOptions = GatewayBenchRuntimeOptions & {
   allowFailures: boolean;
   cases: GatewayBenchCase[];
   entry: string;
@@ -168,6 +173,8 @@ const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set([
   "--case",
   "--entry",
+  "--gateway-runtime",
+  "--gateway-cpus",
   "--output",
   "--post-ready-delay-ms",
   "--restarts",
@@ -231,6 +238,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     valueFlags: VALUE_FLAGS,
   });
   return {
+    ...parseGatewayBenchRuntimeOptions(flags),
     allowFailures: flags.has("--allow-failures"),
     cases: resolveCases(flags.get("--case") ?? []),
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
@@ -258,6 +266,8 @@ Usage:
 Options:
   --case <id>              Specific case id to run; repeatable (default: skipChannels)
   --entry <path>           Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
+  --gateway-cpus <list>    Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --runs <n>               Measured process samples per case (default: ${DEFAULT_RUNS})
   --warmup <n>             Warmup process samples per case (default: ${DEFAULT_WARMUP})
   --restarts <n>           In-process restarts per process sample (default: ${DEFAULT_RESTARTS})
@@ -692,16 +702,22 @@ async function waitForIterationCondition(
   return predicate();
 }
 
-async function runGatewaySample(options: {
-  benchCase: GatewayBenchCase;
-  entry: string;
-  restarts: number;
-  postReadyDelayMs: number;
-  timeoutMs: number;
-}): Promise<GatewayRestartSample> {
+async function runGatewaySample(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    entry: string;
+    restarts: number;
+    postReadyDelayMs: number;
+    timeoutMs: number;
+  },
+): Promise<GatewayRestartSample> {
   ensureSupportedRestartPlatform();
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-restart-bench-"));
   const port = await getFreePort();
+  const command = buildGatewayBenchCommand(
+    buildGatewayBenchChildArgs(options.entry, port),
+    options,
+  );
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-restart-bench-"));
   const configPath = writeConfig(root, options.benchCase);
   const env = sanitizedEnv(root, configPath, options.benchCase);
   const sampleStartAt = performance.now();
@@ -716,24 +732,21 @@ async function runGatewaySample(options: {
   let initialGatewayReadyLogMs: number | null = null;
   let initialHttpListenLogLine: string | null = null;
   let initialHttpListenLogMs: number | null = null;
-  let maxRssMb: number | null = null;
   let childExited = false;
 
-  const child = spawn(process.execPath, buildGatewayBenchChildArgs(options.entry, port), {
+  const child = spawn(command.command, command.args, {
     cwd: process.cwd(),
     detached: process.platform !== "win32",
     env,
   });
+  try {
+    await once(child, "spawn");
+  } catch (error) {
+    rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+    throw error;
+  }
   events.push({ ms: performance.now() - sampleStartAt, type: "process.spawned" });
-  const sampleRss = () => {
-    const rssMb = readProcessRssMb(child.pid);
-    if (rssMb != null) {
-      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-    }
-  };
-  sampleRss();
-  const rssTimer = setInterval(sampleRss, 100);
-  rssTimer.unref?.();
+  const rssSampler = startGatewayRssSampling(child);
   child.once("exit", () => {
     childExited = true;
     events.push({ ms: performance.now() - sampleStartAt, type: "process.exit" });
@@ -924,8 +937,8 @@ async function runGatewaySample(options: {
   currentIteration = null;
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
   const exit = await stopChild(child);
-  clearInterval(rssTimer);
-  sampleRss();
+  rssSampler.stop();
+  const maxRssMb = rssSampler.sample();
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
     flushPartial: true,
   });
@@ -957,25 +970,21 @@ async function runGatewaySample(options: {
   };
 }
 
-async function runCase(options: {
-  benchCase: GatewayBenchCase;
-  entry: string;
-  postReadyDelayMs: number;
-  restarts: number;
-  runs: number;
-  timeoutMs: number;
-  warmup: number;
-}): Promise<CaseResult> {
+async function runCase(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    entry: string;
+    postReadyDelayMs: number;
+    restarts: number;
+    runs: number;
+    timeoutMs: number;
+    warmup: number;
+  },
+): Promise<CaseResult> {
   const samples: GatewayRestartSample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
-    const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      entry: options.entry,
-      postReadyDelayMs: options.postReadyDelayMs,
-      restarts: options.restarts,
-      timeoutMs: options.timeoutMs,
-    });
+    const sample = await runGatewaySample(options);
     if (index >= options.warmup) {
       samples.push(sample);
       console.error(
@@ -1123,21 +1132,13 @@ async function main() {
   ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        entry: options.entry,
-        postReadyDelayMs: options.postReadyDelayMs,
-        restarts: options.restarts,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {
     entry: options.entry,
+    gatewayRuntime: options.gatewayRuntime,
+    gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
     node: process.version,
     platform: {

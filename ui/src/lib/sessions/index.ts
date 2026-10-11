@@ -2,24 +2,26 @@ import type { SessionCatalogPullRequestSummary } from "../../../../packages/gate
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { BootRecord } from "../../app/boot-record.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
+import { captureBootRoster } from "./session-boot-roster.ts";
+import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import { createSessionReconciliation } from "./session-reconciliation.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
-import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
-import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
@@ -61,8 +63,9 @@ export type {
 
 export function createSessionCapability(
   gateway: SessionGateway,
-  agentSelection: SessionAgentSelection,
-  cacheOptions: SessionRosterCacheOptions & {
+  agentSelection: SelectedAgentSource,
+  cacheOptions: {
+    bootRecord?: BootRecord | null;
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
 ): SessionCapability {
@@ -89,19 +92,22 @@ export function createSessionCapability(
     }
     presentation = { result: null, agentId: null };
   };
-  const cacheLifecycle = createSessionRosterCacheLifecycle(gateway, agentSelection, cacheOptions, {
+  const cacheLifecycle = createSessionBootSnapshot(gateway, agentSelection, cacheOptions, {
     readState: () => state,
     publish: (next) => {
       // Cache admission and retirement already own credential/profile boundaries.
       roster.retireWarmLists();
       retirePresentation();
       if (next.resultCached) {
-        presentation = { result: next.result, agentId: next.agentId, resultCached: true };
+        presentation = {
+          result: next.result,
+          agentId: next.agentId,
+          resultCached: true,
+          profileId: presentationProfileId,
+        };
       }
       publish(next);
     },
-    connected: () => connection.capture() !== null,
-    query: () => roster.lastOptions(),
   });
 
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
@@ -153,13 +159,13 @@ export function createSessionCapability(
         result: next.result,
         agentId: next.agentId,
         resultCached: next.resultCached,
+        profileId: presentationProfileId,
       };
       if (!next.resultCached) {
         reconnectListRevision = null;
       }
     }
     githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
-    cacheLifecycle.persist(next);
     notifySubscribers();
   };
 
@@ -185,10 +191,7 @@ export function createSessionCapability(
     const annotated = swarmActivity.decorate(projected);
     // Preserve receipts before a pending intent makes another tracked copy.
     roster.observations.inherit(annotated, projected);
-    const decorated = deletions.apply(
-      mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
-      owner,
-    );
+    const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
     roster.observations.inherit(decorated, result);
     return decorated;
   };
@@ -250,27 +253,24 @@ export function createSessionCapability(
         revision,
         agentId,
       );
-      const sources = roster.observations.observeReadRows(
-        admitted?.sessions ?? [],
-        revision,
-        agentId,
-      );
+      roster.observations.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observeArchiveRead(row);
+      }
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.observations.inherit(projected, admitted);
       if (!projected) {
         return projected;
       }
-      const sessions = roster.observations.projectRows(projected.sessions);
-      sessions.forEach((row, index) => {
-        const source = sources[index];
-        if (source) {
-          mutations.observePendingFields(
-            source.row,
-            source.select(row, optimisticSessionRowFields),
-            agentId,
-          );
-        }
-      });
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observePendingFields(
+          row,
+          row.rowMode
+            ? optimisticSessionRowFields.filter((field) => Object.hasOwn(row, field))
+            : optimisticSessionRowFields,
+          agentId,
+        );
+      }
       return projected;
     },
     onCanonicalList(result, requestRevision, agentId, observed) {
@@ -390,7 +390,6 @@ export function createSessionCapability(
     createSessionReconciliation({
       readState: () => state,
       publish,
-      canonicalListRevision: () => canonicalListRevision,
       connection,
       snapshot: () => gateway.snapshot,
       permissions,
@@ -525,7 +524,7 @@ export function createSessionCapability(
     }
   });
 
-  const stopSelection = subscribeAgentSelection(agentSelection, (nextAgentId, foreground) => {
+  const stopSelection = watchSelectedAgent(agentSelection, (nextAgentId, foreground) => {
     retirePresentation();
     notifySubscribers();
     // Selection publishes before Gateway hydration. A new connection bootstraps
@@ -644,6 +643,12 @@ export function createSessionCapability(
       return cacheLifecycle.routingDefaults;
     },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
+    captureBootRoster: () =>
+      connection.capture() &&
+      reconnectListRevision === null &&
+      isPrimarySessionListQuery(roster.lastOptions())
+        ? captureBootRoster(state)
+        : null,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
     describe: roster.observations.descriptions.describe,

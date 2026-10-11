@@ -1,7 +1,5 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
@@ -9,9 +7,8 @@ import {
   findDuplicateGuardMusicGenerationTaskForSession,
 } from "../media-generation-task-status.js";
 import {
-  createMediaGenerateProviderListActionResult,
+  createMediaGenerateProviderListAction,
   createMediaGenerateTaskActions,
-  type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
 function summarizeMusicGenerationCapabilities(
@@ -54,29 +51,13 @@ function summarizeMusicGenerationCapabilities(
   return capabilities;
 }
 
-export function createMusicGenerateListActionResult(
-  config?: OpenClawConfig,
-  options?: {
-    workspaceDir?: string;
-    agentDir?: string;
-    authStore?: AuthProfileStore;
-    authProfileStoreSource?: boolean;
-  },
-): MediaGenerateActionResult {
-  const providers = listRuntimeMusicGenerationProviders({ config });
-  return createMediaGenerateProviderListActionResult({
-    kind: "music_generation",
-    providers,
-    emptyText: "No music-generation providers are registered.",
-    cfg: config,
-    workspaceDir: options?.workspaceDir,
-    agentDir: options?.agentDir,
-    authStore: options?.authStore,
-    authProfileStoreSource: options?.authProfileStoreSource,
-    listModes: listSupportedMusicGenerationModes,
-    summarizeCapabilities: summarizeMusicGenerationCapabilities,
-  });
-}
+export const createMusicGenerateListActionResult = createMediaGenerateProviderListAction({
+  kind: "music_generation",
+  listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  emptyText: "No music-generation providers are registered.",
+  listModes: listSupportedMusicGenerationModes,
+  summarizeCapabilities: summarizeMusicGenerationCapabilities,
+});
 
 export const {
   createStatusActionResult: createMusicGenerateStatusActionResult,

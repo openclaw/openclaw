@@ -4,15 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { useConfigCliIntegrationHarness } from "../cli/config-cli.integration.test-harness.js";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
 import { createPreUpdateConfigSnapshot } from "./backup-rotation.js";
+import { withExecutor } from "./config-executor.test-support.js";
 import {
   expectPosixMode,
   IS_WINDOWS,
@@ -35,29 +28,6 @@ async function expectPathMissing(filePath: string): Promise<void> {
     error = err as { code?: unknown };
   }
   expect(error?.code).toBe("ENOENT");
-}
-
-async function withConfigExecutor(
-  home: string,
-  operation: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-backup-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await operation(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
 }
 
 describe("config backup rotation", () => {
@@ -170,7 +140,7 @@ describe("config backup rotation", () => {
     "stops backup maintenance when executor authority ends after %s",
     async (revokeAfter) => {
       await withTempHome(async (home) =>
-        withConfigExecutor(home, async (assertCurrent, revoke) => {
+        withExecutor(home, "config-backup-fence", async (assertCurrent, revoke) => {
           const configPath = resolveConfigPathFromTempState();
           const raw = '{"gateway":{"mode":"local","port":18789}}\n';
           await fs.writeFile(configPath, raw);

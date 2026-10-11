@@ -55,6 +55,14 @@ export default definePluginEntry({
 
 ### Executor controller plugins
 
+A harness with a provider-managed workspace may declare
+`workspaceEnvironment: { kind: "provider-hosted", label: "Provider workspace" }`.
+The Gateway projects this metadata on configured model/runtime choices so the
+Control UI can distinguish hosted workspaces from local folders and cloud workers.
+Declare it only for the active hosted configuration, not a self-hosted executor.
+This presentation metadata grants no availability, authentication, placement, or
+file-synchronization capability; those stay with their existing owners.
+
 A harness can delegate self-hosted executor connection management to a separate
 plugin. Register one controller with `api.registerAgentExecutorController(...)`.
 The registry assigns ownership from the registering plugin's ID; the controller
@@ -144,7 +152,11 @@ guarantee must select a runtime that provides it.
 
 Each new isolated completion uses the configuration and agent/workspace directories
 of its admitted runtime generation. Explicit model, auth-profile, and runtime
-selections remain fixed while that generation is prepared.
+selections remain fixed while that generation is prepared. Registry preparation
+selects provider and harness owners, including their declared harness dependencies.
+Preparation does not add memory or context-engine plugins merely because the
+agent selects them, or unrelated startup plugins, and does not adopt Gateway
+agent capabilities.
 
 Host-authorized calls must use the supplied model and credential without substitution.
 Harnesses using the shared host-prepared completion helper

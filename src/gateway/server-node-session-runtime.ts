@@ -9,8 +9,6 @@ import {
   setNodeRunnerStateChangedListener,
   type NodeRunnerStateChange,
 } from "./node-registry-private.js";
-// Gateway node session runtime factory.
-// Creates node registry, subscription, and voice-wake fanout state.
 import {
   NodeRegistry,
   serializeEventPayload,
@@ -26,9 +24,6 @@ import type {
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { hasConnectedTalkNode } from "./talk/nodes.js";
 
-// Node session runtime owns connected node registry state, session event
-// subscriptions, and voice-wake fanout helpers for the gateway process.
-/** Creates node registry/subscription runtime state for a gateway server. */
 export function createGatewayNodeSessionRuntime(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];

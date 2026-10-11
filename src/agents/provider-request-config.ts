@@ -217,7 +217,6 @@ export function mergeModelProviderRequestOverrides(
   return hasMerged ? merged : undefined;
 }
 
-/** Normalizes provider base URLs by trimming trailing slashes. */
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;
 export function normalizeBaseUrl(
   baseUrl: string | undefined,
@@ -271,22 +270,21 @@ function resolveTlsOverride(tls: ProviderRequestTlsOverride | undefined) {
   if (tls.insecureSkipVerify === true) {
     throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
   }
-  const ca = tls.ca?.trim();
-  const cert = tls.cert?.trim();
-  const key = tls.key?.trim();
-  const passphrase = tls.passphrase?.trim();
-  const serverName = tls.serverName?.trim();
+  const keys = ["ca", "cert", "key", "passphrase", "serverName"] as const;
+  const fields: Partial<Record<(typeof keys)[number], string | undefined>> = {};
+  for (const key of keys) {
+    const value = tls[key]?.trim();
+    if (value) {
+      fields[key] = value;
+    }
+  }
   const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
-  if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
+  if (Object.keys(fields).length === 0 && rejectUnauthorized === undefined) {
     return { configured: false } as const;
   }
   return {
     configured: true,
-    ...(ca ? { ca } : {}),
-    ...(cert ? { cert } : {}),
-    ...(key ? { key } : {}),
-    ...(passphrase ? { passphrase } : {}),
-    ...(serverName ? { serverName } : {}),
+    ...fields,
     ...(rejectUnauthorized !== undefined ? { rejectUnauthorized } : {}),
   } as const;
 }
@@ -467,7 +465,6 @@ function toTlsConnectOptions(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-/** Builds the dispatcher proxy/TLS policy for outbound provider requests. */
 export function buildProviderRequestDispatcherPolicy(
   request: Pick<ResolvedProviderRequestConfig, "proxy" | "tls">,
 ): PinnedDispatcherPolicy | undefined {
@@ -490,7 +487,6 @@ export function buildProviderRequestDispatcherPolicy(
   };
 }
 
-/** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
 ) {
@@ -590,7 +586,6 @@ export function resolveProviderRequestConfig(params: {
 
 type ResolvedProviderRequestConfig = ReturnType<typeof resolveProviderRequestConfig>;
 
-/** Resolves final headers for one provider request route. */
 export function resolveProviderRequestHeaders(params: {
   provider: string;
   api?: RequestApi;
@@ -653,7 +648,6 @@ export function attachModelProviderRequestTransport<TModel extends object>(
   return { ...model, [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request };
 }
 
-/** Reads provider request transport metadata attached to a model definition. */
 export function getModelProviderRequestTransport(
   model: object,
 ): ModelProviderRequestTransportOverrides | undefined {
@@ -690,7 +684,6 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
   };
 }
 
-/** Reads the prepared provider route attached to a transport model. */
 export function getModelProviderRequestRouteFacts(
   model: object,
 ): ProviderRequestRouteFacts | undefined {

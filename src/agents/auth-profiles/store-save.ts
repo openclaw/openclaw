@@ -20,8 +20,7 @@ import {
 } from "./runtime-external-profile-references.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
-import type { AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
 
 export type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
@@ -42,6 +41,7 @@ export function buildLocalAuthProfileStoreForSave(params: {
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
   persistedStores: PersistedAuthProfileStores;
+  runtimeStore?: AuthProfileStore;
 }): AuthProfileStore {
   const localStore = cloneAuthProfileStore(removePersonalAuthProfileReferences(params.store));
   for (const [profileId, credential] of Object.entries(localStore.profiles)) {
@@ -89,8 +89,9 @@ export function buildLocalAuthProfileStoreForSave(params: {
       ) {
         // Runtime external profiles are normally overlays. Persist only when they
         // have explicit local state or differ from the runtime snapshot.
-        const runtimeCredential = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-          params.owner.databasePath,
+        const runtimeCredential = (
+          params.runtimeStore ??
+          getRuntimeAuthProfileStoreSnapshotAtDatabasePath(params.owner.databasePath)
         )?.profiles[profileId];
         if (!runtimeCredential || isDeepStrictEqual(runtimeCredential, credential)) {
           return false;
@@ -120,14 +121,11 @@ export function buildLocalAuthProfileStoreForSave(params: {
   for (const profileId of normalizeUniqueStringEntries(params.options?.pruneOrderProfileIds)) {
     keptOrderProfileIds.delete(profileId);
   }
-  for (const profileId of keptProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptProfileIds.delete(profileId);
-    }
-  }
-  for (const profileId of keptOrderProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptOrderProfileIds.delete(profileId);
+  for (const profileIds of [keptProfileIds, keptOrderProfileIds]) {
+    for (const profileId of profileIds) {
+      if (isUserModelAuthProfileId(profileId)) {
+        profileIds.delete(profileId);
+      }
     }
   }
   pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);

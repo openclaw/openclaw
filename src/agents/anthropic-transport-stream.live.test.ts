@@ -15,10 +15,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  disposeOpenClawAgentDatabaseByPath,
-} from "../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import { isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
@@ -411,7 +409,7 @@ describeProviderLive("anthropic transport stream provider live", () => {
           `[anthropic-compaction-live] sqliteReplay=passed toolMarker=preserved summaryChars=${checkpoint.data.length} encryptedField=${"encryptedContent" in checkpoint}\n`,
         );
       } finally {
-        disposeOpenClawAgentDatabaseByPath(target.storePath);
+        await disposeOpenClawAgentDatabaseByPath(target.storePath);
       }
     },
     8 * 60 * 1000,

@@ -23,11 +23,6 @@ const REFLECTION_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: GATEWAY_MISSING_API_KEY_RE, label: "gateway-missing-api-key" },
 ];
 
-type ReflectionDetection = {
-  isReflection: boolean;
-  matchedLabels: string[];
-};
-
 function hasMatchOutsideCode(
   text: string,
   re: RegExp,
@@ -36,8 +31,7 @@ function hasMatchOutsideCode(
   const globalRe = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
 
   for (const match of text.matchAll(globalRe)) {
-    const start = match.index ?? -1;
-    if (start >= 0 && !isInsideCode(start, codeRegions)) {
+    if (!isInsideCode(match.index, codeRegions)) {
       return true;
     }
   }
@@ -49,7 +43,7 @@ function hasMatchOutsideCode(
  * Check whether an inbound message appears to be a reflection of
  * assistant-originated content. Returns matched pattern labels for telemetry.
  */
-export function detectReflectedContent(text: string): ReflectionDetection {
+export function detectReflectedContent(text: string) {
   if (!text) {
     return { isReflection: false, matchedLabels: [] };
   }

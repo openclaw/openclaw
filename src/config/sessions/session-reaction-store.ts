@@ -19,6 +19,7 @@ import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import {
   SessionReactionLimitError,
@@ -66,8 +67,9 @@ export async function setSessionReactionAsync(
   const logical = resolveSqliteScope({ ...scope, storePath: undefined, env });
   const storePath =
     logical.path ?? scope.storePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  if (scope.incognito) {
-    const { actor, authority } = scope.incognito;
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const { actor, authority } = incognito;
     if (actor.agentId !== logical.agentId || actor.path !== storePath) {
       throw new Error("Reaction target differs from its captured incognito actor");
     }

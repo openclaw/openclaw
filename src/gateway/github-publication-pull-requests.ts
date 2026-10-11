@@ -65,10 +65,7 @@ async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRe
 function parseGitHubPublicationPullRequests(raw: string) {
   let pages: unknown[];
   try {
-    pages = raw
-      .trim()
-      .split(/\r?\n/u)
-      .map((page) => JSON.parse(page));
+    pages = raw.split(/\r?\n/u).map((page) => JSON.parse(page));
   } catch (error) {
     throw new Error("GitHub pull request lookup returned invalid JSON.", { cause: error });
   }
@@ -109,7 +106,7 @@ function parseGitHubPublicationPullRequests(raw: string) {
 export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
-    recordObserved?: (url: string) => void;
+    recordObserved?: (url: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
@@ -126,7 +123,7 @@ export async function findGitHubPublicationPullRequest(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
     );
   if (found) {
-    params.recordObserved?.(found.url);
+    await params.recordObserved?.(found.url);
     if (found.state === "closed") {
       params.assertCurrent();
       throw new GitHubPublicationKnownFailure(
@@ -168,7 +165,7 @@ export async function reconcileGitHubPublicationPullRequest(
     parentCommit: string;
     pushOnly?: "observed" | "dispatched";
     knownPullRequestUrls: readonly string[];
-    recordPushObserved?: (headCommit: string) => void;
+    recordPushObserved?: (headCommit: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
   const { raw } = await readGitHubPublicationApi(
@@ -239,7 +236,7 @@ export async function reconcileGitHubPublicationPullRequest(
       continue;
     }
     if (await includesCommit(candidate.headSha)) {
-      params.recordObserved?.(candidate.url);
+      await params.recordObserved?.(candidate.url);
       return candidate.url;
     }
     unrelated = true;
@@ -267,6 +264,6 @@ export async function reconcileGitHubPublicationPullRequest(
   ) {
     throw new Error("The original GitHub push has not been confirmed.");
   }
-  params.recordPushObserved?.(params.headCommit);
+  await params.recordPushObserved?.(params.headCommit);
   return undefined;
 }

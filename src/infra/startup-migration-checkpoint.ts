@@ -155,97 +155,90 @@ function acquireStartupMigrationLease(
   const env = params.env ?? process.env;
   const owner = params.owner ?? randomUUID();
   return withOpenClawStateStartupMigrationCheckpointDatabase(
-    (db) =>
+    (connection) => {
       // Integrity verification may outlast a lease; start its lifetime at the actual claim.
-      acquireStartupMigrationLeaseFromDatabase(db, { ...params, env, nowMs: now(), owner }),
+      const admitted = { ...params, env, nowMs: now(), owner };
+      const nowMs = admitted.nowMs ?? Date.now();
+      const ownerPid = admitted.ownerPid ?? process.pid;
+      const leaseOwner: StateLeaseProcessOwner = {
+        pid: ownerPid,
+        host: hostname(),
+        startedAt: getFileLockProcessStartTime(ownerPid),
+      };
+      const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
+      const identity = { ...STARTUP_MIGRATION_LEASE, owner };
+
+      runSqliteImmediateTransactionSync(
+        connection,
+        () => {
+          const db = connection;
+          assertOpenClawStateWriteAllowed({
+            database: db,
+            databasePath: resolveOpenClawStateSqlitePath(env),
+            env,
+          });
+          const acquire = () =>
+            acquireOpenClawStateLeaseInTransaction(
+              db,
+              identity,
+              STARTUP_MIGRATION_LEASE_TTL_MS,
+              JSON.stringify({ version: VERSION, owner: leaseOwner }),
+              nowMs,
+            );
+          if (acquire().kind === "held") {
+            const existing = reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+            if (existing) {
+              const existingOwner = parseStateLeaseProcessOwner(existing.payloadJson);
+              const ownerHint = existingOwner ? ` (held by pid ${existingOwner.pid})` : "";
+              throw new StartupMigrationLeaseConflictError(
+                `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
+              );
+            }
+            acquire();
+          }
+        },
+        {
+          databaseLabel: resolveOpenClawStateSqlitePath(env),
+          operationLabel: "state.startup-migration.lease.acquire",
+        },
+      );
+
+      return {
+        owner,
+        assertOwned: () =>
+          assertStartupMigrationLeaseOwned(
+            withExistingOpenClawStateDatabaseCurrentReadOnly(
+              ({ db }) => readOpenClawStateLeaseExpiry(db, identity),
+              { env },
+            ),
+          ),
+        assertOwnedInTransaction: (database, assertionParams = {}) => {
+          assertStartupMigrationLeaseOwned(
+            readOpenClawStateLeaseExpiry(database, identity, assertionParams.nowMs),
+          );
+        },
+        heartbeat: (heartbeatParams = {}) => {
+          const heartbeatNowMs = heartbeatParams.nowMs ?? Date.now();
+          writeStartupMigrationCheckpointDatabase(env, (db) => {
+            const renewed = renewOpenClawStateLeaseInTransaction(
+              db,
+              identity,
+              STARTUP_MIGRATION_LEASE_TTL_MS,
+              undefined,
+              heartbeatNowMs,
+            );
+            assertStartupMigrationLeaseOwned(renewed);
+          });
+        },
+        release: () => {
+          writeStartupMigrationCheckpointDatabase(env, (db) =>
+            releaseOpenClawStateLeaseInTransaction(db, identity),
+          );
+        },
+      };
+    },
     { env, atomic: true },
   );
-}
-
-function acquireStartupMigrationLeaseFromDatabase(
-  connection: DatabaseSync,
-  params: StartupMigrationLeaseParams,
-): StartupMigrationLease {
-  const env = params.env ?? process.env;
-  const nowMs = params.nowMs ?? Date.now();
-  const owner = params.owner ?? randomUUID();
-  const ownerPid = params.ownerPid ?? process.pid;
-  const leaseOwner: StateLeaseProcessOwner = {
-    pid: ownerPid,
-    host: hostname(),
-    startedAt: getFileLockProcessStartTime(ownerPid),
-  };
-  const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
-  const identity = { ...STARTUP_MIGRATION_LEASE, owner };
-
-  runSqliteImmediateTransactionSync(
-    connection,
-    () => {
-      const db = connection;
-      assertOpenClawStateWriteAllowed({
-        database: db,
-        databasePath: resolveOpenClawStateSqlitePath(env),
-        env,
-      });
-      const acquire = () =>
-        acquireOpenClawStateLeaseInTransaction(
-          db,
-          identity,
-          STARTUP_MIGRATION_LEASE_TTL_MS,
-          JSON.stringify({ version: VERSION, owner: leaseOwner }),
-          nowMs,
-        );
-      if (acquire().kind === "held") {
-        const existing = reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
-        if (existing) {
-          const existingOwner = parseStateLeaseProcessOwner(existing.payloadJson);
-          const ownerHint = existingOwner ? ` (held by pid ${existingOwner.pid})` : "";
-          throw new StartupMigrationLeaseConflictError(
-            `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
-          );
-        }
-        acquire();
-      }
-    },
-    {
-      databaseLabel: resolveOpenClawStateSqlitePath(env),
-      operationLabel: "state.startup-migration.lease.acquire",
-    },
-  );
-
-  return {
-    owner,
-    assertOwned: () =>
-      assertStartupMigrationLeaseOwned(
-        withExistingOpenClawStateDatabaseCurrentReadOnly(
-          ({ db }) => readOpenClawStateLeaseExpiry(db, identity),
-          { env },
-        ),
-      ),
-    assertOwnedInTransaction: (database, assertionParams = {}) => {
-      assertStartupMigrationLeaseOwned(
-        readOpenClawStateLeaseExpiry(database, identity, assertionParams.nowMs),
-      );
-    },
-    heartbeat: (heartbeatParams = {}) => {
-      const heartbeatNowMs = heartbeatParams.nowMs ?? Date.now();
-      writeStartupMigrationCheckpointDatabase(env, (db) => {
-        const renewed = renewOpenClawStateLeaseInTransaction(
-          db,
-          identity,
-          STARTUP_MIGRATION_LEASE_TTL_MS,
-          undefined,
-          heartbeatNowMs,
-        );
-        assertStartupMigrationLeaseOwned(renewed);
-      });
-    },
-    release: () => {
-      writeStartupMigrationCheckpointDatabase(env, (db) =>
-        releaseOpenClawStateLeaseInTransaction(db, identity),
-      );
-    },
-  };
 }
 
 export function acquireStartupMigrationLeaseWithWait(

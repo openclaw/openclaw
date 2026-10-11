@@ -26,52 +26,39 @@ export class CodexAppServerMessageDecoder {
 
   parse(line: string): unknown {
     const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
-    if (this.pending) {
-      return this.parseContinuation(rawLine, this.pending);
-    }
-    const trimmed = rawLine.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(trimmed);
-    } catch (error) {
-      const text = rawLine.trimStart();
-      const inString = recoverableJsonStringState(text, error);
-      if (inString !== undefined) {
-        this.pending = {
-          fragments: [text],
-          length: text.length,
-          inString,
-        };
-      } else {
-        this.reportError(trimmed, error, 1);
+    const pending = this.pending;
+    let candidate: string;
+    let withinBounds = true;
+    if (pending) {
+      pending.fragments.push(rawLine);
+      pending.length += 2 + rawLine.length;
+      withinBounds =
+        pending.length <= PARSE_BUFFER_MAX && pending.fragments.length <= PARSE_BUFFER_MAX_LINES;
+      // The inserted escaped newline is valid when the prior string has no partial escape.
+      if (withinBounds && pending.inString && scanJsonString(rawLine, 0) === rawLine.length) {
+        return undefined;
+      }
+      candidate = pending.fragments.join("\\n");
+      this.pending = undefined;
+    } else {
+      candidate = rawLine.trim();
+      if (!candidate) {
+        return undefined;
       }
     }
-    return undefined;
-  }
-
-  private parseContinuation(line: string, pending: PendingMessage): unknown {
-    pending.fragments.push(line);
-    pending.length += 2 + line.length;
-    const withinBounds =
-      pending.length <= PARSE_BUFFER_MAX && pending.fragments.length <= PARSE_BUFFER_MAX_LINES;
-    // The inserted escaped newline is valid when the prior string has no partial escape.
-    if (withinBounds && pending.inString && scanJsonString(line, 0) === line.length) {
-      return undefined;
-    }
-    const candidate = pending.fragments.join("\\n");
-    this.pending = undefined;
     try {
+      // Completed messages still parse above the incomplete-recovery bounds.
       return JSON.parse(candidate);
     } catch (error) {
-      // Completed messages still parse above the incomplete-recovery bounds.
-      const inString = withinBounds ? recoverableJsonStringState(candidate, error) : undefined;
+      const text = pending ? candidate : rawLine.trimStart();
+      const inString = withinBounds ? recoverableJsonStringState(text, error) : undefined;
       if (inString !== undefined) {
-        pending.inString = inString;
-        this.pending = pending;
+        if (pending) {
+          pending.inString = inString;
+        }
+        this.pending = pending ?? { fragments: [text], length: text.length, inString };
       } else {
-        this.reportError(candidate, error, pending.fragments.length);
+        this.reportError(candidate, error, pending?.fragments.length ?? 1);
       }
     }
     return undefined;

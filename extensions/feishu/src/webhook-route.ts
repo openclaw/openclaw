@@ -25,7 +25,7 @@ export function describeFeishuWebhookPathConflict(path: string): string | undefi
   const probe = classifyGatewayProbePath(pathname);
   let reason: string;
   if (probe !== "outside" && probe !== "namespace") {
-    reason = "is reserved for Gateway probes";
+    reason = "is reserved for Gateway checks";
   } else if (isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))) {
     reason = "requires Gateway authentication";
   } else {

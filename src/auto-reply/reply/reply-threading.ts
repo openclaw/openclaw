@@ -1,4 +1,3 @@
-/** Reply threading policy helpers for channel replies and status notices. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -24,15 +23,6 @@ type ReplyToModeChannelConfig = {
   accounts?: Record<string, ReplyToModeChannelConfig | undefined>;
 };
 
-function normalizeReplyToModeChatType(
-  chatType?: string | null,
-): "direct" | "group" | "channel" | undefined {
-  return chatType === "direct" || chatType === "group" || chatType === "channel"
-    ? chatType
-    : undefined;
-}
-
-/** Resolve configured reply-to mode from channel and chat-type config. */
 function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   provider?: string,
@@ -53,13 +43,12 @@ function resolveConfiguredReplyToMode(
         normalizeAccountId,
       )
     : undefined;
-  const normalizedChatType = normalizeReplyToModeChatType(chatType);
-  if (normalizedChatType) {
+  if (chatType === "direct" || chatType === "group" || chatType === "channel") {
     // Exhaust account policy before channel defaults so a routed account cannot silently inherit.
     return (
-      accountConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      accountConfig?.replyToModeByChatType?.[chatType] ??
       accountConfig?.replyToMode ??
-      channelConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      channelConfig?.replyToModeByChatType?.[chatType] ??
       channelConfig?.replyToMode ??
       "all"
     );
@@ -67,7 +56,6 @@ function resolveConfiguredReplyToMode(
   return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
 
-/** Resolve effective reply-to mode for a channel/account/chat tuple. */
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
@@ -121,7 +109,6 @@ export function resolveReplyDeliveryAccountId(
   return listedDefault ?? DEFAULT_ACCOUNT_ID;
 }
 
-/** Build the canonical reply policy context consumed by delivery adapters. */
 export function createReplyDeliveryContext(
   replyToMode: ReplyToMode,
   chatType?: string | null,
@@ -133,19 +120,6 @@ export function createReplyDeliveryContext(
   };
 }
 
-function suppressReplyTarget(payload: ReplyPayload): ReplyPayload {
-  return setReplyPayloadMetadata(
-    copyReplyPayloadMetadata(payload, {
-      ...payload,
-      replyToId: undefined,
-      replyToCurrent: false,
-      replyToTag: false,
-    }),
-    { replyTargetSuppressed: true },
-  );
-}
-
-/** Create a reply-to filter using channel-specific explicit-tag defaults. */
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
@@ -179,7 +153,15 @@ export function createReplyToModeFilterForChannel(
     // Status notices keep their target without consuming the first-reply slot.
     if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
       if (hasThreaded) {
-        return suppressReplyTarget(payload);
+        return setReplyPayloadMetadata(
+          copyReplyPayloadMetadata(payload, {
+            ...payload,
+            replyToId: undefined,
+            replyToCurrent: false,
+            replyToTag: false,
+          }),
+          { replyTargetSuppressed: true },
+        );
       }
       if (!preview) {
         hasThreaded = true;
@@ -193,7 +175,6 @@ export function createReplyToModeFilterForChannel(
   });
 }
 
-/** Resolve whether implicit current-message replies are allowed under threading policy. */
 export function resolveImplicitCurrentMessageReplyAllowance(
   mode: ReplyToMode | undefined,
   policy?: ReplyThreadingPolicy,
@@ -204,7 +185,6 @@ export function resolveImplicitCurrentMessageReplyAllowance(
   );
 }
 
-/** Build threading policy for batched reply-to mode. */
 export function resolveBatchedReplyThreadingPolicy(
   mode: ReplyToMode,
   isBatched: boolean,

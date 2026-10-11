@@ -1,10 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import * as transcriptReader from "../../config/sessions/session-transcript-anchor-read.js";
 import { buildAgentSessionPatch, type AgentSessionPatchBuild } from "./agent-session-patch.js";
+
+beforeEach(() => {
+  const read = transcriptReader.readSessionTranscriptAnchorsAsync;
+  vi.spyOn(transcriptReader, "readSessionTranscriptAnchorsAsync").mockImplementation((...args) =>
+    args[1].includeMetadata
+      ? Promise.resolve({
+          anchors: [],
+          metadata: { present: true, observedAt: null, updatedAt: null },
+        })
+      : read(...args),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 async function buildPatch(
   touchInteraction: boolean,
@@ -39,7 +54,6 @@ async function buildPatch(
       visibleRequest: true,
       fallbackSessionId: "fallback",
       touchInteraction,
-      failedSessionTranscriptMissing: () => false,
     })
   ).patch;
 }
@@ -70,7 +84,6 @@ async function buildCreationPatch(opts: {
     visibleRequest: opts.visibleRequest ?? true,
     fallbackSessionId: "fallback",
     touchInteraction: false,
-    failedSessionTranscriptMissing: () => false,
   });
 }
 
@@ -86,6 +99,38 @@ describe("agent session patch", () => {
 
   it("does not clear agent status for lifecycle-only patches", async () => {
     expect(Object.hasOwn(await buildPatch(false), "agentStatus")).toBe(false);
+  });
+
+  it("preserves a recovery reservation while reusing a session with a failed outcome", async () => {
+    const entry: SessionEntry = {
+      sessionId: "recovering-session",
+      updatedAt: 1_000,
+      status: "failed",
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "recovery-run",
+      mainRestartRecovery: {
+        cycleId: "recovery-cycle",
+        revision: 2,
+        chargedAttempts: 1,
+        reservation: { runId: "recovery-run", lifecycleGeneration: "generation-1", attempt: 1 },
+      },
+    };
+    const { patch } = await buildCreationPatch({ freshEntry: entry, isSystemGatewayRun: true });
+    const merged = mergeSessionEntry(entry, patch);
+
+    expect(
+      transitionMainSessionRecovery(merged, {
+        kind: "validate_recovery",
+        lifecycleGeneration: "generation-1",
+        runId: "recovery-run",
+        sessionId: entry.sessionId,
+      }),
+    ).toEqual({ kind: "recovery_validated" });
+    expect(merged).toMatchObject({
+      status: "failed",
+      abortedLastRun: true,
+      mainRestartRecovery: entry.mainRestartRecovery,
+    });
   });
 
   // Public agent RPC labels retain their run-start contract; native spawn labels are creation-owned.

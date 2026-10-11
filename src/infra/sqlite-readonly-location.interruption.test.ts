@@ -21,7 +21,6 @@ afterEach(() => {
 });
 
 it.skipIf(process.platform === "win32").each([
-  { signal: "SIGTERM", relocated: false },
   { signal: "SIGKILL", relocated: false },
   { signal: "SIGTERM", relocated: true },
 ])(

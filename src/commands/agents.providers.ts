@@ -1,5 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { describeChannelAccount, resolveChannelAccount } from "../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -22,14 +22,7 @@ type ProviderAccountStatus = {
   providerLabel?: string;
   accountId: string;
   name?: string;
-  state:
-    | "linked"
-    | "not linked"
-    | "configured"
-    | "configured unavailable"
-    | "not configured"
-    | "enabled"
-    | "disabled";
+  state: ReturnType<typeof projectChannelAccountDisplayState> | "configured unavailable";
   enabled?: boolean;
   configured?: boolean;
   visibleInConfiguredLists?: boolean;
@@ -107,12 +100,9 @@ export function buildProviderSummaryMetadataIndex(
   return metadata;
 }
 
-function formatChannelAccountLabel(params: {
-  provider: ChannelId;
-  providerLabel?: string;
-  accountId: string;
-  name?: string;
-}): string {
+function formatChannelAccountLabel(
+  params: Pick<ProviderAccountStatus, "provider" | "providerLabel" | "accountId" | "name">,
+): string {
   const label = params.providerLabel ?? params.provider;
   const account = params.name?.trim()
     ? `${params.accountId} (${params.name.trim()})`
@@ -152,7 +142,7 @@ export async function buildProviderStatusIndex(
       if (!account) {
         continue;
       }
-      const snapshot = plugin.config.describeAccount?.(account, cfg);
+      const snapshot = await describeChannelAccount({ plugin, account, cfg });
       const enabled = plugin.config.isEnabled
         ? plugin.config.isEnabled(account, cfg)
         : typeof snapshot?.enabled === "boolean"

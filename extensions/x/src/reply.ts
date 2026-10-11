@@ -4,7 +4,12 @@ import { normalizeXReplyTarget } from "./target.js";
 import { findXUrls } from "./urls.js";
 
 const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
-export type XVisibleWorkSession = { sessionKey: string; url: string; label?: string };
+export type XVisibleWorkSession = {
+  sessionKey: string;
+  url: string;
+  label?: string;
+  publicRead?: boolean;
+};
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
 
@@ -52,8 +57,10 @@ function xWeightedLength(text: string): number {
 }
 
 function appendVisibleWorkSession(text: string, sessions: XVisibleWorkSession[] = []): string {
-  const url = sessions[0]?.url;
-  return url && !text.includes(url) ? `${text.trimEnd()}\n${url}` : text;
+  const session = sessions[0];
+  const url = session?.url;
+  const prefix = session?.publicRead === true ? "" : "Work session (sign-in required): ";
+  return url && !text.includes(url) ? `${text.trimEnd()}\n${prefix}${url}` : text;
 }
 
 function chunkXReply(text: string, signature = DEFAULT_X_REPLY_SIGNATURE): string[] {

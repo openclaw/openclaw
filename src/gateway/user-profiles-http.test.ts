@@ -118,11 +118,8 @@ describe("profile avatar HTTP endpoint", () => {
     });
   });
 
-  it.each([
-    { controlUi: { allowedOrigins: ["https://control.example"] } },
-    { publicOrigin: "https://control.example" },
-  ])("answers credentialed avatar preflights with origin policy %j", async (gateway) => {
-    getRuntimeConfig.mockReturnValue({ gateway });
+  it("answers credentialed avatar preflights with the public origin", async () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { publicOrigin: "https://control.example" } });
     const res = response();
     const req = {
       method: "OPTIONS",
@@ -145,43 +142,47 @@ describe("profile avatar HTTP endpoint", () => {
   });
 
   it.each([
-    { method: "GET", mime: "image/webp", hash: "first-hash", header: undefined },
-    { method: "HEAD", mime: "image/png", hash: "head-hash", header: undefined },
-    ...['"current-hash-png"', 'W/"current-hash-png"', '"other", "current-hash-png"', "*"].map(
-      (header) => ({ method: "GET", mime: "image/png", hash: "current-hash", header }),
-    ),
+    { method: "GET", revision: undefined, conditional: false, immutable: false },
+    { method: "GET", revision: "old-png", conditional: false, immutable: false },
+    { method: "GET", revision: "1725000123456", conditional: false, immutable: false },
+    { method: "GET", revision: "saved-png", conditional: false, immutable: true },
+    { method: "HEAD", revision: "saved-png", conditional: false, immutable: true },
+    { method: "GET", revision: "saved-png", conditional: true, immutable: true },
+    { method: "GET", revision: "old-png", conditional: true, immutable: false },
   ])(
-    "serves saved avatars for $method / $header without unnecessary byte reads",
-    async ({ method, mime, hash, header }) => {
-      const bytes = new Uint8Array([1, 2, 3]);
-      avatarFixture.mockReturnValue({ bytes, mime, sha256: hash, updatedAt: 42 });
-      const res = response();
-      const req = request("/ignored-by-handler", header ? { "if-none-match": header } : {});
-      req.method = method;
-      await handleUserProfileAvatarHttpRequest(req, res.response, "/api/users/profile%2D1/avatar", {
-        auth: {} as never,
+    "serves $method revision=$revision conditional=$conditional with immutable=$immutable",
+    async ({ method, revision, conditional, immutable }) => {
+      const bytes = Buffer.from([1, 2, 3]);
+      avatarFixture.mockReturnValue({ bytes, mime: "image/png", sha256: "saved" });
+      const pathname = "/control/api/users/profile-1/avatar";
+      const req = request(revision ? `${pathname}?v=${revision}` : pathname, {
+        origin: "https://control.example",
+        ...(conditional ? { "if-none-match": '"saved-png"' } : {}),
       });
-
-      expect(createProfileAvatarReader).toHaveBeenCalledWith("profile-1");
-      expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledWith(
-        expect.objectContaining({ requiredOperatorMethod: "users.list" }),
+      req.method = method;
+      const res = response();
+      await handleUserProfileAvatarHttpRequest(req, res.response, pathname, {
+        auth: {} as never,
+        basePath: "/control",
+      });
+      expect(res.writeHead).toHaveBeenCalledWith(
+        conditional ? 304 : 200,
+        expect.objectContaining({
+          ETag: '"saved-png"',
+          "Cache-Control": immutable
+            ? "private, max-age=31536000, immutable"
+            : "private, max-age=0, must-revalidate",
+        }),
       );
-      const etag = `"${hash}-${mime === "image/webp" ? "webp" : "png"}"`;
-      if (header) {
-        expect(res.writeHead).toHaveBeenCalledWith(304, {
-          ETag: etag,
-          "Cache-Control": "private, max-age=0, must-revalidate",
-        });
-        expect(res.end).toHaveBeenCalledWith();
-      } else {
-        expect(res.writeHead).toHaveBeenCalledWith(
-          200,
-          expect.objectContaining({ "Content-Type": mime, ETag: etag }),
-        );
-        expect(res.end).toHaveBeenCalledWith(method === "HEAD" ? undefined : bytes);
-      }
-      if (method === "HEAD" || header) {
+      expect(res.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Origin",
+        "https://control.example",
+      );
+      if (conditional || method === "HEAD") {
         expect(loadAvatarBytes).not.toHaveBeenCalled();
+      } else {
+        expect(res.end).toHaveBeenCalledWith(bytes);
       }
     },
   );
@@ -196,13 +197,23 @@ describe("profile avatar HTTP endpoint", () => {
     }));
     const pathname = "/api/users/gateway-owner/avatar";
     const inferred = response();
-    await handleUserProfileAvatarHttpRequest(request(pathname), inferred.response, pathname, {
-      auth: {} as never,
-    });
+    await handleUserProfileAvatarHttpRequest(
+      request(`${pathname}?v=host-photo-jpeg`),
+      inferred.response,
+      pathname,
+      {
+        auth: {} as never,
+      },
+    );
     expect(inferred.writeHead).toHaveBeenCalledWith(
       200,
-      expect.objectContaining({ "Content-Type": "image/jpeg", ETag: '"host-photo-jpeg"' }),
+      expect.objectContaining({
+        "Content-Type": "image/jpeg",
+        ETag: '"host-photo-jpeg"',
+        "Cache-Control": "private, max-age=0, must-revalidate",
+      }),
     );
+    expect(inferred.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
     expect(inferred.end).toHaveBeenCalledWith(hostAvatar.bytes);
     expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
 

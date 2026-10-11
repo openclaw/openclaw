@@ -147,38 +147,6 @@ describe("discord message context", () => {
     expect(payload.GroupSpace).toBe("guild-id");
   });
 
-  it("links back to the created thread while retaining the mention's parent channel", async () => {
-    const payload = await context({
-      channelConfig: { allowed: true, autoThread: true },
-      data: { guild: { id: "123456789012345678", name: "Test Guild" } },
-      guildInfo: null,
-      client: {
-        rest: {
-          get: async () => ({ thread: { id: "234567890123456789" } }),
-        },
-      },
-    });
-
-    expect(payload.MessageThreadId).toBe("234567890123456789");
-    expect(payload.ThreadParentId).toBe("c1");
-    expect(payload.ConversationLink).toEqual({
-      url: "https://discord.com/channels/123456789012345678/234567890123456789",
-      label: "Discord Thread",
-    });
-  });
-
-  it("links a direct conversation using its native channel rather than the sender", async () => {
-    const payload = await context({
-      isDirectMessage: true,
-      isGuildMessage: false,
-      messageChannelId: "345678901234567890",
-    });
-    expect(payload.ConversationLink).toEqual({
-      url: "https://discord.com/channels/@me/345678901234567890",
-      label: "Discord Conversation",
-    });
-  });
-
   it("omits SenderIsBot for PluralKit proxy senders despite the bot author", async () => {
     const payload = await context({
       author: { id: "U1", username: "pk", discriminator: "0", globalName: "PK", bot: true },

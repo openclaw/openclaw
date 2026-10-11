@@ -1,8 +1,5 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -36,18 +33,12 @@ const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
+export const CONTEXT_OVERFLOW_ERROR_MESSAGE =
+  "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;
-
-type ApiErrorInfo = {
-  httpCode?: string;
-  type?: string;
-  code?: string;
-  message?: string;
-  requestId?: string;
-};
 
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
@@ -87,7 +78,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   const error = asOptionalRecord(record.error);
   return (
     [error?.message, error?.type, error?.code].some((value) => typeof value === "string") ||
-    (typeof record.error === "string" && typeof record.message === "string")
+    typeof record.error === "string"
   );
 }
 
@@ -173,7 +164,7 @@ export function isGenericProviderInternalError(raw: string): boolean {
   );
 }
 
-export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
+export function parseApiErrorInfo(raw?: string) {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
@@ -211,13 +202,18 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     ? errorCode !== undefined && !errorType
       ? errorCode
       : errorType
-    : readStringField(payload, "error");
+    : typeof payload.message === "string"
+      ? readStringField(payload, "error")
+      : undefined;
   const code = errorCode ?? readStringField(payload, "code");
   return {
     httpCode,
     type: type ?? readStringField(payload, "type"),
     ...(code === undefined ? {} : { code }),
-    message: readStringField(error, "message") ?? readStringField(payload, "message"),
+    message:
+      readStringField(error, "message") ??
+      readStringField(payload, "message") ??
+      readStringField(payload, "error"),
     requestId: readStringField(payload, "request_id") ?? readStringField(payload, "requestId"),
   };
 }
@@ -262,42 +258,33 @@ const CONNECTION_FAILED_MESSAGE =
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
-    phrases: ["connection refused", "actively refused"],
+    phrases: /connection refused|actively refused/i,
     message: CONNECTION_FAILED_MESSAGE,
   },
   {
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
-    phrases: ["socket hang up", "connection reset", "connection aborted"],
+    phrases: /socket hang up|connection reset|connection aborted/i,
     message:
       "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   },
   {
     code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
-    phrases: [
-      "getaddrinfo",
-      "no such host",
-      "dns",
-      "network is unreachable",
-      "host is unreachable",
-      "fetch failed",
-      "connection error",
-      "network request failed",
-    ],
+    phrases:
+      /getaddrinfo|no such host|\bdns\b|network is unreachable|host is unreachable|fetch failed|connection error|network request failed/i,
     message: CONNECTION_FAILED_MESSAGE,
   },
 ];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return TRANSPORT_ERRORS.some(({ code }) => code?.exec(value)?.[0] === value);
+  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {
   if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
     return undefined;
   }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
   for (const { code, phrases, message } of TRANSPORT_ERRORS) {
-    if (code?.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
+    if (code.test(raw) || phrases.test(raw)) {
       return message;
     }
   }

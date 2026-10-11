@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -26,7 +30,9 @@ describe("persistAgentSessionPhase", () => {
         freshness: undefined,
       };
 
+      const sql = observeHostDataSql();
       const committed = vi.fn((entry: { sessionId: string }) => {
+        sql.restore();
         expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
           entry.sessionId,
         );
@@ -62,21 +68,25 @@ describe("persistAgentSessionPhase", () => {
         suppressVisibleSessionEffects: false,
         initialPatchBuild: patchBuild,
         buildSessionPatch: async () => patchBuild,
-        initialSessionPersistedBeforeGatewayAdmission: false,
+        state: {
+          sessionPersistedBeforeGatewayAdmission: false,
+          admittedSessionId: runId,
+          skipAgentInitialSessionTouch: false,
+          isNewSession: true,
+          bestEffortDeliver: false,
+        },
         touchInteraction: false,
-        bestEffortDeliver: false,
         expectedSession: undefined,
         maintenanceConfig: undefined,
         abortForLifecycleRotation: () => false,
         assertGatewayWorkAdmissionAllowed: vi.fn(),
         respondToGatewayAdmissionOutcome: () => false,
-        updateAdmissionState: vi.fn(),
-        getAdmittedSessionId: () => runId,
         setCronContinuationClaim: vi.fn(),
         setMainRestartRecoveryOwnerLease: vi.fn(),
         respond: vi.fn(),
-      });
+      }).finally(sql.restore);
 
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       expect(result?.sessionEntry).toMatchObject({
         createdVia: "run",
         createdActor: { type: "human", id: profile.id },
@@ -143,16 +153,19 @@ describe("persistAgentSessionPhase", () => {
               allowedAgents.length = 0;
               return patchBuild;
             },
-            initialSessionPersistedBeforeGatewayAdmission: false,
+            state: {
+              sessionPersistedBeforeGatewayAdmission: false,
+              admittedSessionId: runId,
+              skipAgentInitialSessionTouch: false,
+              isNewSession: true,
+              bestEffortDeliver: false,
+            },
             touchInteraction: false,
-            bestEffortDeliver: false,
             expectedSession: undefined,
             maintenanceConfig: undefined,
             abortForLifecycleRotation,
             assertGatewayWorkAdmissionAllowed: vi.fn(),
             respondToGatewayAdmissionOutcome: () => false,
-            updateAdmissionState: vi.fn(),
-            getAdmittedSessionId: () => runId,
             setCronContinuationClaim: vi.fn(),
             setMainRestartRecoveryOwnerLease: vi.fn(),
             respond,

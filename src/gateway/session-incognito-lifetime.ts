@@ -4,7 +4,6 @@ import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
-import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
@@ -28,7 +27,7 @@ type IncognitoSessionDeadline = {
   agentId: string;
   sessionId: string;
   expiresAt: number;
-  source: { identity: string | symbol; assertCurrent(): void; assertSettlingCurrent?(): void };
+  source: { identity: string | symbol; assertCurrent(): void };
 };
 
 type DeleteIncognitoSession = (
@@ -46,22 +45,16 @@ function createIncognitoSessionDeadlineOwner(params: {
   const scheduler = params.scheduler.scope();
   const restartSignal = getGatewayRestartDrainSignal();
   const deadlines = new Map<string, Deadline>();
-  const current = (deadline: Deadline, accepted = false) => {
-    const registered = deadlines.get(deadline.sessionKey);
-    const retaining = accepted && deadline.source.assertSettlingCurrent !== undefined;
+  const current = (deadline: Deadline) => {
     if (
-      (!retaining && (scheduler.signal.aborted || restartSignal.aborted)) ||
-      (registered !== deadline && (!retaining || registered !== undefined))
+      scheduler.signal.aborted ||
+      restartSignal.aborted ||
+      deadlines.get(deadline.sessionKey) !== deadline
     ) {
       return false;
     }
     try {
-      // An acknowledged deletion may remove its own row and deadline before cleanup settles.
-      if (accepted && deadline.source.assertSettlingCurrent) {
-        deadline.source.assertSettlingCurrent();
-      } else {
-        deadline.source.assertCurrent();
-      }
+      deadline.source.assertCurrent();
       return true;
     } catch {
       return false;
@@ -87,7 +80,7 @@ function createIncognitoSessionDeadlineOwner(params: {
         let accepted = true;
         try {
           await params.deleteSession(deadline, () => {
-            if (!accepted || !current(deadline, true)) {
+            if (!accepted || !current(deadline)) {
               throw new Error("Incognito expiry no longer owns this session.");
             }
           });
@@ -141,7 +134,6 @@ function createIncognitoSessionDeadlineOwner(params: {
   };
 }
 
-/** Production acquisition remains native until every incognito caller moves together. */
 export function startIncognitoSessionLifetime(params: {
   context: GatewayRequestContext;
   logWarning: (message: string) => void;
@@ -230,59 +222,6 @@ export function startIncognitoSessionLifetime(params: {
   }
   return {
     stop: async () => {
-      active = false;
-      unsubscribe();
-      await owner.stop();
-    },
-  };
-}
-
-/**
- * Inactive: activation supplies its captured actor and the bound Gateway deletion owner.
- * @internal Knip production exception; atomic activation installs this sidecar.
- */
-export function startIncognitoActorSessionLifetime(params: {
-  actor: IncognitoSessionActor;
-  scheduler: GatewayScheduler;
-  logWarning: (message: string) => void;
-  deleteSession: DeleteIncognitoSession;
-}): GatewayPostReadySidecarHandle {
-  const { actor } = params;
-  actor.assertCurrent();
-  const owner = createIncognitoSessionDeadlineOwner({
-    ...params,
-    deleteSession: (deadline, assertCurrent) =>
-      actor.sessions.withSharedState(() => params.deleteSession(deadline, assertCurrent)),
-  });
-  const runInOwner = AsyncLocalStorage.snapshot();
-  let active = true;
-  const observe = (change?: SessionRowChange) => {
-    if (!active) {
-      return;
-    }
-    if (change && (!("sessionKey" in change) || change.storePath !== actor.path)) {
-      return;
-    }
-    const facts = actor.sessions.deadlines();
-    for (const fact of facts) {
-      if (!change || ("sessionKey" in change && change.sessionKey === fact.sessionKey)) {
-        owner.observe({ ...fact, agentId: actor.agentId });
-      }
-    }
-    if (
-      change &&
-      "sessionKey" in change &&
-      !facts.some((fact) => fact.sessionKey === change.sessionKey)
-    ) {
-      owner.forget(change.sessionKey);
-    }
-  };
-  observe();
-  const unsubscribe = sessionChanges.subscribeProjection((change) =>
-    runInOwner(() => observe(change)),
-  );
-  return {
-    async stop() {
       active = false;
       unsubscribe();
       await owner.stop();

@@ -1,18 +1,22 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { PreparedQuestionCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import {
+  hasPreparedGatewayDeviceAuthority,
   readAcceptedGatewayDeviceSourceAuthority,
   readGatewayDeviceRevocationGuard,
 } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
+import { isInternalApprovalCommitGuard } from "../internal-approval-authority.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -34,6 +38,7 @@ type RequestMutationOptions = Pick<
 type RequestMutationAuthorityBase = {
   /** Preparation checks cannot consume an opaque SDK commit callback. */
   assertPreparationCurrent: () => void;
+  questionCallerRead?: PreparedQuestionCallerRead;
   assertCurrent: () => void;
   /** Original transport/SDK lifetime; prepared-profile methods check selection separately. */
   assertLifetimeCurrent: () => void;
@@ -50,34 +55,13 @@ type RequestMutationAuthorityBase = {
 type GatewayRequestMutationAuthority = RequestMutationAuthorityBase &
   ({ family: "worker"; assertWorkerCurrent: () => void } | { family: "native-compatibility" });
 
-const requestMutationAuthorityKey = Symbol("gatewayRequestMutationAuthority");
-
-class RequestMutationAuthorityBinding {
-  readonly #owner: object;
-  readonly #authority: GatewayRequestMutationAuthority;
-
-  constructor(owner: object, authority: GatewayRequestMutationAuthority) {
-    this.#owner = owner;
-    this.#authority = authority;
-    Object.setPrototypeOf(this, null);
-    Object.freeze(this);
-  }
-
-  static read(value: unknown, owner: object): GatewayRequestMutationAuthority | undefined {
-    return typeof value === "object" && value !== null && #owner in value && value.#owner === owner
-      ? value.#authority
-      : undefined;
-  }
-}
+const requestMutationAuthorities = new WeakMap<object, GatewayRequestMutationAuthority>();
 
 function bindRequestMutationAuthority(
   options: object,
   authority: GatewayRequestMutationAuthority,
 ): void {
-  Object.defineProperty(options, requestMutationAuthorityKey, {
-    value: new RequestMutationAuthorityBinding(options, authority),
-    configurable: true,
-  });
+  requestMutationAuthorities.set(options, authority);
 }
 
 function assertRequestTransportCurrent(options: RequestMutationOptions): void {
@@ -98,29 +82,52 @@ function assertRequestAuthorityCurrent(options: RequestMutationOptions): void {
   options.sessionMutationCommitGuard?.();
 }
 
-function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
+function captureRequestAuthorityAssertion(
+  options: RequestMutationOptions,
+  nativeTransport: boolean,
+) {
   const source = captureExternalSessionCommitGuard(options.sessionMutationCommitGuard);
-  return composeSessionSourceAssertion([source], (assertSource) => {
-    assertRequestTransportCurrent(options);
-    assertSource();
-  });
+  const transportSource =
+    nativeTransport && options.hasCurrentClientAuthority
+      ? captureExternalSessionCommitGuard(() => assertRequestTransportCurrent(options))
+      : undefined;
+  return composeSessionSourceAssertion(
+    [transportSource, source],
+    (assertSource) => {
+      if (!transportSource) {
+        assertRequestTransportCurrent(options);
+      }
+      assertSource();
+    },
+    {
+      hasOpaqueCheck: nativeTransport,
+      preparedCheck: (assertSource) => {
+        options.signal?.throwIfAborted();
+        if (!hasPreparedGatewayDeviceAuthority(options.client, options.hasCurrentClientAuthority)) {
+          throw new Error("Gateway requester authority changed");
+        }
+        assertSource();
+      },
+    },
+  );
+}
+
+function captureRequestMutationOptions(options: GatewayRequestOptions, client = options.client) {
+  const { req, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
+  return { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard };
 }
 
 /** Opaque SDK guards retain their synchronous commit boundary from v2026.9.4. */
 export function readGatewayRequestMutationAuthority(
   options: RequestMutationOptions,
 ): GatewayRequestMutationAuthority {
-  const binding: unknown = Object.getOwnPropertyDescriptor(
-    options,
-    requestMutationAuthorityKey,
-  )?.value;
-  const retained = RequestMutationAuthorityBinding.read(binding, options);
+  const retained = requestMutationAuthorities.get(options);
   if (retained) {
     return retained;
   }
   const { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
   const captured = { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard };
-  const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured);
+  const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured, true);
   const compatibility: GatewayRequestMutationAuthority = {
     family: "native-compatibility",
     assertPreparationCurrent: () => assertRequestTransportCurrent(captured),
@@ -136,15 +143,32 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
   options: T,
   assertSourceCurrent: (() => void) | undefined,
   assertPreparationCurrent: (() => void) | undefined,
+  questionCallerRead?: PreparedQuestionCallerRead,
 ): T {
-  if (!assertSourceCurrent && !assertPreparationCurrent) {
+  if (
+    isGatewayWorkerApprovalMethod(options.req.method) &&
+    isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)
+  ) {
+    const captured = captureRequestMutationOptions(options);
+    const assertWorkerCurrent = () => {
+      assertRequestAuthorityCurrent(captured);
+    };
+    bindRequestMutationAuthority(options, {
+      family: "worker",
+      assertPreparationCurrent: assertWorkerCurrent,
+      assertCurrent: assertWorkerCurrent,
+      assertLifetimeCurrent: assertWorkerCurrent,
+      assertWorkerCurrent,
+    });
+  }
+  if (!assertSourceCurrent && !assertPreparationCurrent && !questionCallerRead) {
     return options;
   }
   const source = readGatewayRequestMutationAuthority(options);
-  const { req, client, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } =
-    options;
+  const captured = captureRequestMutationOptions(options);
   bindRequestMutationAuthority(options, {
     ...source,
+    questionCallerRead,
     assertPreparationCurrent: () => {
       source.assertPreparationCurrent();
       assertPreparationCurrent?.();
@@ -152,21 +176,8 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     ...(assertSourceCurrent
       ? {
           assertAdmittedInputCurrent: () => {
-            if (
-              options.req !== req ||
-              options.client !== client ||
-              options.context !== context ||
-              options.signal !== signal ||
-              options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
-              options.sessionMutationCommitGuard !== sessionMutationCommitGuard
-            ) {
-              throw new Error("Gateway requester authority changed");
-            }
             assertRequestAuthorityCurrent({
-              req,
-              client,
-              signal,
-              hasCurrentClientAuthority,
+              ...captured,
               sessionMutationCommitGuard: assertSourceCurrent,
             });
           },
@@ -194,20 +205,12 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   ) {
     return options;
   }
-  const { req, context, signal, hasCurrentClientAuthority } = options;
+  const captured = captureRequestMutationOptions(options, client);
+  const { signal, hasCurrentClientAuthority } = captured;
   const assertWorkerCurrent = () => {
     signal?.throwIfAborted();
     const acceptedSource = readAcceptedGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
-    if (
-      options.req !== req ||
-      options.client !== client ||
-      options.context !== context ||
-      options.signal !== signal ||
-      options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
-      options.sessionMutationCommitGuard !== undefined ||
-      !hasCurrentDeviceRevocation() ||
-      client.internal?.agentRuntimeIdentity
-    ) {
+    if (!hasCurrentDeviceRevocation() || client.internal?.agentRuntimeIdentity) {
       throw new Error("Gateway requester authority changed");
     }
     if (acceptedSource) {
@@ -238,14 +241,14 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
     assertLifetimeCurrent: assertWorkerCurrent,
     assertCurrent: () => {
       assertWorkerCurrent();
-      assertRequestAuthorityCurrent(options);
+      assertRequestAuthorityCurrent(captured);
     },
     assertWorkerCurrent,
   });
   return options;
 }
 
-/** Transfer only this exact invocation's custody after the router composes profile selection. */
+/** Retain the request authority after the router composes profile selection. */
 export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequestHandlerOptions>(
   request: GatewayRequestOptions,
   handler: T,
@@ -255,41 +258,17 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
   const source = readGatewayRequestMutationAuthority(request);
   const retainedProfileBinding = expectedProfileBinding ?? source.expectedProfileBinding;
   const retainedSessionScope = sessionScope ?? source.sessionScope;
-  const { req, client, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } =
-    handler;
-  const assertHandlerCurrent = () => {
-    if (
-      handler.req !== req ||
-      handler.client !== client ||
-      handler.context !== context ||
-      handler.signal !== signal ||
-      handler.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
-      handler.sessionMutationCommitGuard !== sessionMutationCommitGuard
-    ) {
-      throw new Error("Gateway requester authority changed");
-    }
-  };
+  const transport = captureRequestMutationOptions(handler);
   const assertCurrent = composeSessionSourceAssertion([
-    assertHandlerCurrent,
     source.assertOperatorCurrent,
     source.family === "worker" ? source.assertWorkerCurrent : undefined,
-    captureRequestAuthorityAssertion(handler),
+    captureRequestAuthorityAssertion(transport, source.family === "native-compatibility"),
   ]);
-  const assertLifetimeCurrent = composeSessionSourceAssertion(
-    [source.assertLifetimeCurrent],
-    (assertSource) => {
-      assertHandlerCurrent();
-      // Keep the pre-router owner; the handler guard also contains native profile selection.
-      assertSource();
-    },
-  );
   const authority: GatewayRequestMutationAuthority = {
-    assertPreparationCurrent: () => {
-      assertHandlerCurrent();
-      source.assertPreparationCurrent();
-    },
+    assertPreparationCurrent: source.assertPreparationCurrent,
+    questionCallerRead: source.questionCallerRead,
     assertCurrent,
-    assertLifetimeCurrent,
+    assertLifetimeCurrent: source.assertLifetimeCurrent,
     expectedProfileBinding: retainedProfileBinding,
     sessionScope: retainedSessionScope,
     assertOperatorCurrent: source.assertOperatorCurrent,
@@ -297,7 +276,6 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
       ? {
           family: "worker" as const,
           assertWorkerCurrent: () => {
-            assertHandlerCurrent();
             source.assertOperatorCurrent?.();
             source.assertWorkerCurrent();
           },
@@ -307,12 +285,11 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
   if (source.assertAdmittedInputCurrent) {
     const assertAdmittedInputCurrent = source.assertAdmittedInputCurrent;
     const assertTransferredHandlerCurrent = () => {
-      assertHandlerCurrent();
       source.assertOperatorCurrent?.();
       // An adapter may add an opaque host guard. Only the unchanged producer
       // guard has the known tool-receipt/source split; retain any new guard in full.
-      if (sessionMutationCommitGuard !== request.sessionMutationCommitGuard) {
-        assertRequestAuthorityCurrent(handler);
+      if (transport.sessionMutationCommitGuard !== request.sessionMutationCommitGuard) {
+        assertRequestAuthorityCurrent(transport);
       }
     };
     authority.assertAdmittedInputCurrent = () => {
@@ -402,8 +379,39 @@ export function withSessionMutationCommitGuard(
     authorization?.assertCurrent,
   ]);
   const admitted = authorization?.admittedInputAuthority;
+  const withCommitGuards = <T>(consume: () => T): T => {
+    assertExpectedProfile?.();
+    assertCommitAllowed?.();
+    return consume();
+  };
   return {
     ...authorization,
+    ...(authorization?.prepareWorkerGrant
+      ? {
+          prepareWorkerGrant: async (target) => {
+            const prepared = await withCommitGuards(() =>
+              authorization.prepareWorkerGrant!(target),
+            );
+            const wrap =
+              <Args extends unknown[]>(assertSource: (...args: Args) => void) =>
+              (...args: Args) =>
+                withCommitGuards(() => assertSource(...args));
+            return {
+              ...prepared,
+              assertCurrent: wrap(prepared.assertCurrent),
+              assertLifetimeCurrent: wrap(prepared.assertLifetimeCurrent),
+              ...(prepared.transaction
+                ? {
+                    transaction: {
+                      ...prepared.transaction,
+                      assertCurrent: wrap(prepared.transaction.assertCurrent),
+                    },
+                  }
+                : {}),
+            };
+          },
+        }
+      : {}),
     assertAdmittedInputCurrent,
     ...(admitted
       ? {
@@ -415,11 +423,7 @@ export function withSessionMutationCommitGuard(
     ...(authorization?.withCurrent
       ? {
           withCurrent: <T>(consume: () => T) =>
-            authorization.withCurrent!(() => {
-              assertExpectedProfile?.();
-              assertCommitAllowed?.();
-              return consume();
-            }),
+            authorization.withCurrent!(() => withCommitGuards(consume)),
         }
       : {}),
     ...(authorization?.withPreparedCurrent
@@ -431,11 +435,7 @@ export function withSessionMutationCommitGuard(
           ) =>
             authorization.withPreparedCurrent!(
               facts,
-              () => {
-                assertExpectedProfile?.();
-                assertCommitAllowed?.();
-                return consume();
-              },
+              () => withCommitGuards(consume),
               assertSourceCurrent,
             ),
         }
@@ -445,10 +445,7 @@ export function withSessionMutationCommitGuard(
       assertCommitAllowed,
       authorization?.assertCurrent,
     ]),
-    assertTargetCurrent: (target) => {
-      assertExpectedProfile?.();
-      assertCommitAllowed?.();
-      authorization?.assertTargetCurrent(target);
-    },
+    assertTargetCurrent: (target) =>
+      withCommitGuards(() => authorization?.assertTargetCurrent(target)),
   };
 }

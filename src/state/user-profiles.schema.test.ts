@@ -1,3 +1,4 @@
+import { copyFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -22,13 +24,13 @@ import {
   readUserProfileSnapshotSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import { readUserProfileIdentity, prepareUserProfileCatalog } from "./user-profile-list.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
-  getUserProfileListItem,
   getUserProfileRole,
   resolveUserProfileId,
 } from "./user-profiles.js";
@@ -94,38 +96,6 @@ function readUserProfileEmailBindingIds(
 }
 
 describe("user profile email binding schema", () => {
-  it("initializes legacy aliases once without changing their ownership, timestamps, or version", () => {
-    const options = stateOptions();
-    const database = createLegacyEmailDatabase(options);
-    const before = database
-      .prepare("SELECT email, profile_id, created_at FROM user_profile_emails ORDER BY email")
-      .all();
-    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
-    const first = readUserProfileEmailBindingIds("legacy-one", options);
-    const second = readUserProfileEmailBindingIds("legacy-two", options);
-    expect(first).toEqual([expect.any(String)]);
-    expect(second).toEqual([expect.any(String)]);
-    expect(new Set([...first, ...second]).size).toBe(2);
-    expect(
-      database
-        .prepare("SELECT email, profile_id, created_at FROM user_profile_emails ORDER BY email")
-        .all(),
-    ).toEqual(before);
-    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
-    expect(database.prepare("PRAGMA table_info(user_profile_emails)").all()).toContainEqual(
-      expect.objectContaining({
-        name: "binding_id",
-        type: "TEXT",
-        notnull: 0,
-        dflt_value: null,
-        pk: 0,
-      }),
-    );
-    closeOpenClawStateDatabaseForTest();
-    expect(readUserProfileEmailBindingIds("legacy-one", options)).toEqual(first);
-    expect(readUserProfileEmailBindingIds("legacy-two", options)).toEqual(second);
-  });
-
   it.each(["outer", "savepoint"] as const)(
     "retries alias initialization after a %s migration rollback",
     (scope) => {
@@ -157,12 +127,12 @@ describe("user profile email binding schema", () => {
 });
 
 describe("user profile role schema", () => {
-  it("lazily adds a downgrade-safe nullable role without changing the schema version", () => {
+  it("lazily adds a downgrade-safe nullable role without changing the schema version", async () => {
     const options = stateOptions();
     const database = createLegacyProfileDatabase(options);
     const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
     const profile = ensureProfileForEmail("ada@example.com", options);
-    const release = retainUserProfileCatalog(options);
+    const release = (await prepareUserProfileCatalog(options)).release;
     try {
       expect(readUserProfileIdentity(profile.id, options)?.role).toBeNull();
 
@@ -244,84 +214,80 @@ describe("user profile role schema", () => {
   );
 });
 
-it.each([false, true])(
-  "upgrades channel links without granting legacy recovery custody (deferred: %s)",
-  async (deferred) => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("upgrade@example.test", options);
-    const identity = { channelId: "discord", accountId: "team", senderId: "100" };
-    linkUserChannelIdentity(profile.id, identity, options);
-    const runId = "ed099411-cfbd-4304-a6b7-d3e504a48505";
-    if (deferred) {
-      createUpdateRun({ runId, trigger: "cli", before: { version: "2026.9.2" } }, options);
-    }
-    closeOpenClawStateDatabaseForTest();
-    const legacy = new DatabaseSync(options.path);
-    legacy.exec(`
+it("upgrades deferred channel links without granting legacy recovery custody", async () => {
+  const options = stateOptions();
+  const profile = ensureProfileForEmail("upgrade@example.test", options);
+  const identity = { channelId: "discord", accountId: "team", senderId: "100" };
+  linkUserChannelIdentity(profile.id, identity, options);
+  const runId = "ed099411-cfbd-4304-a6b7-d3e504a48505";
+  createUpdateRun({ runId, trigger: "cli", before: { version: "2026.9.2" } }, options);
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  renameSync(options.path, `${options.path}.seed`);
+  copyFileSync(`${options.path}.seed`, options.path);
+  const legacy = new DatabaseSync(options.path);
+  legacy.exec(`
     DROP INDEX idx_user_profile_identities_authorization;
     ALTER TABLE user_profile_identities DROP COLUMN authorization_id;
     ALTER TABLE user_profile_identities DROP COLUMN authorization_basis_json;
     PRAGMA user_version = 18;
     UPDATE schema_meta SET schema_version = 18;
   `);
-    const before = legacy.prepare("SELECT * FROM user_profile_identities").all();
-    legacy.close();
-    let db = openOpenClawStateDatabase(options).db;
-    expect(db.prepare("SELECT * FROM user_profile_identities").all()).toEqual(
-      before.map((row) =>
-        Object.assign(row, {
-          authorization_id: null,
-          authorization_basis_json: null,
-        }),
-      ),
-    );
-    const policy = resolveUserChannelAuthorizationPolicy({
-      roles: {
-        default: "admin",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-        },
+  const before = legacy.prepare("SELECT * FROM user_profile_identities").all();
+  legacy.close();
+  let db = openOpenClawStateDatabase(options).db;
+  expect(db.prepare("SELECT * FROM user_profile_identities").all()).toEqual(
+    before.map((row) =>
+      Object.assign(row, {
+        authorization_id: null,
+        authorization_basis_json: null,
+      }),
+    ),
+  );
+  const policy = resolveUserChannelAuthorizationPolicy({
+    roles: {
+      default: "admin",
+      definitions: {
+        admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
       },
-    });
-    const owners = [identity.senderId];
-    // Config activation publishes once; the update watcher can publish v19 later without a reload.
+    },
+  });
+  const owners = [identity.senderId];
+  // Config activation publishes once; the update watcher can publish v19 later without a reload.
+  runOpenClawStateWriteTransaction(({ db: writer }) => {
+    publishUserChannelPolicyInDatabase(
+      writer,
+      policy,
+      configuredCommandOwnerPolicyFingerprint(owners),
+    );
+  }, options);
+  const mint = () =>
     runOpenClawStateWriteTransaction(({ db: writer }) => {
-      publishUserChannelPolicyInDatabase(
-        writer,
+      return authorizeUserChannelIdentityInDatabase(writer, {
+        identity,
+        profileId: profile.id,
         policy,
-        configuredCommandOwnerPolicyFingerprint(owners),
-      );
+        grant: null,
+      });
     }, options);
-    const mint = () =>
-      runOpenClawStateWriteTransaction(({ db: writer }) => {
-        return authorizeUserChannelIdentityInDatabase(writer, {
-          identity,
-          profileId: profile.id,
-          policy,
-          grant: null,
-        });
-      }, options);
-    if (deferred) {
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
-      expect(mint()).toBeUndefined();
-      expect(await prepareConfiguredCommandOwnerAuthority(owners, options)).toBeUndefined();
-      db.prepare(
-        "UPDATE update_runs SET status = 'succeeded', phase = 'finished', finished_at_ms = ? WHERE run_id = ?",
-      ).run(Date.now() - 300_001, runId);
-      closeOpenClawStateDatabaseForTest();
-      db = openOpenClawStateDatabase(options).db;
-    }
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    const reference = mint();
-    expect(reference).toEqual({ version: 1, id: expect.any(String) });
-    const configured = await prepareConfiguredCommandOwnerAuthority(owners, options);
-    expect(configured?.recoveryReference).toEqual({ version: 2, id: expect.any(String) });
-    closeOpenClawStateDatabaseForTest();
-    expect(mint()).toEqual(reference);
-    expect(
-      (await prepareConfiguredCommandOwnerAuthority(owners, options))?.recoveryReference,
-    ).toEqual(configured?.recoveryReference);
-  },
-);
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+  expect(mint()).toBeUndefined();
+  expect(await prepareConfiguredCommandOwnerAuthority(owners, options)).toBeUndefined();
+  db.prepare(
+    "UPDATE update_runs SET status = 'succeeded', phase = 'finished', finished_at_ms = ? WHERE run_id = ?",
+  ).run(Date.now() - 300_001, runId);
+  closeOpenClawStateDatabaseForTest();
+  db = openOpenClawStateDatabase(options).db;
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  const reference = mint();
+  expect(reference).toEqual({ version: 1, id: expect.any(String) });
+  const configured = await prepareConfiguredCommandOwnerAuthority(owners, options);
+  expect(configured?.recoveryReference).toEqual({ version: 2, id: expect.any(String) });
+  closeOpenClawStateDatabaseForTest();
+  expect(mint()).toEqual(reference);
+  expect(
+    (await prepareConfiguredCommandOwnerAuthority(owners, options))?.recoveryReference,
+  ).toEqual(configured?.recoveryReference);
+});

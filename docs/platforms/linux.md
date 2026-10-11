@@ -62,7 +62,7 @@ endpoint.
 The app prepares the local Chrome native helper at startup and after CLI
 installation. Release builds reuse a matching CLI or install a version-matched
 browser runtime under their own app-data directory. This download does not
-create, probe, refresh, or restart a Gateway service, replace its runtime, or
+create, check, refresh, or restart a Gateway service, replace its runtime, or
 change the selected remote connection. It requires an internet connection.
 
 Choose **Set Up Chrome Extension…** in the tray to retry setup and open the
@@ -154,7 +154,7 @@ separate from the native **OpenClaw** app.
 ### Use the bundled runtime
 
 On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
-fork through the canonical CLI. The install guard requires the service to still
+fork through the standard CLI. The install guard requires the service to still
 be absent. A service that appears during setup blocks that installation. The app's
 runtime marker is informational and never authorizes automatic service changes.
 
@@ -498,7 +498,7 @@ On Linux hosts without a supported service manager, run the Gateway in the
 foreground or through your own supervisor, such as rc.d. `openclaw gateway status
 --deep` reports **no supported service manager detected** and identifies a
 remaining service unit as stale. That recorded unit does not select the status
-probe's configuration or port. Updates continue with a service warning; restart
+check's configuration or port. Updates continue with a service warning; restart
 your manually launched Gateway after the update. An unavailable user session bus
 on a systemd host remains a separate service-access diagnostic.
 

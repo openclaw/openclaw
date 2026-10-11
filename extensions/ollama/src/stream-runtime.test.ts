@@ -4,7 +4,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -16,12 +16,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
+import { convertToOllamaMessages } from "./stream-messages.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
-  convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
 } from "./stream.runtime.js";
@@ -1116,9 +1116,7 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(events[6]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
     }
     const done = events.at(-1);
-    if (done?.type !== "done") {
-      throw new Error("Expected done event");
-    }
+    assert(done?.type === "done", "Expected done event");
     expect(done.message.content).toEqual([
       ...(visible ? [{ type: "text", text: "Visible answer" }] : []),
       { type: "toolCall", id: expect.any(String), name: "bash", arguments: { command: "ls" } },

@@ -7,6 +7,19 @@ import type { ResourceExtensionPaths } from "./resource-loader.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 
+function describeCommands<T extends Pick<SlashCommandInfo, "description" | "sourceInfo">>(
+  commands: readonly T[],
+  source: SlashCommandInfo["source"],
+  name: (command: T) => string,
+): SlashCommandInfo[] {
+  return commands.map((command) => ({
+    name: name(command),
+    description: command.description,
+    source,
+    sourceInfo: command.sourceInfo,
+  }));
+}
+
 export abstract class AgentSessionExtensions extends AgentSessionCompaction {
   async bindExtensions(bindings: ExtensionBindings): Promise<void> {
     if (bindings.uiContext !== undefined) {
@@ -101,54 +114,38 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
   }
 
   private bindExtensionCore(runner: ExtensionRunner): void {
-    const getCommands = (): SlashCommandInfo[] => {
-      const extensionCommands: SlashCommandInfo[] = runner
-        .getRegisteredCommands()
-        .map((command) => ({
-          name: command.invocationName,
-          description: command.description,
-          source: "extension",
-          sourceInfo: command.sourceInfo,
-        }));
-
-      const templates: SlashCommandInfo[] = this.promptTemplates.map((template) => ({
-        name: template.name,
-        description: template.description,
-        source: "prompt",
-        sourceInfo: template.sourceInfo,
-      }));
-
-      const skills: SlashCommandInfo[] = this.sessionResourceLoader
-        .getSkills()
-        .skills.map((skill) => ({
-          name: `skill:${skill.name}`,
-          description: skill.description,
-          source: "skill",
-          sourceInfo: skill.sourceInfo,
-        }));
-
-      return [...extensionCommands, ...templates, ...skills];
+    const reportSendError = (event: string, err: unknown) => {
+      runner.emitError({
+        extensionPath: "<runtime>",
+        event,
+        error: err instanceof Error ? err.message : String(err),
+      });
     };
+    const getCommands = (): SlashCommandInfo[] => [
+      ...describeCommands(
+        runner.getRegisteredCommands(),
+        "extension",
+        (command) => command.invocationName,
+      ),
+      ...describeCommands(this.promptTemplates, "prompt", (template) => template.name),
+      ...describeCommands(
+        this.sessionResourceLoader.getSkills().skills,
+        "skill",
+        (skill) => `skill:${skill.name}`,
+      ),
+    ];
 
     runner.bindCoreAsync(
       {
         sendMessage: (message, options) => {
-          this.sendCustomMessage(message, options).catch((err: unknown) => {
-            runner.emitError({
-              extensionPath: "<runtime>",
-              event: "send_message",
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
+          this.sendCustomMessage(message, options).catch((err: unknown) =>
+            reportSendError("send_message", err),
+          );
         },
         sendUserMessage: (content, options) => {
-          this.sendUserMessage(content, options).catch((err: unknown) => {
-            runner.emitError({
-              extensionPath: "<runtime>",
-              event: "send_user_message",
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
+          this.sendUserMessage(content, options).catch((err: unknown) =>
+            reportSendError("send_user_message", err),
+          );
         },
         // Retained third-party synchronous persistence adapters.
         appendEntry: (customType, data) => {

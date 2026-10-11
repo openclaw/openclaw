@@ -2,10 +2,7 @@ import path from "node:path";
 import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   findCapabilityProviderById,
@@ -129,26 +126,18 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       providerId: params.providerId,
       normalizeProviderId,
     });
-  if (!provider) {
-    return params.providerId
-      ? hasProviderAuthForTool({
-          provider: params.providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-          authProfileStoreSource: params.authProfileStoreSource,
-        })
-      : false;
+  const providerId = provider ? provider.id : params.providerId;
+  if (providerId === undefined || (!provider && !providerId)) {
+    return false;
   }
-  if (provider.isConfigured) {
+  if (provider?.isConfigured) {
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,
     });
   }
   return hasProviderAuthForTool({
-    provider: provider.id,
+    provider: providerId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
@@ -175,27 +164,22 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   modelConfig: ToolModelConfig;
   modelOverride?: string;
 }): T | undefined {
-  const selectedRef =
-    resolveCapabilityModelRefForProviders({
+  for (const raw of [params.modelOverride, params.modelConfig.primary]) {
+    const selectedRef = resolveCapabilityModelRefForProviders({
       providers: params.providers,
-      raw: params.modelOverride,
-      parseModelRef: parseGenerationModelRef,
-      normalizeProviderId,
-    }) ??
-    resolveCapabilityModelRefForProviders({
-      providers: params.providers,
-      raw: params.modelConfig.primary,
+      raw,
       parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     });
-  if (!selectedRef) {
-    return undefined;
+    if (selectedRef) {
+      return findCapabilityProviderById({
+        providers: params.providers,
+        providerId: selectedRef.provider,
+        normalizeProviderId,
+      });
+    }
   }
-  return findCapabilityProviderById({
-    providers: params.providers,
-    providerId: selectedRef.provider,
-    normalizeProviderId,
-  });
+  return undefined;
 }
 
 function resolveCapabilityModelCandidatesForTool(params: {
@@ -332,18 +316,11 @@ export function hasGenerationToolAvailability(params: {
 export function resolveGenerateAction(
   args: Record<string, unknown>,
 ): "generate" | "status" | "list" {
-  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
-  switch (action) {
-    case undefined:
-    case "generate":
-      return "generate";
-    case "status":
-      return "status";
-    case "list":
-      return "list";
-    default:
-      throw new ToolInputError('action must be "generate", "status", or "list"');
+  const action = readToolStringParam(args, "action")?.toLowerCase() ?? "generate";
+  if (action === "generate" || action === "status" || action === "list") {
+    return action;
   }
+  throw new ToolInputError('action must be "generate", "status", or "list"');
 }
 
 /**

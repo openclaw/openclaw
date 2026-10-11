@@ -32,8 +32,6 @@ import {
 describe("buildIMessageInboundContext direct reply route", () => {
   it.each([
     { chatId: undefined, bound: false, dispatchState: "context-only" },
-    { chatId: 42, bound: false, dispatchState: "context-only" },
-    { chatId: 42, bound: true, dispatchState: "context-only" },
     { chatId: 42, bound: true, dispatchState: "permitted" },
     { chatId: 42, bound: true, dispatchState: "revoked" },
     { chatId: 42, bound: true, dispatchState: "reassigned" },

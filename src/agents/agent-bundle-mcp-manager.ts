@@ -1,4 +1,3 @@
-/** Session MCP runtime manager: acquisition and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -84,31 +83,22 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       const priorDisposal = store.disposalInFlight;
       const priorSessionWork = store.runtimeWorkChains.get(params.sessionId);
-      const input: PreparedAcquisitionParams = { ...params, requester };
-      let publication = store.configReload;
+      const publication = store.configReload;
       let acquired: T | undefined;
       try {
-        // Reserve every possible partition before yielding, including requester
-        // keys a crossed publication may add. Teardown drains this entire admission.
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
-          for (;;) {
-            store.scheduler.signal.throwIfAborted();
-            const next = store.configReload;
-            // A publication can cross queued admission before a producer starts.
-            if (next && next !== publication) {
-              Object.assign(input, { cfg: next.cfg, manifestRegistry: next.manifestRegistry });
-            }
-            publication = next;
-            const previous = acquired;
-            acquired = await acquire(input);
-            // Keep one hidden lease until its successor owns unchanged transports.
-            previous?.releaseLease();
-            store.scheduler.signal.throwIfAborted();
-            if (!store.configReload || store.configReload === publication) {
-              return acquired;
-            }
-          }
+          store.scheduler.signal.throwIfAborted();
+          const reload = store.configReload;
+          acquired = await acquire({
+            ...params,
+            requester,
+            ...(reload && reload !== publication
+              ? { cfg: reload.cfg, manifestRegistry: reload.manifestRegistry }
+              : {}),
+          });
+          store.scheduler.signal.throwIfAborted();
+          return acquired;
         });
       } catch (error) {
         acquired?.releaseLease();
@@ -121,16 +111,34 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         }
       }
     };
-  const prepareAcquisition = (params: PreparedAcquisitionParams) => {
+  const prepareAcquisition = (
+    params: PreparedAcquisitionParams,
+    configReloadAtAdmission: SessionMcpConfigPublication | undefined,
+  ) => {
     const fullConfig = loadSessionMcpConfig({ ...params, logDiagnostics: false });
     const partition = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
     // Full-set names stay stable when only some requester connections resolve.
     const { safeServerNamesByServer } = fullConfig;
+    const requester = params.requester;
     return {
       fullConfig,
       ...partition,
       safeServerNamesByServer,
-      requester: params.requester,
+      requester,
+      acquireRequester: () =>
+        requester
+          ? materializeRequesterScopedRuntime({
+              ...params,
+              configReloadAtAdmission,
+              mcpServers: fullConfig.loaded.mcpServers,
+              oauthRequesterServerNames: partition.oauthRequesterServerNames,
+              resolverRequesterServerNames: partition.resolverRequesterServerNames,
+              scopedNameSet: new Set(partition.requesterScopedServerNames),
+              safeServerNamesByServer,
+              requesterSenderId: requester.senderId,
+              runtimeKey: requester.runtimeKey,
+            })
+          : undefined,
     };
   };
   const materializeRequesterScopedRuntime = async (
@@ -178,14 +186,12 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
 
       const {
-        fullConfig,
         staticServers,
         requesterScopedServerNames,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
         safeServerNamesByServer,
         requester,
-      } = prepareAcquisition(params);
+        acquireRequester,
+      } = prepareAcquisition(params, configReloadAtAdmission);
 
       const leases: SessionMcpRuntimeLease[] = [];
       try {
@@ -204,23 +210,10 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
           return staticLease;
         }
         const parts = Object.keys(staticServers).length > 0 ? [staticLease.runtime] : [];
-        const scopedNameSet = new Set(requesterScopedServerNames);
-        if (requester) {
-          const lease = await materializeRequesterScopedRuntime({
-            ...params,
-            configReloadAtAdmission,
-            mcpServers: fullConfig.loaded.mcpServers,
-            oauthRequesterServerNames,
-            resolverRequesterServerNames,
-            scopedNameSet,
-            safeServerNamesByServer,
-            requesterSenderId: requester.senderId,
-            runtimeKey: requester.runtimeKey,
-          });
-          if (lease) {
-            leases.push(lease);
-            parts.push(lease.runtime);
-          }
+        const requesterLease = requester ? await acquireRequester() : undefined;
+        if (requesterLease) {
+          leases.push(requesterLease);
+          parts.push(requesterLease.runtime);
         }
         return {
           runtime:
@@ -256,11 +249,10 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       const {
         fullConfig,
         requesterScopedServerNames,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
         safeServerNamesByServer,
         requester,
-      } = prepareAcquisition(params);
+        acquireRequester,
+      } = prepareAcquisition(params, configReloadAtAdmission);
       // Native acquisition can project only static servers. Requester discovery
       // owns its advertised catalog; lease release/reload own server retirement.
       const advertisedCatalogConfigFingerprint = loadSessionMcpConfig({
@@ -284,18 +276,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       if (requesterScopedServerNames.length === 0) {
         return undefined;
       }
-      const scopedNameSet = new Set(requesterScopedServerNames);
-      const lease = await materializeRequesterScopedRuntime({
-        ...params,
-        configReloadAtAdmission,
-        mcpServers: fullConfig.loaded.mcpServers,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
-        scopedNameSet,
-        safeServerNamesByServer,
-        requesterSenderId: requester.senderId,
-        runtimeKey: requester.runtimeKey,
-      });
+      const lease = await acquireRequester();
       if (!lease) {
         return undefined;
       }
@@ -416,7 +397,6 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     },
     totalActiveLeasesForSession: lifecycle.totalActiveLeasesForSessionId,
   };
-  // Test-only bookkeeping snapshot for drain assertions.
   Object.assign(manager, {
     bookkeepingSizesForTest: () => ({
       runtimes: store.runtimesBySessionId.size,

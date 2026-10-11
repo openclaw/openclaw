@@ -1,12 +1,14 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread } from "./app-server/protocol.js";
 import type {
   CodexCatalogIndexRow,
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   mergeCodexCatalogRolloutRow,
-  projectCodexCatalogThread,
+  projectCodexCatalogPage,
 } from "./session-catalog-projection.js";
 import {
   type CodexCatalogRolloutScanner,
@@ -24,7 +26,6 @@ type ReconciliationOwner = {
   assertCurrent(): void;
   requestNativeRefresh(): void;
   report(error: unknown): void;
-  mark(id: string): void;
   put(row: CodexCatalogIndexRow): void;
   remove(id: string): void;
 };
@@ -32,7 +33,6 @@ type ReconciliationOwner = {
 /** Plan file reconciliation; the index retains every publication and lifetime decision. */
 export async function reconcileCodexCatalogFiles(
   root: string,
-  isCurrent: (id: string) => boolean,
   owner: ReconciliationOwner,
 ): Promise<Map<string, CodexCatalogRolloutFingerprint>> {
   const byPath = new Map<string, CodexCatalogIndexRow>();
@@ -60,7 +60,7 @@ export async function reconcileCodexCatalogFiles(
       continue;
     }
     owner.requestNativeRefresh();
-    // Publish a new fingerprint only after its projection survives concurrent native updates.
+    // Failed reads retain their old fingerprint so the next scan can retry.
     observed.delete(file);
     if (known) {
       observed.set(file, known);
@@ -78,9 +78,6 @@ export async function reconcileCodexCatalogFiles(
       observed.set(file, fingerprint);
       continue;
     }
-    if (!isCurrent(thread.id)) {
-      continue;
-    }
     const existing = owner.rows.get(thread.id);
     if (
       existing?.rolloutPath &&
@@ -96,17 +93,16 @@ export async function reconcileCodexCatalogFiles(
       continue;
     }
     thread.preview ||= existing?.preview;
-    const projected = await projectCodexCatalogThread(thread, root);
+    const projected = await projectCodexCatalogPage(
+      { data: [projectCodexCatalogNativeThread(thread, sanitizeTerminalText)] },
+      { localSessionsRoot: root, sanitize: sanitizeTerminalText },
+    );
     owner.assertCurrent();
-    if (!isCurrent(thread.id)) {
-      continue;
-    }
     observed.set(file, fingerprint);
     const row = projected.rows[0];
     if (!row) {
       continue;
     }
-    owner.mark(row.threadId);
     owner.put(mergeCodexCatalogRolloutRow(row, existing, fingerprint));
     await nextTurn();
   }

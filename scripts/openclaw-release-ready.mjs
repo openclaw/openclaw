@@ -228,14 +228,34 @@ export function readyArtifactName(sourceSha, runId, runAttempt) {
 function artifactFor(run, workflow, tooling, name) {
   const identity = producer(run, workflow, tooling);
   const artifacts = [];
+  let totalCount;
   for (let page = 1; page <= 20; page++) {
     const result = api(`actions/runs/${run.id}/artifacts?per_page=100&page=${page}`);
-    requireValue(result.total_count <= 2000, "Prepared release artifact list exceeds its limit.");
+    requireValue(
+      Number.isSafeInteger(result.total_count) &&
+        result.total_count >= 0 &&
+        result.total_count <= 2000 &&
+        Array.isArray(result.artifacts),
+      "Prepared release artifact list is invalid or exceeds its limit.",
+    );
+    totalCount ??= result.total_count;
+    requireValue(
+      result.total_count === totalCount,
+      "Prepared release artifact count changed while reading it.",
+    );
     artifacts.push(...result.artifacts);
-    if (artifacts.length >= result.total_count) {
+    if (artifacts.length === result.total_count) {
       break;
     }
+    requireValue(
+      result.artifacts.length > 0 && artifacts.length < result.total_count,
+      "Prepared release artifact list is incomplete.",
+    );
   }
+  requireValue(
+    artifacts.length === totalCount && artifacts.length > 0,
+    "Prepared release artifact list is incomplete.",
+  );
   const matches = artifacts.filter((artifact) => artifact.name === name);
   requireValue(matches.length === 1, `Expected one exact prepared artifact: ${name}.`);
   const [artifact] = matches;
@@ -255,7 +275,7 @@ function artifactFor(run, workflow, tooling, name) {
   };
 }
 
-async function waitForRun(runId, attempt, workflow, tooling) {
+async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = false } = {}) {
   const deadline = Date.now() + 110 * 60_000;
   while (Date.now() < deadline) {
     const run = api(`actions/runs/${runId}`);
@@ -266,7 +286,7 @@ async function waitForRun(runId, attempt, workflow, tooling) {
     );
     if (run.status === "completed") {
       requireValue(
-        run.conclusion === "success",
+        run.conclusion === "success" || (allowFailure && run.conclusion === "failure"),
         `${workflow} run ${runId}/${attempt} ended ${run.conclusion}; ${
           workflow === PUBLISH_WORKFLOW
             ? "inspect child outcomes for owner recovery, then start a new button run with the same readiness receipt and openclaw_npm_resume_run_id when core npm succeeded. A published core version without a successful child requires core-owner reconciliation. This button remains bound to its original parent attempt."
@@ -546,6 +566,34 @@ async function readPublicationRequest(path, directory, tooling, token) {
   return request;
 }
 
+async function verifyPublicationOutcome(run, request, tooling, token, directory) {
+  if (run.conclusion === "failure") {
+    const { verifyOpenClawCorePostpublish } = await import("./openclaw-core-postpublish.mjs");
+    const artifact = artifactFor(
+      run,
+      PUBLISH_WORKFLOW,
+      tooling,
+      `openclaw-release-postpublish-evidence-${request.inputs.tag}`,
+    );
+    await verifyOpenClawCorePostpublish({
+      parent: run,
+      artifact,
+      releaseTag: request.inputs.tag,
+      npmDistTag: request.inputs.npm_dist_tag,
+      token,
+      outputDir: join(directory, "core-postpublish-verification"),
+    });
+  }
+  const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
+  await verifyClawHubPostpublish({
+    event: { workflow_run: run },
+    parentStatePolicy: "sealed-producer",
+    verifierSha: tooling.sha,
+    token,
+    outputDir: join(directory, "clawhub-public-verification"),
+  });
+}
+
 async function main() {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -811,9 +859,12 @@ async function main() {
       requireValue(
         isDeepStrictEqual(observed, request.producer) &&
           run.status === "completed" &&
-          run.conclusion === "success",
-        "Publication request no longer identifies a successful exact publisher.",
+          ["success", "failure"].includes(run.conclusion),
+        "Publication request no longer identifies an allowed terminal exact publisher.",
       );
+      if (run.conclusion === "failure") {
+        await verifyPublicationOutcome(run, request, tooling, token, directory);
+      }
       return;
     }
     const run = await waitForRun(
@@ -821,14 +872,9 @@ async function main() {
       request.releaseRunAttempt,
       PUBLISH_WORKFLOW,
       tooling,
+      { allowFailure: true },
     );
-    const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
-    await verifyClawHubPostpublish({
-      event: { workflow_run: run },
-      verifierSha: tooling.sha,
-      token,
-      outputDir: join(directory, "clawhub-public-verification"),
-    });
+    await verifyPublicationOutcome(run, request, tooling, token, directory);
     output("verified", "true");
     return;
   }

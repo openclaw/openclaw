@@ -1,0 +1,125 @@
+openclaw-keyboard-shortcuts-dialog {
+  display: contents;
+  --openclaw-modal-width: 560px;
+}
+
+openclaw-keyboard-shortcuts-dialog .dialog {
+  box-sizing: content-box;
+  display: flex;
+  max-height: min(720px, calc(100dvh - 64px));
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--text);
+}
+
+openclaw-keyboard-shortcuts-dialog .header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+openclaw-keyboard-shortcuts-dialog h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+openclaw-keyboard-shortcuts-dialog .close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+openclaw-keyboard-shortcuts-dialog .close span {
+  display: flex;
+}
+
+openclaw-keyboard-shortcuts-dialog .close svg {
+  width: 16px;
+  height: 16px;
+}
+
+openclaw-keyboard-shortcuts-dialog .close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+openclaw-keyboard-shortcuts-dialog .body {
+  overflow: auto;
+  padding: 8px 22px 18px;
+}
+
+openclaw-keyboard-shortcuts-dialog section + section {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+openclaw-keyboard-shortcuts-dialog h3 {
+  margin: 18px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+openclaw-keyboard-shortcuts-dialog .shortcut-row {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+}
+
+openclaw-keyboard-shortcuts-dialog .combos {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+openclaw-keyboard-shortcuts-dialog .combo {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+openclaw-keyboard-shortcuts-dialog kbd {
+  box-sizing: content-box;
+  min-width: 22px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-muted);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+openclaw-keyboard-shortcuts-dialog .shortcut-kbd:where(:not([hidden])) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+openclaw-keyboard-shortcuts-dialog .shortcut-kbd > span + span {
+  margin-inline-start: 0.15em;
+}
+openclaw-keyboard-shortcuts-dialog .kbd__text {
+  text-box: trim-both cap alphabetic;
+}
+openclaw-keyboard-shortcuts-dialog .shortcut-kbd::before {
+  content: "";
+  height: 1lh;
+}

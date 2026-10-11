@@ -1,4 +1,3 @@
-// Runs a Vitest config and enforces wall-time regression budgets.
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {

@@ -208,7 +208,6 @@ function invalidSearchQueriesPayload() {
   };
 }
 
-/** Maps a Parallel v1 response into wrapped `web_search` result entries. */
 function mapParallelResults(response: ParallelSearchResponse, count: number) {
   const rawResults = asOptionalObjectRecord(response)?.results;
   const results = Array.isArray(rawResults) ? rawResults.filter(isRecord) : [];

@@ -333,19 +333,15 @@ export function startCodexCatalogControlRequestDiagnostics(
       const kept = (page.fields.controlWaitersV1 ??= []);
       page.fields.controlWaitersOmitted ??= 0;
       const tuple = controlWaiterTuple(controlCallOrdinal, summary);
-      if (!tuple) {
+      if (!tuple || kept.length === 4) {
         page.fields.controlWaitersOmitted = Math.min(
           Number.MAX_SAFE_INTEGER,
           page.fields.controlWaitersOmitted + 1,
         );
-        return;
-      }
-      if (kept.length === 4) {
+        if (!tuple) {
+          return;
+        }
         kept.splice(2, 1);
-        page.fields.controlWaitersOmitted = Math.min(
-          Number.MAX_SAFE_INTEGER,
-          page.fields.controlWaitersOmitted + 1,
-        );
       }
       kept.push(tuple);
     },

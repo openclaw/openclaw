@@ -2,10 +2,6 @@
  * Subagent spawn target policy. Requesters can self-spawn by default, or opt
  * into a configured allowlist that is still intersected with known agents.
  */
-import {
-  normalizeUniqueStringEntries,
-  sortUniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
@@ -18,15 +14,8 @@ function normalizeAllowAgents(allowAgents: readonly string[] | undefined): Set<s
     allowAgents
       .map((value) => value.trim())
       .filter(Boolean)
-      .map((value) => (value === "*" ? value : normalizeAgentId(value)))
-      .filter(Boolean),
+      .map((value) => (value === "*" ? value : normalizeAgentId(value))),
   );
-}
-
-function normalizeConfiguredAgentIds(
-  configuredAgentIds: readonly string[] | undefined,
-): Set<string> {
-  return new Set(normalizeUniqueStringEntries((configuredAgentIds ?? []).map(normalizeAgentId)));
 }
 
 /** Resolve the normalized agent IDs a requester may target with sessions_spawn. */
@@ -40,20 +29,17 @@ export function resolveSubagentAllowedTargetIds(params: {
   if (!policy) {
     return {
       allowAny: false,
-      allowedIds: requesterAgentId ? [requesterAgentId] : [],
+      allowedIds: [requesterAgentId],
     };
   }
+  const configuredIds = new Set((params.configuredAgentIds ?? []).map(normalizeAgentId));
   if (policy.has("*")) {
-    const configuredIds = Array.from(normalizeConfiguredAgentIds(params.configuredAgentIds));
-    if (requesterAgentId) {
-      configuredIds.push(requesterAgentId);
-    }
+    configuredIds.add(requesterAgentId);
     return {
       allowAny: true,
-      allowedIds: sortUniqueStrings(configuredIds),
+      allowedIds: [...configuredIds].toSorted(),
     };
   }
-  const configuredIds = normalizeConfiguredAgentIds(params.configuredAgentIds);
   return {
     allowAny: false,
     allowedIds: [...policy]
@@ -86,16 +72,12 @@ export function resolveSubagentTargetPolicy(params: {
   }
   const allowedText = allowed.allowedIds.length > 0 ? allowed.allowedIds.join(", ") : "none";
   const policy = normalizeAllowAgents(params.allowAgents);
-  if (allowed.allowAny || policy?.has(targetAgentId)) {
-    return {
-      ok: false,
-      allowedText,
-      error: `agentId "${targetAgentId}" is not in the configured agent registry (allowed: ${allowedText})`,
-    };
-  }
   return {
     ok: false,
     allowedText,
-    error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+    error:
+      allowed.allowAny || policy?.has(targetAgentId)
+        ? `agentId "${targetAgentId}" is not in the configured agent registry (allowed: ${allowedText})`
+        : `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
   };
 }

@@ -1,18 +1,17 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
-import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
+import type { AgentEventPayload, AgentAssistantSourceReceipt } from "../infra/agent-events.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
-  capLiveAssistantText,
   createLiveAssistantTextProjection,
+  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
 } from "./live-chat-projector.js";
+import * as assistantText from "./server-chat-buffer.js";
 import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import {
   createToolEventRecipientRegistry,
   type ChatRunToolRecipientState,
-  type ToolEventRecipientRegistry,
 } from "./server-chat-tool-recipients.js";
 
 export type ChatRunTiming = {
@@ -87,31 +86,20 @@ type PendingLiveTextFlush = {
   flush: () => void;
 };
 
-type LiveDisplayState = {
-  projector: ReturnType<typeof createLiveAssistantTextProjection>;
-  current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
-  pendingRawDelta?: string | null;
-  reset?: boolean;
-  unsentDelta: string | null;
-  sentText?: string;
-};
+type LiveDisplayState = NonNullable<assistantText.ChatRunBufferState["display"]>;
 
-type ChatRunRecord = {
+export type ChatRunRecord = assistantText.ChatRunBufferState & {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
-  rawBuffer?: string;
   buffer?: string;
   bufferIsCurrent?: () => boolean;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
   liveTextEpoch?: object;
-  display?: LiveDisplayState;
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   canvasBlocks?: ChatCanvasBlock[];
   deltaSentAt?: number;
-  assistantScope?: AssistantTextSnapshot["scope"];
-  managedMediaUrls?: Set<string>;
   agentText?: Partial<
     Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
   >;
@@ -121,13 +109,9 @@ type ChatRunRecord = {
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
 
-type ChatRunRecordStore = {
-  runs: Map<string, ChatRunRecord>;
-  getOrCreate: (runId: string) => ChatRunRecord;
-  releaseIfEmpty: (runId: string) => void;
-};
+type ChatRunRecordStore = ReturnType<typeof createChatRunRecordStore>;
 
-function createChatRunRecordStore(): ChatRunRecordStore {
+function createChatRunRecordStore() {
   const runs = new Map<string, ChatRunRecord>();
   const getOrCreate = (runId: string) => {
     const existing = runs.get(runId);
@@ -203,31 +187,10 @@ function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegist
   return { add, peek, shift: (sessionId) => takeRegistration(sessionId), remove: takeRegistration };
 }
 
-export type ChatRunState = {
-  runs: Map<string, ChatRunRecord>;
-  registry: ChatRunRegistry;
-  toolEventRecipients: ToolEventRecipientRegistry;
-  /** Acquire mutable state and record activity; readers use runs.get. */
-  getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (
-    runId: string,
-    options?: { final?: boolean },
-  ) => { text: string; suppress: boolean };
-  updateBuffer: (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => string;
-  takeBufferDelta: (
-    runId: string,
-    text: string,
-  ) => { deltaText: string; replace?: true } | undefined;
-  flushPendingText: (runId: string) => void;
-  hasAbortMarker: (runId: string) => boolean;
-  deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
-  clearRun: (runId: string) => void;
-  clear: () => void;
-};
+export type ChatRunState = ReturnType<typeof createChatRunState>;
 
 /** Create the single record map used by Gateway chat-run runtime state. */
-export function createChatRunState(isConnectionActive?: (connId: string) => boolean): ChatRunState {
+export function createChatRunState(isConnectionActive?: (connId: string) => boolean) {
   const store = createChatRunRecordStore();
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistry(store, isConnectionActive);
@@ -253,6 +216,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       return;
     }
     delete record.rawBuffer;
+    delete record.rawOffset;
+    delete record.assistantItems;
     delete record.buffer;
     delete record.bufferIsCurrent;
     record.liveTextGroup?.abort();
@@ -264,6 +229,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     delete record.canvasBlocks;
     delete record.deltaSentAt;
     delete record.assistantScope;
+    delete record.assistantScopeOffset;
+    delete record.assistantOccurrenceId;
     delete record.managedMediaUrls;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;
@@ -278,59 +245,62 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     store.runs.clear();
   };
 
-  const updateBuffer = (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => {
-    const record = store.getOrCreate(runId);
-    const display = record.display;
-    if (input.managedMediaUrls?.length) {
-      const urls = (record.managedMediaUrls ??= new Set<string>());
-      const previousSize = urls.size;
-      input.managedMediaUrls.forEach((url) => urls.add(url));
-      if (display && urls.size !== previousSize) {
-        display.reset = true;
-      }
-    }
-    const snapshot = mergeAssistantText(
-      { text: record.rawBuffer ?? "", scope: record.assistantScope },
-      input,
-      "live",
-    );
-    record.assistantScope = snapshot.scope;
-    const text = capLiveAssistantText(snapshot);
-    record.rawBuffer = text;
-    if (display) {
-      display.reset ||= text.length !== snapshot.text.length || input.replace === true;
-      display.pendingRawDelta =
-        snapshot.appendedText !== undefined && display.pendingRawDelta !== null
-          ? (display.pendingRawDelta ?? "") + snapshot.appendedText
-          : null;
-    }
-    return text;
-  };
-
-  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
+  const resolveBuffer = (
+    runId: string,
+    options?: { final?: boolean },
+  ): ReturnType<typeof projectLiveAssistantBufferedText> & { displayText?: string } => {
     const record = store.runs.get(runId);
     if (!record || record.bufferIsCurrent?.() === false) {
       return projectLiveAssistantBufferedText("");
     }
-    const rawText = record.rawBuffer;
-    if (rawText === undefined) {
+    const source = record.rawBuffer;
+    if (source === undefined) {
       return projectLiveAssistantBufferedText(record.buffer ?? "");
     }
-    const createProjector = () =>
-      createLiveAssistantTextProjection({
-        ...options,
-        managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
-      });
-    // Finalization releases ambiguous tails without changing the live projection.
+    const projectionOptions = {
+      ...options,
+      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    };
+    const createProjector = () => createLiveAssistantTextProjection(projectionOptions);
+    const rawText = source;
+    const tail = assistantText.bufferVisibleText(record);
+    const contextEvicted = (record.rawOffset ?? 0) > 0;
+    const projectTail = (full: LiveDisplayState["current"]) => {
+      if (tail === source && !contextEvicted) {
+        return full;
+      }
+      // Missing source context cannot justify suppressing retained output.
+      const suppressed =
+        !contextEvicted &&
+        (options?.final
+          ? projectLiveAssistantBufferedText(full.text, { suppressLeadFragments: false }).suppress
+          : full.suppress);
+      const text = suppressed
+        ? ""
+        : contextEvicted
+          ? tail
+          : normalizeLiveAssistantBufferedText(tail, projectionOptions);
+      return {
+        ...full,
+        text,
+        suppress: suppressed || !text,
+        pendingLeadFragment: suppressed && full.pendingLeadFragment,
+      };
+    };
+    // Delivery remains complete; display finalizes the same occurrence-owned tail.
     if (options?.final) {
-      return createProjector().replace(rawText);
+      const complete = createProjector().replace(source);
+      return {
+        ...complete,
+        ...(tail !== source || contextEvicted ? { displayText: projectTail(complete).text } : {}),
+      };
     }
     let display = record.display;
     if (!display) {
       const projector = createProjector();
       display = record.display = {
         projector,
-        current: projector.replace(rawText),
+        current: projectTail(projector.replace(rawText)),
         unsentDelta: null,
       };
     } else if (display.reset || display.pendingRawDelta !== undefined) {
@@ -347,10 +317,21 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
             ? rawText.slice(projector.source.length)
             : null
           : pendingRawDelta;
-      display.current =
+      const next = projectTail(
         delta == null
           ? display.projector.replace(rawText)
-          : display.projector.append(delta, rawText);
+          : display.projector.append(delta, rawText),
+      );
+      // A source append is a display append only when it continues the emitted baseline.
+      const previous = display.current.suppress ? "" : display.current.text;
+      const visible = next.suppress ? "" : next.text;
+      next.delta =
+        next.delta !== null &&
+        visible.length === previous.length + next.delta.length &&
+        visible.startsWith(previous)
+          ? next.delta
+          : null;
+      display.current = next;
       display.unsentDelta =
         display.unsentDelta !== null && display.current.delta !== null
           ? display.unsentDelta + display.current.delta
@@ -373,16 +354,18 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     const visible = projected.suppress ? "" : projected.text;
     const previous = display.sentText;
     const append =
-      text === visible && previous !== undefined && display.unsentDelta !== null
-        ? display.unsentDelta
-        : previous === undefined
-          ? text
-          : text.startsWith(previous)
-            ? text.slice(previous.length)
-            : null;
+      previous === undefined
+        ? text
+        : display.unsentDelta === null
+          ? null
+          : text === visible
+            ? display.unsentDelta
+            : text.startsWith(previous)
+              ? text.slice(previous.length)
+              : null;
     display.sentText = text;
-    display.unsentDelta = text === visible ? "" : null;
-    return append === null
+    display.unsentDelta = visible.startsWith(text) ? visible.slice(text.length) : null;
+    return append === null && (text !== "" || previous !== "")
       ? { deltaText: text, replace: true as const }
       : append
         ? { deltaText: append }
@@ -393,11 +376,20 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     runs: store.runs,
     registry,
     toolEventRecipients,
+    /** Acquire mutable state and record activity; readers use runs.get. */
     getOrCreate: store.getOrCreate,
     resolveBuffer,
-    updateBuffer,
+    updateBuffer: (
+      runId: string,
+      input: Parameters<typeof assistantText.updateBuffer>[1],
+      source?: AgentAssistantSourceReceipt,
+    ) => assistantText.updateBuffer(store.getOrCreate(runId), input, source),
+    retireBuffer: (runId: string, itemIds: readonly string[]) =>
+      assistantText.retireBuffer(store.getOrCreate(runId), itemIds),
+    retireSource: (runId: string, source: AgentAssistantSourceReceipt) =>
+      assistantText.retireSource(store.runs.get(runId), source),
     takeBufferDelta,
-    flushPendingText: (runId) => {
+    flushPendingText: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;
@@ -408,8 +400,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         flush.flush();
       }
     },
-    hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
-    deleteAbortMarker: (runId) => {
+    hasAbortMarker: (runId: string) => store.runs.get(runId)?.abortMarker !== undefined,
+    deleteAbortMarker: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;
@@ -600,16 +592,14 @@ export function createSessionMessageSubscriberRegistry(
       };
       state.inflight.set(provisionalRecency, mode);
       updateSubscription(normalizedConnId, normalizedSessionKey, owners);
-      let settled = false;
       const settle = (succeeded: boolean) => {
         if (
-          settled ||
+          !state.inflight.has(provisionalRecency) ||
           connections.get(normalizedConnId)?.get(normalizedSessionKey)?.get(subscriptionId) !==
             state
         ) {
           return;
         }
-        settled = true;
         if (succeeded && provisionalRecency >= (state.committed?.sequence ?? -Infinity)) {
           state.committed = {
             sequence: provisionalRecency,

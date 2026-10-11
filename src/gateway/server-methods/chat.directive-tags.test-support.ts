@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
@@ -21,11 +21,9 @@ import {
   type GatewayPluginMetadataOwner,
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -33,6 +31,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 export function expectManagedAudioBlock(
   block: Record<string, unknown> | undefined,
@@ -82,6 +81,84 @@ export class ChatDirectiveDedupe extends Map<string, DedupeEntry> {
     // Admission retains request identity before a response-bearing receipt exists.
     expect(readChatSendDedupeResponse(this, runId)).toBeDefined();
   }
+}
+
+type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
+type ChatDirectiveSendContext = GatewayRequestContext & {
+  dedupe: ChatDirectiveDedupe;
+  broadcast: ReturnType<typeof vi.fn<GatewayRequestContext["broadcast"]>>;
+};
+
+/** The suite binds handlers after installing its module mocks. */
+export function createChatDirectiveSender(handlers: {
+  internal: (options: GatewayRequestHandlerOptions) => Promise<void>;
+  external: (options: GatewayRequestHandlerOptions) => Promise<void>;
+}) {
+  return async (params: {
+    context: ChatDirectiveSendContext;
+    respond: RespondFn;
+    idempotencyKey: string;
+    message?: string;
+    sessionKey?: string;
+    deliver?: boolean;
+    client?: unknown;
+    expectBroadcast?: boolean;
+    requestParams?: Record<string, unknown>;
+    directExternal?: boolean;
+    waitForCompletion?: boolean;
+    waitForDedupe?: boolean;
+    waitFor?: NonStreamingChatSendWaitFor;
+  }): Promise<Record<string, unknown> | undefined> => {
+    const sendParams: {
+      sessionKey: string;
+      message: string;
+      idempotencyKey: string;
+      deliver?: boolean;
+    } = {
+      sessionKey: params.sessionKey ?? "main",
+      message: params.message ?? "hello",
+      idempotencyKey: params.idempotencyKey,
+    };
+    if (typeof params.deliver === "boolean") {
+      sendParams.deliver = params.deliver;
+    }
+    const handler = params.directExternal === false ? handlers.internal : handlers.external;
+    const handlerOptions = {
+      params: {
+        ...sendParams,
+        ...params.requestParams,
+      },
+      respond: params.respond,
+      req: {} as never,
+      client: (params.client ?? null) as never,
+      isWebchatConnect: () => false,
+      context: params.context,
+    };
+    await handler(handlerOptions);
+
+    const waitFor =
+      params.waitFor ??
+      (params.waitForCompletion === false || params.waitForDedupe === false
+        ? "none"
+        : params.expectBroadcast === false
+          ? "dedupe"
+          : "broadcast");
+    if (waitFor === "none") {
+      return undefined;
+    }
+    if (waitFor === "dedupe") {
+      await params.context.dedupe.waitForResponse(params.idempotencyKey);
+      return undefined;
+    }
+
+    const terminalCalls = () =>
+      params.context.broadcast.mock.calls.filter(
+        ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
+      );
+    await params.context.dedupe.waitForResponse(params.idempotencyKey);
+    expect(terminalCalls()).toHaveLength(1);
+    return asOptionalRecord(terminalCalls()[0]?.[1]);
+  };
 }
 
 export type ChatDirectiveSessionState = {

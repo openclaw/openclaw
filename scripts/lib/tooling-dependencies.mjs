@@ -43,13 +43,13 @@ function readManifest(checkout) {
   return JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
 }
 
-function qualifiedPackage(manifest, root, specifier, consumer) {
+function qualifiedPackage(manifest, root, specifier, consumer, owner = root) {
   const name = packageName(specifier);
   const required = declaredVersion(manifest, name);
   const modules = realpathSync(join(root, "node_modules"));
   // A workspace link would execute another checkout's source. Only installed
   // third-party packages can fill missing dependencies in this checkout.
-  const directory = contained(modules, join(modules, name));
+  const directory = contained(modules, join(owner, "node_modules", name));
   const installed = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
   if (!required || installed.name !== name || installed.version !== required) {
     throw new Error(
@@ -162,51 +162,71 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
 const params = new URL(import.meta.url).searchParams;
 const root = params.get("root");
 if (root) {
-  const checkout = params.get("checkout");
+  const checkout = realpathSync(params.get("checkout"));
   const consumer = params.get("consumer");
-  const manifest = readManifest(checkout);
-  const parentURL = pathToFileURL(join(root, "package.json")).href;
-  // Checkout source keeps what resolves inside the checkout; its other declared
-  // packages belong to the qualified tooling root. An ancestor install can be
-  // stale and either succeed with old exports or reject newer subpaths.
-  const rootOwned = (specifier, context) => {
+  const manifests = new Map([[checkout, readManifest(checkout)]]);
+  const sourceOwner = (context) => {
     const importer = context.parentURL?.startsWith("file:")
       ? fileURLToPath(context.parentURL)
       : undefined;
-    return Boolean(
-      importer &&
-      isWithin(checkout, importer) &&
-      !relative(checkout, importer).split(sep).includes("node_modules") &&
-      declaredVersion(manifest, packageName(specifier)),
-    );
+    if (
+      !importer ||
+      !isWithin(checkout, importer) ||
+      relative(checkout, importer).split(sep).includes("node_modules")
+    ) {
+      return undefined;
+    }
+    let directory = dirname(contained(checkout, importer));
+    while (!manifests.has(directory)) {
+      if (statSync(join(directory, "package.json"), { throwIfNoEntry: false })?.isFile()) {
+        manifests.set(directory, readManifest(directory));
+        break;
+      }
+      directory = dirname(directory);
+    }
+    return { directory, manifest: manifests.get(directory) };
   };
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
         return nextResolve(specifier, context);
       }
+      const owner = sourceOwner(context);
+      // Dependency-owned imports retain their own private versions and failures.
+      if (!owner) {
+        return nextResolve(specifier, context);
+      }
       let resolved;
       try {
         resolved = nextResolve(specifier, context);
       } catch (error) {
-        if (error?.code !== "ERR_MODULE_NOT_FOUND" && !rootOwned(specifier, context)) {
+        if (
+          error?.code !== "ERR_MODULE_NOT_FOUND" &&
+          !declaredVersion(owner.manifest, packageName(specifier))
+        ) {
           throw error;
         }
       }
       if (resolved) {
         const target = resolved.url.startsWith("file:") ? fileURLToPath(resolved.url) : undefined;
-        // Dependency-owned imports retain their own private versions.
-        if (
-          !target ||
-          isWithin(checkout, target) ||
-          !target.split(sep).includes("node_modules") ||
-          !rootOwned(specifier, context)
-        ) {
+        if (!target || isWithin(checkout, realpathSync(target))) {
           return resolved;
         }
+        if (!target.split(sep).includes("node_modules")) {
+          throw new Error("Tooling package escapes its installed dependency owner.");
+        }
       }
-      resolved = nextResolve(specifier, { ...context, parentURL });
-      const directory = qualifiedPackage(manifest, root, specifier, consumer);
+      // A workspace package owns its pins and its donor resolution context.
+      // Its pnpm links may land in the root store, never in foreign source.
+      const donor =
+        owner.directory === checkout
+          ? root
+          : contained(root, join(root, relative(checkout, owner.directory)));
+      const directory = qualifiedPackage(owner.manifest, root, specifier, consumer, donor);
+      resolved = nextResolve(specifier, {
+        ...context,
+        parentURL: pathToFileURL(join(donor, "package.json")).href,
+      });
       contained(directory, fileURLToPath(resolved.url));
       return resolved;
     },

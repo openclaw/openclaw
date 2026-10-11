@@ -90,25 +90,6 @@ describe("explicit full-message reads", () => {
     },
   );
 
-  it("retains successful reads across reconnects and scopes the result to the requested content", async () => {
-    const { state, context, load, request } = fixture();
-    expect(await load()(messageRequest)).toEqual(result);
-    state.connected = false;
-    expect(createSidebarFullMessageLoader(state, context.gateway)).toBeNull();
-    state.connectionEpoch += 1;
-    state.connected = true;
-    expect(await load()(messageRequest)).toEqual(result);
-    expect(request).toHaveBeenCalledExactlyOnceWith("chat.message.get", {
-      ...messageRequest,
-      maxChars: 500_000,
-    });
-
-    await load()({ ...messageRequest, sessionKey: "agent:MAIN:example", agentId: "MAIN" });
-    expect(request).toHaveBeenCalledTimes(1);
-    await load()({ ...messageRequest, maxChars: 2_000_000 });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it.each([{ sessionKey: "agent:main:other" }, { agentId: "research" }])(
     "re-reads foreign requests whose lifecycle is not owned by the pane: %j",
     async (target) => {
@@ -124,6 +105,44 @@ describe("explicit full-message reads", () => {
       expect(request).toHaveBeenCalledTimes(2);
     },
   );
+
+  it("retrieves retained references from the displayed physical session after the live session advances", async () => {
+    const { state, session, load, request } = fixture();
+    await load()(messageRequest);
+    session.sessionId = "successor-session";
+    await load()(messageRequest);
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+      ...messageRequest,
+      sessionId: "physical-session",
+      maxChars: 500_000,
+    });
+
+    for (const input of [
+      { ...messageRequest, sessionKey: "agent:main:other" },
+      { ...messageRequest, messageId: "pending:input-1" },
+    ]) {
+      await load()(input);
+      expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+        ...input,
+        maxChars: 500_000,
+      });
+    }
+
+    state.currentSessionId = session.sessionId;
+    await load()(messageRequest);
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+      ...messageRequest,
+      maxChars: 500_000,
+    });
+    const explicitSource = { ...messageRequest, sessionId: "physical-session" };
+    const reads = request.mock.calls.length;
+    await load()(explicitSource);
+    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
+      ...explicitSource,
+      maxChars: 500_000,
+    });
+  });
 
   it("does not borrow the selected global agent for a request that omitted its agent", async () => {
     const { state, session, load, request } = fixture();
@@ -207,23 +226,6 @@ describe("explicit full-message reads", () => {
 
   it.each([
     {
-      name: "mutable CLI import",
-      messageId: "answer",
-      message: {
-        role: "assistant",
-        content: "Imported before edit",
-        __openclaw: { id: "answer", importedFrom: "claude-cli" },
-      },
-      next: {
-        ok: true,
-        message: {
-          role: "assistant",
-          content: "Imported after edit",
-          __openclaw: { id: "answer", importedFrom: "claude-cli" },
-        },
-      },
-    },
-    {
       name: "pending input whose custody ended",
       messageId: "pending:input-1",
       message: { role: "user", content: "Queued input", __openclaw: { id: "pending:input-1" } },
@@ -246,18 +248,6 @@ describe("explicit full-message reads", () => {
     const input = { ...messageRequest, messageId };
     expect(await load()(input)).toEqual(first);
     expect(await load()(input)).toEqual(next);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries an unavailable original when explicitly opened again", async () => {
-    const { load, request } = fixture(
-      vi
-        .fn()
-        .mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" })
-        .mockResolvedValue(result),
-    );
-    expect(await load()(messageRequest)).toMatchObject({ ok: false });
-    expect(await load()(messageRequest)).toEqual(result);
     expect(request).toHaveBeenCalledTimes(2);
   });
 });

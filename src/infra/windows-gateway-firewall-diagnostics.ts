@@ -1,4 +1,3 @@
-// Read-only diagnostics for Windows LAN Gateway reachability.
 import { safeParseJson } from "@openclaw/normalization-core";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
@@ -201,17 +200,6 @@ type QuickFirewallPayload = {
   ActiveRules?: unknown;
   LocalRules?: unknown;
 };
-
-function powershell(command: string): string[] {
-  return [
-    getWindowsPowerShellExePath(),
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
-    command,
-  ];
-}
 
 async function runBestEffortCommand(
   runCommandWithTimeout: WindowsGatewayFirewallCommandRunner,
@@ -568,7 +556,14 @@ export async function inspectWindowsGatewayFirewall(
   const timeoutMs = params.timeoutMs ?? WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS;
   const quickJson = await runBestEffortCommand(
     runCommandWithTimeout,
-    powershell(buildWindowsQuickFirewallCommand(params.port)),
+    [
+      getWindowsPowerShellExePath(),
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      buildWindowsQuickFirewallCommand(params.port),
+    ],
     timeoutMs,
   );
   if (quickJson === null) {

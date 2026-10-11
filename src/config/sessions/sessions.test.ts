@@ -39,9 +39,10 @@ it.each<NormalizationCase>([
     input: { sessionId: "legacy:session", pluginExtensions: { memory: { mode: "legacy" } } },
   },
   {
-    name: "preserves metadata without a conversation link",
+    name: "drops retired conversation links without losing session metadata",
     input: {
       sessionId: "existing-session",
+      conversationLink: { url: "https://chat.example.test/thread/123", label: "Source Thread" },
       pluginExtensions: { wordboard: { draftId: "draft-1" } },
     },
     expected: {

@@ -562,26 +562,7 @@ export function getGatewaySuspendStatus(
   includeLifecycle = false,
 ): GatewaySuspendStatusResult {
   const retired = getRestartingSuspension();
-  if (retired) {
-    if (retired.suspensionId !== suspensionId) {
-      return { status: "conflict", expiresAtMs: retired.expiresAtMs };
-    }
-    // Committed shutdown outlives the reversible lease. Only observation remains;
-    // never run expiry recovery or commit its invalidated admission here.
-    const snapshot = createGatewayActiveWorkSnapshot(retired.inspect, {
-      ignoreTerminalSessions: retired.terminalPolicy === "terminate",
-    });
-    return {
-      status: "draining",
-      ...(includeLifecycle ? { ownerId: retired.requestId, phase: retired.shutdown!.phase } : {}),
-      expiresAtMs: retired.expiresAtMs,
-      activeCount: snapshot.counts.totalActive,
-      blockers: snapshot.blockers,
-      writeCustody: snapshot.writeCustody,
-      retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
-    };
-  }
-  const held = currentSuspension();
+  const held = retired ?? currentSuspension();
   if (held?.kind === "recovering") {
     return schedulerRecoveryResult();
   }
@@ -591,14 +572,25 @@ export function getGatewaySuspendStatus(
   if (held.suspensionId !== suspensionId) {
     return { status: "conflict", expiresAtMs: held.expiresAtMs };
   }
-  const snapshot = refreshHeldSuspension(held);
+  // Committed shutdown outlives the reversible lease. Only observation remains;
+  // never run expiry recovery or commit its invalidated admission here.
+  const snapshot = retired
+    ? createGatewayActiveWorkSnapshot(held.inspect, {
+        ignoreTerminalSessions: held.terminalPolicy === "terminate",
+      })
+    : refreshHeldSuspension(held);
   if (!snapshot) {
     return getGatewaySuspendStatus(suspensionId, includeLifecycle);
   }
-  if (!snapshot.idle) {
+  if (retired || !snapshot.idle) {
     return {
       status: "draining",
-      ...(includeLifecycle ? { ownerId: held.requestId, phase: "draining" as const } : {}),
+      ...(includeLifecycle
+        ? {
+            ownerId: held.requestId,
+            phase: retired ? retired.shutdown!.phase : ("draining" as const),
+          }
+        : {}),
       expiresAtMs: held.expiresAtMs,
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
@@ -623,24 +615,10 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
     };
   }
   const held = currentSuspension();
-  if (held?.kind === "recovering") {
-    return {
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: GATEWAY_SCHEDULER_RECOVERY_RETRY_MS,
-    };
-  }
-  if (!held) {
-    return {
-      ok: true,
-      status: "running",
-      resumed: false,
-    };
-  }
-  if (held.suspensionId !== suspensionId) {
+  if (held?.kind === "held" && held.suspensionId !== suspensionId) {
     return { ok: false, reason: "suspension-mismatch" };
   }
-  if (!resumeAndReopen(held)) {
+  if (held?.kind === "recovering" || (held && !resumeAndReopen(held))) {
     return {
       ok: false,
       reason: "scheduler-resume-failed",
@@ -650,7 +628,7 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
   return {
     ok: true,
     status: "running",
-    resumed: true,
+    resumed: held !== null,
   };
 }
 

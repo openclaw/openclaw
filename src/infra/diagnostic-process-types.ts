@@ -1,16 +1,20 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { WorkerRequestKind } from "./worker-request-kind.js";
 
-export type WorkerRequestKind =
-  | "identity"
-  | "avatar"
-  | "catalog"
-  | "transcript"
-  | "sqlite_read"
-  | "sqlite_writer"
-  | "state_read"
-  | "cron"
-  | "compute"
-  | "other";
+export type DiagnosticRuntimeMeasurementFields =
+  | {
+      type: "gateway.http.cancelled";
+      source: "client" | "shutdown";
+    }
+  | {
+      type: "gateway.event_loop.sample";
+      intervalMs: number;
+      delayMaxMs: number;
+    }
+  | {
+      type: "diagnostic.gc";
+      durationMs: number;
+    };
 
 export type DiagnosticWorkerRequestFields = {
   type: "worker.request";

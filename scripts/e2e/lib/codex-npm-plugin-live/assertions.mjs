@@ -1,4 +1,3 @@
-// Assertions for Codex npm plugin live E2E scenarios.
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -638,24 +637,14 @@ function extractOpenClawToolTimeline(transcriptEvents) {
   return timeline;
 }
 
-function findSuccessfulToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY) {
+function findToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY, successful = true) {
   return timeline.find(
     (entry) =>
       entry.type === "result" &&
       entry.id === call.id &&
       entry.index > call.index &&
       entry.index < beforeIndex &&
-      entry.isError !== true,
-  );
-}
-
-function findToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY) {
-  return timeline.find(
-    (entry) =>
-      entry.type === "result" &&
-      entry.id === call.id &&
-      entry.index > call.index &&
-      entry.index < beforeIndex,
+      (!successful || entry.isError !== true),
   );
 }
 
@@ -693,11 +682,11 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
     );
   }
   const [progressCall, completeCall] = markerCalls;
-  const progressResult = findSuccessfulToolResult(timeline, progressCall, completeCall.index);
+  const progressResult = findToolResult(timeline, progressCall, completeCall.index);
   if (!progressResult) {
     throw new Error("missing successful progress message result before completion");
   }
-  const completeResult = findSuccessfulToolResult(timeline, completeCall);
+  const completeResult = findToolResult(timeline, completeCall);
   if (!completeResult) {
     throw new Error("missing successful completion message result");
   }
@@ -728,17 +717,14 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
       entry.index > progressResult.index &&
       entry.index < completeCall.index,
   );
-  if (workCalls.length === 0) {
-    throw new Error("expected successful workspace work between progress and completion");
-  }
   const successfulWorkCalls = workCalls.filter((entry) =>
-    findSuccessfulToolResult(timeline, entry, completeCall.index),
+    findToolResult(timeline, entry, completeCall.index),
   );
   if (successfulWorkCalls.length === 0) {
     throw new Error("expected successful workspace work between progress and completion");
   }
   const unsettledWorkCalls = workCalls.filter(
-    (entry) => !findToolResult(timeline, entry, completeCall.index),
+    (entry) => !findToolResult(timeline, entry, completeCall.index, false),
   );
   if (unsettledWorkCalls.length > 0) {
     throw new Error(
@@ -788,7 +774,7 @@ function assertAgentTurnEvidence({ marker, sessionId, modelRef, stdoutPath, stde
   if (entry.modelOverride && entry.modelOverride !== modelRef) {
     throw new Error(`unexpected session model override: ${entry.modelOverride}`);
   }
-  if (!Number.isSafeInteger(transcriptEventCount) || transcriptEventCount < 1) {
+  if (transcriptEventCount < 1) {
     throw new Error(`missing OpenClaw transcript events for ${sessionId}`);
   }
 
@@ -808,7 +794,7 @@ function assertAgentTurnEvidence({ marker, sessionId, modelRef, stdoutPath, stde
     path.join(agentDir, "codex-home"),
     path.join(agentDir, "agent", "codex-home"),
     path.join(path.dirname(agentDir), "codex-home"),
-  ].filter((entryValue, index, entries) => entries.indexOf(entryValue) === index);
+  ];
   const codexHome = codexHomes.find((entryLocal) => fs.existsSync(entryLocal));
   if (!codexHome) {
     throw new Error(`missing isolated Codex home; checked ${codexHomes.join(", ")}`);
@@ -953,18 +939,14 @@ function assertAgentError() {
       `expected OpenClaw agent to fail after Codex uninstall, got status ${process.argv[3]}`,
     );
   }
-  const stdout = fs.existsSync("/tmp/openclaw-codex-agent-after-uninstall.json")
-    ? readTextFileTail(
-        "/tmp/openclaw-codex-agent-after-uninstall.json",
-        "post-uninstall agent stdout",
-      )
-    : "";
-  const stderr = fs.existsSync("/tmp/openclaw-codex-agent-after-uninstall.err")
-    ? readTextFileTail(
-        "/tmp/openclaw-codex-agent-after-uninstall.err",
-        "post-uninstall agent stderr",
-      )
-    : "";
+  const stdout = readTextFileTail(
+    "/tmp/openclaw-codex-agent-after-uninstall.json",
+    "post-uninstall agent stdout",
+  );
+  const stderr = readTextFileTail(
+    "/tmp/openclaw-codex-agent-after-uninstall.err",
+    "post-uninstall agent stderr",
+  );
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
     'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex)',

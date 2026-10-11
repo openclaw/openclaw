@@ -31,19 +31,19 @@ afterEach(() => vi.restoreAllMocks());
 it.each([
   {
     stage: "registration",
-    responses: ["timeout", "found", "found", "found", "found", "found"],
+    responses: ["timeout", "found", "found"],
     recovered: true,
   },
   {
-    stage: "revalidation",
-    responses: ["found", "timeout", "found", "found", "found", "found", "found"],
+    stage: "runtime",
+    responses: ["found", "timeout", "found", "found"],
     recovered: true,
   },
   { stage: "registration", responses: ["timeout", "timeout"], recovered: false },
-  { stage: "revalidation", responses: ["found", "timeout", "found", "timeout"], recovered: false },
+  { stage: "runtime", responses: ["found", "timeout", "found", "timeout"], recovered: false },
   {
     stage: "command then runtime",
-    responses: ["timeout", "found", "found", "timeout"],
+    responses: ["timeout", "found", "timeout"],
     recovered: false,
   },
   { stage: "unavailable", responses: ["unavailable"], recovered: false },
@@ -130,12 +130,12 @@ it.each([
     } else {
       expect(inspected.serviceMutationSkipMessage).toContain(
         scenario.stage === "unavailable"
-          ? "Task Scheduler probe failed (exit 2)."
-          : scenario.stage === "command then runtime"
-            ? "Scheduled Task probe timed out after 47000 ms (ETIMEDOUT)."
-            : "Task Scheduler probe timed out after 47000 ms.",
+          ? "Task Scheduler check failed (exit 2)."
+          : scenario.stage === "command then runtime" || scenario.stage === "runtime"
+            ? "Scheduled Task check timed out after 47000 ms (ETIMEDOUT)."
+            : "Task Scheduler check timed out after 47000 ms.",
       );
-      if (scenario.stage !== "command then runtime") {
+      if (scenario.stage === "registration" || scenario.stage === "unavailable") {
         expect(inspected.serviceUpdateVerdict).toMatchObject({
           inspectionReason: "windows-task-inspection-failed",
         });

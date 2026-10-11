@@ -21,10 +21,10 @@ import {
 } from "../../lib/plugins/index.ts";
 import { installPlugin } from "../../lib/plugins/install.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
+import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.tsx";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
+import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 
 type PluginMutationSuccess<Result> = (
@@ -65,6 +65,16 @@ export function pluginMutationWarnings(
     refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
   ].filter(Boolean);
   return warnings.length ? { kind: "warning", text: warnings.join("\n") } : null;
+}
+
+function pluginRuntimeFailureText(details: Record<string, unknown> | undefined, text: string) {
+  const phase =
+    asOptionalRecord(details?.runtimeAttempt)?.phase ?? asOptionalRecord(details?.runtime)?.phase;
+  return typeof phase === "string"
+    ? [text, t("pluginsPage.runtimeFailurePhase", { phase: formatUiExternalText(phase) })]
+        .filter(Boolean)
+        .join("\n")
+    : text;
 }
 
 export class PluginsConsentController {
@@ -383,11 +393,11 @@ export class PluginsConsentController {
           const pluginId = savedInstall;
           const key = pluginRowKey(pluginId);
           const runtime = asOptionalRecord(details?.runtime);
-          const phase = asOptionalRecord(details?.runtimeAttempt)?.phase ?? runtime?.phase;
           const message: PluginRowMessage = {
             kind: "error",
             savedInstall: pluginId,
-            text: [
+            text: pluginRuntimeFailureText(
+              details,
               t(
                 runtime?.committed === false
                   ? "pluginsPage.installSavedNotApplied"
@@ -397,12 +407,7 @@ export class PluginsConsentController {
                   error: formatUiError(error),
                 },
               ),
-              typeof phase === "string"
-                ? t("pluginsPage.runtimeFailurePhase", { phase: formatUiExternalText(phase) })
-                : null,
-            ]
-              .filter(Boolean)
-              .join("\n"),
+            ),
           };
           // Persistence is independent of runtime publication. Do not offer an install retry
           // while the authoritative reads catch up or fail after this saved outcome.
@@ -486,19 +491,11 @@ export class PluginsConsentController {
           this.open({ kind: action, pluginId, rowKey }, consent.pluginId, consent);
           return;
         }
-        const phase = asOptionalRecord(details?.runtimeAttempt)?.phase ?? runtime?.phase;
         const savedInstall = this.host.getMessages()[rowKey]?.savedInstall;
         const message: PluginRowMessage = {
           kind: "error",
           ...(savedInstall ? { savedInstall } : {}),
-          text: [
-            formatUiError(error),
-            typeof phase === "string"
-              ? t("pluginsPage.runtimeFailurePhase", { phase: formatUiExternalText(phase) })
-              : null,
-          ]
-            .filter(Boolean)
-            .join("\n"),
+          text: pluginRuntimeFailureText(details, formatUiError(error)),
         };
         if (runtime?.committed === true) {
           // A published generation survives this failure even when its event was missed.

@@ -2927,6 +2927,7 @@ function createReleasePublishFixture(
     join(helperDir, "release-beta-verifier.ts"),
     "file",
   );
+  symlinkSync(resolve("scripts/tsx.mjs"), join(helperDir, "../tsx.mjs"), "file");
   writeFileSync(eventsPath, "");
   writeFileSync(githubEventPath, JSON.stringify({ inputs }));
   writeFileSync(outputPath, "");
@@ -3002,6 +3003,7 @@ ${functions}
           PATH: process.env.PATH,
           GITHUB_WORKSPACE: root,
           RUNNER_TEMP: root,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
           GITHUB_OUTPUT: outputPath,
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -3317,6 +3319,7 @@ function runReleaseChecksInputValidation(
   const workdir = tempDirs.make("release-checks-input-validation-");
   const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/pr-lib/gh-api-preflight.mjs",
     "scripts/lib/full-release-manifest.mjs",
     "scripts/release-qualification-coverage.mjs",
     ...PUBLICATION_CONTRACT_FILES,
@@ -3640,6 +3643,7 @@ function runFullReleaseChildDispatch(
     PACKAGE_SPEC: "openclaw@beta",
     PARENT_WORKFLOW_SHA: parentSha,
     PREFLIGHT_PHASE: "all",
+    PUBLICATION_ARTIFACTS_REUSED: "false",
     PREPARED_NPM_BUNDLE_JSON: '{"schema":"openclaw.prepared-npm-bundle/v1"}',
     PHASE: child.jobName.endsWith("_candidate") ? "candidate" : "independent",
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
@@ -4033,6 +4037,7 @@ function runReleaseSurvivorProfileStep(params: {
   ref?: string;
   override?: string;
   supportsScenario?: boolean;
+  supportsPackageRecovery?: boolean;
   metadataError?: boolean;
 }) {
   const step = workflowStep(
@@ -4082,7 +4087,14 @@ if (tool === "gh") {
       FIXTURE_DIRECTORY: JSON.stringify(
         params.supportsScenario === false
           ? ["run.sh"]
-          : ["run.sh", "legacy-operator-state.mjs", "custom-plugin-siblings.mjs"],
+          : [
+              "run.sh",
+              "legacy-operator-state.mjs",
+              "custom-plugin-siblings.mjs",
+              ...(params.supportsPackageRecovery === false
+                ? []
+                : ["package-activation-recovery.mjs"]),
+            ],
       ),
     },
   });
@@ -4449,6 +4461,7 @@ type ProtectedPreflightConsumerParams = {
   currentWorkflowSha: string;
   fullReleasePreflight?: boolean;
   independentProducer?: boolean;
+  producerCurrentAttempt?: number;
   fullReleaseRunId?: string;
   fullReleaseRunAttempt?: string;
   npmDistTag?: string;
@@ -4479,6 +4492,7 @@ function writePreflightConsumerTooling(toolingDir: string) {
     "lib/npm-core-release-packages.json",
     "lib/npm-shrinkwrap-dependencies.mjs",
     "lib/record-shared.mjs",
+    "lib/release-evidence-identity.mjs",
     "lib/release-version.mjs",
   ]) {
     copyFileSync(resolve(REPO_ROOT, "scripts", source), resolve(toolingDir, source));
@@ -4488,7 +4502,11 @@ function writePreflightConsumerTooling(toolingDir: string) {
 const PREFLIGHT_PRODUCER_GH_CASES = `
 case "$2" in
   */actions/runs/*/attempts/*/jobs*)
-    printf '%s\\n' "$MOCK_QUALIFIED_JOBS"
+    if [[ "$2" == */attempts/1/jobs* ]]; then
+      printf '%s\\n' "$MOCK_QUALIFIED_JOBS"
+    else
+      printf '%s\\n' "$MOCK_QUALIFIED_LATER_JOBS"
+    fi
     exit 0
     ;;
   */actions/runs/*/attempts/*)
@@ -4496,7 +4514,7 @@ case "$2" in
     exit 0
     ;;
   */actions/runs/"\${MOCK_QUALIFIED_RUN_ID:-}")
-    printf '%s\\n' "$MOCK_QUALIFIED_RUN"
+    printf '%s\\n' "\${MOCK_QUALIFIED_CURRENT_RUN:-$MOCK_QUALIFIED_RUN}"
     exit 0
     ;;
   */actions/artifacts/555)
@@ -4570,6 +4588,18 @@ async function qualifiedPreflightConsumerFixture(
     jobName: "Prepare release npm artifacts / Qualify prepared npm package",
     producerWorkflowPath: OPENCLAW_NPM_PREFLIGHT_WORKFLOW,
   };
+  const producerRun = {
+    id: Number(runId),
+    run_attempt: 1,
+    path: `${workflowPath}@${fullRef}`,
+    head_sha: params.preflightHeadSha,
+    head_branch: params.preflightHeadBranch,
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    repository: { full_name: "openclaw/openclaw" },
+    head_repository: { full_name: "openclaw/openclaw" },
+  };
   const manifest = Buffer.from(
     JSON.stringify({ version: 3, releaseSha: "d".repeat(40), producer }),
   );
@@ -4638,17 +4668,24 @@ globalThis.fetch = async (url) => {
     MOCK_QUALIFIED_ARCHIVE: archivePath,
     MOCK_QUALIFIED_ARTIFACT: JSON.stringify(artifactMetadata),
     MOCK_QUALIFIED_RUN_ID: runId,
-    MOCK_QUALIFIED_RUN: JSON.stringify({
-      id: Number(runId),
-      run_attempt: 1,
-      path: `${workflowPath}@${fullRef}`,
-      head_sha: params.preflightHeadSha,
-      head_branch: params.preflightHeadBranch,
-      event: "workflow_dispatch",
-      status: "completed",
-      conclusion: "success",
-      repository: { full_name: "openclaw/openclaw" },
-      head_repository: { full_name: "openclaw/openclaw" },
+    MOCK_QUALIFIED_RUN: JSON.stringify(producerRun),
+    MOCK_QUALIFIED_CURRENT_RUN: JSON.stringify({
+      ...producerRun,
+      run_attempt: params.producerCurrentAttempt ?? 1,
+    }),
+    MOCK_QUALIFIED_LATER_JOBS: JSON.stringify({
+      total_count: 1,
+      jobs: [
+        {
+          id: 1000,
+          name: "Publish immutable artifact receipt",
+          run_id: Number(runId),
+          run_attempt: params.producerCurrentAttempt ?? 1,
+          head_sha: params.preflightHeadSha,
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
     }),
     MOCK_QUALIFIED_JOBS: JSON.stringify({
       total_count: 1,
@@ -6201,6 +6238,7 @@ esac
       name: "standalone FRV",
       fullReleasePreflight: true,
       independentProducer: true,
+      producerCurrentAttempt: 2,
       version: "2026.8.1",
     },
     {
@@ -6242,6 +6280,7 @@ esac
         .split("\n")
         .map((line) => line.split("=")),
     );
+    expect(stepOutputs.run_attempt).toBe("1");
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
@@ -6667,9 +6706,13 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       expect(events).toContain(`wait:plugin-clawhub-release.yml:terminal:${approval}`);
       expect(events).toContain(`wait:plugin-clawhub-new.yml:terminal:${approval}`);
       const verification = `verify:1:bootstrap=${bootstrapCompleted}:workflow=refs/heads/main`;
-      expect(events.indexOf(verification)).toBeGreaterThan(
-        events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
-      );
+      if (approvesClawHub) {
+        expect(events.indexOf(verification)).toBeGreaterThan(
+          events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
+        );
+      } else {
+        expect(events).not.toContain(verification);
+      }
       expect(events).toContain("release-evidence");
       expect(events).not.toContain("windows");
       expect(fixture.summary()).toContain("evidence updated; a required publish child failed");
@@ -6698,7 +6741,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       if (failedPublisher === "plugin") {
         expect(fixture.outputs().plugin_npm_completed).toBeUndefined();
         expect(fixture.events().some((event) => event.startsWith("dispatch:"))).toBe(false);
-        expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(2);
+        expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(0);
+        expect(start.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
       } else {
         expect(fixture.outputs()).toMatchObject({
           plugin_npm_completed: "true",
@@ -6886,7 +6930,7 @@ if (args[0] === "view") {
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     const diagnosticPath = join(fixture.root, "evidence/release-postpublish-diagnostics.json");
     const imported = fixture.run({
-      run: `node --import tsx --input-type=module -e 'await import("./.release-harness/scripts/lib/release-beta-verifier.ts")' diagnostic-import initialize`,
+      run: `node --import ./.release-harness/scripts/tsx.mjs --input-type=module -e 'await import("./.release-harness/scripts/lib/release-beta-verifier.ts")' diagnostic-import initialize`,
     });
     expect(imported.status, imported.stderr).toBe(0);
     expect(imported.stderr).toBe("");
@@ -9014,7 +9058,18 @@ test "$package_manager" = "pnpm@12.1.0"
       const step = workflowStep(job, child.stepName);
       expect(step.env?.CHILD_WORKFLOW_KIND ?? job.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
       if (child.kind.startsWith("artifact-")) {
-        expect(step.if).toBe("github.run_attempt == 1");
+        for (const [attempt, reused, dispatched] of [
+          [1, "false", true],
+          [2, "false", false],
+          [1, "true", child.kind === "artifact-candidate"],
+        ] as const) {
+          expect(
+            runInNewContext(step.if ?? "true", {
+              github: { run_attempt: attempt },
+              env: { PUBLICATION_ARTIFACTS_REUSED: reused },
+            }),
+          ).toBe(dispatched);
+        }
       } else {
         expect(job["timeout-minutes"]).toBe(15);
         expect(job.outputs).toMatchObject({
@@ -9498,7 +9553,6 @@ describe("package artifact reuse", () => {
       on?: { workflow_call?: { inputs?: Record<string, unknown> } };
     };
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
@@ -9738,17 +9792,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("GROUP_LABEL: ${{ matrix.group.label }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
-    expect(scheduler).toContain(
-      "published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
-    );
-    expect(scheduler).toContain(
-      "published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
-    );
-    expect(scheduler).toContain(
-      '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
-    );
-    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
-    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(packageJson).toContain("test:docker:update-restart-auth");
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
@@ -9825,7 +9868,7 @@ describe("package artifact reuse", () => {
         "evidence_reuse",
       ]);
     }
-    expect(jobNeeds(qualify)).toEqual(["resolve_target", "prepare_npm_package"]);
+    expect(jobNeeds(qualify)).toEqual(["resolve_target", "evidence_reuse", "prepare_npm_package"]);
     expect(qualify.if).toBe(
       "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}",
     );
@@ -9834,7 +9877,6 @@ describe("package artifact reuse", () => {
     expect(qualify.env?.ARTIFACT_OUTPUT).toBe("receipt");
     for (const job of [prepare, docker, candidate]) {
       expect(job.if).not.toContain("github.run_attempt == 1");
-      expect(workflowStepById(job, "dispatch").if).toBe("github.run_attempt == 1");
       expect(workflowStepById(job, "producer").run).toBe(
         "node scripts/full-release-artifacts.mjs resolve",
       );
@@ -10491,7 +10533,7 @@ describe("package artifact reuse", () => {
     );
     expect(chromiumInstall).toMatchObject({
       if: expect.stringContaining("matrix.suite_id == 'native-live-extensions-a-k'"),
-      run: "pnpm --dir ui exec playwright install --with-deps chromium",
+      uses: "./.release-harness/.github/actions/setup-playwright-chromium",
     });
     const mediaStepNames = mediaLiveJob.steps?.map((step) => step.name) ?? [];
     expect(mediaStepNames.indexOf(chromiumInstall.name)).toBeGreaterThan(
@@ -10606,7 +10648,8 @@ describe("package artifact reuse", () => {
       "Checkout trusted artifact harness",
     );
     expect(repoE2eHarnessCheckout.with).toMatchObject({
-      "sparse-checkout": "/package.json\n/scripts/\n/src/shared/non-packaged-plugin-dirs.ts\n",
+      "sparse-checkout":
+        "/.github/actions/setup-playwright-chromium/\n/package.json\n/scripts/\n/src/shared/non-packaged-plugin-dirs.ts\n",
       "sparse-checkout-cone-mode": false,
     });
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
@@ -12157,6 +12200,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const { result, output } = runReleaseSurvivorProfileStep(params);
     expect(result.status, result.stderr).toBe(0);
     expect(output).toEqual({ baselines: "", scenarios: "base" });
+  });
+
+  it("does not send recovery scenarios to a current-line source without the recovery harness", () => {
+    const { result, output } = runReleaseSurvivorProfileStep({
+      soak: true,
+      supportsPackageRecovery: false,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(output.baselines).toBe("supported-lines");
+    expect(output.scenarios?.split(" ")).toContain("legacy-operator-state");
+    expect(output.scenarios).not.toMatch(/package-(?:publication|verification|stranded)/);
   });
 
   it("preserves the historical candidate-compatible upgrade survivor soak inventory without the new scenario", () => {
@@ -14722,7 +14776,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/lib/release-evidence-identity.mjs",
@@ -14731,6 +14784,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "scripts/release-qualification-coverage.mjs",
       "scripts/lib/full-release-manifest.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/pr-lib/gh-api-preflight.mjs",
+      "scripts/lib/direct-run.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
@@ -14749,7 +14804,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "scripts/lib/upgrade-survivor-policy.mjs",
       "scripts/lib/upgrade-survivor-scenarios.json",
     ]) {
-      copyFileSync(source, join(root, source.replace(/^scripts\//u, "")));
+      const destination = join(root, source.replace(/^scripts\//u, ""));
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
     }
     const result = spawnSync(
       process.execPath,
@@ -15427,7 +15484,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@7e2aa3cec5d35c91bb6163aa6676541d795876c5",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -15776,9 +15833,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ]),
     ) as Record<(typeof profiles)[number], number[]>;
     expect(releasePackagePaths).toEqual({
-      beta: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      stable: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      full: [30, 15, 60, 10, 30, 90, 90, 5, 5],
+      beta: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      stable: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      full: [30, 35, 60, 10, 30, 90, 90, 5, 5],
     });
     const releaseChecksParent = workflowJob(
       FULL_RELEASE_VALIDATION_WORKFLOW,
@@ -15818,7 +15875,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseCrossOsPath).toEqual([30, 15, 90, 180, 5]);
+    expect(releaseCrossOsPath).toEqual([30, 35, 90, 180, 5]);
 
     const releaseInstall = workflowJob(RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks");
     expect(jobNeeds(releaseInstall)).toEqual(["resolve_target"]);

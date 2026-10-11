@@ -189,7 +189,6 @@ it.each(
       const target = { sessionKey, storePath };
       const entry = {
         sessionId: "restart-final",
-        status: "running" as const,
         updatedAt: Date.now(),
       };
       await replaceSessionEntry(target, entry);

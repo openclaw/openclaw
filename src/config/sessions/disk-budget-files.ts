@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
@@ -32,6 +33,7 @@ export async function removeFileIfExists(filePath: string): Promise<FileRemovalR
   if (!stat?.isFile()) {
     return err("not-removed");
   }
+  getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   // Forced removal would count paths another cleanup already removed after stat.
   return fs.promises.rm(filePath).then(
     () => ok(stat.size),

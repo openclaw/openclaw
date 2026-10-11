@@ -55,11 +55,11 @@ openclaw automations create "0 18 * * 1-5" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
-Use `--command` for deterministic shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
+Use `--command` for script-based shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
 
 ```bash
 openclaw automations create "*/15 * * * *" \
-  --name "Queue depth probe" \
+  --name "Queue depth check" \
   --command "scripts/check-queue.sh" \
   --command-cwd "/srv/app" \
   --announce \
@@ -117,6 +117,8 @@ working directory.
 
 Agent-turn jobs default to the creating conversation when session context is available. Without a session key, including ordinary CLI calls and API calls that omit one, the target falls back to `isolated`.
 
+An isolated agent-turn job created from a conversation also captures that conversation's generation for delivery. With `announce` and no explicit or remembered external route, its final result is committed into that conversation while the run remains isolated. Ordinary CLI jobs without a creating session still need a resolvable channel route, webhook delivery, or `--no-deliver`.
+
 <AccordionGroup>
   <Accordion title="Session keys">
     - `main` binds to the agent's main session.
@@ -136,7 +138,7 @@ If session cleanup fails, the error is logged. A removal with no active run also
 
 ## Delivery
 
-`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will be blocked.
 
 If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
@@ -151,17 +153,19 @@ Isolated `automations add` jobs default to `--announce` delivery. Use `--no-deli
 Isolated automation chat delivery is shared between the agent and the runner:
 
 - The agent can send directly using the `message` tool when a chat route is available.
-- `announce` fallback-delivers the final reply only when the agent did not send directly to the resolved target.
+- `announce` sends the final result unless a verified matching send already did so, then adds confirmed delivery to the destination chat's transcript.
 - `webhook` posts the finished payload to a URL.
-- `none` disables runner fallback delivery.
+- `none` disables automatic conversation results and external notifications.
+
+Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results fail if the creating conversation was deleted or reset; recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
-`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which only disables runner fallback delivery, these remove the stored field so the job resolves that part of its route from defaults again.
+`automations edit <job-id>` can unset individual delivery routing fields with `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` (each is rejected when combined with its matching set flag). Unlike `--no-deliver`, which disables automatic results and notifications, these remove the stored field so the job resolves that part of its route from defaults again.
 
-`--announce` is runner fallback delivery for the final reply. `--no-deliver` disables that fallback but does not remove the agent's `message` tool when a chat route is available.
+`--announce` enables the conversation result and notification flow. `--no-deliver` disables that automatic flow but does not remove the agent's `message` tool when a chat route is available.
 
-Reminders created from an active chat preserve the live chat delivery target for fallback announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
+Reminders created from an active chat preserve the live chat delivery target for announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
 
 ### Failure delivery
 
@@ -187,6 +191,8 @@ Command jobs do not start an isolated agent turn. A zero exit code records `ok`.
 
 Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the shared job/global `failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. An alert never retries the primary route that just failed.
 
+An unresolved announcement target (for example, no configured channels) is a delivery-only failure when the agent turn succeeds. Its report remains in run history; configure the destination before running the job again.
+
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error. Examples are `setup timed out before runner start`, or a stall message naming the last-known startup phase such as `context-engine`. For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts. Session lookup, hook, auth, prompt, and CLI setup stalls are therefore reported as pre-model automation failures.
 
 ## Scheduling
@@ -209,9 +215,11 @@ Configured intervals and stagger windows retain millisecond precision in human-r
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
+For provider network failures, request timeouts, overloads, rate limits, and server errors (not the job's own execution timeout), the scheduler first re-runs the job after 30s, 1m, and 5m (or at its next scheduled run when sooner), and holds failure alerts and owner repair requests until those re-runs also fail.
+
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 
-A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler probes `api: "ollama"` providers at `/api/tags`. It probes other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated probes.
+A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler checks `api: "ollama"` providers at `/api/tags`. It checks other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated checks.
 
 Automation jobs, pending runtime state, and run history live in the shared SQLite state database. The file store it replaced in 2026.6.1 is retired. If `jobs.json`, `<name>-state.json`, or `runs/*.jsonl` files remain, install OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading to the latest version. Current Doctor preserves these files and reports the intermediate upgrade requirement. Supported `jobs-quarantine.json` sidecars are still imported and archived with a `.migrated` suffix. Edit schedules with `openclaw automations add|edit|remove` instead of editing JSON files.
 
@@ -226,6 +234,8 @@ openclaw automations run <job-id>
 openclaw automations runs <job-id> --run-id <run-id>
 ```
 
+A forced run skips the job's `trigger.script` condition gate and executes the payload directly. An `agentTurn` payload therefore wakes the model even if the gate would return `fire: false`. The `automations` tool also skips the gate when called with `action: "run", runMode: "force"`; its default `runMode` is `"due"`.
+
 Add `--wait` when a script should block until that exact queued run records a terminal status:
 
 ```bash
@@ -235,7 +245,7 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`. It does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`. `failed`, `unknown`, execution errors or skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
 
 <Note>
-Use `--due` when you want the manual command to run only if the job is currently due. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling.
+Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
 </Note>
 
 ## Models
@@ -253,6 +263,8 @@ The automation `--model` is a **job primary**, not a chat-session `/model` overr
 - An empty per-job fallback list (`--fallbacks ""` or `fallbacks: []` in the job payload/API) makes the run strict.
 - When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override. The agent primary is therefore not appended as a hidden retry target.
 - Local-provider preflight checks walk configured fallbacks before marking a run `skipped`.
+
+When every local provider is unreachable, `automations runs` and `automations show` retain the skipped status and preflight reason. Start the provider or correct its configured endpoint. Repeated preflight skips use the existing failure-alert route and threshold without requiring `failureAlert.includeSkipped`, while explicit alert opt-outs still apply. Recurring jobs stay enabled and resume on a later scheduled run once reachability is checked again; endpoint results are cached for up to five minutes.
 
 `openclaw doctor` reports jobs that already have `payload.model` set, including provider namespace counts and mismatches against `agents.defaults.model`. Use that check when auth, provider, or billing behavior looks different between live chat and scheduled jobs.
 
@@ -281,7 +293,17 @@ Isolated automation turns suppress stale acknowledgement-only replies. If the fi
 
 ### Silent token suppression
 
-If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses direct outbound delivery and the fallback queued summary path. Nothing is posted back to chat.
+For text-only isolated automation announcements, a reply that contains only the silent token (`NO_REPLY` or `no_reply`), or ends with a trailing silent token, suppresses direct outbound delivery and the fallback queued summary path. The preceding text is not delivered.
+
+For example, this final reply sends no chat message:
+
+```text
+Nothing actionable found today.
+
+NO_REPLY
+```
+
+Do not append `NO_REPLY` to a report that should reach the user. Mentioning the token within a sentence, such as `Use NO_REPLY when nothing actionable changed.`, does not trigger this rule. For media payloads, a silent caption can be removed while the media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
@@ -430,7 +452,7 @@ with the intended job ID instead of the name.
 With `--json`, the failure envelope includes these summaries in `error.matches`.
 Event schedules appear as `on-exit` or `stream` without their command text.
 
-`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
+`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status uses the plain values above without decoration, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
 
 `automations runs` entries include delivery diagnostics with the intended automation target, the resolved target, message-tool sends, fallback use, and delivered state.
 

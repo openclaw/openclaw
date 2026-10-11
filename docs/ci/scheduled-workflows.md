@@ -153,8 +153,9 @@ frozen release target or replace an exact-head PR release gate.
 ### What stays on pushes
 
 CodeQL retains all seven main-push security categories. CI retains
-`security-fast` (committed private keys, changed-workflow security auditing,
-and production dependency auditing) on its existing non-docs push scope.
+`security-fast` (committed private keys and changed-workflow security auditing)
+on its existing non-docs push scope. Pull-request, push, and scheduled CI skip
+production dependency auditing; only release dispatches run it, as a warning.
 Default main pushes also run the baseline-growth, assertion-safety, test timeout
 race, and new protocol-method metadata guards there against the exact push
 `before` SHA, so scheduled CI's main-against-itself comparison cannot lose these
@@ -266,9 +267,9 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 
 Before tolerating a partial Kova verdict, the report gate requires aggregate RSS and CPU samples to match the individual records, including repeated measurements. A missing or substituted sample keeps the gate nonzero even when the sample count matches.
 
-OpenClaw-native source probes run in the separate `source_performance` job, in parallel with the Kova lanes after `resolve_target`: gateway boot timing and memory across default, skipped-channel, internal-hook, and fifty-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance probe. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The publisher includes these source artifacts in the `mock-provider` report bundle, with the Markdown summary at `source/index.md` and raw JSON beside it.
+OpenClaw-native source checks run in the separate `source_performance` job, in parallel with the Kova lanes after `resolve_target`: gateway boot timing and memory across default, skipped-channel, internal-hook, and fifty-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance check. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The publisher includes these source artifacts in the `mock-provider` report bundle, with the Markdown summary at `source/index.md` and raw JSON beside it.
 
-Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints a short-lived ClawSweeper GitHub App token scoped only to `openclaw/clawgrit-reports` contents and passes it only to the Git push step. It commits `report.json`, `report.md`, `index.md`, source-probe artifacts, and bundle metadata/checksums under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
+Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints a short-lived ClawSweeper GitHub App token scoped only to `openclaw/clawgrit-reports` contents and passes it only to the Git push step. It commits `report.json`, `report.md`, `index.md`, source-check artifacts, and bundle metadata/checksums under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
 
 All explicit Performance workflow Git commands use the pinned Git lifecycle owner,
 prepared in `RUNNER_TEMP` before each job's selected checkout. Target resolution,
@@ -311,7 +312,7 @@ gh workflow run openclaw-performance.yml --ref main \
 One job builds the selected source once, runs the mock provider, then optionally
 runs OpenAI with a real key. Each run seeds 1,000 sessions across 32 agents and
 completes 96 turns alongside session updates, history reads, subscriptions, and
-64 probe rounds. Dreaming is disabled; normal indexing, recaps, and the database
+64 check rounds. Dreaming is disabled; normal indexing, recaps, and the database
 idle retention policy remain unchanged. The live run denies tools and caps model
 output at 128 tokens. Results include load-phase main-thread and Worker CPU
 profiles. The two providers are different workloads, not a before/after speed
@@ -320,7 +321,7 @@ comparison.
 Live execution requires the default-branch workflow and the tested SHA to equal
 the workflow SHA. A requested live run fails if that condition or
 `OPENAI_API_KEY` is missing. Omit `live_openai_candidate` for mock-only evidence.
-This mode runs no Kova lanes, source-probe jobs, or report publication, and is not
+This mode runs no Kova lanes, source-check jobs, or report publication, and is not
 selected by the daily schedule. See [Gateway concurrency](/reference/test/performance#benchmarks)
 for local invocation and result interpretation.
 
@@ -339,7 +340,7 @@ gh workflow run openclaw-performance.yml \
 
 Both inputs must be lowercase full SHAs, `target_ref` must equal the workflow
 SHA selected by `--ref`, and reruns are refused. Dispatch a fresh workflow run
-instead of retrying an attempt. Kova, source probes, report publication, and
+instead of retrying an attempt. Kova, source checks, report publication, and
 their artifact-only guard stay skipped in this mode. The benchmark job has
 read-only repository permission, does not receive secrets, does not restore or
 save Actions caches, and checks out the helper, candidate, and baseline with
@@ -545,10 +546,12 @@ approval revocations; its per-head review serialization remains non-canceling.
 
 `Dependency Audit` runs the production lockfile audit daily at 07:23 UTC and on
 manual dispatch. It stays separate from PR CI and fails on findings, unavailable
-advisories, or invalid data. Each dependency graph is submitted as one request;
+advisories, or invalid data. This red triage signal is not a required PR check
+and never gates merging. Follow up with a dependency bump on `main`.
+Each dependency graph is submitted as one request;
 release checks keep their product and tooling graphs separate.
 
-Both ordinary CI and this strict audit publish the outcome, package count,
+Both release CI and this strict audit publish the outcome, package count,
 duration, timestamp, and bounded failure reason in the job summary. A completed
 npm check covers npm bulk advisories only, not every upstream advisory source.
 
@@ -572,9 +575,15 @@ For local reproduction, run
 `node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high`. Adding `--ci`
 selects a shorter 30-second diagnostic budget but preserves exit codes: 0 means
 no matching findings, 1 means findings or an error, and 2 means incomplete coverage.
-Ordinary CI, scheduled audits, and local hooks propagate every non-zero exit.
-CI dispatched by Full Release Validation or release publication reports a
-non-zero exit as a warning, because advisories never block a release.
+This direct diagnostic command and the daily Dependency Audit retain those
+non-zero exits. Ordinary pull-request, push, and scheduled CI skip the audit.
+CI runs it only for `workflow_dispatch` IDs beginning with
+`full-release-validation-` or `release-native-android-`; every non-zero audit exit
+becomes a warning with exit code 0. The optional `pnpm-audit-prod` pre-commit
+hook uses the same warn-only wrapper and retains the audit output. Dependency
+advisories cannot block CI, local commits, or releases. The separate release
+`pnpm deps:vuln:gate` still blocks known malware; vulnerability advisories there
+remain warnings.
 
 ### Docs Sync Publish Repo
 
@@ -629,6 +638,8 @@ for the weekly burst separately from PR and main admission.
 ## ClawSweeper activity forwarding
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
+
+The same workflow file also runs Barnacle's `auto-response` job. GitHub creates one run per subscribing workflow before job `if:` admission, and ClawSweeper's own comments and labels arrive as ordinary events, so one shared listener starts one run per event instead of two. The `auto-response` job keeps Barnacle's original event set (issue opened/edited/labeled, comment created, pull request opened/edited/synchronize/reopened/labeled/unlabeled), credentials, trusted base checkout, and its own per-item concurrency group. The file path stays fixed because ClawSweeper's direct queue intake verifies the OIDC `workflow_ref` of `clawsweeper-dispatch.yml`.
 
 Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 

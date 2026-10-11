@@ -42,18 +42,6 @@ type PluginSkillCandidate = {
   rejectHardlinks: boolean;
 };
 
-type DiscoveredSkillCandidates = {
-  candidates: CandidateSkillDir[];
-  rootIsSkill: boolean;
-  configuredRootCandidate?: CandidateSkillDir;
-};
-
-type ChildDirectoryScan = {
-  dirs: string[];
-  scannedEntryCount: number;
-  truncated: boolean;
-};
-
 type SkillDiscoveryBudget = {
   remainingDirectoryScans: number;
   remainingRawEntries: number;
@@ -79,7 +67,7 @@ function listChildDirectories(
     onDiagnostic?: SkillDiscoveryReporter;
     onSymlink?: SkillDirectoryReporter;
   },
-): ChildDirectoryScan {
+) {
   const { budget } = opts;
   if (budget && (budget.remainingDirectoryScans <= 0 || budget.remainingRawEntries <= 0)) {
     budget.truncated = true;
@@ -379,25 +367,6 @@ function shouldUseConfiguredSymlinkTargets(source: string): boolean {
   );
 }
 
-function resolveSkillRootCandidatePath(params: {
-  source: string;
-  rootDir: string;
-  rootRealPath: string;
-  candidatePath: string;
-  allowedSymlinkTargetRealPaths: readonly string[];
-  onDiagnostic?: SkillDiscoveryReporter;
-}): string | null {
-  if (!shouldEnforceConfiguredSkillRootContainment(params.source)) {
-    return tryRealpath(params.candidatePath);
-  }
-  return resolveContainedSkillPath({
-    ...params,
-    allowedSymlinkTargetRealPaths: shouldUseConfiguredSymlinkTargets(params.source)
-      ? params.allowedSymlinkTargetRealPaths
-      : [],
-  });
-}
-
 export function canonicalSkillDirForSource(
   source: string,
   skillDirRealPath: string,
@@ -433,7 +402,7 @@ export function discoverSkillCandidates(params: {
   onDirectory?: SkillDirectoryReporter;
   /** Each listed link, including links that resolve to files or escape the root. */
   onSymlink?: SkillDirectoryReporter;
-}): DiscoveredSkillCandidates {
+}) {
   const rootDir = path.resolve(params.dir);
   let rootRealPath: string;
   try {
@@ -449,39 +418,44 @@ export function discoverSkillCandidates(params: {
   const baseDir = rootIsContainer
     ? rootDir
     : resolveNestedSkillsRoot(params.dir, params.limits.maxCandidatesPerRoot, params.onDirectory);
-  const baseDirRealPath = resolveSkillRootCandidatePath({
-    source: params.source,
-    rootDir,
-    rootRealPath,
-    candidatePath: baseDir,
-    allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
-    onDiagnostic: params.onDiagnostic,
-  });
+  const resolveCandidateDirectory = (candidatePath: string, boundaryRealPath: string) => {
+    if (!shouldEnforceConfiguredSkillRootContainment(params.source)) {
+      return tryRealpath(candidatePath);
+    }
+    return resolveContainedSkillPath({
+      source: params.source,
+      rootDir,
+      rootRealPath: boundaryRealPath,
+      candidatePath,
+      allowedSymlinkTargetRealPaths: shouldUseConfiguredSymlinkTargets(params.source)
+        ? params.allowedSymlinkTargetRealPaths
+        : [],
+      onDiagnostic: params.onDiagnostic,
+    });
+  };
+  const baseDirRealPath = resolveCandidateDirectory(baseDir, rootRealPath);
   if (!baseDirRealPath) {
     return { candidates: [], rootIsSkill: false };
   }
   params.onDirectory?.(rootDir);
   params.onDirectory?.(baseDir);
 
-  if (!rootIsContainer && hasSkillFileCandidate(baseDir)) {
-    const rootSkillRealPath = resolveSkillFilePath({
+  const readCandidate = (
+    skillDir: string,
+    skillDirRealPath: string,
+    name?: string,
+  ): CandidateSkillDir | undefined =>
+    resolveSkillFilePath({
       source: params.source,
-      skillDir: baseDir,
-      skillDirRealPath: baseDirRealPath,
+      skillDir,
+      skillDirRealPath,
       onDiagnostic: params.onDiagnostic,
-    });
-    return {
-      candidates: rootSkillRealPath
-        ? [
-            {
-              skillDir: baseDir,
-              skillDirRealPath: baseDirRealPath,
-              name: path.basename(baseDir),
-            },
-          ]
-        : [],
-      rootIsSkill: true,
-    };
+    })
+      ? { skillDir, skillDirRealPath, name: name ?? path.basename(skillDir) }
+      : undefined;
+  if (!rootIsContainer && hasSkillFileCandidate(baseDir)) {
+    const candidate = readCandidate(baseDir, baseDirRealPath);
+    return { candidates: candidate ? [candidate] : [], rootIsSkill: true };
   }
 
   const maxCandidatesPerRoot = Math.max(0, params.limits.maxCandidatesPerRoot);
@@ -490,7 +464,10 @@ export function discoverSkillCandidates(params: {
   const baseDirIsNestedSkillsRoot = path.resolve(baseDir) === path.resolve(rootDir, "skills");
   const baseDirLooksLikeSkillsRoot = path.basename(baseDir) === "skills";
   const discoveryBudget = createSkillDiscoveryBudget(maxCandidatesPerRoot);
-  const reportTruncatedScan = (scan: ChildDirectoryScan, nestedDir?: string) => {
+  const reportTruncatedScan = (
+    scan: ReturnType<typeof listChildDirectories>,
+    nestedDir?: string,
+  ) => {
     const candidateLimitReached = scan.dirs.length > maxCandidatesPerRoot;
     discoveryBudget.truncated ||= candidateLimitReached;
     if (!scan.truncated && !candidateLimitReached) {
@@ -536,19 +513,7 @@ export function discoverSkillCandidates(params: {
 
   let configuredRootCandidate: CandidateSkillDir | undefined;
   if (!rootIsContainer && path.resolve(baseDir) !== rootDir && hasSkillFileCandidate(rootDir)) {
-    const configuredRootSkillRealPath = resolveSkillFilePath({
-      source: params.source,
-      skillDir: rootDir,
-      skillDirRealPath: rootRealPath,
-      onDiagnostic: params.onDiagnostic,
-    });
-    if (configuredRootSkillRealPath) {
-      configuredRootCandidate = {
-        skillDir: rootDir,
-        skillDirRealPath: rootRealPath,
-        name: path.basename(rootDir),
-      };
-    }
+    configuredRootCandidate = readCandidate(rootDir, rootRealPath);
   }
   const skillCandidates: CandidateSkillDir[] = [];
   const scanQueue: Array<{ skillDir: string; name: string; depth: number }> = limitedChildren.map(
@@ -560,32 +525,16 @@ export function discoverSkillCandidates(params: {
   );
 
   for (const candidate of scanQueue) {
-    const skillDirRealPath = resolveSkillRootCandidatePath({
-      source: params.source,
-      rootDir,
-      rootRealPath: baseDirRealPath,
-      candidatePath: candidate.skillDir,
-      allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
-      onDiagnostic: params.onDiagnostic,
-    });
+    const skillDirRealPath = resolveCandidateDirectory(candidate.skillDir, baseDirRealPath);
     if (!skillDirRealPath) {
       continue;
     }
     params.onDirectory?.(candidate.skillDir);
 
     if (hasSkillFileCandidate(candidate.skillDir)) {
-      const skillMdRealPath = resolveSkillFilePath({
-        source: params.source,
-        skillDir: candidate.skillDir,
-        skillDirRealPath,
-        onDiagnostic: params.onDiagnostic,
-      });
-      if (skillMdRealPath) {
-        skillCandidates.push({
-          skillDir: candidate.skillDir,
-          skillDirRealPath,
-          name: candidate.name,
-        });
+      const found = readCandidate(candidate.skillDir, skillDirRealPath, candidate.name);
+      if (found) {
+        skillCandidates.push(found);
       }
       continue;
     }

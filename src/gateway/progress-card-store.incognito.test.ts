@@ -5,6 +5,8 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { readAcpSessionEntryAsync } from "../acp/runtime/session-meta-read.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import {
   readSessionManagerModelContextAsync,
   readSessionManagerContextAsync,
@@ -27,13 +29,13 @@ import * as workerStores from "../infra/sqlite-worker-store.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { createIncognitoProgressCardStore } from "./progress-card-store.js";
+import { createIncognitoProgressCardStore, progressCardStore } from "./progress-card-store.js";
 import { createIncognitoSessionComputeReader } from "./session-history-snapshot.js";
 
 // The retained suite actor, shared state, and closing actor require three broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -90,42 +92,50 @@ async function fixture(name: string, source = authority) {
 }
 
 it("composes reactions, heartbeat claims, and progress-card revisions without caller SQL", async () => {
-  const { scope, reaction, store, heartbeat } = await fixture("composition");
+  const prepared = await fixture("composition");
+  const { reaction } = prepared;
+  const scope = { ...prepared.scope, incognito: undefined };
+  const heartbeat = { ...prepared.heartbeat, incognito: undefined };
+  const store = progressCardStore;
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   const sql = observeHostDataSql();
   try {
-    expect(await setSessionReactionAsync(scope, reaction)).toMatchObject({ changed: true });
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, messageId: "missing" }),
-    ).rejects.toBeInstanceOf(SessionReactionMessageMissingError);
-    expect(
-      await actor.sessions.sideData(authority, {
-        type: "session.reactions.read",
-        input: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
-      }),
-    ).toEqual({
-      [reaction.messageId]: [{ emoji: "👍", count: 1, identities: [{ id: "viewer" }] }],
+    await withIncognitoSessionActor(actor, async () => {
+      expect(await setSessionReactionAsync(scope, reaction)).toMatchObject({ changed: true });
+      await expect(
+        setSessionReactionAsync(scope, { ...reaction, messageId: "missing" }),
+      ).rejects.toBeInstanceOf(SessionReactionMessageMissingError);
+      expect(
+        await actor.sessions.sideData(authority, {
+          type: "session.reactions.read",
+          input: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
+        }),
+      ).toEqual({
+        [reaction.messageId]: [{ emoji: "👍", count: 1, identities: [{ id: "viewer" }] }],
+      });
+      await persistHeartbeatOutcome(heartbeat);
+      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toMatchObject({
+        summary: "Private progress",
+      });
+      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toBeDefined();
+      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "second" })).toBeUndefined();
+      expect(await store.put(scope.sessionKey, { markdown: "First" })).toMatchObject({
+        card: { revision: 1, markdown: "First" },
+      });
+      expect(await store.put(scope.sessionKey, { markdown: "Second" })).toMatchObject({
+        card: { revision: 2 },
+      });
+      expect(await store.put(scope.sessionKey, { expectedRevision: 1 })).toMatchObject({
+        card: { revision: 2 },
+      });
+      expect(await store.get(scope.sessionKey)).toMatchObject({ markdown: "Second", revision: 2 });
+      expect(await store.put(scope.sessionKey, { expectedRevision: 2 })).toEqual({ card: null });
+      expect(await store.get(scope.sessionKey)).toBeNull();
+      expect(sql.queries).toEqual([]);
+      expect(existsSync(actor.path)).toBe(false);
     });
-    await persistHeartbeatOutcome(heartbeat);
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toMatchObject({
-      summary: "Private progress",
-    });
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toBeDefined();
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "second" })).toBeUndefined();
-    expect(await store.put(scope.sessionKey, { markdown: "First" })).toMatchObject({
-      card: { revision: 1, markdown: "First" },
-    });
-    expect(await store.put(scope.sessionKey, { markdown: "Second" })).toMatchObject({
-      card: { revision: 2 },
-    });
-    expect(await store.put(scope.sessionKey, { expectedRevision: 1 })).toMatchObject({
-      card: { revision: 2 },
-    });
-    expect(await store.get(scope.sessionKey)).toMatchObject({ markdown: "Second", revision: 2 });
-    expect(await store.put(scope.sessionKey, { expectedRevision: 2 })).toEqual({ card: null });
-    expect(await store.get(scope.sessionKey)).toBeNull();
-    expect(sql.queries).toEqual([]);
-    expect(existsSync(actor.path)).toBe(false);
   } finally {
+    vi.unstubAllEnvs();
     sql.restore();
   }
 });
@@ -380,21 +390,26 @@ it.each([
             { kind: "widget_resize", name: "stored", sizeW: 8, sizeH: 6 },
           ]);
         } else if (reader === "acp-write") {
-          await borrowed.acp.upsertMeta({
-            ...scope,
-            authority: source,
-            cfg: {},
-            mutate: () => ({
-              backend: "fixture",
-              agent: "fixture",
-              runtimeSessionName: "private-runtime",
-              mode: "persistent",
-              state: "idle",
-              lastActivityAt: 100,
-            }),
-          });
+          await upsertAcpSessionMeta(
+            {
+              ...scope,
+              cfg: {},
+              mutate: () => ({
+                backend: "fixture",
+                agent: "fixture",
+                runtimeSessionName: "private-runtime",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: 100,
+              }),
+            },
+            { actor: borrowed, authority: source },
+          );
         } else if (reader === "acp") {
-          await borrowed.acp.readEntry({ ...scope, authority: source, cfg: {} });
+          await readAcpSessionEntryAsync(
+            { ...scope, cfg: {} },
+            { actor: borrowed, authority: source },
+          );
         } else if (reader === "pending") {
           await createIncognitoPendingInputHistoryReader({
             actor: borrowed,

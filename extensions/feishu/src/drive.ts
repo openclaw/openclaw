@@ -5,12 +5,12 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import {
   encodeQuery,
+  extractFeishuApiErrorMeta,
   extractReplyText,
   FeishuReplyCommentError,
   formatFeishuApiError,
@@ -152,28 +152,6 @@ function resolveDriveCommentParams<
   };
 }
 
-function extractDriveApiErrorMeta(error: unknown): {
-  message: string;
-  httpStatus?: number;
-  feishuCode?: number | string;
-  feishuMsg?: string;
-  feishuLogId?: string;
-} {
-  if (!isRecord(error)) {
-    return { message: typeof error === "string" ? error : JSON.stringify(error) };
-  }
-  const response = isRecord(error.response) ? error.response : undefined;
-  const responseData = isRecord(response?.data) ? response?.data : undefined;
-  return {
-    message: typeof error.message === "string" ? error.message : JSON.stringify(error),
-    httpStatus: typeof response?.status === "number" ? response.status : undefined,
-    feishuCode:
-      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-    feishuMsg: readString(responseData?.msg),
-    feishuLogId: readString(responseData?.log_id),
-  };
-}
-
 async function listFolder(client: Lark.Client, params: Record<string, unknown> = {}) {
   const folderToken =
     typeof params.folder_token === "string" ? params.folder_token.trim() : undefined;
@@ -243,7 +221,7 @@ async function getFileInfo(
       },
     });
   } catch (error) {
-    if (extractDriveApiErrorMeta(error).feishuCode === 99991672) {
+    if (extractFeishuApiErrorMeta(error).feishuCode === 99991672) {
       // Existing read-only apps may not have the newer metadata scope. Preserve their
       // root-file lookup while allowing scoped apps to resolve files in any shared folder.
       return getRootFileInfo(client, fileToken);
@@ -397,7 +375,7 @@ async function replyComment(
     ) {
       throw error;
     }
-    const meta = extractDriveApiErrorMeta(error);
+    const meta = extractFeishuApiErrorMeta(error);
     console.warn(
       `[feishu_drive] replyComment threw ` +
         `comment=${params.comment_id} file_type=${params.file_type} ` +

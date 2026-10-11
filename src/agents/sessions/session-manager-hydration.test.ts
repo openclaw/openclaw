@@ -4,10 +4,8 @@ import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
-import {
-  upsertSessionEntryCore,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -16,16 +14,17 @@ import { historyLane } from "../../config/sessions/session-transcript-worker-res
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabases,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   listOpenIncognitoAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -101,7 +100,43 @@ it.each(["canonical", "shared"])(
         expect(detached.isPersisted()).toBe(false);
         expect(detached.buildSessionContext()).toEqual(expectedBounded);
         detached.appendMessage(makeUserMessage("detached only", 20));
-        await cold.reloadPersistedTranscriptAsync();
+        expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
+        // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
+        const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
+        expect(warm.db.isOpen).toBe(true);
+        probes.forEach((probe) => probe.mockClear());
+        const retirementEntered = createDeferredCore();
+        const releaseRetirement = createDeferredCore();
+        let following: Promise<void> | undefined;
+        const waitForWriter = () => {
+          following ??= runOpenClawAgentWriteAdmission(
+            { agentId: database.agentId, path: database.path },
+            () => {},
+          );
+          retirementEntered.resolve();
+          return Promise.race([following, releaseRetirement.promise]);
+        };
+        const close = vi
+          .spyOn(historyLane.pool, "closeResources")
+          .mockImplementation(waitForWriter);
+        const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
+        const reloading = runOpenClawAgentWriteAdmission(
+          { agentId: database.agentId, path: database.path },
+          () => cold.reloadPersistedTranscriptAsync(),
+        );
+        try {
+          await Promise.race([
+            reloading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Manager reload cleanup waits on its own queued writer");
+            }),
+          ]);
+        } finally {
+          releaseRetirement.resolve();
+          await Promise.allSettled([reloading, following]);
+          close.mockRestore();
+          rotate.mockRestore();
+        }
         expect(cold.getCwd()).toBe("/runtime");
         expect(cold.getPersistedEntries()).toEqual(expected);
         const reader = prepareSessionTranscriptHydration(
@@ -292,7 +327,7 @@ it("does not publish a stale retarget over a manager changed while its worker re
 });
 
 it.each(["hydration", "current-turn"] as const)(
-  "releases queued %s admission on abort before its predecessor finishes",
+  "releases queued %s admission on abort before its predecessors finish",
   async (kind) => {
     await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
       const target = canonicalTarget(state, "queued-abort");
@@ -305,11 +340,15 @@ it.each(["hydration", "current-turn"] as const)(
       const queued = createDeferredCore();
       const release = createDeferredCore();
       const run = historyLane.pool.run.bind(historyLane.pool);
+      const capacity = historyLane.pool.getSnapshot().maxWorkers;
       let submissions = 0;
+      let enteredCount = 0;
       const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
-        if (submissions++ === 0) {
+        if (submissions++ < capacity) {
           return run(async () => {
-            entered.resolve();
+            if (++enteredCount === capacity) {
+              entered.resolve();
+            }
             await release.promise;
             return typeof input === "function" ? await input() : input;
           }, options);
@@ -318,11 +357,22 @@ it.each(["hydration", "current-turn"] as const)(
         queued.resolve();
         return result;
       });
-      const predecessor = SessionManager.openAsync(target);
-      const reads: Promise<unknown>[] = [predecessor];
+      const predecessorReads = Array.from({ length: capacity }, () =>
+        SessionManager.openAsync(target),
+      );
+      const predecessors = Promise.all(predecessorReads);
+      const reads: Promise<unknown>[] = [...predecessorReads, predecessors];
       try {
-        await entered.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        await Promise.race([
+          entered.promise,
+          predecessors.then(() => {
+            throw new Error("Hydration predecessors settled before filling the worker pool");
+          }),
+        ]);
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity,
+        });
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
         const canceled =
@@ -340,14 +390,22 @@ it.each(["hydration", "current-turn"] as const)(
         const refused = expect(canceled).rejects.toBe(reason);
         reads.push(canceled, refused);
         await queued.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 2 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity + 1,
+        });
         controller.abort(reason);
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity,
+        });
         await refused;
         release.resolve();
-        expect((await predecessor).buildSessionContext().messages).toEqual([
-          makeUserMessage("preserved predecessor", 1),
-        ]);
+        for (const predecessor of await predecessors) {
+          expect(predecessor.buildSessionContext().messages).toEqual([
+            makeUserMessage("preserved predecessor", 1),
+          ]);
+        }
       } finally {
         release.resolve();
         spy.mockRestore();

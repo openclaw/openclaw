@@ -15,27 +15,26 @@ const loadTranscriptRuntime = createLazyRuntimeModule(
 export async function mirrorDeliveredPayloads(params: {
   delivery: DeliverOutboundPayloadsCoreParams;
   payloads: readonly NormalizedOutboundPayload[];
-  channel: string;
-  to: string;
 }): Promise<void> {
   const mirror = params.delivery.mirror;
   if (!mirror || params.payloads.length === 0) {
     return;
   }
-  const deliveredMirror = {
+  const mirrorText = resolveMirroredTranscriptText({
     text: params.payloads
       .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
       .filter((text) => text.trim())
       .join("\n"),
     mediaUrls: params.payloads.flatMap((payload) => payload.mediaUrls),
-  };
-  const mirrorText = resolveMirroredTranscriptText({
-    text: deliveredMirror.text,
-    mediaUrls: deliveredMirror.mediaUrls,
   });
   if (!mirrorText) {
     return;
   }
+  const warnFailure = (reason: string) =>
+    log.warn(
+      `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${reason}`,
+      { channel: params.delivery.channel, to: params.delivery.to, sessionKey: mirror.sessionKey },
+    );
   // Transcript mirroring is best-effort bookkeeping after platform send.
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
   try {
@@ -57,15 +56,9 @@ export async function mirrorDeliveredPayloads(params: {
       config: params.delivery.cfg,
     });
     if (!mirrorResult.ok) {
-      log.warn(
-        `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${mirrorResult.reason}`,
-        { channel: params.channel, to: params.to, sessionKey: mirror.sessionKey },
-      );
+      warnFailure(mirrorResult.reason);
     }
   } catch (err) {
-    log.warn(
-      `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${formatErrorMessage(err)}`,
-      { channel: params.channel, to: params.to, sessionKey: mirror.sessionKey },
-    );
+    warnFailure(formatErrorMessage(err));
   }
 }

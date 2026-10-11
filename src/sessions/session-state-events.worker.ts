@@ -26,6 +26,7 @@ import {
 } from "./session-state-events.kernel.js";
 import { readSessionStateSequence } from "./session-state-events.read.worker.js";
 import type { SessionStateWorkerOperations } from "./session-state-events.worker-contract.js";
+import { deleteSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
 export function executeSessionStateCommand(
   command: SqliteWorkerCommand<SessionStateWorkerOperations>,
@@ -37,6 +38,7 @@ export function executeSessionStateCommand(
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const kysely = getSessionStateKysely(db);
       if (input.kind === "delete") {
+        deleteSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId);
         for (const table of ["session_state_events", "session_state_heads"] as const) {
           executeSqliteQuerySync(
             db,

@@ -311,8 +311,7 @@ enum OnboardingSystemAgentResumeStore {
         case .completed:
             return .completed
         case .activating, .verified:
-            guard let deadline = record.deadline else { return .activationExpired }
-            guard now < deadline else { return .activationExpired }
+            guard let deadline = record.deadline, now < deadline else { return .activationExpired }
             return record.phase == .activating
                 ? .activating(deadline: deadline)
                 : .verified(deadline: deadline)
@@ -375,21 +374,23 @@ enum OnboardingSystemAgentResumeStore {
             self.writeRecords(records, defaults: defaults)
             return records
         }
-        if version == self.unsafeOwnerlessRecordVersion ||
+        let stripsUnsafeOwner = version == self.unsafeOwnerlessRecordVersion ||
             version == self.unsafeCredentialFingerprintRecordVersion
-        {
-            guard let storedRecords = container["records"] as? [String: Any] else {
-                self.clear(defaults: defaults)
-                return [:]
-            }
-            // Strip the unsafe/absent auth owner immediately, but retain active
-            // deadlines so a possibly running activation cannot overlap a new one.
-            let records: [String: Record] = storedRecords.reduce(into: [:]) { result, entry in
-                guard let routeIdentity = entry.key.trimmedNonEmpty,
-                      let payload = entry.value as? [String: Any],
-                      let record = decodeRecord(payload),
-                      record.phase != .completed
-                else { return }
+        guard version == self.recordVersion || stripsUnsafeOwner,
+              let storedRecords = container["records"] as? [String: Any]
+        else {
+            self.clear(defaults: defaults)
+            return [:]
+        }
+        let records: [String: Record] = storedRecords.reduce(into: [:]) { result, entry in
+            guard let routeIdentity = entry.key.trimmedNonEmpty,
+                  let payload = entry.value as? [String: Any],
+                  let record = decodeRecord(payload)
+            else { return }
+            if stripsUnsafeOwner {
+                // Strip the unsafe/absent auth owner immediately, but retain active
+                // deadlines so a possibly running activation cannot overlap a new one.
+                guard record.phase != .completed else { return }
                 result[routeIdentity] = Record(
                     phase: record.phase,
                     startedAt: record.startedAt,
@@ -397,23 +398,14 @@ enum OnboardingSystemAgentResumeStore {
                     activationOwner: nil,
                     modelTarget: nil,
                     utilityModel: nil)
+            } else {
+                result[routeIdentity] = record
             }
+        }
+        if stripsUnsafeOwner {
             self.writeRecords(records, defaults: defaults)
-            return records
         }
-        guard version == self.recordVersion,
-              let storedRecords = container["records"] as? [String: Any]
-        else {
-            self.clear(defaults: defaults)
-            return [:]
-        }
-        return storedRecords.reduce(into: [:]) { result, entry in
-            guard let routeIdentity = entry.key.trimmedNonEmpty,
-                  let payload = entry.value as? [String: Any],
-                  let record = decodeRecord(payload)
-            else { return }
-            result[routeIdentity] = record
-        }
+        return records
     }
 
     private static func decodeLegacyRecord(_ payload: [String: Any], now: Date) -> Record {
@@ -470,22 +462,14 @@ enum OnboardingSystemAgentResumeStore {
         }
         let payload = records.mapValues { record -> [String: Any] in
             var value: [String: Any] = ["phase": record.phase.rawValue]
-            if let startedAt = record.startedAt {
-                value["startedAt"] = startedAt.timeIntervalSince1970
-            }
-            if let deadline = record.deadline {
-                value["deadlineAt"] = deadline.timeIntervalSince1970
-            }
+            value["startedAt"] = record.startedAt?.timeIntervalSince1970
+            value["deadlineAt"] = record.deadline?.timeIntervalSince1970
             if let activationOwner = record.activationOwner {
                 value["activationId"] = activationOwner.id
                 value["routeFingerprint"] = activationOwner.routeFingerprint
             }
-            if let utilityModel = record.utilityModel {
-                value["utilityModel"] = utilityModel
-            }
-            if let modelTarget = record.modelTarget {
-                value["modelTarget"] = modelTarget.rawValue
-            }
+            value["utilityModel"] = record.utilityModel
+            value["modelTarget"] = record.modelTarget?.rawValue
             return value
         }
         defaults.set(
@@ -727,10 +711,7 @@ struct OnboardingView: View {
     }
 
     var selectedConnectionMode: AppState.ConnectionMode {
-        if self.isConnectionSelectionBlocking {
-            return .local
-        }
-        return self.state.connectionMode
+        self.isConnectionSelectionBlocking ? .local : self.state.connectionMode
     }
 
     var isConnectionSelectionBlocking: Bool {

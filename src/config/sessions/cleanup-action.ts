@@ -9,7 +9,6 @@ export type SessionCleanupAction =
   | "cap-overflow"
   | "retire-dm-scope";
 
-/** Resolves the action label for one session key from cleanup key sets. */
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;

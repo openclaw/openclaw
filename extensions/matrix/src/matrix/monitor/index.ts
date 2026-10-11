@@ -566,11 +566,7 @@ async function runMatrixMonitorSession(
     ]);
     await cleanup();
   } catch (err) {
-    if (monitorSetupClosed) {
-      await cleanup("stop");
-      return;
-    }
-    if (monitorLifecycleSignal?.aborted === true && isMatrixStartupAbortError(err)) {
+    if (monitorSetupClosed || (monitorLifecycleSignal?.aborted && isMatrixStartupAbortError(err))) {
       await cleanup("stop");
       return;
     }

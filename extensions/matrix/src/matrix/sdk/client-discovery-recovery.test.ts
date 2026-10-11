@@ -1,3 +1,4 @@
+import { ClientStoppedError } from "matrix-js-sdk/lib/errors.js";
 import {
   ClientEvent,
   EventType,
@@ -46,11 +47,13 @@ const encryption = { algorithm: "m.megolm.v1.aes-sha2" };
 describe("Matrix startup with unavailable joined-room discovery", () => {
   let client: MatrixClient;
   let discovery: () => Promise<Response>;
+  let crypto: RustCrypto | undefined;
 
   beforeEach(() => {
     resetPluginStateStoreForTests();
     installMatrixTestRuntime();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("matrix-discovery-state-"));
+    crypto = undefined;
     discovery = async () => Response.json({ errcode: "M_UNKNOWN" }, { status: 503 });
     fixture.fetch.mockReset().mockImplementation(async (input) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -71,11 +74,12 @@ describe("Matrix startup with unavailable joined-room discovery", () => {
         state_key: "",
         content: encryption,
       });
-      const crypto = sdk.getCrypto();
-      if (!(crypto instanceof RustCrypto)) {
+      const backend = sdk.getCrypto();
+      if (!(backend instanceof RustCrypto)) {
         throw new Error("Expected the installed Rust crypto backend");
       }
-      await crypto.onCryptoEvent(room, event);
+      crypto = backend;
+      await backend.onCryptoEvent(room, event);
       room.currentState.setStateEvents([event]);
       sdk.store.storeRoom(room);
       const unrecovered = new Room(missing, sdk, "@bot:example.org");
@@ -140,6 +144,11 @@ describe("Matrix startup with unavailable joined-room discovery", () => {
           (input instanceof Request ? input.url : String(input)).includes("/send/"),
         ),
       ).toBe(false);
+      if (!crypto) {
+        throw new Error("Expected the started Rust crypto backend");
+      }
+      await client.stopWithoutPersist();
+      await expect(crypto.getCrossSigningStatus()).rejects.toBeInstanceOf(ClientStoppedError);
     },
   );
 });
