@@ -60,4 +60,33 @@ describe("main-thread stall attribution", () => {
     runWithMainThreadTask("maintenance", () => elapse(1_001));
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0 });
   });
+
+  it.each(["sync", "resolved", "rejected"] as const)(
+    "expires a %s task before its detached work runs",
+    async (completion) => {
+      const { monitor, elapse } = fixture();
+      const ready = createDeferredCore();
+      let detached: Promise<void> | undefined;
+      const result = runWithMainThreadTask("plugins.runtime-post-bind", () => {
+        detached = ready.promise.then(() => {
+          elapse(1_700);
+        });
+        if (completion === "sync") {
+          return;
+        }
+        return completion === "resolved" ? Promise.resolve() : Promise.reject(new Error("load"));
+      });
+      if (completion === "rejected") {
+        await expect(result).rejects.toThrow("load");
+      } else {
+        await result;
+      }
+      ready.resolve();
+      await detached;
+      expect(monitor.drain()).toEqual({
+        stalls: [{ elapsedMs: 1_700, task: "unattributed", taskMs: 1_700 }],
+        dropped: 0,
+      });
+    },
+  );
 });
