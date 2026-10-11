@@ -19,14 +19,6 @@ import {
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
-  clearPendingCommentaryText,
-  rememberPendingCommentaryTags,
-  tagInterruptedTextPhases,
-  tagPendingCommentaryText,
-  tagUnresolvedTextAsCommentary,
-  type PendingCommentaryTags,
-} from "../utils/assistant-text-phase.js";
-import {
   createToolArgumentPreviewSchedule,
   parseStreamingJson,
   type ToolArgumentPreviewSchedule,
@@ -76,7 +68,6 @@ type CompletionsStreamOptions = {
   | {
       mode: "direct";
       beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
-      provisionalCommentaryTags: PendingCommentaryTags;
     }
   | { mode?: "managed"; beforeContentBlock?: never }
 );
@@ -124,8 +115,7 @@ export async function processCompletionsStream(
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
-  let pendingInterruptedTextBlock: TextBlock | null = null;
-  let confirmedInterruptedTextBlock: TextBlock | null = null;
+  let sawReasoning = false;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
@@ -133,9 +123,7 @@ export async function processCompletionsStream(
   const encryptedReasoning = createOpenAIEncryptedToolCallReasoningTracker();
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
-  const provisionalCommentaryTags = directMode ? options.provisionalCommentaryTags : new Map();
   const blockIndices = new WeakMap<TextBlock | ThinkingBlock | ToolCallBlock, number>();
-  let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let finishReason: string | undefined;
   let sawNativeToolCallDelta = false;
@@ -194,9 +182,6 @@ export async function processCompletionsStream(
       if (delta.kind === "text") {
         currentBlock = { type: "text", text: "" };
         currentTextSource = delta.source;
-        if (delta.source === "reasoning_detail") {
-          (explicitVisibleTextBlocks ??= new Set()).add(currentBlock);
-        }
       } else {
         currentBlock = {
           type: "thinking",
@@ -215,10 +200,6 @@ export async function processCompletionsStream(
       appendAssistantThinking(currentBlock, delta.text);
     } else {
       currentBlock.text += delta.text;
-      if (pendingInterruptedTextBlock && delta.text.trim()) {
-        confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
-        pendingInterruptedTextBlock = null;
-      }
     }
     const event = { contentIndex: blockIndex(), delta: delta.text };
     if (delta.kind === "thinking") {
@@ -275,10 +256,6 @@ export async function processCompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    rememberPendingCommentaryTags(
-      provisionalCommentaryTags,
-      tagPendingCommentaryText(output.content),
-    );
     const block: ToolCallBlock = {
       type: "toolCall",
       // Recovered text has no provider call id. A response-local counter would alias a
@@ -332,7 +309,7 @@ export async function processCompletionsStream(
   const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
     const recoverUnclosed =
       allowRecovery &&
-      !output.openclawDelivery?.textPhaseRequiresTerminal &&
+      !sawReasoning &&
       output.stopReason !== "length" &&
       output.stopReason !== "error" &&
       output.stopReason !== "aborted";
@@ -360,11 +337,6 @@ export async function processCompletionsStream(
     if (currentBlock?.type !== "text") {
       return;
     }
-    // Resumed reasoning makes the preceding visible text interim. Preserve
-    // the candidate boundary only if later text confirms a final answer.
-    if (currentTextSource !== "reasoning_detail" && currentBlock.text.trim()) {
-      pendingInterruptedTextBlock = currentBlock;
-    }
     currentBlock = null;
     if (directMode) {
       directContent.block = null;
@@ -372,7 +344,9 @@ export async function processCompletionsStream(
     currentTextSource = undefined;
   };
   const beginReasoning = (hasFollowingVisibleText: boolean) => {
-    output.openclawDelivery = { ...output.openclawDelivery, textPhaseRequiresTerminal: true };
+    // Native reasoning makes unclosed reasoning tags private, without changing
+    // the delivery phase of any visible text already emitted.
+    sawReasoning = true;
     // Let following text finish syntax already owned by the Markdown
     // parser; otherwise packet batching cannot erase a lane boundary.
     if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
@@ -390,6 +364,7 @@ export async function processCompletionsStream(
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
   const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
+  const maxUsageTokens = { prompt: 0, completion: 0, total: 0, reasoning: 0 };
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
@@ -406,9 +381,22 @@ export async function processCompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
-    const hasReasoningUsageActivity = Boolean(
-      asPositiveFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens),
-    );
+    let hasUsageProgress = false;
+    let hasReasoningUsageActivity = false;
+    // Cumulative snapshots can repeat or regress; billing metadata is not model work.
+    for (const [counter, reported] of [
+      ["prompt", usage?.prompt_tokens],
+      ["completion", usage?.completion_tokens],
+      ["total", usage?.total_tokens],
+      ["reasoning", usage?.completion_tokens_details?.reasoning_tokens],
+    ] as const) {
+      const tokens = asPositiveFiniteNumber(reported) ?? 0;
+      if (tokens > maxUsageTokens[counter]) {
+        maxUsageTokens[counter] = tokens;
+        hasUsageProgress = true;
+        hasReasoningUsageActivity ||= counter === "reasoning";
+      }
+    }
     if (usage) {
       output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
@@ -419,7 +407,7 @@ export async function processCompletionsStream(
     notifyLlmRequestActivity(
       options?.signal,
       Boolean(
-        usage ||
+        hasUsageProgress ||
         choice?.finish_reason ||
         (rawChoiceDelta &&
           (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
@@ -493,10 +481,6 @@ export async function processCompletionsStream(
         flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
         flushReasoningTagTextPartitioner(false);
-        rememberPendingCommentaryTags(
-          provisionalCommentaryTags,
-          tagPendingCommentaryText(output.content),
-        );
         for (const toolCall of toolCallDeltas) {
           const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
           let block =
@@ -610,27 +594,6 @@ export async function processCompletionsStream(
       });
     },
   });
-  if (
-    confirmedInterruptedTextBlock &&
-    output.stopReason !== "toolUse" &&
-    output.stopReason !== "error" &&
-    output.stopReason !== "aborted"
-  ) {
-    tagInterruptedTextPhases(
-      output.content,
-      confirmedInterruptedTextBlock,
-      explicitVisibleTextBlocks,
-    );
-  }
-  if (output.stopReason !== "toolUse") {
-    clearPendingCommentaryText(provisionalCommentaryTags);
-  }
-  if (output.stopReason === "error" || output.stopReason === "aborted") {
-    tagUnresolvedTextAsCommentary(output);
-  }
-  if (output.stopReason === "toolUse") {
-    tagPendingCommentaryText(output.content);
-  }
   if (
     !output.usage.contextUsage &&
     !options?.signal?.aborted &&

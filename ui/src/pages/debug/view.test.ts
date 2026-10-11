@@ -5,7 +5,7 @@ import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-syn
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import "./debug-overlay.ts";

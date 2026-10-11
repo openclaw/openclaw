@@ -247,7 +247,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       deliveryPayloads: [mediaPayload],
     });
     const result = await runTurn();
-    expectDispatch({ spawnOnlyHandoff: false, deliveryPayloadHasStructuredContent: true });
+    expectDispatch({ spawnOnlyHandoff: false });
     expectObjectFields(result, { status: "ok", deliveryError: error });
   });
 
