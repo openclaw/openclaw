@@ -547,6 +547,48 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });
 
+  it("retains the pending orphan pass after a transient workspace-resolution failure", async () => {
+    const root = support.testState.root;
+    await git(root, "init", "--quiet");
+    await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
+    await git(root, "add", "result.txt");
+    const tree = await git(root, "write-tree");
+    const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
+    await git(root, "update-ref", cleanupRef, tree);
+    const placements = createStore();
+    const idle = await placements.startDispatch({
+      ...REQUEST,
+      sessionId: "idle",
+      sessionKey: "agent:main:idle",
+    });
+    await placements.fail({
+      sessionId: idle.sessionId,
+      expectedGeneration: idle.generation,
+      recoveryError: "finished fixture",
+    });
+    let resolutionAttempts = 0;
+    const harness = createHarness(support.testState.stateDb, placements, {
+      workspacePath: root,
+      resolveWorkspace: async () => {
+        resolutionAttempts += 1;
+        if (resolutionAttempts === 1) {
+          // Transient FS/git resolution failure on the first sweep only.
+          throw new Error("fixture transient workspace resolution failure");
+        }
+        return { kind: "local", path: root };
+      },
+    });
+    const coordinated = coordinate(harness);
+    await coordinated.reconcile("startup");
+    // First sweep: resolution fails, so the sweep is incomplete and the orphan ref is kept.
+    await coordinated.reconcileActive();
+    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+    // Second sweep: resolution succeeds and the retained pending pass cleans the orphan ref.
+    await coordinated.reconcileActive();
+    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+    expect(resolutionAttempts).toBe(2);
+  });
+
   it("a real dispatch reaches device provisioning while another placement's teardown is stuck", async () => {
     const placements = createStore();
     const harness = createHarness(support.testState.stateDb, placements, {
