@@ -1,6 +1,10 @@
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import {
+  assertTranscriptPageIdentity,
+  TranscriptPageIdentityError,
+} from "./session-transcript-page-read-identity.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptWorkerInput,
@@ -11,6 +15,7 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "transcript-page-read"
       | "trajectory-events"
       | "trajectory-retention"
       | "board-snapshot"
@@ -49,6 +54,7 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "transcript-page-read":
     case "trajectory-events":
     case "trajectory-retention":
     case "board-snapshot":
@@ -91,6 +97,7 @@ export async function prepareSessionHistoryReadOperation(
     if (
       "expectedIdentity" in request &&
       request.expectedIdentity &&
+      request.kind !== "transcript-page-read" &&
       request.kind !== "transcript-anchors" &&
       request.kind !== "context-messages"
     ) {
@@ -109,6 +116,50 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "transcript-page-read": {
+      const [
+        { withScopedOpenClawAgentDatabaseReadOnly },
+        { createTranscriptReadMeter, readTranscriptPageInDatabase },
+      ] = await Promise.all([
+        // The page read must never borrow the process-held writable handle:
+        // the scoped owner admits only native read-only connections.
+        import("../../state/openclaw-agent-db-readonly-scope.js"),
+        import("./session-transcript-page-read.kernel.js"),
+      ]);
+      const meter = createTranscriptReadMeter(request.request.limits);
+      return () => {
+        const fail = (error: "missing" | "read_failed" | "stale_session" | "forbidden") => ({
+          kind: request.kind,
+          result: { ok: false as const, error, budget: meter.snapshot(true) },
+        });
+        if (
+          request.request.scope.agentId !== request.database.agentId ||
+          request.request.scope.path !== request.database.path
+        ) {
+          return fail("forbidden");
+        }
+        try {
+          assertTranscriptPageIdentity(request.database.path, request.expectedIdentity);
+          const read = withScopedOpenClawAgentDatabaseReadOnly(
+            (database) => readTranscriptPageInDatabase(database, request.request, meter),
+            {
+              agentId: request.database.agentId,
+              path: request.database.path,
+              env: request.request.scope.env,
+            },
+          );
+          assertTranscriptPageIdentity(request.database.path, request.expectedIdentity);
+          return read.found
+            ? { kind: request.kind, result: read.value }
+            : fail(read.reason === "database-missing" ? "missing" : "read_failed");
+        } catch (error) {
+          if (error instanceof TranscriptPageIdentityError) {
+            return fail(error.reason);
+          }
+          throw error;
+        }
+      };
+    }
     case "trajectory-events": {
       const { loadSqliteTrajectoryRuntimeEventRowsSync } =
         await import("../../trajectory/runtime-store.sqlite.js");

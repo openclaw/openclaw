@@ -5744,3 +5744,41 @@ committed timestamp without a follow-up read. Generic synchronous machine-state
 APIs retain other callers pending their owner-level cutover; these changes do not
 classify those callers as worker-only. Schemas, retention, stored bytes, and
 update behavior are unchanged.
+
+Read-only transcript page reads use the existing session-history lane and its
+retained database owner through an internal transcript-page operation. One
+absolute deadline of at most five seconds bounds the response, including queue
+wait and execution. Worker dispatch receives only the remaining allowance.
+Settlement separately joins preparation, the owned worker task and host cleanup;
+it may outlast the response deadline while retaining custody. A timed-out or
+canceled response carries observed partial accounting marked `final: false`
+under the `timed_out` code and never publishes a late successful page.
+
+Store admission serializes across resource generations. A verified no-dispatch
+refusal settles with final zero accounting. Settlement resolves only when final
+source accounting and cleanup are verified. A lost worker receipt or failed
+cleanup rejects settlement and keeps admission closed, including after an
+ordinary post-dispatch timeout or cancellation. The existing database owner's
+close/reload/shutdown path joins and retries retained cleanup before releasing
+the failed claim. Successful cleanup alone does not reconstruct lost counts;
+reads are never replayed automatically. Callers must handle this availability
+limit rather than retrying against closed admission. A retained failed claim
+also keeps the shared history lane pending, suppressing its idle retirement and
+retaining its memory-pressure subscription until owner recovery.
+Admission is native read-only: the page dispatcher uses the scoped read-only
+owner rather than the generic helper, so a host-held writable handle never
+receives page-read SQL, and the auxiliary quarantine lookup opens its store
+read-only so a lookup cannot create or recreate it. SQLite may create WAL/SHM
+coordination files for an existing store under the logical read-only contract;
+reader-issued writes, DDL, migrations, cold restoration, and missing-store
+creation remain prohibited. First admission of missing, schema-incompatible,
+and bare stores returns closed failures with primary bytes unchanged. Warm
+reads retain the existing owner's published schema facts; an untracked
+`user_version`-only edit to an admitted store is not detected as a fresh
+schema admission. No WAL read mark survives an operation, so the owner's checkpoint still resets the WAL while
+the reader is idle. The kernel meters source queries, lookahead and decoded
+UTF-8 bytes, with limits of 50 returned records, 1,000 scanned entries and 16 MiB.
+This does not yet qualify all schema/quarantine admission SQL against that
+aggregate meter, or prove a post-snapshot archive/rewrite publication fence.
+Those remain required before a public facade can promise the full contract.
+The operation has no production caller or released SDK export.
