@@ -264,6 +264,9 @@ export async function getActiveMemorySearchManagerCore(params: {
   return {
     ...result,
     manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
+    ...(owner.runtime.searchForCli
+      ? { searchForCli: owner.runtime.searchForCli.bind(owner.runtime) }
+      : {}),
     searchRuntimeRegistered: true,
   };
 }

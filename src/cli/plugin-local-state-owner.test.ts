@@ -26,6 +26,7 @@ import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
+import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 
 const fixture = vi.hoisted(() => ({
@@ -69,7 +70,14 @@ vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => {
   };
 });
 
-// Synthetic command families retain the caller shapes without loading bundled plugins.
+const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: object) => {
+    searchForCli: NonNullable<MemoryPluginRuntime["searchForCli"]>;
+  };
+}>("../../extensions/memory-core/runtime-api.js");
+const searchForCli = createCliMemoryRuntime({}).searchForCli;
+
+// Synthetic command families retain the caller shapes.
 // Admission, physical custody, transport dispatch, and response revocation stay real.
 function registerSyntheticPlugin(api: OpenClawPluginApi) {
   const registerOwnedMethod = (
@@ -358,6 +366,7 @@ beforeEach(() => {
       status: () => ({ backend: "builtin", provider: "none", dirty: false, workspaceDir: root }),
       close: fixture.searchClose,
     },
+    searchForCli,
   });
   fixture.status.mockReset();
   fixture.bootstrap.mockReset();

@@ -323,7 +323,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const isUnlistedWildcardCliModel = createUnlistedClaudeCliWildcardCheck({
     cfg: params.cfg,
     agentId: params.agentId,
-    entries: () => snapshot.entries,
+    outcomes: () => snapshot.providerOutcomes,
   });
   const evaluateStoredEntry = (
     entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,

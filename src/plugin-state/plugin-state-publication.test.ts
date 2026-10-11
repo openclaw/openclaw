@@ -22,7 +22,10 @@ import {
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 import type { PluginStateRow } from "./plugin-state-store.kernel.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+import {
+  clearPluginStateStoreForTests,
+  seedPluginStateEntriesForTests,
+} from "./plugin-state-store.test-helpers.js";
 import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
@@ -51,6 +54,25 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("publishes fixture cleanup to warm observations and ownership reads", async () => {
+    await withOpenClawTestState({ label: "plugin-state-clear-publication" }, async ({ env }) => {
+      const store = createPluginStateKeyedStore("receipt-test", {
+        namespace: "bindings",
+        maxEntries: 10,
+        env,
+      });
+      await store.register("session", { model: "first" });
+      const captured = await capturePluginStateReadDependencies(() => store.observe("session"));
+      try {
+        clearPluginStateStoreForTests();
+        expect(captured.isCurrent()).toBe(false);
+        expect((await store.observe("session")).value).toBeUndefined();
+      } finally {
+        captured.release();
+      }
+    });
+  });
+
   it.each(["lookup", "observe"] as const)(
     "keeps a prepared %s current only until its exact dependency commits",
     async (method) => {

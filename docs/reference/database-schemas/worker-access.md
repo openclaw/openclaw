@@ -66,6 +66,9 @@ in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
 from SQLite's native connection descriptor.
 
+Synchronous admission exchanges carry the requested physical database's facts and
+custody, including a retained file whose original pathname now points elsewhere.
+
 Quarantine guards retain their indexed durable row lookup by target pathname.
 A separate inspection process can admit a file before the Gateway's verifier
 confirms corruption and records quarantine. The inspecting process must observe
@@ -485,7 +488,9 @@ unknown outcome nor a failed worker request selects a native fallback.
 Conversation binding V2 adapters require awaited operations and coherent inspection
 snapshots with current-source assertions. Expiring lookup/list operations remain
 writer operations. The account manager uses the same current-binding worker and
-receipt owner; external adapters certify their own source.
+receipt owner; external adapters certify their own source. Bundled Matrix activity
+writes update the affected key, publish only after commit, and retain their existing
+activity coalescing policy using acknowledged facts.
 
 Native harness ownership prepares through the awaited harness hook. Descriptive
 session rows retain exact keyed-state read dependencies through acceptance and
@@ -531,9 +536,10 @@ The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;
 expiry still turns a row into absence, and callers receive freshly decoded values.
 Pending writes suspend cache reads, and unknown settlement drops cached facts.
-Comparisons carry the current cached image to the writer, whose conditional
-update or delete matches its stored bytes and timestamps. A changed row returns
-a conflict; insertion still checks current absence and capacity in the write
+Comparisons reread the authoritative row inside the write transaction, including
+no-op comparisons. Native binding settlement invalidates its affected observation
+keys because its compound receipt does not carry plugin-state postimages. A changed
+row returns a conflict; insertion checks current absence and capacity in the write
 transaction. Same-value sets retain their age and TTL refresh behavior. This
 changes no stored format, schema version, update migration, or SDK signature.
 
@@ -958,6 +964,11 @@ debt, as do synchronous result compatibility readers and pending-result guards.
 These changes require no schema, retention, durability, or update migration.
 
 Workspace publication and move/reclaim retain synchronous final-authority guards.
+Independent lease heartbeats for the same physical state database share one
+worker and native connection. Each lease retains its own expiry, current-owner
+checks, requests, and cleanup. Closing one lease leaves its siblings running;
+closing the last joins native worker exit. Renewal remains independent of the
+Gateway event loop, including during concurrent worktree creation.
 Workspace reservation keeps its existing lease acquisition order and native
 preparation path. Each authority check reads placement and pending-result or
 reconciliation presence in one indexed statement, including orphan results when
