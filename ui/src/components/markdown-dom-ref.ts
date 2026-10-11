@@ -14,7 +14,10 @@ export function createMarkdownRef(
     connected?: boolean;
   },
 ): (element: ParentNode) => void {
-  const [owner, setOwner] = createSignal<MarkdownDomReconciler>();
+  // Fragment consumers attach during construction; ordinary element refs run unowned.
+  const [owner, setOwner] = createSignal<MarkdownDomReconciler | undefined>(undefined, {
+    ownedWrite: true,
+  });
   let current: MarkdownDomReconciler | undefined;
   createEffect(
     () => [owner(), read()] as const,

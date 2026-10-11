@@ -101,6 +101,9 @@ openclaw-mermaid > pre {
   font: 12px/1.6 var(--mono);
   tab-size: 2;
 }
+openclaw-mermaid > pre > code {
+  font: inherit;
+}
 openclaw-mermaid > .status {
   margin: 0;
   padding: 36px 16px 12px;

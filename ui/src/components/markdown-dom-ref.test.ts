@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { toStreamingMarkdownParts } from "./markdown.ts";
@@ -11,18 +12,18 @@ describe("Solid Markdown island", () => {
     ["code fence", "```text\nA growing block", "pre"],
   ])("retains every node across 12 %s updates", (_label, initial, selector) => {
     const [source, setSource] = createSignal(initial);
-    const target = document.createElement("div");
-    const view = renderSolidRef(
-      () =>
-        createMarkdownRef(() => ({
-          content: {
-            messageKey: "stream",
-            source: source(),
-            parts: toStreamingMarkdownParts(source()),
-          },
-        })),
-      { targetElement: target },
-    );
+    const view = mountSolid(() => {
+      const fragment = document.createDocumentFragment();
+      createMarkdownRef(() => ({
+        content: {
+          messageKey: "stream",
+          source: source(),
+          parts: toStreamingMarkdownParts(source()),
+        },
+      }))(fragment);
+      return Array.from(fragment.childNodes);
+    });
+    const target = view.container;
     const retained = target.querySelector(selector);
     expect(retained).not.toBeNull();
     const observer = new MutationObserver(() => {});
