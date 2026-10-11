@@ -8,9 +8,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -168,6 +170,15 @@ describe("Reef conversation directory", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
+      createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
+        authority ?? { assertCurrent() {} },
+      );
     setReefRuntime(runtime);
     const identity = generateIdentity();
     await openReefTrustStore(
@@ -267,6 +278,15 @@ describe("Reef gateway account ownership", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
+      createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
+        authority ?? { assertCurrent() {} },
+      );
     runtime.state.resolveStateDir = () => stateDir;
     await generateAndStoreKeys(runtime);
     await finalizeReefIdentityBinding(

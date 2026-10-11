@@ -1,16 +1,74 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Model } from "../llm/types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
+import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
 import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
+  copyPreparedModelFullCatalogAuth,
   getPreparedModelFullCatalogAuth,
   hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
+import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelCatalogInventory } from "./prepared-model-runtime.types.js";
+
+function catalogPublicationContent(catalog: ModelCatalogSnapshot) {
+  const { pendingProviders: _pending, refreshFailed: _failed, ...inventory } = catalog;
+  // Scoped merges move providers, not their model preference order. Compare a grouped view
+  // without changing the published order used by model-selection fallbacks.
+  const byProvider = <T extends { provider: string }>(rows: readonly T[] = []) =>
+    rows.toSorted((left, right) => left.provider.localeCompare(right.provider));
+  const byRuntime = <T extends { provider: string }>(
+    scopes: Readonly<Record<string, readonly T[]>> | undefined,
+  ) =>
+    scopes &&
+    Object.fromEntries(
+      Object.entries(scopes).map(([runtime, rows]) => [runtime, byProvider(rows)]),
+    );
+  const auth = getPreparedModelFullCatalogAuth(catalog);
+  return {
+    ...inventory,
+    entries: byProvider(catalog.entries),
+    routeVariants: byProvider(catalog.routeVariants),
+    staticEntries: byProvider(catalog.staticEntries),
+    providerOutcomes: byProvider(catalog.providerOutcomes),
+    acceptedDiscoveryOrigins: catalog.acceptedDiscoveryOrigins?.toSorted(
+      (left, right) =>
+        left.provider.localeCompare(right.provider) ||
+        (left.profileId ?? "").localeCompare(right.profileId ?? ""),
+    ),
+    nativeProviderOutcomes: byRuntime(catalog.nativeProviderOutcomes),
+    nativeHostRows: byRuntime(catalog.nativeHostRows),
+    authoritative: catalog.authoritative !== false,
+    full: isPreparedModelCatalogFull(catalog),
+    // Workers can observe auth changes before the parent gets a store publication.
+    auth: auth && {
+      modes: auth.authModes,
+      labels: auth.providerAuthLabels,
+      metadata: runtimeAuthMetadataState(auth.authStore),
+    },
+  };
+}
+
+/** Keep inventory identity stable across renewals while adopting the latest private auth. */
+export function retainPreparedModelCatalogPublication(
+  catalog: ModelCatalogSnapshot | undefined,
+  previous: ModelCatalogSnapshot | undefined,
+): ModelCatalogSnapshot | undefined {
+  if (
+    !catalog ||
+    !previous ||
+    !isDeepStrictEqual(catalogPublicationContent(catalog), catalogPublicationContent(previous))
+  ) {
+    return catalog;
+  }
+  copyPreparedModelFullCatalogAuth(catalog, previous);
+  return previous;
+}
 
 export function mergePreparedNativeCatalog(
   native: ModelCatalogSnapshot,
@@ -282,8 +340,22 @@ export function prepareModelCatalogPublication(
     ).toSorted(compareModelCatalogEntries);
   // Route dedupe follows another round of normalization callbacks; acquire its policy afresh.
   const routeKeyOf = createModelCatalogIdentityKeyResolver();
+  const providerOutcomes: NonNullable<ModelCatalogSnapshot["providerOutcomes"]>[number][] = [];
+  for (const outcome of catalog.providerOutcomes ?? []) {
+    const accepted = previous?.providerOutcomes?.find(
+      (candidate) => candidate.provider === outcome.provider,
+    );
+    providerOutcomes.push(
+      outcome.status !== "ready" &&
+        retainedProviders.has(normalizeProvider(outcome.provider)) &&
+        accepted?.listedModelIds !== undefined
+        ? { ...outcome, listedModelIds: accepted.listedModelIds }
+        : outcome,
+    );
+  }
   const published: ModelCatalogSnapshot = {
     ...catalog,
+    providerOutcomes,
     entries: retain(catalog.entries, previous?.entries ?? []),
     routeVariants: retain(catalog.routeVariants, previous?.routeVariants ?? [], (entry) =>
       JSON.stringify([routeKeyOf(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),
