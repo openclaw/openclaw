@@ -3,8 +3,8 @@
 import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import {
   clickPanelButton,
@@ -12,7 +12,9 @@ import {
   createGatewayClient,
   createPanel,
   desktopEnvironment,
-  settleTasks,
+  mountPanel,
+  unmountPanel,
+  updatePanel,
 } from "./desktop-panel.test-support.ts";
 
 const observed: DesktopObserveResult = {
@@ -43,17 +45,19 @@ async function openPanel(
   connect: DesktopClient["connect"],
 ) {
   const panel = createPanel();
-  panel.client = createGatewayClient(request).client;
-  panel.available = true;
-  panel.embedded = true;
-  panel.presented = true;
-  panel.desktopClientFactory = () => ({ connect });
-  document.body.append(panel);
-  await waitForFast(() =>
+  updatePanel(panel, {
+    client: createGatewayClient(request).client,
+    available: true,
+    embedded: true,
+    presented: true,
+    desktopClientFactory: () => ({ connect }),
+  });
+  mountPanel(panel);
+  await waitForSolid(() =>
     expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull(),
   );
   clickPanelButton(panel);
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1),
   );
   return panel;
@@ -77,19 +81,21 @@ describe("Desktop observe abandonment", () => {
       const panel = await openPanel(request, connect);
       const originalClient = panel.client;
       if (change === "hidden") {
-        panel.presented = false;
+        updatePanel(panel, { presented: false });
       } else if (change === "removed") {
-        panel.remove();
+        unmountPanel(panel);
       } else {
-        panel.client = createGatewayClient(replacementRequest).client;
+        updatePanel(panel, { client: createGatewayClient(replacementRequest).client });
       }
       await panel.updateComplete;
       observation.resolve(observed);
-      await settleTasks();
+      await panel.updateComplete;
 
-      expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
-        ["desktop.release", { wsPath: observed.wsPath }],
-      ]);
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
+          ["desktop.release", { wsPath: observed.wsPath }],
+        ]),
+      );
       expect(connect).not.toHaveBeenCalled();
       expect(replacementRequest.mock.calls.some(([method]) => method === "desktop.release")).toBe(
         false,
@@ -120,38 +126,41 @@ describe("Desktop observe abandonment", () => {
       const panel = await openPanel(request, connect);
       try {
         if (stage === "credentials") {
-          await waitForFast(() =>
+          await waitForSolid(() =>
             expect(panel.renderRoot.querySelector(".desktop-credentials")).not.toBeNull(),
           );
         } else {
-          await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+          await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
           if (stage === "returned") {
             result.resolve(handle);
+            await connect.mock.results[0]!.value;
           }
-          await settleTasks();
+          await panel.updateComplete;
         }
         expect(request.mock.calls.some(([method]) => method === "desktop.release")).toBe(false);
-        panel.presented = false;
+        updatePanel(panel, { presented: false });
         await panel.updateComplete;
         if (stage === "authenticated") {
           expect(handle.disconnect).not.toHaveBeenCalled();
-          panel.presented = true;
+          updatePanel(panel, { presented: true });
           await panel.updateComplete;
-          await settleTasks();
           expect(connect).toHaveBeenCalledOnce();
         } else {
-          await settleTasks();
+          await panel.updateComplete;
           expect(request.mock.calls.filter(([method]) => method === "desktop.release")).toEqual([
             ["desktop.release", { wsPath: observed.wsPath }],
           ]);
           result.resolve(handle);
-          await settleTasks();
+          if (stage !== "credentials") {
+            await connect.mock.results[0]!.value;
+          }
+          await panel.updateComplete;
           if (stage !== "credentials") {
             expect(handle.disconnect).toHaveBeenCalledOnce();
           }
         }
-        panel.remove();
-        await settleTasks();
+        unmountPanel(panel);
+        await panel.updateComplete;
         if (stage === "authenticated") {
           expect(handle.disconnect).toHaveBeenCalledOnce();
           expect(request.mock.calls.some(([method]) => method === "desktop.release")).toBe(false);
@@ -165,8 +174,8 @@ describe("Desktop observe abandonment", () => {
         }
       } finally {
         result.resolve(handle);
-        panel.remove();
-        await settleTasks();
+        unmountPanel(panel);
+        await panel.updateComplete;
       }
     },
   );

@@ -102,9 +102,20 @@ export type ParentOwner = {
   onDirectChildAccepted?: () => void;
 };
 
+/** A native child whose completion still resumes its requester, in the host's pending-child shape. */
+export type NativePendingChild = {
+  runId: string;
+  childSessionKey: string;
+  label?: string;
+  state: "running" | "completing";
+  wakeArmed: false;
+};
+
 export type ParentRegistrationHandle = {
   ready: Promise<void>;
   bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
+  /** Unsettled children of this requester's parent threads, including earlier turns'. */
+  listPendingChildren: () => NativePendingChild[];
   unregister: () => Promise<void>;
 };
 

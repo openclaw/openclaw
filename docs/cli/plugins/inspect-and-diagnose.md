@@ -24,6 +24,8 @@ Default human inspection uses `enabled`, `disabled`, or `error` status labels,
 matching `plugins list`. It describes the metadata snapshot; it does not claim
 that a plugin module was imported. With `--runtime`, successful runtime inspection
 uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
+Known-incompatible plugins remain visible with their repair guidance. Their
+diagnostics do not prevent inspection of other plugins, including with `--runtime`.
 
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 

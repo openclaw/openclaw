@@ -73,7 +73,10 @@ export function createWorkerPlacementDispatchStartup(options: {
   failure: PlacementFailureActions;
   runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
   runActivationBarrier: WorkerActivationBarrier;
-  onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+  onActivated?: (
+    request: WorkerPlacementDispatchRequest,
+    placement: WorkerActiveDispatchPlacement,
+  ) => void;
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
@@ -471,7 +474,7 @@ export function createWorkerPlacementDispatchStartup(options: {
             activate,
           });
       try {
-        options.onActivated?.(request);
+        options.onActivated?.(request, activePlacement);
       } catch {
         // Maintenance scheduling cannot overturn a durable placement activation.
       }

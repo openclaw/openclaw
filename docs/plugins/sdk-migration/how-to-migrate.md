@@ -269,11 +269,18 @@ behavior.
 
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
-`retireSessionPlacementAsync`. Await their results before using placement facts,
+Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,
+`listAsync`, `listForReconcileAsync`, and `retireSessionPlacementAsync`.
+Await their results before using placement facts,
 starting dependent work, or releasing request resources. Their synchronous
 counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
 compatibility methods until the next Plugin SDK major.
+
+Placement activation callbacks receive the committed active placement directly.
+Use that result for maintenance scheduling instead of reading it again. Native
+readers remain available for final synchronous execution or disclosure guards;
+prepared placement facts do not replace those checks. Legacy placement reads
+warn once per plugin and capability family.
 
 Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
 state-directory lock, before admitting turns. The placement worker clears stale
