@@ -1,5 +1,8 @@
 // @vitest-environment node
 
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -14,6 +17,16 @@ const shippedLocales = new Map(
       async (locale) => [locale, await loadLazyLocaleTranslation(locale)] as const,
     ),
   ),
+);
+const memoryDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.i18n");
+// Swedish is registered before the post-merge locale refresh creates its memory.
+const sourceOnlyLocales = new Map(
+  [...shippedLocales].filter(
+    ([locale]) => locale === "sv" && !existsSync(path.join(memoryDir, `${locale}.tm.jsonl`)),
+  ),
+);
+const translatedLocales = new Map(
+  [...shippedLocales].filter(([locale]) => !sourceOnlyLocales.has(locale)),
 );
 let translateImportCase = 0;
 
@@ -157,6 +170,19 @@ describe("i18n", () => {
     }
   });
 
+  it("uses English source copy until a new locale has generated memory", () => {
+    for (const [locale, value] of sourceOnlyLocales) {
+      expect(readTranslationString(value, "login.failure.rawError"), locale).toBe(
+        readTranslationString(registerLoginEnglish.catalog, "login.failure.rawError"),
+      );
+      for (const key of ["devices.pairing.button", "chat.composer.addAttachment"]) {
+        expect(readTranslationString(value, key), `${locale}:${key}`).toBe(
+          readTranslationString(en, key),
+        );
+      }
+    }
+  });
+
   it("keeps newly exposed locales from shipping as English fallback bundles", () => {
     for (const locale of ["ar", "hi", "fa", "it", "nl", "vi"] as const) {
       expect(readTranslationString(shippedLocales.get(locale), "common.health"), locale).not.toBe(
@@ -168,7 +194,7 @@ describe("i18n", () => {
   it("keeps login failure guidance localized in shipped locale bundles", () => {
     const checkedKeys = flatten(registerLoginEnglish.catalog.login.failure, "login.failure");
     expect(checkedKeys.length).toBeGreaterThan(0);
-    for (const [locale, value] of shippedLocales) {
+    for (const [locale, value] of translatedLocales) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
           readTranslationString(registerLoginEnglish.catalog, key),
@@ -182,7 +208,7 @@ describe("i18n", () => {
       (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
     );
 
-    for (const [locale, value] of shippedLocales) {
+    for (const [locale, value] of translatedLocales) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
           readTranslationString(en, key),
@@ -194,7 +220,7 @@ describe("i18n", () => {
   it("keeps the chat composer attachment action localized in shipped locale bundles", () => {
     const key = "chat.composer.addAttachment";
 
-    for (const [locale, value] of shippedLocales) {
+    for (const [locale, value] of translatedLocales) {
       expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
         readTranslationString(en, key),
       );
