@@ -23,6 +23,7 @@ import {
   type SqliteWorkerStore,
   runQueuedStoreWrite,
   readOpenClawAgentDatabaseIdentity,
+  readSqliteDatabaseWriteTokenForPath,
   supportsOpenClawAgentDatabaseExecution,
   withOpenClawAgentDatabaseWrite,
   type StoreWriterQueue,
@@ -48,6 +49,7 @@ import type {
 } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
 import { publishMemoryEmbeddingCache, publishMemorySource } from "./manager-publication.js";
+import { readMemoryDatabaseFacts, type MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -89,6 +91,8 @@ export class MemoryIndexDatabase {
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
   private schemaAdmission?: Promise<void>;
+  private connectionPragmas?: MemoryPublicationConnection["pragmas"];
+  private factsToken?: string;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -135,11 +139,15 @@ export class MemoryIndexDatabase {
         (!database.fts.enabled || params.maintenanceSource.fts.available)
       ) {
         Object.assign(database.fts, params.maintenanceSource.fts);
+        database.installFacts(params.maintenanceSource.facts);
       } else if (params.readOnly) {
         database.fts.available =
           database.hasIndex &&
           database.fts.enabled &&
           memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
+        if (database.hasIndex) {
+          database.installFacts(readMemoryDatabaseFacts(database.db));
+        }
       } else {
         await database.admitSchema(params.schema);
         // Sync must acquire its own retained executor for accepted shutdown work.
@@ -165,6 +173,7 @@ export class MemoryIndexDatabase {
         identity: readMemoryShadowIdentity(filename),
         pragmas: readConnectionPragmas(db, "Invalid memory shadow connection policy"),
       };
+      database.connectionPragmas = database.shadow.pragmas;
       return database;
     } catch (error) {
       closeMemoryDatabase(db);
@@ -196,7 +205,13 @@ export class MemoryIndexDatabase {
     loadError?: string;
   } = { enabled: false, available: false };
   vectorReady: Promise<boolean> | null = null;
-  lastMetaSerialized: string | null = null;
+  facts: MemoryDatabaseFacts = {
+    meta: null,
+    serialized: null,
+    revision: 0,
+    hasIndexedChunks: false,
+    hasSemanticChunks: false,
+  };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
@@ -207,6 +222,47 @@ export class MemoryIndexDatabase {
     readonly writeOptions?: Parameters<typeof withOpenClawAgentDatabaseWrite>[0],
     readonly hasIndex = true,
   ) {}
+
+  private writeToken(): string | undefined {
+    const filename = this.shadow?.path ?? this.writeOptions?.path;
+    return filename ? readSqliteDatabaseWriteTokenForPath(filename) : undefined;
+  }
+
+  private installFacts(facts: MemoryDatabaseFacts, token?: string): void {
+    this.facts = facts;
+    this.factsToken = token;
+  }
+
+  async refreshFacts(): Promise<void> {
+    if (!this.hasIndex || this.readOnly) {
+      return;
+    }
+    const token = this.writeToken();
+    if (token !== undefined && token === this.factsToken) {
+      return;
+    }
+    this.installFacts(
+      await this.executePublication({ type: "index.facts", input: undefined }, () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before reading index facts");
+        }
+      }),
+      token,
+    );
+  }
+
+  async writeMetadata(meta: NonNullable<MemoryDatabaseFacts["meta"]>): Promise<void> {
+    if (this.facts.serialized === JSON.stringify(meta)) {
+      return;
+    }
+    await this.retryPublication(() =>
+      this.executePublication({ type: "index.writeMetadata", input: meta }, () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before writing index metadata");
+        }
+      }),
+    );
+  }
 
   get isShadow(): boolean {
     return this.shadow !== undefined;
@@ -291,8 +347,10 @@ export class MemoryIndexDatabase {
       if (!filename || this.readOnly || this.closed) {
         throw new Error("Memory publication requires its live file owner");
       }
-      const pragmas =
-        this.shadow?.pragmas ?? readConnectionPragmas(this.db, "Invalid memory connection policy");
+      const pragmas = (this.connectionPragmas ??= readConnectionPragmas(
+        this.db,
+        "Invalid memory connection policy",
+      ));
       const worker = {
         moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
         input: {
@@ -404,6 +462,9 @@ export class MemoryIndexDatabase {
     while (await prepare()) {
       const result = await run();
       if (result.ok) {
+        if (result.facts) {
+          this.installFacts(result.facts, result.writeToken);
+        }
         return result.value;
       }
       const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;

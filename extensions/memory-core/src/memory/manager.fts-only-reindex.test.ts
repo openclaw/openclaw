@@ -199,11 +199,14 @@ describe("memory manager FTS-only reindex", () => {
     }
   }
 
-  function writeExistingMeta(memoryManager: MemoryIndexManager, model: string): void {
+  async function writeExistingMeta(
+    memoryManager: MemoryIndexManager,
+    model: string,
+  ): Promise<void> {
     const metaWriter = memoryManager as unknown as {
-      writeMeta(meta: MemoryIndexMeta): void;
+      writeMeta(meta: MemoryIndexMeta): Promise<void>;
     };
-    metaWriter.writeMeta({
+    await metaWriter.writeMeta({
       model,
       provider: "openai",
       chunkTokens: 600,
@@ -271,7 +274,10 @@ describe("memory manager FTS-only reindex", () => {
       providerEmbeddingError = new Error("embedding request failed during bootstrap");
       const memoryManager = await createManager();
       const metadata = vi
-        .spyOn(memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): void }, "writeMeta")
+        .spyOn(
+          memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): Promise<void> },
+          "writeMeta",
+        )
         .mockImplementationOnce(() => {
           throw new Error("keyword publication failed");
         });
@@ -598,7 +604,7 @@ describe("memory manager FTS-only reindex", () => {
 
   it("aborts instead of downgrading an existing semantic index to FTS-only", async () => {
     const memoryManager = await createManager();
-    writeExistingMeta(memoryManager, "mock-embed");
+    await writeExistingMeta(memoryManager, "mock-embed");
 
     await expect(memoryManager.sync({ force: true })).rejects.toThrow(
       "Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: mock-embed).",
