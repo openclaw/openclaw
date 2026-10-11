@@ -497,6 +497,7 @@ export const gatewayServerSerialTestFiles = [
 export const gatewayServerBackedHttpTestFiles = [
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.admission.test.ts",
   "src/gateway/openai-http.test.ts",
   "src/gateway/openresponses-http.test.ts",
   "src/gateway/probe.auth.integration.test.ts",
@@ -590,6 +591,7 @@ export const gatewayCoreTestExclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
   "src/gateway/**/*server*.test.ts",
   "src/gateway/gateway.test.ts",
+  "src/gateway/openai-http.admission.test.ts",
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",

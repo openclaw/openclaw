@@ -138,7 +138,7 @@ type GatewayRequestContextRuntime = Pick<
     >;
     sessionMessageSubscribers: Pick<
       GatewayCoreRuntime["sessionMessageSubscribers"],
-      "unsubscribeAll"
+      "get" | "unsubscribeAll"
     >;
     toolEventRecipients: Pick<
       GatewayCoreRuntime["toolEventRecipients"],
@@ -553,6 +553,7 @@ export function createGatewayRequestContext(
       runtimeState.sessionViewerPresence?.unsubscribe(connId);
     },
     getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+    getSessionMessageSubscriberConnIds: sessionMessageSubscribers.get,
     registerToolEventRecipient: runtime.toolEventRecipients.add,
     dedupe: runtime.dedupe,
     wizardSessions: runtime.wizardSessions,
