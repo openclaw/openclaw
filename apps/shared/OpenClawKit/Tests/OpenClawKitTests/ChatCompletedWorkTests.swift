@@ -5,6 +5,19 @@ import Testing
 
 @Suite("Completed transcript work")
 struct ChatCompletedWorkTests {
+    @Test func `paging completed work adds a disclosure without changing the message anchor`() throws {
+        let answer = Self.message("assistant", "Reading answer", at: 3000, phase: "final_answer")
+        let before = ChatTranscriptPresentation(rows: Self.collapse([answer]), metadata: [:])
+        let commentary = Self.message("assistant", "Checking", at: 1000, phase: "commentary")
+        let tool = Self.message("toolResult", "Checked", at: 2000)
+        let after = ChatTranscriptPresentation(rows: Self.collapse([commentary, tool, answer]), metadata: [:])
+        #expect(before.historyAnchorID == answer.id)
+        #expect(after.historyAnchorID == before.historyAnchorID)
+        let work = try #require(Self.work(in: after.rows).first)
+        #expect(after.rows.map(\.id) == [work.id, answer.id])
+        #expect(work.messages.map(\.id) == [commentary.id, tool.id])
+    }
+
     @Test func `spoken rendition stays visible when a consult answer is persisted later`() throws {
         let voice = try Self.decode(#"""
         {"role":"assistant","content":"The latest build is on your phone.","timestamp":1000,

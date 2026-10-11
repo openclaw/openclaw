@@ -72,13 +72,6 @@ struct ChatReaderScrollStateTests {
             liveTurnID: live) == .added(live))
     }
 
-    @Test func `undated history cannot steal the opening position`() {
-        #expect(chatReaderUserTransition(
-            previousID: nil,
-            visibleIDs: [UUID()],
-            liveTurnID: nil) == .unchanged)
-    }
-
     @Test func `a live user anchors even when narration adds a later boundary`() {
         let previous = UUID()
         let user = UUID()

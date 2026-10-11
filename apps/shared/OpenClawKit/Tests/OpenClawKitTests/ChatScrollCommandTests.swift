@@ -6,6 +6,43 @@ import Testing
 struct ChatScrollCommandTests {
     private let session = OpenClawChatSessionTarget(sessionKey: "main", agentID: "test")
 
+    @Test func `an empty page retains the reading offset for the next page`() {
+        let geometry = ChatHistoryScrollGeometry()
+        let rowID = UUID()
+        geometry.settledOffset = 300
+        geometry.row = ChatScrollRowGeometry(targetID: rowID, preservationID: nil, contentMinY: 400)
+        let first = geometry.preserve(rowID)
+        let next = geometry.preserve(rowID)
+        #expect(first.0 == rowID)
+        #expect(first.1 == -100)
+        #expect(next.0 == rowID)
+        #expect(next.1 == -100)
+    }
+
+    @Test func `a replaced history window discards its stale paging geometry`() {
+        let geometry = ChatHistoryScrollGeometry()
+        let staleID = UUID()
+        geometry.settledOffset = 300
+        geometry.row = ChatScrollRowGeometry(targetID: staleID, preservationID: nil, contentMinY: 400)
+        _ = geometry.preserve(staleID)
+        let replacement = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Replacement")],
+            timestamp: nil)
+        let presentation = ChatTranscriptPresentation(rows: [.message(replacement)], metadata: [:])
+        let readingRow = geometry.validatedRow(in: presentation.rows)
+        #expect(readingRow == nil)
+        #expect(geometry.row == nil)
+        #expect(geometry.pagingRowID == nil)
+        let fallback = geometry.preserve(readingRow?.targetID ?? presentation.historyAnchorID)
+        #expect(fallback.0 == replacement.id)
+        #expect(fallback.1 == nil)
+        #expect(geometry.pagingRowID == replacement.id)
+        geometry.row = ChatScrollRowGeometry(targetID: replacement.id, preservationID: nil, contentMinY: 350)
+        #expect(geometry.validatedRow(in: presentation.rows)?.targetID == replacement.id)
+        #expect(geometry.preserve(replacement.id).1 == -50)
+    }
+
     @Test func `a removed history row cannot arm deferred preservation`() throws {
         var command = ChatScrollCommand()
         command.enqueue(to: UUID(), anchor: .top, sessionTarget: self.session, offsetFromRow: -60)

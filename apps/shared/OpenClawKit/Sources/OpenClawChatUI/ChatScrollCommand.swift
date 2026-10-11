@@ -103,11 +103,21 @@ final class ChatHistoryScrollGeometry {
     var nativeViewport: ChatNativePrependViewport?
     #endif
 
+    func validatedRow(in rows: [ChatTranscriptRow]) -> ChatScrollRowGeometry? {
+        if let row = self.row, !rows.contains(where: { $0.id == row.targetID }) {
+            self.row = nil
+        }
+        if let pagingRowID = self.pagingRowID, !rows.contains(where: { $0.id == pagingRowID }) {
+            self.pagingRowID = nil
+        }
+        return self.row
+    }
+
     func preserve(_ id: UUID?) -> (UUID?, CGFloat?) {
         let offset = self.offsetFromRow(id)
         self.preservedRowID = id
         self.pagingRowID = id
-        self.row = nil
+        // An empty projected page may not emit a new row sample before the next request.
         return (id, offset)
     }
 
@@ -136,6 +146,9 @@ struct ChatScrollHistoryRowModifier: ViewModifier {
         } action: { row in
             guard let row else { return }
             self.geometry.row = row
+            #if os(iOS)
+            self.geometry.nativeViewport?.update(row: row)
+            #endif
             if row.preservationID != nil { self.preservationGeometry = row }
         }
     }
