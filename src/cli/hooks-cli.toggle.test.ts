@@ -240,8 +240,7 @@ describe("hooks CLI metadata config keys", () => {
       mocks.foreignOwner = true;
       await expect(
         createHooksProgram().parseAsync(["hooks", command, "display-name"], { from: "user" }),
-      ).rejects.toThrow("__exit__:1");
-      expect(capture.runtimeErrors.at(-1)).toContain("stop the Gateway");
+      ).rejects.toThrow("stop the Gateway");
       expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
   );
