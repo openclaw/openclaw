@@ -182,7 +182,12 @@ describe("startCodexAttemptThread", () => {
     });
 
     await answerInitialize(harness);
-    await answerPreparedApiKeyLogin(harness);
+    const login = await waitForRequest(harness, "account/login/start");
+    expect(login.params).toEqual({
+      type: "apiKey",
+      apiKey: "prepared-platform-key",
+    });
+    harness.send({ id: login.id, result: { type: "apiKey" } });
     const threadStart = await waitForThreadStart(harness);
     harness.send({ id: threadStart.id, result: threadStartResult() });
     const result = await run;
