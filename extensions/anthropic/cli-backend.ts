@@ -46,7 +46,7 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "--allowedTools",
   "mcp__openclaw__*",
   "--disallowedTools",
-  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+  "ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor",
 ] as const;
 
 // Only equivalent bare tools confer general capabilities; Glob and notebook-cell
