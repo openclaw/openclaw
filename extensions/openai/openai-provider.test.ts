@@ -1859,6 +1859,7 @@ describe("buildOpenAIProvider", () => {
       applyAssistantFirstOrderingFix: false,
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
+      duplicateToolCallIdStyle: "openai",
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
     });

@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 
 const mocks = vi.hoisted(() => ({
@@ -65,6 +66,7 @@ function createFixture() {
         agentSession: { activeSession: { agent, messages } },
         boundary: {},
         sessionManager: {},
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         transcriptPolicy: {},
         transport: {},
         state: { systemPromptText: "System prompt" },

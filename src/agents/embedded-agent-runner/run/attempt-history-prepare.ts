@@ -15,6 +15,7 @@ import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-r
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
+import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
@@ -71,7 +72,10 @@ export async function prepareEmbeddedAttemptHistory(
     });
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
-      messages: activeSession.messages,
+      messages: bindToolResultPromptProjectionKeys(
+        activeSession.messages,
+        input.prepared.sessionRuntime.toolResultPromptProjectionState,
+      ),
       allowedToolNames: replayAllowedToolNames,
       sessionManager,
     });
