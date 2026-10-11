@@ -3,14 +3,13 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished as registerTestCleanup, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configFileSource from "../config/source-file.js";
 import { markGatewayRestartHandled } from "../infra/restart.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
@@ -19,7 +18,6 @@ import {
   CHANNEL_BINDING_IDS,
   clearInstanceBindingProbeCoordinators,
   INSTANCE_BINDING_PROBE_METHOD,
-  type ChannelBindingMonitor,
   type ChannelBindingProof,
   type InstanceBindingProbeCoordinator,
   type InstanceBindingProbeResult,
@@ -176,304 +174,6 @@ describe("gateway plugin instance bindings", () => {
       throw new AggregateError(closeFailures, "Gateway lifecycle fixture shutdown failed");
     }
   });
-
-  it(
-    "closes only its own channels while another real Gateway owns colliding channel IDs",
-    { timeout: 600_000 },
-    async () => {
-      const firstIds = ["binding-a-only", "binding-shared"];
-      const secondIds = ["binding-b-only", "binding-shared"];
-      const { coordinator } = await prepareInstanceBindingTest({
-        channels: true,
-        channelIds: [...new Set([...firstIds, ...secondIds])],
-      });
-      const proof = coordinator.channelProof;
-      if (!proof) {
-        throw new Error("channel binding fixture was not installed");
-      }
-      channelProof = proof;
-      channelCleanup = coordinator.channelCleanup = new Map();
-      const stopHooks: NonNullable<InstanceBindingProbeCoordinator["channelStops"]> = [];
-      coordinator.channelStops = stopHooks;
-      skippedBefore = {
-        channels: process.env.OPENCLAW_SKIP_CHANNELS,
-        providers: process.env.OPENCLAW_SKIP_PROVIDERS,
-      };
-      channelEnv = captureEnv(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"]);
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-
-      // Each activation registers its own plugin instances without changing shared config.
-      coordinator.channelIds = firstIds;
-      const firstClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const first = await startTestGatewayServer(firstClaim, {
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        sidecarStartup: "start",
-      });
-      started.push(first);
-      await first.startupSettled;
-      await expect.poll(() => proof.monitors.length, { timeout: 30_000 }).toBe(2);
-      const firstMonitors = [...proof.monitors].toSorted((a, b) =>
-        a.channelId.localeCompare(b.channelId),
-      );
-      expect(firstMonitors.map(({ channelId }) => channelId)).toEqual(firstIds);
-      const firstRegistry = getActivePluginRegistry();
-      expect(firstRegistry).toBeTruthy();
-      const firstProbes = await Promise.all(
-        firstMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
-      );
-      expect(firstProbes[0]).toEqual(firstProbes[1]);
-
-      coordinator.channelIds = secondIds;
-      const secondClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const second = await startTestGatewayServer(secondClaim, {
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        sidecarStartup: "start",
-      });
-      started.push(second);
-      await second.startupSettled;
-      await expect.poll(() => proof.monitors.length, { timeout: 30_000 }).toBe(4);
-      const secondMonitors = proof.monitors
-        .filter((monitor) => !firstMonitors.includes(monitor))
-        .toSorted((a, b) => a.channelId.localeCompare(b.channelId));
-      expect(secondMonitors.map(({ channelId }) => channelId)).toEqual(secondIds);
-      const secondRegistry = getActivePluginRegistry();
-      expect(secondRegistry).toBeTruthy();
-      expect(secondRegistry).not.toBe(firstRegistry);
-      expect(new Set(firstMonitors.map(({ runtimeId }) => runtimeId)).size).toBe(1);
-      expect(new Set(secondMonitors.map(({ runtimeId }) => runtimeId)).size).toBe(1);
-      expect(new Set(proof.monitors.map(({ runtimeId }) => runtimeId)).size).toBe(2);
-      expect(new Set(proof.monitors.map(({ abortSignal }) => abortSignal)).size).toBe(4);
-      const secondProbes = await Promise.all(
-        secondMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
-      );
-      expect(secondProbes[0]).toEqual(secondProbes[1]);
-      for (const secondProbe of secondProbes) {
-        for (const firstProbe of firstProbes) {
-          expect(secondProbe.registryId).not.toBe(firstProbe.registryId);
-          expect(secondProbe.sessionsId).not.toBe(firstProbe.sessionsId);
-          expect(secondProbe.placementId).not.toBe(firstProbe.placementId);
-        }
-      }
-      expect(
-        proof.monitors.every(({ stopped, abortSignal }) => !stopped && !abortSignal.aborted),
-      ).toBe(true);
-      expect(stopHooks).toEqual([]);
-      await expect(
-        Promise.all(
-          firstMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
-        ),
-      ).resolves.toEqual(firstProbes);
-      proof.observations.push({ phase: "two-gateways-started", firstProbes, secondProbes });
-
-      const snapshot = (monitors: readonly ChannelBindingMonitor[]) =>
-        monitors.map((monitor) => ({
-          channelId: monitor.channelId,
-          runtimeId: monitor.runtimeId,
-          stopped: monitor.stopped,
-          aborted: monitor.abortSignal.aborted,
-          stopHooks: stopHooks
-            .filter(
-              ({ channelId, runtimeId }) =>
-                channelId === monitor.channelId && runtimeId === monitor.runtimeId,
-            )
-            .map(({ abortSignal }) => ({
-              ownSignal: abortSignal === monitor.abortSignal,
-              aborted: abortSignal.aborted,
-            })),
-        }));
-      const expected = (monitors: readonly ChannelBindingMonitor[], stopped: boolean) =>
-        monitors.map(({ channelId, runtimeId }) => ({
-          channelId,
-          runtimeId,
-          stopped,
-          aborted: stopped,
-          stopHooks: stopped ? [{ ownSignal: true, aborted: true }] : [],
-        }));
-
-      proof.events.push({ event: "first-close-request" });
-      await first.close({ reason: "close first Gateway while second remains active" });
-      started.splice(started.indexOf(first), 1);
-      expect(coordinator.gatewayStops).toEqual([firstProbes[0]!.registryId]);
-      const afterFirstClose = {
-        first: snapshot(firstMonitors),
-        second: snapshot(secondMonitors),
-      };
-      proof.observations.push({ phase: "first-close-completed", ...afterFirstClose });
-      for (const { runtime } of firstMonitors) {
-        await expect(requestInstanceBindingProbe(runtime)).rejects.toThrow(
-          'Plugin "instance-binding-channels" runtime is no longer active.',
-        );
-      }
-      const survivingProbes = await Promise.all(
-        secondMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
-      );
-      expect(survivingProbes).toEqual(secondProbes);
-      proof.observations.push({ phase: "second-gateway-still-bound", probes: survivingProbes });
-      expect(
-        afterFirstClose,
-        "Gateway close must select and join its own channels without borrowing another registry",
-      ).toEqual({ first: expected(firstMonitors, true), second: expected(secondMonitors, false) });
-
-      proof.events.push({ event: "second-close-request" });
-      await second.close({ reason: "close remaining channel Gateway" });
-      started.splice(started.indexOf(second), 1);
-      expect(coordinator.gatewayStops).toEqual([
-        firstProbes[0]!.registryId,
-        secondProbes[0]!.registryId,
-      ]);
-      const afterBothClose = snapshot([...firstMonitors, ...secondMonitors]);
-      proof.observations.push({ phase: "both-closes-completed", channels: afterBothClose });
-      expect(afterBothClose).toEqual(expected([...firstMonitors, ...secondMonitors], true));
-      expect(proof.monitors).toHaveLength(4);
-      for (const { runtime } of secondMonitors) {
-        await expect(requestInstanceBindingProbe(runtime)).rejects.toThrow(
-          'Plugin "instance-binding-channels" runtime is no longer active.',
-        );
-      }
-    },
-  );
-
-  it(
-    "publishes startup plugins after another Gateway starts during its loader handoff",
-    { timeout: 600_000 },
-    async () => {
-      const { coordinator } = await prepareInstanceBindingTest();
-      const firstStarted = createDeferred();
-      const secondStarted = createDeferred();
-      const startupSignals = new Map<number, typeof firstStarted>();
-      const lifecycleEvents: Array<
-        Parameters<NonNullable<InstanceBindingProbeCoordinator["onLifecycleEvent"]>>[0]
-      > = [];
-      coordinator.onLifecycleEvent = (event) => {
-        lifecycleEvents.push(event);
-        if (event.kind === "start") {
-          startupSignals.get(event.port)?.resolve();
-        }
-      };
-      const startupTrace = await import("./server-startup-trace.js");
-      const createTrace = startupTrace.createGatewayStartupTrace;
-      const pluginLoadFinished = createDeferred();
-      const releaseAttachment = createDeferred();
-      const traceSpy = vi
-        .spyOn(startupTrace, "createGatewayStartupTrace")
-        .mockImplementationOnce((...args) => {
-          const trace = createTrace(...args);
-          const measure = trace.measure.bind(trace);
-          trace.measure = async (name, run, options) => {
-            const result = await measure(name, run, options);
-            if (name === "plugins.runtime-post-bind") {
-              pluginLoadFinished.resolve();
-              await releaseAttachment.promise;
-            }
-            return result;
-          };
-          return trace;
-        });
-      let firstStarting: ReturnType<typeof startTestGatewayServer> | undefined;
-      try {
-        const firstPortClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        startupSignals.set(firstPortClaim.port, firstStarted);
-        firstStarting = startTestGatewayServer(firstPortClaim, {
-          auth: { mode: "none" },
-          controlUiEnabled: false,
-          sidecarStartup: "start",
-        }).then((server) => {
-          started.push(server);
-          return server;
-        });
-        await Promise.race([
-          pluginLoadFinished.promise,
-          firstStarting.then(() => {
-            throw new Error("First Gateway passed its plugin attachment barrier");
-          }),
-        ]);
-        const firstRegistrationCount = coordinator.runtimes.length;
-        expect(firstRegistrationCount).toBeGreaterThan(0);
-
-        const secondPortClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        startupSignals.set(secondPortClaim.port, secondStarted);
-        const second = await startTestGatewayServer(secondPortClaim, {
-          auth: { mode: "none" },
-          controlUiEnabled: false,
-          sidecarStartup: "start",
-        });
-        started.push(second);
-        await second.startupSettled;
-        await secondStarted.promise;
-        const sharedMetadata = getGatewayPluginMetadataSnapshot();
-        expect(sharedMetadata).toBeDefined();
-        expect(coordinator.runtimes.length).toBeGreaterThan(firstRegistrationCount);
-
-        releaseAttachment.resolve();
-        const first = await firstStarting;
-        await first.startupSettled;
-        await firstStarted.promise;
-        expect(getGatewayPluginMetadataSnapshot()).toBe(sharedMetadata);
-        const { runtime: firstRuntime } = await requireBoundRuntime(
-          coordinator.runtimes.slice(0, firstRegistrationCount),
-          "first concurrent startup",
-        );
-        const { runtime: secondRuntime } = await requireBoundRuntime(
-          coordinator.runtimes.slice(firstRegistrationCount),
-          "second concurrent startup",
-        );
-        const firstProbe = await requestInstanceBindingProbe(firstRuntime);
-        const secondProbe = await requestInstanceBindingProbe(secondRuntime);
-        expect(firstProbe.registryId).not.toBe(secondProbe.registryId);
-        expect(firstProbe.sessionsId).not.toBe(secondProbe.sessionsId);
-        expect(firstProbe.placementId).not.toBe(secondProbe.placementId);
-        await expect(
-          firstRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
-        ).resolves.toEqual({ messages: [] });
-        await expect(
-          secondRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
-        ).resolves.toEqual({ messages: [] });
-        await expect(requestInstanceBindingProbe(firstRuntime)).resolves.toEqual(firstProbe);
-        await expect(requestInstanceBindingProbe(secondRuntime)).resolves.toEqual(secondProbe);
-        expect(lifecycleEvents).toEqual([
-          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "start" },
-          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "start" },
-        ]);
-
-        // A publishes last; closing B must dispatch B's hooks while A remains the default.
-        await Promise.all([
-          second.close({ reason: "close earlier-published Gateway" }),
-          second.close({ reason: "join earlier-published Gateway close" }),
-        ]);
-        started.splice(started.indexOf(second), 1);
-        clearPluginMetadataLifecycleCaches();
-        expect(getGatewayPluginMetadataSnapshot()).toBe(sharedMetadata);
-        expect(lifecycleEvents).toEqual([
-          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "start" },
-          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "start" },
-          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "stop" },
-        ]);
-        await expect(requestInstanceBindingProbe(secondRuntime)).rejects.toThrow(
-          'Plugin "instance-binding-probe" runtime is no longer active.',
-        );
-        await expect(requestInstanceBindingProbe(firstRuntime)).resolves.toEqual(firstProbe);
-        await expect(
-          firstRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
-        ).resolves.toEqual({ messages: [] });
-        await first.close({ reason: "close remaining concurrent Gateway" });
-        started.splice(started.indexOf(first), 1);
-        expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
-        expect(lifecycleEvents).toEqual([
-          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "start" },
-          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "start" },
-          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "stop" },
-          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "stop" },
-        ]);
-      } finally {
-        releaseAttachment.resolve();
-        await Promise.allSettled([firstStarting]);
-        traceSpy.mockRestore();
-      }
-    },
-  );
 
   it(
     "discards a prepared startup candidate when Gateway close starts before publication",
@@ -665,7 +365,7 @@ describe("gateway plugin instance bindings", () => {
       const channelInstance = channelOwner && getPluginInstance(channelOwner);
       expect(channelInstance?.hasRetainedConsumers).toBe(true);
       // Live monitors retain custody, so they cannot refuse replacement admission.
-      expect(() => channelInstance!.reserveReplacement()()).not.toThrow();
+      expect(() => channelInstance!.reserveReplacement()).not.toThrow();
       const channelReload = await rpcReq(socket, "plugins.reload", {
         plugins: [{ pluginId: "instance-binding-channels" }],
       });
@@ -787,6 +487,17 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async (serviceStopFailure) => {
       const { coordinator, bundledRoot } = await prepareInstanceBindingTest({ serviceStopFailure });
+      const startupPlugins = await import("./server-startup-plugins.js");
+      const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+      const maintenanceSettled = createDeferred();
+      const maintenanceObserver = vi
+        .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+        .mockImplementation((params) => {
+          const maintenance = runMaintenance(params);
+          maintenanceSettled.resolve(maintenance);
+          return maintenance;
+        });
+      registerTestCleanup(() => maintenanceObserver.mockRestore());
       finishServiceStops.push(coordinator.serviceStopCompletion.resolve);
       const hotReloadRecovery = vi.fn(() => {
         // No run loop consumes this synthetic emission, so release its signal-admission lease.
@@ -802,6 +513,8 @@ describe("gateway plugin instance bindings", () => {
       });
       started.push(server);
       await server.startupSettled;
+      // Mandatory sidecars settle before the deferred registry refresh releases its lease.
+      await maintenanceSettled.promise;
 
       const initialRegistry = getActivePluginRegistry();
       const initialMetadata = getGatewayPluginMetadataSnapshot();

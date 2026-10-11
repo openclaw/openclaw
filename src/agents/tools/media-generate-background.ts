@@ -2,6 +2,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -45,6 +46,7 @@ export type MediaGenerateToolOptions = {
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   workspaceDir?: string;
   cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -234,6 +236,7 @@ export async function prepareMediaGenerationTask<
   }
   return runMediaGenerationTask({
     ...prepared.params,
+    inputProvenance: options?.inputProvenance,
     requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
@@ -251,6 +254,7 @@ export async function runMediaGenerationTask(params: {
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   prompt: string;
   requestKey: string;
   providerId?: string;
@@ -297,6 +301,7 @@ export async function runMediaGenerationTask(params: {
       requesterRunSessionKey: params.requesterRunSessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
+      inputProvenance: params.inputProvenance ?? { kind: "external_user" },
       prompt: params.prompt,
       providerId: params.providerId,
       assertCurrent: assertAdmissionCurrent,

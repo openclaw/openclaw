@@ -321,7 +321,6 @@
     "src/skills/lifecycle/gh-config-discovery.test.ts": "889782c1738b129d442e2d49901a8cc9171840e392421b937ad70907e2e789d3",
     "src/skills/lifecycle/install-output.test.ts": "2a55cfedc31aa2470f3c7d2a743def176b37bc2f17ba705c35be740e35409775",
     "src/skills/workshop/config.test.ts": "7ff46a2786f1928f5c53c80cd9951377d0e7373d2f53d73e45d8c54c4f2ad254",
-    "src/skills/workshop/learn-prompt.test.ts": "16f6bb26dba951b0d479c1499ef0a9a3cb60b3e6239a870a6523677966755e27",
     "src/utils/chunk-items.test.ts": "4b165806a3c07eb758b3b78da6ad7d77427db9781fb7d4c9d2cf725a192f9a88",
     "src/utils/normalize-secret-input.test.ts": "2b474185847ecfca939b16f82f380007fc276c640bc7b5d5f8d300e4c7e4499a",
     "src/utils/reaction-level.test.ts": "19e5367b157e9875742dc851f4c69adc73dec6fbcc38b920ffc711073d8f2236",

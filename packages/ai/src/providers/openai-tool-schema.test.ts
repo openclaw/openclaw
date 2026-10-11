@@ -204,6 +204,44 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
+  it("downgrades strict mode for regex lookarounds in string patterns", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        filename: { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" },
+        folder: { type: "string" },
+        content: { type: "string" },
+      },
+      required: ["folder", "filename", "content"],
+    };
+
+    expect(
+      findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters"),
+    ).toEqual(["parameters.properties.filename.pattern"]);
+    expect(
+      resolveOpenAIProjectedToolsStrictToolFlag(
+        projectOpenAITools([{ name: "create_file", parameters: schema }]),
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["(?=a)b", "(?!a)b", "(?<=a)b", "(?<!a)b"])(
+    "reports the lookaround in pattern %s",
+    (pattern) => {
+      expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([
+        "value.pattern",
+      ]);
+    },
+  );
+
+  it.each(["^[a-z]+$", "(?:ab)+", "(?<name>ab)", "\\(?=a", "[(?=]a"])(
+    "keeps strict mode for pattern %s without a lookaround",
+    (pattern) => {
+      expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+    },
+  );
+
   it("normalizes truly empty MCP tool schema {} for strict mode", () => {
     const schema = {};
     const normalized = normalizeStrictOpenAIJsonSchema(schema) as Record<string, unknown>;

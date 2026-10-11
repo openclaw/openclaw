@@ -35,11 +35,24 @@ import {
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 type PromptAdmission = (onAdmitted: (commit?: () => void) => void) => Promise<void>;
+
+function createCustomMessage<T>(
+  message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+): CustomMessage<T> {
+  return {
+    role: "custom",
+    customType: message.customType,
+    content: message.content,
+    display: message.display,
+    details: message.details,
+    timestamp: Date.now(),
+  };
+}
 
 /** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
 export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
@@ -387,14 +400,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       );
       if (result?.messages) {
         for (const msg of result.messages) {
-          messages.push({
-            role: "custom",
-            customType: msg.customType,
-            content: msg.content,
-            display: msg.display,
-            details: msg.details,
-            timestamp: Date.now(),
-          });
+          messages.push(createCustomMessage(msg));
         }
       }
       this.systemPromptOverride = result?.systemPrompt;
@@ -639,14 +645,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
     options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
   ): Promise<void> {
-    const appMessage = {
-      role: "custom" as const,
-      customType: message.customType,
-      content: message.content,
-      display: message.display,
-      details: message.details,
-      timestamp: Date.now(),
-    } satisfies CustomMessage<T>;
+    const appMessage = createCustomMessage(message);
     if (options?.deliverAs === "nextTurn") {
       this.pendingNextTurnMessages.push(appMessage);
     } else if (this.isStreaming) {
@@ -663,12 +662,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   private async persistCustomMessage(message: CustomMessage): Promise<void> {
-    await withSessionManagerWrite(this.sessionManager, async () => {
+    await withSessionManagerAppend(this.sessionManager, async () => {
       await this.sessionManager.appendCustomMessageEntryAsync(
         message.customType,
         message.content,
         message.display,
         message.details,
+        message.timestamp,
       );
       this.agent.state.messages.push(message);
     });

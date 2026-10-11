@@ -1,4 +1,3 @@
-// OpenClaw rescue messages expose approved setup-helper commands over message channels.
 import { createHash } from "node:crypto";
 import {
   asDateTimestampMs,
@@ -25,8 +24,6 @@ import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import { resolveSystemAgentRescuePolicy } from "./rescue-policy.js";
 
 /**
- * Message-channel rescue command handling for OpenClaw.
- *
  * Rescue mode accepts `/openclaw` commands from approved message contexts,
  * stores pending persistent operations for explicit confirmation, and captures
  * command output without exposing local TUI or plugin-install flows remotely.
@@ -36,7 +33,6 @@ type RescuePendingOperation = {
   operation: SystemAgentOperation;
 };
 
-/** Input required to process one possible `/openclaw` rescue message. */
 type SystemAgentRescueMessageInput = {
   cfg: OpenClawConfig;
   command: CommandContext;

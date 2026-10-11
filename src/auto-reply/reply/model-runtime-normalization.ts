@@ -1,4 +1,3 @@
-/** Prepared plugin metadata handoff for runtime model normalization. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -12,10 +11,7 @@ import {
   normalizeProviderId,
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -30,10 +26,7 @@ import {
 
 export function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
-  if (!normalized || normalized === "auto" || normalized === "default") {
-    return "openclaw";
-  }
-  return normalized;
+  return !normalized || normalized === "auto" || normalized === "default" ? "openclaw" : normalized;
 }
 
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
@@ -107,6 +100,8 @@ export async function prepareModelSelectionRuntime(params: {
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
   hydrateThinkingCatalog?: boolean;
+  /** Idle model-only host changes need no thinking policy refresh. */
+  thinkingPolicyRequired?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -202,9 +197,15 @@ export async function prepareModelSelectionRuntime(params: {
           sessionEntry: runtimeEntry,
         });
   let hydratedSelection: ModelCatalogEntry | undefined;
+  const needsThinkingObservation =
+    params.thinkingPolicyRequired !== false ||
+    agentRuntime !== "openclaw" ||
+    !selected ||
+    (selected.nativeRuntime !== undefined && selected.nativeRuntime !== "openclaw");
   if (
     params.hydrateThinkingCatalog !== false &&
-    needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
+    params.cfg.plugins?.enabled !== false &&
+    needsThinkingObservation
   ) {
     // The selected route owns its capabilities. A prepared default-provider row cannot
     // supply thinking or context metadata for an explicit cross-provider selection.

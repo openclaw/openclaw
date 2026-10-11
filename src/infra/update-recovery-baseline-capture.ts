@@ -8,7 +8,6 @@ import {
   type UpdateRecoveryBackupManifest,
 } from "../commands/backup-verify-manifest.js";
 import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
-import { collectDoctorSkillWorkshopBackupResources } from "../commands/doctor-update-rehearsal-workshop.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
@@ -56,6 +55,7 @@ import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { hasPendingUpdateRecoverySeal } from "./update-recovery-capture-seal.js";
+import { canonicalEntryPath } from "./update-recovery-path.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 
@@ -89,14 +89,6 @@ function within(candidate: string, root: string): boolean {
   return (
     relative === "" ||
     (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-}
-
-function canonicalEntryPath(value: string): string {
-  const absolute = path.resolve(value);
-  return path.join(
-    resolvePathViaExistingAncestorSync(path.dirname(absolute)),
-    path.basename(absolute),
   );
 }
 
@@ -245,12 +237,8 @@ export function captureUpdateRecoveryBaseline(params: {
             warnings,
             requireLocalResources: true,
           });
-          const workshop = await collectDoctorSkillWorkshopBackupResources({
-            config: snapshot.sourceConfig,
-            env,
-          });
           plugins.assertCurrent();
-          return [...plugins.resources, ...workshop];
+          return plugins.resources;
         },
         { env },
       );

@@ -20,6 +20,7 @@ import {
   SYNC_REBUILD_MAX_ROWS,
 } from "../../config/sessions/session-transcript-index.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -43,7 +44,7 @@ import {
 } from "./session-persistence-operation.js";
 
 export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
-  /** @deprecated Use removeTrailingEntriesAsync; removed at the next Plugin SDK major. */
+  /** @deprecated Use removeTrailingEntriesAsync; removed in the next Plugin SDK major. */
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
@@ -81,7 +82,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           throw new Error("Session transcript changed during suffix preparation");
         }
       };
-      const reader = prepareSessionManagerHydration(target);
+      const reader = prepareSessionManagerHydration(target, { lane: targetDiscoveryLane });
       const { env: _env, ...scope } = withOwnedSessionTranscriptWriterFence(target);
       const { withSessionMetadataWorker } = await import("./session-manager-metadata-runtime.js");
       assertCurrent();
@@ -318,14 +319,17 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     }
     const preparedEntries = [...retainedContextPrefix, ...expectedPersistedEntries];
     const prepared = new SessionManagerSuffixPersistence(this.cwd, undefined, preparedEntries);
-    const restoreOmittedParentAncestry = (): void => {
-      for (const [id, parentId] of this.opaqueParentsById) {
-        if (!prepared.byId.has(id) && !prepared.opaqueParentsById.has(id)) {
-          prepared.opaqueParentsById.set(id, parentId);
+    const restoreOmittedParentAncestry = (
+      source: SessionManagerSuffixPersistence,
+      destination: SessionManagerSuffixPersistence,
+    ): void => {
+      for (const [id, parentId] of source.opaqueParentsById) {
+        if (!destination.byId.has(id) && !destination.opaqueParentsById.has(id)) {
+          destination.opaqueParentsById.set(id, parentId);
         }
       }
     };
-    restoreOmittedParentAncestry();
+    restoreOmittedParentAncestry(this, prepared);
     prepared.leafId = this.leafId;
     prepared.appendParentId = this.appendParentId;
     prepared.appendMode = this.appendMode;
@@ -434,7 +438,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
 
     prepared.clampOpaqueFileEntryIndexes();
     prepared.buildIndex();
-    restoreOmittedParentAncestry();
+    restoreOmittedParentAncestry(this, prepared);
     // The predecessor may be outside a bounded window but is still the durable active leaf.
     // Preserve its opaque identity so the serialized leaf control can restore it on a full reopen.
     prepared.leafId = replacementParentId;
@@ -461,11 +465,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
       this.fileEntries = prepared.fileEntries.map(restoreCustomData);
       this.opaqueFileEntries = prepared.opaqueFileEntries;
       this.buildIndex();
-      for (const [id, parentId] of prepared.opaqueParentsById) {
-        if (!this.byId.has(id) && !this.opaqueParentsById.has(id)) {
-          this.opaqueParentsById.set(id, parentId);
-        }
-      }
+      restoreOmittedParentAncestry(prepared, this);
       this.leafId = prepared.leafId;
       this.appendParentId = prepared.appendParentId;
       this.appendMode = prepared.appendMode;

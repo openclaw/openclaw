@@ -55,7 +55,10 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   ],
   // Not a slot key: the detail slot also renders tool output and status
   // templates synchronously, so only its panel branch waits for this element.
-  "detail-panel": ["openclaw-chat-detail-panel", () => import("./components/chat-detail-panel.ts")],
+  "detail-panel": [
+    "openclaw-chat-detail-panel",
+    () => import("./components/chat-detail-panel.tsx"),
+  ],
   terminal: [
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
@@ -70,15 +73,15 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
   processes: [
     "openclaw-chat-processes-panel",
-    () => import("./components/chat-processes-panel.ts"),
+    () => import("./components/chat-processes-panel.tsx"),
   ],
   subagents: [
     "openclaw-chat-subagents-panel",
-    () => import("./components/chat-subagents-panel.ts"),
+    () => import("./components/chat-subagents-panel.tsx"),
   ],
   discussion: [
     "openclaw-session-discussion",
-    () => import("./components/session-discussion-panel.ts"),
+    () => import("./components/session-discussion-panel.tsx"),
   ],
 };
 
@@ -184,6 +187,7 @@ export function renderSidebarRegion(params: {
   sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
+  background?: TemplateResult;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
@@ -210,27 +214,49 @@ export function renderSidebarRegion(params: {
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
-  const activePanelId = params.layout.columns[0]?.activePanelId;
-  const activePanelSlot = params.layout.columns[0]?.panels.find(
-    (panel) => panel.id === activePanelId,
-  )?.slot;
-  const regionLoading = panelDefinitions.find(
-    (definition) => definition.slot === activePanelSlot,
-  )?.loading;
   return html`<div
-    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
+    class="sidebar-region ${params.background ? "sidebar-region--background" : ""} ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
-    } ${params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
+    } ${
+      params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""
+    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
     style=${styleMap({
       "--side-panel-width": `${column?.width ?? 480}px`,
       "--side-panel-height": `${column?.height ?? 360}px`,
     })}
   >
+    ${
+      params.background
+        ? html`<div
+            class="sidebar-region__background"
+            ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
+            style=${styleMap({
+              gridArea: chatMain
+                ? "main-header / main-header / main / main"
+                : "side-header / side-header / side / side",
+            })}
+          >
+            ${params.background}
+          </div>`
+        : nothing
+    }
     <div class="sidebar-region__header">${params.header ?? nothing}</div>
     ${
       regionError !== undefined
         ? regionError === null
-          ? (regionLoading ?? null)
+          ? column?.panels
+              .filter(
+                (panel) =>
+                  panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
+              )
+              .map(
+                (panel) => html`<div
+                  class="side-panel__panel"
+                  data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
+                >
+                  ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
+                </div>`,
+              )
           : null
         : html`<openclaw-chat-sidebar-region
             .panelIdPrefix=${panelIdPrefix}

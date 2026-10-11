@@ -105,8 +105,8 @@ Only `toolResult` messages are eligible; normal conversation text is left alone.
 
 OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
 
-- It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
-- The window advances only when a new user turn begins, never within a tool loop.
+- It preserves at least the **3 most recent completed turns** byte-for-byte. After the first cleanup, the boundary advances in batches of **8 completed turns**, retaining 3–10 completed turns between cuts. This count includes text-only turns; appending a turn between cuts leaves the earlier replay bytes unchanged.
+- The window advances only when a new user turn begins, never within a tool loop. Replay derives the same boundary after a restart; compaction or an explicit history-window cut starts a new retained history segment. Image cleanup does not enforce the total model context limit; normal compaction and overflow recovery still own that limit.
 - In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
 - Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
 - The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.

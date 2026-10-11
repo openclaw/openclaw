@@ -294,10 +294,7 @@ export async function prepareCodexThreadFinalConfigPatch(
         ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
       },
       params.client,
-    )) ?? {
-      configPatch: params.finalConfigPatch,
-      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-    }
+    )) ?? { configPatch: undefined, nativeHookRelayGeneration: undefined }
   );
 }
 
@@ -433,7 +430,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
-  if (params.shellEnvironment) {
+  if (params.shellEnvironment || params.shellGitConfigParameters) {
     params.config = mergeCodexNativeShellEnvironment(
       params.config,
       effectiveConfig.config.shell_environment_policy,

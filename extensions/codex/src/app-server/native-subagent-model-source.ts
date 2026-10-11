@@ -341,11 +341,11 @@ export function releaseNativeParentModelSources(
 
 export function associateNativeChildInteraction(
   known: KnownChild,
-  threadId: string,
   nativeTurnId: string,
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>,
   drain: (owner: ParentOwner, turnId: string) => void,
 ): void {
+  const threadId = known.assignment.childThreadId;
   for (const [parentTurnId, pending] of admissions) {
     const interaction = pending.find(
       (evidence) =>
@@ -378,7 +378,7 @@ type ModelSourceDependencies = {
   isCurrent: (state: ParentState) => boolean;
   assertInputCurrent: (threadId: string, owner: ParentOwner) => void;
   hasPendingInput: (request: NativeModelSourceRequest) => boolean;
-  onExecutionAdmitted: (known: KnownChild, threadId: string) => void;
+  onExecutionAdmitted: (known: KnownChild) => void;
   registerChildExecution: (
     state: ParentState,
     request: NativeModelSourceRequest,
@@ -555,7 +555,7 @@ function executionOwner(
     }
   }
   if (pending?.state === "active" || child?.nativeTurnId === request.turnId) {
-    dependencies.onExecutionAdmitted(known, request.threadId);
+    dependencies.onExecutionAdmitted(known);
   }
   return modelSource.executionOwner;
 }

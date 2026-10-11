@@ -637,29 +637,44 @@ describe("trigger handling", () => {
       );
       expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/stop",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: "telegram:slash:111",
-          CommandSource: "native",
-          CommandTargetSessionKey: targetSessionKey,
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
+      const native = await vi.importActual<
+        typeof import("../agents/embedded-agent-runner/runs.js")
+      >("../agents/embedded-agent-runner/runs.js");
+      const { createEmbeddedRunHandle } =
+        await import("../agents/embedded-agent-runner/runs.test-support.js");
+      const abort = vi.fn();
+      const handle = createEmbeddedRunHandle({ abort });
+      native.setActiveEmbeddedRun(targetSessionId, handle, targetSessionKey, undefined, "main");
+      getAbortEmbeddedAgentRunMock().mockImplementation(native.abortEmbeddedAgentRun);
+      try {
+        const res = await getReplyFromConfig(
+          {
+            Body: "/stop",
+            From: "telegram:111",
+            To: "telegram:111",
+            ChatType: "direct",
+            Provider: "telegram",
+            Surface: "telegram",
+            SessionKey: "telegram:slash:111",
+            CommandSource: "native",
+            CommandTargetSessionKey: targetSessionKey,
+            CommandAuthorized: true,
+          },
+          {},
+          cfg,
+        );
 
-      expect(maybeReplyText(res)).toBe("⚙️ Agent was aborted.");
-      expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
-      expect(loadSessionEntry({ storePath, sessionKey: targetSessionKey })?.abortedLastRun).toBe(
-        true,
-      );
-      expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+        expect(maybeReplyText(res)).toBe("⚙️ Agent was aborted.");
+        expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
+        expect(abort).toHaveBeenCalledOnce();
+        expect(loadSessionEntry({ storePath, sessionKey: targetSessionKey })?.abortedLastRun).toBe(
+          true,
+        );
+        expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+      } finally {
+        native.clearActiveEmbeddedRun(targetSessionId, handle);
+        getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
+      }
     });
   });
 

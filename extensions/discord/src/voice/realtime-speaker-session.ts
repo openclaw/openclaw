@@ -71,8 +71,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   private readonly recording: DiscordRealtimeRecording;
   private lifecycle: {
     status: "inactive" | "starting" | "active" | "closing" | "stopped";
-    generation: number;
-  } = { status: "inactive", generation: 0 };
+  } = { status: "inactive" };
   private policy: Omit<
     ReturnType<typeof resolveDiscordRealtimeSpeakerConfig>["sessionPolicy"],
     "autoRespondToAudio"
@@ -140,32 +139,33 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     for (const item of params.conversationHistory ?? []) {
       this.harness.recordTranscript(item.role, item.text);
     }
-    this.playback = new DiscordRealtimePlayback({
+    const context = {
+      ...params,
       bridge: () => this.bridge,
+      harness: this.harness,
+      providerEpoch: () => this.providerContinuityEpoch,
+      providerId: () => this.realtimeProviderId,
+      realtimeConfig: () => this.realtimeConfig,
+      stopped: () => this.isStopped(),
+      wakeNamePolicy: () => this.policy.wakeNamePolicy,
+    };
+    this.playback = new DiscordRealtimePlayback({
+      ...context,
       bridgeReady: () => this.isReady(),
       buildSpeakExactMessage: (text) =>
         buildRealtimeVoiceSpeakExactMessage({
           text,
           surfaceLabel: "the Discord voice channel",
         }),
-      entry: this.params.entry,
-      player: this.params.player,
-      harness: this.harness,
       markProviderGenerationObserved: () => this.markProviderGenerationObserved(),
-      mode: this.params.mode,
-      onTerminalError: this.params.onTerminalError,
-      providerId: () => this.realtimeProviderId,
-      realtimeConfig: () => this.realtimeConfig,
       stopTerminally: () => {
         this.lifecycle.status = "stopped";
         this.consults.close();
       },
-      stopped: () => this.isStopped(),
       wakeNameRequired: () => this.isWakeNameRequired(),
     });
     this.turns = new DiscordRealtimeTurns({
-      bridge: () => this.bridge,
-      entry: this.params.entry,
+      ...context,
       getHumanParticipantCount: () => this.humanParticipantCount(),
       interruptRoomPlayback: () => {
         if (!this.playback.isBargeInEnabled() || !this.params.player.isActive()) {
@@ -173,45 +173,30 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         }
         return this.params.player.handleBargeIn("active-speaker-audio");
       },
-      onAcceptedTranscript: (text, context, providerEpoch) =>
-        this.consults.handleAcceptedTranscript(text, context, providerEpoch),
+      onAcceptedTranscript: (text, speakerContext, providerEpoch) =>
+        this.consults.handleAcceptedTranscript(text, speakerContext, providerEpoch),
       playback: this.playback,
-      providerEpoch: () => this.providerContinuityEpoch,
-      providerId: () => this.realtimeProviderId,
-      realtimeConfig: () => this.realtimeConfig,
       recordInputAudio: (audio) => this.harness.recordInputAudio(audio),
-      stopped: () => this.isStopped(),
-      wakeNamePolicy: () => this.policy.wakeNamePolicy,
       wakeNames: () => this.policy.wakeNames,
     });
     this.consults = new DiscordRealtimeConsults({
-      accountId: this.params.accountId,
+      ...context,
       consultPolicy: () => this.policy.consultPolicy,
       consultToolPolicy: () => this.policy.toolPolicy,
       consultToolsAllow: () => this.policy.consultToolsAllow,
       debounceMs: () => this.realtimeConfig?.debounceMs,
-      entry: this.params.entry,
-      harness: this.harness,
       isAgentProxy: () => this.params.mode === "agent-proxy" && !this.policy.handlesAgentConsult,
       isWakeNameRequired: () => this.isWakeNameRequired(),
       playback: this.playback,
-      providerEpoch: () => this.providerContinuityEpoch,
       runAgentTurn: (turn) => this.trackOperation(() => this.params.runAgentTurn(turn)),
-      resolveSpeakerContext: this.params.resolveSpeakerContext,
-      stopped: () => this.isStopped(),
       turns: this.turns,
       usesRealtimeAgentHandoff: () =>
         this.params.mode === "bidi" || this.policy.toolPolicy !== "none",
-      wakeNamePolicy: () => this.policy.wakeNamePolicy,
     });
   }
 
   async connect(): Promise<void> {
-    const lifecycleGeneration = this.lifecycle.generation + 1;
-    this.lifecycle = {
-      status: "starting",
-      generation: lifecycleGeneration,
-    };
+    this.lifecycle.status = "starting";
     const {
       resolved,
       selection,
@@ -240,7 +225,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
     const onReady = () => {
       this.markProviderGenerationObserved();
-      if (this.markLifecycleReady(lifecycleGeneration)) {
+      if (this.markLifecycleReady()) {
         this.playback.drainQueuedExactSpeechMessages("provider-ready");
       }
     };
@@ -381,7 +366,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     );
     this.attachOutputAudioPort();
     await this.bridge.connect();
-    if (!this.markLifecycleReady(lifecycleGeneration)) {
+    if (!this.markLifecycleReady()) {
       await this.close();
       return;
     }
@@ -623,11 +608,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     return this.lifecycle.status === "active";
   }
 
-  private markLifecycleReady(generation: number): boolean {
-    if (
-      (this.lifecycle.status !== "starting" && this.lifecycle.status !== "active") ||
-      this.lifecycle.generation !== generation
-    ) {
+  private markLifecycleReady(): boolean {
+    if (this.isStopped()) {
       return false;
     }
     this.lifecycle.status = "active";

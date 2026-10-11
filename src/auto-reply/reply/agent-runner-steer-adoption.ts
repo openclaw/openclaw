@@ -126,19 +126,16 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   }
-  const scheduleParkedFallback = () => {
-    const owner = replyRunRegistry.get(queueKey);
-    if (owner) {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: owner,
-        queueKey,
-        runFollowup,
-      });
-    } else {
-      scheduleFollowupDrain(queueKey, runFollowup);
-    }
-  };
-  scheduleParkedFallback();
+  const owner = replyRunRegistry.get(queueKey);
+  if (owner) {
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: owner,
+      queueKey,
+      runFollowup,
+    });
+  } else {
+    scheduleFollowupDrain(queueKey, runFollowup);
+  }
   releaseAdmissionTicket();
   const fallback = async (
     reason: ActiveReplySteerFallbackReason,
@@ -331,15 +328,11 @@ export async function runActiveReplySteer(
         isError: true,
       });
     }
-    const transcriptCommitUnconfirmed =
-      finalization.outcome.result?.transcriptCommit === "unconfirmed";
     if (finalization.aborted) {
       if (replyOperationRunState) {
         replyOperationRunState.messageInjectionAborted = true;
       }
-      const reason = transcriptCommitUnconfirmed
-        ? (finalization.outcome.result?.errorMessage ?? "transcript commitment unconfirmed")
-        : `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
+      const reason = `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
       logVerbose(
         `queue: active session ${steerSessionId} aborted exact steered target without replay (${reason})`,
       );

@@ -1,6 +1,5 @@
 import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { sleep } from "../../../utils/sleep.js";
 import {
@@ -9,6 +8,7 @@ import {
   listMediaGenerationOperations,
   type MediaGenerationOperation,
 } from "../../media-generation-activity.js";
+import { withAbortListener } from "./abortable.js";
 
 export type AsyncStartedToolMeta = {
   toolName?: string;
@@ -52,23 +52,7 @@ async function sleepWithAbort(
     return;
   }
   throwIfAborted(signal);
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(createAbortError(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    sleepFn(ms).then(
-      () => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      },
-      (err: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(err, "Non-Error rejection"));
-      },
-    );
-  });
+  await withAbortListener(signal, () => sleepFn(ms), createAbortError);
 }
 
 function isPendingCompletionTask(task: MediaGenerationOperation): boolean {

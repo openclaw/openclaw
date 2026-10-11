@@ -44,20 +44,9 @@ async function runPolicyWatch(args: readonly string[]): Promise<void> {
   await program.parseAsync(["policy", "watch", "--json", ...args], { from: "user" });
 }
 
-it.each([
-  { value: "250", expected: 250 },
-  { value: String(MAX_TIMER_TIMEOUT_MS), expected: MAX_TIMER_TIMEOUT_MS },
-  { value: "2147483648", expected: MAX_TIMER_TIMEOUT_MS },
-  { value: String(Number.MAX_SAFE_INTEGER), expected: MAX_TIMER_TIMEOUT_MS },
-])("keeps watch interval $value within the safe timer range", async ({ value, expected }) => {
-  await runPolicyWatch(["--interval-ms", value]);
+it("caps oversized watch intervals at the safe timer maximum", async () => {
+  await runPolicyWatch(["--interval-ms", String(Number.MAX_SAFE_INTEGER)]);
 
   expect(mocks.delay).toHaveBeenCalledTimes(1);
-  expect(mocks.delay).toHaveBeenCalledWith(expected);
-});
-
-it("does not schedule polling for a single watch evaluation", async () => {
-  await runPolicyWatch(["--once", "--interval-ms", "2147483648"]);
-
-  expect(mocks.delay).not.toHaveBeenCalled();
+  expect(mocks.delay).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
 });

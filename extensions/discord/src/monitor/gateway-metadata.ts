@@ -107,19 +107,6 @@ function createGatewayMetadataError(params: {
   return error;
 }
 
-function createDefaultGatewayInfo(): APIGatewayBotInfo {
-  return {
-    url: DEFAULT_DISCORD_GATEWAY_URL,
-    shards: 1,
-    session_start_limit: {
-      total: 1,
-      remaining: 1,
-      reset_after: 0,
-      max_concurrency: 1,
-    },
-  };
-}
-
 function summarizeGatewaySchemaErrors(value: unknown): string {
   const errors = Errors(discordGatewayBotInfoSchema, value);
   if (errors.length === 0) {
@@ -202,9 +189,7 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
       }),
     run: async (signal) =>
       await fetchDiscordGatewayInfo({
-        token: params.token,
-        gatewayBotUrl: params.gatewayBotUrl,
-        fetchImpl: params.fetchImpl,
+        ...params,
         fetchInit: {
           ...params.fetchInit,
           signal,
@@ -235,7 +220,16 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
     }
   }
   return {
-    info: createDefaultGatewayInfo(),
+    info: {
+      url: DEFAULT_DISCORD_GATEWAY_URL,
+      shards: 1,
+      session_start_limit: {
+        total: 1,
+        remaining: 1,
+        reset_after: 0,
+        max_concurrency: 1,
+      },
+    },
     usedFallback: true,
   };
 }

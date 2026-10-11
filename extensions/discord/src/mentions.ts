@@ -46,13 +46,7 @@ function resolveConfiguredMentionAlias(
       continue;
     }
     const aliasWithoutDiscriminator = alias.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-    if (
-      alias === key ||
-      (withoutDiscriminator && withoutDiscriminator !== key && alias === withoutDiscriminator) ||
-      (aliasWithoutDiscriminator &&
-        aliasWithoutDiscriminator !== alias &&
-        aliasWithoutDiscriminator === key)
-    ) {
+    if (alias === key || alias === withoutDiscriminator || aliasWithoutDiscriminator === key) {
       const userId = normalizeDiscordSnowflake(rawUserId);
       if (userId) {
         return userId;

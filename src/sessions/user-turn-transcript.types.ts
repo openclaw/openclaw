@@ -8,6 +8,7 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -155,7 +156,7 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
-  beforeFreshMessageCommit?: () => void;
+  beforeFreshMessageCommit?: SessionSourceAssertion;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -185,7 +186,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   errorContext?: string;
   /** Revalidate the original input at fresh commit, not at ACK or preparation. */
-  assertOriginalInputCommit?: () => void;
+  assertOriginalInputCommit?: SessionSourceAssertion;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
@@ -204,7 +205,7 @@ export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Committed input, accepted pending custody, and blocked notices are exempt. */
-  assertOriginalInputCommit?: () => void;
+  assertOriginalInputCommit?: SessionSourceAssertion;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
@@ -232,6 +233,15 @@ export type UserTurnTranscriptRecorder = {
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
+  /**
+   * Freeze model-facing text on the canonical user record before its first provider dispatch.
+   * `requestLocal` applies the same redaction but leaves the stored record unchanged.
+   */
+  captureModelPromptProjection?: (
+    text: string,
+    assertCurrent: () => void,
+    options?: { requestLocal?: boolean },
+  ) => Promise<PersistedUserTurnMessage>;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
   setAdmissionHandler?: (

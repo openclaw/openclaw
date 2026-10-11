@@ -6,7 +6,6 @@ import { AUTOMATION_FAILED_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/to
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type {
   CronAgentExecutionPhaseUpdate,
@@ -16,7 +15,7 @@ import type {
 } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
+import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
@@ -29,15 +28,11 @@ export type RunCronAgentTurnParams = {
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
+  onLaneWait?: CronLaneWaitCallback;
   sessionKey: string;
   agentId?: string;
   lane?: string;
   executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
-  /** Host-only root for system-owned turns; never persisted in cron state. */
-  executionRoot?: string;
-  /** Explicit instruction set for a host-owned turn, including an empty review context. */
-  skillsSnapshot?: SkillSnapshot;
 };
 
 export type WithRunSession = (

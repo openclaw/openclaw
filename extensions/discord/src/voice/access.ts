@@ -71,14 +71,8 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   });
   const channelConfig = params.channelId
     ? resolveDiscordChannelConfigWithFallback({
+        ...params,
         guildInfo,
-        channelId: params.channelId,
-        channelName: params.channelName,
-        channelSlug: params.channelSlug,
-        parentId: params.parentId,
-        parentName: params.parentName,
-        parentSlug: params.parentSlug,
-        scope: params.scope,
       })
     : null;
 

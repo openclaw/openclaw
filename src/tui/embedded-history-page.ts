@@ -5,8 +5,8 @@ import {
   createChatHistoryByteCounter,
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat-history-budget.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
+import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 
 export async function readEmbeddedHistoryPage(params: ChatHistoryPageParams) {

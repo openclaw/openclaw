@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
@@ -21,7 +22,6 @@ import {
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -29,6 +29,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
+import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -182,6 +183,8 @@ export function readSessionTranscriptBoundedActiveContextCore(
     ignoreReadFence?: boolean;
     readOnly?: boolean;
     resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
+    onRead?: (projection: CurrentTranscriptProjection) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
   const maxBytes = normalizeVisibleMessageLimit(
@@ -227,9 +230,6 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .limit(1),
     );
     const headerBytes = header?.serialized_bytes ?? 0;
-    if (headerBytes > maxBytes) {
-      throw new RangeError("Session transcript header exceeds the active-context byte limit");
-    }
     // Explicit reset retention wins over ordinary exclusion. The window owner
     // selects paired entries; only its newest candidates can fit this bounded read.
     const retained =
@@ -268,17 +268,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     );
-    const selectedRows: { event_seq: number; active_position: number }[] = [];
-    let serializedBytes = headerBytes;
-    let truncated = false;
-    for (const row of metadata) {
-      if (selectedRows.length >= maxEvents || serializedBytes + row.serialized_bytes > maxBytes) {
-        truncated = true;
-        break;
-      }
-      selectedRows.push(row);
-      serializedBytes += row.serialized_bytes;
-    }
+    const selection = selectBoundedContextRows(metadata, headerBytes, { maxBytes, maxEvents });
+    const { selectedRows } = selection;
+    let { serializedBytes, truncated } = selection;
     const selectedSequences = selectedRows.map((row) => row.event_seq);
     let boundary = executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -457,10 +449,12 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // Retention moves forward from a cut; append ancestry moves backward. Keep both
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
-    const version = readTranscriptContextVersionInTransaction(
-      projection.database,
-      projection.resolved.sessionId,
-    );
+    const version = projection.version;
+    const consumed = options.onRead?.(projection);
+    if (isPromiseLike(consumed)) {
+      void Promise.resolve(consumed).catch(() => {});
+      throw new Error("Transcript snapshot consumers must remain synchronous");
+    }
     return {
       version,
       activeLeafEntryId,
@@ -475,10 +469,17 @@ export function readSessionTranscriptBoundedActiveContextCore(
       totalEvents: projection.state.activeEventCount,
       transcriptMutationAt: version.updatedAt,
       truncated,
+      ...(!truncated &&
+      !fence &&
+      !projection.hasUnindexedPrefix &&
+      selectedRows.length === projection.state.activeEventCount
+        ? { completeActivePath: true as const }
+        : {}),
     };
   };
   return withCurrentProjectionSnapshot(scope, read, {
     readOnly: options.readOnly,
     resolvedScope: options.resolvedScope,
+    transaction: options.transaction,
   });
 }

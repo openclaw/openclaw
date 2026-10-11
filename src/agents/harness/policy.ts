@@ -55,11 +55,8 @@ export function resolveAgentHarnessPolicy(
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
   });
-  if (openAIImplicitRuntime) {
-    return { runtime: openAIImplicitRuntime, runtimeSource };
-  }
   return {
-    runtime,
+    runtime: openAIImplicitRuntime || runtime,
     runtimeSource,
   };
 }

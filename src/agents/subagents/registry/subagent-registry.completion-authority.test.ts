@@ -19,6 +19,7 @@ import {
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
@@ -46,6 +47,7 @@ import {
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -298,26 +300,14 @@ describe("registered completion source custody", () => {
       );
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const held = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((owner, run, options) =>
-          execute(
-            owner,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const receipt = await scope.execute(command, executeOptions);
-                  if (command.type === "subagents.persistChanges") {
-                    entered.resolve();
-                    await release.promise;
-                  }
-                  return receipt;
-                },
-              }),
-            options,
-          ),
-        );
+      const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const receipt = await scope.execute(command, executeOptions);
+        if (command.type === "subagents.persistChanges") {
+          entered.resolve();
+          await release.promise;
+        }
+        return receipt;
+      });
       const pending = withPluginRuntimeGatewayRequestScope(
         { client, context, resolveGatewayContext, isWebchatConnect: () => false },
         () => registerSubagentRun(params),
@@ -565,6 +555,8 @@ describe("registered completion source custody", () => {
       });
     },
   );
+
+  registerRequesterCompletionCustodyTests({ registration, updateRun });
 
   it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

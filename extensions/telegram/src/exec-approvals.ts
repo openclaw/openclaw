@@ -20,15 +20,7 @@ import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./target
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
   const chatId = normalizeTelegramChatId(String(value));
-  if (!chatId || chatId.startsWith("-")) {
-    return undefined;
-  }
-  return chatId;
-}
-
-function resolveTelegramOwnerApprovers(cfg: OpenClawConfig): Array<string | number> {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  return Array.isArray(ownerAllowFrom) ? ownerAllowFrom : [];
+  return chatId && !chatId.startsWith("-") ? chatId : undefined;
 }
 
 export function resolveTelegramExecApprovalConfig(params: {
@@ -51,7 +43,9 @@ export function getTelegramExecApprovalApprovers(params: {
 }): string[] {
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
-    allowFrom: resolveTelegramOwnerApprovers(params.cfg),
+    allowFrom: Array.isArray(params.cfg.commands?.ownerAllowFrom)
+      ? params.cfg.commands.ownerAllowFrom
+      : [],
     normalizeApprover: normalizeTelegramDirectApproverId,
   });
 }

@@ -38,7 +38,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -51,10 +51,8 @@ import {
   scheduleSqliteTrajectoryRuntimeRetention,
   settleIncognitoTrajectoryRuntimeRetention,
 } from "./runtime-retention.js";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  type SqliteTrajectoryRuntimeAppend,
-} from "./runtime-store.sqlite.js";
+import type { SqliteTrajectoryRuntimeAppend } from "./runtime-store.contract.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeSinkParams = {

@@ -263,11 +263,9 @@ private data class SelectedConnectAuth(
   val authBootstrapToken: String?,
   val authDeviceToken: String?,
   val authPassword: String?,
-  val signatureToken: String?,
   val storedToken: String?,
   val storedScopes: List<String>,
   val authSource: GatewayConnectAuthSource,
-  val attemptedDeviceTokenRetry: Boolean,
 )
 
 private class GatewayConnectFailure(
@@ -1595,7 +1593,7 @@ class GatewaySession(
           storedToken = storedToken?.takeIf { it.isNotEmpty() },
           storedScopes = storedEntry?.scopes.orEmpty(),
         )
-      if (selectedAuth.attemptedDeviceTokenRetry) {
+      if (selectedAuth.authDeviceToken != null) {
         target.pendingDeviceTokenRetry = false
       }
       val payload =
@@ -1622,18 +1620,17 @@ class GatewaySession(
           target.recoveringStoredBootstrap = true
         }
         val shouldRetryWithDeviceToken =
-          shouldRetryWithStoredDeviceToken(
-            target = target,
-            error = error,
-            explicitGatewayToken = target.token?.trim()?.takeIf { it.isNotEmpty() },
-            storedToken = storedToken?.takeIf { it.isNotEmpty() },
-            attemptedDeviceTokenRetry = selectedAuth.attemptedDeviceTokenRetry,
-          )
+          !target.deviceTokenRetryBudgetUsed &&
+            selectedAuth.authDeviceToken == null &&
+            !target.token.isNullOrBlank() &&
+            !storedToken.isNullOrEmpty() &&
+            isTrustedDeviceRetryEndpoint(target.endpoint, target.tls) &&
+            error.details?.canRetryWithDeviceToken == true
         if (shouldRetryWithDeviceToken) {
           target.pendingDeviceTokenRetry = true
           target.deviceTokenRetryBudgetUsed = true
         } else if (
-          selectedAuth.attemptedDeviceTokenRetry &&
+          selectedAuth.authDeviceToken != null &&
           error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
         ) {
           deviceAuthStore.clearToken(target.endpoint.stableId, identity.deviceId, target.options.role, onlyIfToken = storedToken)
@@ -1867,7 +1864,7 @@ class GatewaySession(
           role = target.options.role,
           scopes = connectScopes,
           signedAtMs = signedAtMs,
-          token = selectedAuth.signatureToken,
+          token = selectedAuth.authToken ?: selectedAuth.authBootstrapToken,
           nonce = connectNonce,
           platform = client.platform,
           deviceFamily = client.deviceFamily,
@@ -2340,26 +2337,10 @@ class GatewaySession(
       authBootstrapToken = authBootstrapToken,
       authDeviceToken = authDeviceToken,
       authPassword = explicitPassword,
-      signatureToken = authToken ?: authBootstrapToken,
       storedToken = storedToken,
       storedScopes = storedScopes,
       authSource = authSource,
-      attemptedDeviceTokenRetry = shouldUseDeviceRetryToken,
     )
-  }
-
-  private fun shouldRetryWithStoredDeviceToken(
-    target: DesiredConnection,
-    error: ErrorShape,
-    explicitGatewayToken: String?,
-    storedToken: String?,
-    attemptedDeviceTokenRetry: Boolean,
-  ): Boolean {
-    if (target.deviceTokenRetryBudgetUsed) return false
-    if (attemptedDeviceTokenRetry) return false
-    if (explicitGatewayToken == null || storedToken == null) return false
-    if (!isTrustedDeviceRetryEndpoint(target.endpoint, target.tls)) return false
-    return error.details?.canRetryWithDeviceToken == true
   }
 
   private fun shouldPauseReconnectAfterAuthFailure(

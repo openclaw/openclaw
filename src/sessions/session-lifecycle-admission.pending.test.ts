@@ -3,8 +3,10 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import {
   beginSessionWorkAdmission,
+  captureSessionWorkRunInterruptions,
   collectActiveSessionWorkAdmissions,
   getActiveSessionWorkAdmissionCount,
+  getCompetingSessionWorkAdmissionRelease,
   getSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
@@ -13,6 +15,84 @@ import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
+
+it.each(["released", "interrupted", "undeclared", "caller", "wrong receipt"] as const)(
+  "targeted run interruption rejects a %s admission",
+  async (state) => {
+    const target = { scope: "capture-current.sqlite", identities: ["capture-current-session"] };
+    const run = { runId: "captured-run" };
+    const onInterrupt = vi.fn(() => ({
+      runId: state === "wrong receipt" ? "different-run" : run.runId,
+    }));
+    const admission = await beginSessionWorkAdmission({
+      ...target,
+      ...(state === "undeclared" ? {} : { run }),
+      assertAllowed: () => {},
+      onInterrupt,
+    });
+    const capture = () => captureSessionWorkRunInterruptions({ ...target, accept: () => true });
+    try {
+      const captured = state === "caller" ? await admission.run(async () => capture()) : capture();
+      if (state === "undeclared" || state === "caller") {
+        expect(captured).toEqual([]);
+        expect(onInterrupt).not.toHaveBeenCalled();
+        return;
+      }
+      expect(captured).toHaveLength(1);
+      if (state === "released") {
+        admission.release();
+      } else if (state === "interrupted") {
+        startSessionWorkAdmissionInterruption(target);
+        onInterrupt.mockClear();
+      }
+      expect(captured[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
+      expect(onInterrupt).toHaveBeenCalledTimes(state === "wrong receipt" ? 1 : 0);
+      expect(capture()).toEqual([]);
+    } finally {
+      admission.release();
+    }
+  },
+);
+
+it("targeted Stop cancels a declared queued run without interrupting its predecessor", async () => {
+  const target = {
+    scope: "capture-pending.sqlite",
+    identities: ["capture-pending-session"],
+    owner: Symbol("queued-run"),
+    serializeOwner: true,
+  };
+  const predecessorInterrupt = vi.fn();
+  const predecessor = await beginSessionWorkAdmission({
+    ...target,
+    assertAllowed: () => {},
+    onInterrupt: predecessorInterrupt,
+  });
+  const run = { runId: "queued-run" };
+  const validate = vi.fn();
+  const onInterrupt = vi.fn(() => ({ runId: run.runId }));
+  const pending = beginSessionWorkAdmission({
+    ...target,
+    run,
+    assertAllowed: validate,
+    onInterrupt,
+  });
+  const reason = createAgentRunDirectAbortError();
+  const rejected = expect(pending).rejects.toBe(reason);
+  try {
+    const captured = captureSessionWorkRunInterruptions({ ...target, accept: () => true });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.interrupt(reason)).toBe(true);
+    expect(captured[0]!.interrupt(reason)).toBe(false);
+    await rejected;
+    expect(onInterrupt).toHaveBeenCalledOnce();
+    expect(predecessorInterrupt).not.toHaveBeenCalled();
+    expect(validate).not.toHaveBeenCalled();
+    expect(predecessor.isActive()).toBe(true);
+  } finally {
+    predecessor.release();
+    await pending.catch(() => {});
+  }
+});
 
 it("serializes pending owners in FIFO order without blocking other owners", async ({ signal }) => {
   const scope = "serialized-owners.sqlite";
@@ -267,6 +347,8 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     ).toBe(false);
     expect(isCompetingSessionWorkAdmissionActive(scope, identities)).toBe(false);
     expect(getSessionWorkAdmissionRelease({ scope, identities })).toBeUndefined();
+    const competingRelease = getCompetingSessionWorkAdmissionRelease({ scope, identities });
+    expect(competingRelease).toBeDefined();
     expect(collectActiveSessionWorkAdmissions().get(scope)).toBeUndefined();
     expect(getActiveSessionWorkAdmissionCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
@@ -274,6 +356,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
       await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
     ).toBe(true);
     expect(await pending).toBe(reason);
+    await expect(competingRelease).resolves.toBeUndefined();
     expect(interrupted).toHaveBeenCalledOnce();
     expect(interrupted).toHaveBeenCalledWith(reason);
     expect(validated).toBe(false);

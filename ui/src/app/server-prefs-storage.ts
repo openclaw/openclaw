@@ -1,6 +1,11 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { SYNCED_PREFS, type ServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
+import {
+  SYNCED_PREFS,
+  clearSidebarEntriesMetadata,
+  type ServerUiPrefs,
+  type SyncedPrefKey,
+} from "./server-prefs-state.ts";
 
 // localStorage persistence primitives for the synced-prefs engine. Stateless:
 // every helper is (root, scope)-parameterized; scope adoption, pending shadows,
@@ -17,7 +22,7 @@ export const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
 // snapshot establishes a LAST_SEEN baseline, then normal server-delta reconciliation resumes.
 const RETAINED_LOCAL_KEY = "openclaw.control.serverPrefs.retained-local.v1";
 
-function readStorageState(
+export function readStorageState(
   root: string,
   scope: string,
 ): { available: boolean; value: string | null } {
@@ -57,6 +62,12 @@ export function writeStorage(root: string, scope: string, value: string | null):
 
 export function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
   const prefs = asRecord(safeParseJson(raw ?? "null"));
+  if (prefs && !Array.isArray(prefs.sidebarEntries)) {
+    clearSidebarEntriesMetadata(prefs);
+  }
+  if (prefs && prefs.sidebarEntriesOrder !== true) {
+    delete prefs.sidebarEntriesOrder;
+  }
   // SAFETY: consumers re-validate per key against SYNCED_PREFS extractors.
   return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
 }

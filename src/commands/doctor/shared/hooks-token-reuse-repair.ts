@@ -5,19 +5,9 @@ import {
   canMaterializeGatewayAuthSecretRefsWithoutExec,
   materializeGatewayAuthSecretRefs,
 } from "../../../gateway/auth-config-utils.js";
-import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../../../gateway/auth.js";
+import { resolveGatewayAuth } from "../../../gateway/auth.js";
 import { randomToken } from "../../random-token.js";
 import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
-
-function activeGatewaySharedSecret(auth: ResolvedGatewayAuth): string {
-  const secret =
-    auth.mode === "token"
-      ? auth.token
-      : auth.mode === "password" || auth.mode === "trusted-proxy"
-        ? auth.password
-        : undefined;
-  return normalizeOptionalString(secret) ?? "";
-}
 
 /** Rotate hooks.token when it matches the active Gateway token/password shared secret. */
 export async function repairHooksTokenReuseGatewayAuth(
@@ -47,7 +37,13 @@ export async function repairHooksTokenReuseGatewayAuth(
     tailscaleMode: materializedCfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
-  if (hooksToken !== activeGatewaySharedSecret(auth)) {
+  const sharedSecret =
+    auth.mode === "token"
+      ? auth.token
+      : auth.mode === "password" || auth.mode === "trusted-proxy"
+        ? auth.password
+        : undefined;
+  if (hooksToken !== (normalizeOptionalString(sharedSecret) ?? "")) {
     return { config: cfg, changes: [] };
   }
 

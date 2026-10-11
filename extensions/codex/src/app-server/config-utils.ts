@@ -20,6 +20,14 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 export { readNonEmptyString, readRecord };
 
+export function appendCodexGitConfigParameters(base: string | undefined, parameters: string) {
+  return !base
+    ? parameters
+    : base === parameters || base.endsWith(` ${parameters}`)
+      ? base
+      : `${base} ${parameters}`;
+}
+
 export function isCodexFastServiceTier(value: unknown): boolean {
   return normalizeCodexServiceTier(value) === "priority";
 }

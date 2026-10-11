@@ -49,22 +49,11 @@ function resolveUniqueCatalogValueById(model: string, catalog: ModelCatalogEntry
     return "";
   }
 
-  let matchedValue = "";
-  for (const entry of catalog) {
-    if (entry.id.trim().toLowerCase() !== normalizedModel) {
-      continue;
-    }
-    const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
-    if (!matchedValue) {
-      matchedValue = candidate;
-      continue;
-    }
-    if (matchedValue.toLowerCase() !== candidate.toLowerCase()) {
-      return "";
-    }
-  }
-
-  return matchedValue;
+  const values = catalog
+    .filter((entry) => entry.id.trim().toLowerCase() === normalizedModel)
+    .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+  const first = values[0] ?? "";
+  return values.every((value) => value.toLowerCase() === first.toLowerCase()) ? first : "";
 }
 
 export function resolvePreferredServerChatModelValue(

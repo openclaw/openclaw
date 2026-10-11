@@ -215,7 +215,7 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
 
-    const resolved = resolveAgentOutboundTarget({
+    const resolved = await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan,
       targetMode: "implicit",
@@ -240,7 +240,7 @@ describe("agent delivery helpers", () => {
     });
 
     mocks.resolveOutboundTarget.mockClear();
-    const resolved = resolveAgentOutboundTarget({
+    const resolved = await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan,
       targetMode: "explicit",
@@ -567,10 +567,10 @@ describe("agent delivery helpers", () => {
     expect(plan.targetResolutionError).toBeUndefined();
   });
 
-  it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
+  it("surfaces stored explicit target errors even when explicit validation is disabled", async () => {
     const targetResolutionError = new Error('reserved target "current"');
 
-    const resolved = resolveAgentOutboundTarget({
+    const resolved = await resolveAgentOutboundTarget({
       cfg: {} as OpenClawConfig,
       plan: {
         baseDelivery: { mode: "explicit" },

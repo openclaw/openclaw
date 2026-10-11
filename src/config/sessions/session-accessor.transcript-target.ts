@@ -11,19 +11,23 @@ import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
 import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import {
+  resolveSqliteSessionKey,
   resolveSqliteTranscriptScope,
+  resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { resolveSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
 import type {
+  ResolvedSessionTranscriptRuntimeTarget,
   SessionTranscriptReadScope,
   SessionTranscriptReadTarget,
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 /** Binds runtime storage without changing keys that raw ownership checks and read fences validate. */
@@ -44,12 +48,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
   config?: OpenClawConfig,
   options: { keyFormat?: "agent-qualified" } = {},
-): Promise<
-  SessionTranscriptRuntimeTarget & {
-    selectedSessionId?: string | null;
-    selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
-  }
-> {
+): Promise<ResolvedSessionTranscriptRuntimeTarget> {
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
@@ -60,6 +59,45 @@ export async function resolveSessionTranscriptRuntimeTarget(
     agentId,
     storePath,
   });
+  const incognito = isMainThread ? captureIncognitoSessionSource(bound) : undefined;
+  if (incognito && "kind" in incognito) {
+    incognito.assertCurrent();
+    return {
+      ...bound,
+      ...(options.keyFormat ? { selectedSessionId: null, selectedLifecycleRevision: null } : {}),
+    };
+  }
+  if (incognito) {
+    incognito.admissionSignal?.throwIfAborted();
+    const sessionKey = resolveSqliteSessionKey(bound.sessionKey, agentId);
+    if (!sessionKey && !options.keyFormat) {
+      // Marker-only history resolves retained windows without a current entry key.
+      const persistedSessionKey = await incognito.actor.sessions.transcript(
+        { assertCurrent: () => incognito.actor.assertReadable() },
+        { type: "session.keyById.read", input: { sessionId: bound.sessionId } },
+        incognito.admissionSignal,
+      );
+      return {
+        agentId,
+        sessionId: bound.sessionId,
+        sessionKey: persistedSessionKey ?? "",
+        storePath: incognito.actor.path,
+      };
+    }
+    return incognito.actor.sessions.transcript(
+      { assertCurrent: () => incognito.actor.assertReadable() },
+      {
+        type: "session.runtimeTarget.read",
+        input: {
+          sessionKey,
+          sessionId: bound.sessionId,
+          fence: {},
+          ...options,
+        },
+      },
+      incognito.admissionSignal,
+    );
+  }
   if (
     !isMainThread ||
     isIncognitoSessionKey(scope.sessionKey) ||
@@ -74,6 +112,27 @@ export async function resolveSessionTranscriptRuntimeTarget(
   const target = await withSessionStoreReaderInWorker(
     bound,
     async ({ reader, database, logicalAgentId, continuation, assertCurrent }) => {
+      const sessionKey = resolveSqliteSessionKey(bound.sessionKey, logicalAgentId);
+      const current = sessionKey
+        ? readRetainedSessionEntryFacts(database, { sessionKeys: [sessionKey] })
+        : undefined;
+      const entry = current?.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+      if (entry?.sessionId === bound.sessionId) {
+        assertCurrent();
+        return {
+          agentId: logicalAgentId,
+          sessionId: bound.sessionId,
+          sessionKey,
+          storePath: database.path,
+          ...(options.keyFormat
+            ? {
+                selectedSessionId: entry.sessionId,
+                selectedLifecycleRevision: entry.lifecycleRevision ?? null,
+              }
+            : {}),
+        };
+      }
+      // Historical windows and keyless lookups need the persisted session-ID index.
       const selected = await reader.readRuntimeTarget({
         scope: {
           agentId: logicalAgentId,
@@ -91,6 +150,28 @@ export async function resolveSessionTranscriptRuntimeTarget(
     { backing: true, lane: projectionLane, dataOnly: true },
   );
   return { ...target, storePath };
+}
+
+/** Resolve only a persisted window's key through the captured storage owner. */
+export async function resolveSessionKeyBySessionIdAsync(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): Promise<string | undefined> {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const target = { ...scope, agentId: resolved.agentId, sessionKey: "" };
+  const source = isMainThread ? captureIncognitoSessionSource(target) : undefined;
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return undefined;
+  }
+  if (source) {
+    source.admissionSignal?.throwIfAborted();
+    return source.actor.sessions.transcript(
+      { assertCurrent: () => source.actor.assertReadable() },
+      { type: "session.keyById.read", input: { sessionId: scope.sessionId } },
+      source.admissionSignal,
+    );
+  }
+  return (await resolveSessionTranscriptRuntimeTarget(target)).sessionKey || undefined;
 }
 
 /** The admitted reader resolves the window and canonical row in its captured physical store. */

@@ -12,7 +12,7 @@ import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.type
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
@@ -1200,7 +1200,7 @@ describe("gateway server chat", () => {
   });
 
   const contextOverflowCopy =
-    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
+    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 
   test.each([
     {

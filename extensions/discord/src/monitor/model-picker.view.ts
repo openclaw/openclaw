@@ -1,5 +1,4 @@
-import type { APISelectMenuOption } from "discord-api-types/v10";
-import { ButtonStyle } from "discord-api-types/v10";
+import { ButtonStyle, type APISelectMenuOption } from "discord-api-types/v10";
 import type {
   ModelsProviderData,
   ModelsRuntimeChoice,
@@ -25,6 +24,7 @@ import {
   createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
+  getDiscordModelPickerRecentModelRefs,
   normalizeModelPickerPage,
   type DiscordModelPickerBucket,
   type DiscordModelPickerCommandContext,
@@ -145,28 +145,22 @@ function buildBucketSelectRow(params: {
   providerPage?: number;
   modelIndex?: number;
 }): Row<StringSelectMenu> | null {
-  if (params.buckets.length <= 1) {
+  const { buckets, currentBucketId, ...state } = params;
+  if (buckets.length <= 1) {
     return null;
   }
-  const options: APISelectMenuOption[] = params.buckets.map((bucket) => ({
+  const options: APISelectMenuOption[] = buckets.map((bucket) => ({
     label: bucket.label,
     value: bucket.id,
-    default: bucket.id === params.currentBucketId,
+    default: bucket.id === currentBucketId,
   }));
   // The select value carries the bucket; derive the provider bucket on interaction
   // to keep long provider and user IDs within Discord's 100-character custom-id cap.
   return createModelSelectRow(
     {
-      command: params.command,
+      ...state,
       action: "bucket",
-      view: params.view,
-      userId: params.userId,
       page: 1,
-      provider: params.provider,
-      runtime: params.runtime,
-      runtimeToken: params.runtimeToken,
-      providerPage: params.providerPage,
-      modelIndex: params.modelIndex,
     },
     options,
     params.view === "providers"
@@ -205,9 +199,8 @@ function buildRenderedShell(
     containerComponents.push(new TextDisplay(`-# ${params.footer}`));
   }
 
-  const container = new Container(containerComponents);
   return {
-    components: [container],
+    components: [new Container(containerComponents)],
   };
 }
 
@@ -220,24 +213,22 @@ function buildProviderSelectRow(params: {
   providerBucket?: string;
   showModelCounts?: boolean;
 }): Row<StringSelectMenu> {
-  const options: APISelectMenuOption[] = params.page.items.map((provider) => ({
+  const { page, currentProvider, showModelCounts, ...state } = params;
+  const options: APISelectMenuOption[] = page.items.map((provider) => ({
     label: provider.id,
     value: provider.id,
-    default: provider.id === params.currentProvider,
-    ...(params.showModelCounts
+    default: provider.id === currentProvider,
+    ...(showModelCounts
       ? { description: `${provider.count} ${provider.count === 1 ? "model" : "models"}` }
       : {}),
   }));
   return createModelSelectRow(
     {
-      command: params.command,
+      ...state,
       action: "provider",
       view: "models",
-      provider: params.provider,
-      page: params.page.page,
-      providerPage: params.page.page,
-      providerBucket: params.providerBucket,
-      userId: params.userId,
+      page: page.page,
+      providerPage: page.page,
     },
     options,
     "Select provider",
@@ -358,6 +349,7 @@ function buildModelRows(
     page: params.modelPage.page,
     providerPage: providerPage.page,
   };
+  const modelActionState = { ...modelViewState, ...compactRuntime };
 
   if (
     runtimeChoices &&
@@ -400,8 +392,7 @@ function buildModelRows(
   rows.push(
     createModelSelectRow(
       {
-        ...modelViewState,
-        ...compactRuntime,
+        ...modelActionState,
         action: "pick",
       },
       modelOptions,
@@ -410,11 +401,10 @@ function buildModelRows(
   );
 
   const modelNavRow = buildPaginationRow({
-    ...modelViewState,
+    ...modelActionState,
     totalPages: params.modelPage.totalPages,
     hasPrev: params.modelPage.hasPrev,
     hasNext: params.modelPage.hasNext,
-    ...compactRuntime,
     modelIndex: params.pendingModelIndex,
     modelToken: pendingModelToken,
     // Model navigation derives providerBucket from provider on interaction;
@@ -435,7 +425,6 @@ function buildModelRows(
     typeof params.pendingModelIndex === "number" &&
     params.pendingModelIndex > 0;
 
-  const modelActionState = { ...modelViewState, ...compactRuntime };
   const buttonRowItems: Button[] = [
     createModelPickerButton("Providers", {
       command: params.command,
@@ -679,11 +668,7 @@ export function renderDiscordModelPickerRecentsView(
   params: DiscordModelPickerRecentsViewParams,
 ): DiscordModelPickerRenderedView {
   const { data, quickModels, currentModel, modelBucket, ...navigationState } = params;
-  const defaultModelRef = `${data.resolvedDefault.provider}/${data.resolvedDefault.model}`;
-  const recentModels = [
-    defaultModelRef,
-    ...quickModels.filter((modelRef) => modelRef !== defaultModelRef),
-  ];
+  const recentModels = getDiscordModelPickerRecentModelRefs(data, quickModels);
   const rows = recentModels.map(
     (modelRef, index) =>
       new Row([

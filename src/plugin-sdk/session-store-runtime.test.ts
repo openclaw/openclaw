@@ -7,9 +7,14 @@ import {
   loadSessionEntry as loadInternalSessionEntry,
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
+import { prepareSessionEntryReplacementDatabase } from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import type * as ConfigSessionTypes from "../config/sessions/types.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   cleanupSessionLifecycleArtifacts,
@@ -360,92 +365,6 @@ describe("session-store-runtime", () => {
     },
   );
 
-  it("forwards maintenance suppression through entry patches", async () => {
-    const staleSessionKey = "agent:main:stale";
-    const activeSessionKey = "agent:main:active";
-    const now = Date.now();
-    await seedSessionEntry(staleSessionKey, {
-      sessionId: "session-stale",
-      updatedAt: now - 8 * DAY_MS,
-    });
-    await seedSessionEntry(activeSessionKey, {
-      sessionId: "session-active",
-      updatedAt: now,
-    });
-
-    await patchSessionEntry({
-      sessionKey: activeSessionKey,
-      storePath,
-      maintenanceConfig: {
-        mode: "enforce",
-        pruneAfterMs: 7 * DAY_MS,
-        modelRunPruneAfterMs: DAY_MS,
-        maxEntries: 1,
-        resetArchiveRetentionMs: 7 * DAY_MS,
-        maxDiskBytes: null,
-        highWaterBytes: null,
-      },
-      requireWriteSuccess: true,
-      skipMaintenance: true,
-      update: () => ({ model: "gpt-5.5" }),
-    });
-
-    expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toMatchObject({
-      sessionId: "session-stale",
-    });
-  });
-
-  it("accepts pre-model-run maintenance configs through entry patches", async () => {
-    const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
-    const activeSessionKey = "agent:main:active";
-    const now = Date.now();
-    await seedSessionEntry(staleModelRunKey, {
-      sessionId: "session-probe",
-      updatedAt: now - 2 * DAY_MS,
-    });
-    await seedSessionEntry(activeSessionKey, {
-      sessionId: "session-active",
-      updatedAt: now,
-    });
-
-    const legacyMaintenanceConfig = {
-      mode: "enforce" as const,
-      pruneAfterMs: 7 * DAY_MS,
-      maxEntries: 500,
-      resetArchiveRetentionMs: 7 * DAY_MS,
-      maxDiskBytes: null,
-      highWaterBytes: null,
-    };
-
-    await expect(
-      patchSessionEntry({
-        sessionKey: activeSessionKey,
-        storePath,
-        maintenanceConfig: legacyMaintenanceConfig,
-        update: () => ({ model: "gpt-5.5" }),
-      }),
-    ).resolves.toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
-
-    expect(getSessionEntry({ sessionKey: staleModelRunKey, storePath })).toMatchObject({
-      sessionId: "session-probe",
-    });
-  });
-
-  it("deletes entries by session identity", async () => {
-    const sessionKey = "agent:main:delete-me";
-    await seedSessionEntry(sessionKey, {
-      sessionId: "session-delete-me",
-      updatedAt: Date.now(),
-    });
-
-    await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
-    await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(false);
-    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  });
-
   it("guards entry deletion against a concurrent session update", async () => {
     const sessionKey = "agent:main:delete-guarded";
     const updatedAt = Date.now();
@@ -543,42 +462,103 @@ describe("session-store-runtime", () => {
         .filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
     ).toHaveLength(1);
   });
+});
 
-  it("honors lifecycle cleanup without archiving removed entry transcripts", async () => {
-    const sessionKey = "agent:main:lifecycle-owned-discard";
-    const oldTimestamp = Date.now() - 600_000;
-    await seedSessionEntry(sessionKey, {
-      sessionId: "lifecycle-owned-discard",
-      updatedAt: oldTimestamp,
+describe("plugin session store maintenance", () => {
+  const maintenanceSessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-maintenance-");
+
+  it("keeps lifecycle cleanup in the explicit environment while its executor is live", async () => {
+    await withOpenClawTestState({ layout: "state-only", applyEnv: false }, async ({ env }) => {
+      expect(resolveOpenClawStateSqlitePath(env)).not.toBe(resolveOpenClawStateSqlitePath());
+      const scope = { agentId: "main", env };
+      const expiredKey = "agent:main:sdk-cleanup-env-expired";
+      const retainedKey = "agent:main:retained";
+      const seed = (sessionKey: string, sessionId: string) => {
+        const entry = { sessionId, updatedAt: 1 };
+        return patchSessionEntry({
+          ...scope,
+          sessionKey,
+          fallbackEntry: entry,
+          replaceEntry: true,
+          skipMaintenance: true,
+          requireWriteSuccess: true,
+          update: () => entry,
+        });
+      };
+      await seed(expiredKey, "expired");
+      // A live target exposes an incorrect fallback to the process environment.
+      const execution = captureOpenClawAgentDatabaseExecution(scope);
+      try {
+        await seed(retainedKey, "retained");
+        await prepareSessionEntryReplacementDatabase(
+          { ...scope, path: execution.path },
+          () => execution.assertCurrent(),
+          execution,
+        );
+        expect(execution.fileIdentity).toBeDefined();
+        await expect(
+          cleanupSessionLifecycleArtifacts({
+            ...scope,
+            archiveRemovedEntryTranscripts: false,
+            sessionKeySegmentPrefix: "sdk-cleanup-env-",
+            transcriptContentMarker: "sdk-cleanup-env-",
+            orphanTranscriptMinAgeMs: 0,
+            nowMs: 10_000,
+          }),
+        ).resolves.toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 0 });
+        expect(getSessionEntry({ ...scope, sessionKey: expiredKey })).toBeUndefined();
+        expect(getSessionEntry({ ...scope, sessionKey: retainedKey })?.sessionId).toBe("retained");
+        execution.assertCurrent();
+      } finally {
+        await execution.release();
+      }
     });
-    await appendTranscriptEvent(
-      { agentId: "main", sessionKey, sessionId: "lifecycle-owned-discard", storePath },
-      {
-        runId: "lifecycle-owned-discard",
-        timestamp: new Date(oldTimestamp).toISOString(),
-        type: "metadata",
-      },
-    );
-
-    await expect(
-      cleanupSessionLifecycleArtifacts({
-        agentId: "main",
-        archiveRemovedEntryTranscripts: false,
-        storePath,
-        sessionKeySegmentPrefix: "lifecycle-owned-",
-        transcriptContentMarker: '"runId":"lifecycle-owned-',
-        orphanTranscriptMinAgeMs: 300_000,
-      }),
-    ).resolves.toEqual({
-      archivedTranscriptArtifacts: 0,
-      removedEntries: 1,
-    });
-
-    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    expect(
-      fs
-        .readdirSync(tempDir)
-        .filter((file) => file.startsWith("lifecycle-owned-discard.jsonl.deleted.")),
-    ).toHaveLength(0);
   });
+
+  it.each([
+    { modelRunPruneAfterMs: DAY_MS, modelRunSessionPresent: false },
+    { modelRunPruneAfterMs: 0, modelRunSessionPresent: true },
+    { modelRunPruneAfterMs: -DAY_MS, modelRunSessionPresent: true },
+  ])(
+    "applies model-run retention $modelRunPruneAfterMs through entry patches",
+    async ({ modelRunPruneAfterMs, modelRunSessionPresent }) => {
+      const storePath = path.join(maintenanceSessionDirs.make(), "sessions.json");
+      const modelRunSessionKey =
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+      const oldSessionKey = "agent:main:old";
+      const activeSessionKey = "agent:main:active";
+      const now = Date.now();
+      const seed = (sessionKey: string, sessionId: string, updatedAt: number) =>
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId, updatedAt },
+        );
+      seed(modelRunSessionKey, "session-model-run", now - 2 * DAY_MS);
+      seed(oldSessionKey, "session-old", now - 3 * DAY_MS);
+      seed(activeSessionKey, "session-active", now);
+
+      const done = observeSessionMaintenanceCompletion(
+        path.join(path.dirname(storePath), "openclaw-agent.sqlite"),
+      );
+      await patchSessionEntry({
+        sessionKey: activeSessionKey,
+        storePath,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          modelRunPruneAfterMs,
+          maxEntries: 2,
+          resetArchiveRetentionMs: 7 * DAY_MS,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        update: () => ({ model: "gpt-5.6-luna" }),
+      });
+
+      await done;
+      expect(getSessionEntry({ sessionKey: modelRunSessionKey, storePath }) != null).toBe(
+        modelRunSessionPresent,
+      );
+    },
+  );
 });

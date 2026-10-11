@@ -26,30 +26,24 @@ const { runWorker, readerAdmitted } = vi.hoisted(() => ({
   runWorker: vi.fn(),
   readerAdmitted: vi.fn(),
 }));
+// mock-isolation: Exercise dispatch and byte admission without opening real history workers.
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: (
     _options: unknown,
-    operation: (owner: {
-      generation: number;
-      run: typeof runWorker;
-      assertCurrent: () => void;
-    }) => unknown,
-  ) => {
-    let admitted = false;
-    return operation({
-      generation: 1,
+    operation: (owner: { run: typeof runWorker; assertCurrent: () => void }) => unknown,
+  ) =>
+    operation({
       run: runWorker,
-      assertCurrent: () => {
-        if (!admitted) {
-          admitted = true;
-          readerAdmitted();
-        }
-      },
-    });
-  },
+      assertCurrent() {},
+    }),
 }));
+// mock-isolation: Cold restoration has its own owner tests; this fixture controls read callbacks.
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
-  readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => read(),
+  readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => {
+    const pending = read();
+    readerAdmitted();
+    return pending;
+  },
 }));
 
 type RpcRequest = Extract<SessionHistoryWorkerRequest, { kind: "rpc" }>;
@@ -256,7 +250,7 @@ it("captures prepared Claude history authority, cwd, and node placement in queue
       },
     },
   });
-  expect(runWorker.mock.calls[0]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+  expect(runWorker.mock.calls[0]![1]).toBe(JSON.stringify(input).length * 2);
   queued[0]!.result.resolve(page("captured authorized root"));
   await pending;
 });
@@ -267,6 +261,22 @@ function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   };
 }
+
+it("treats an empty exact archive path as an ordinary recent-history request", async () => {
+  const result = { messages: [], totalMessages: 0 };
+  runWorker.mockImplementationOnce(async (prepare: () => SessionTranscriptHistoryWorkerInput) => {
+    const input = prepare();
+    expect(input.request.kind).toBe("recent-page");
+    expect(input.request.params).not.toHaveProperty("exactArchivePath");
+    return { kind: "recent-page", result };
+  });
+  await expect(
+    readSessionHistoryPageInWorker({
+      kind: "recent-page",
+      params: { target: historyTarget(), exactArchivePath: "", options: { maxMessages: 10 } },
+    }),
+  ).resolves.toEqual(result);
+});
 
 function httpPage(): SessionHistoryWorkerResult {
   return {
@@ -463,7 +473,7 @@ it.each(["rpc", "http"] as const)(
         sessionKey: "agent:main:history-worker",
         storePath: "/tmp/history-worker-fixture/sessions.json",
       });
-      expect.soft(bytes).toBe(`1:${JSON.stringify(input)}`.length * 2);
+      expect.soft(bytes).toBe(JSON.stringify(input).length * 2);
     }
   },
 );
@@ -720,7 +730,7 @@ it.each(["rpc limit", "rpc store", "http cursor"] as const)(
     expect(queued).toHaveLength(2);
     for (const [index, job] of queued.entries()) {
       const input = job.prepare();
-      expect(runWorker.mock.calls[index]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+      expect(runWorker.mock.calls[index]![1]).toBe(JSON.stringify(input).length * 2);
       job.result.resolve(selector === "http cursor" ? httpPage() : page("selected page"));
     }
     await Promise.all([first, second]);
@@ -859,7 +869,7 @@ it.each([
     });
     expect(input.target).not.toHaveProperty("database");
     expect(input.target).not.toHaveProperty("env");
-    expect(runWorker.mock.calls[0]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+    expect(runWorker.mock.calls[0]![1]).toBe(JSON.stringify(input).length * 2);
     queued[0]!.result.resolve(page("requested transcript"));
     await pending;
   },

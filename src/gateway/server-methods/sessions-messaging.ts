@@ -19,7 +19,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
-  resolveDeletedAgentIdFromSessionKey,
+  prepareDeletedAgentSessionCheck,
 } from "../session-utils.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -126,9 +126,19 @@ async function handleSessionSend(
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const sessionAuthorization = options.sessionMutationAuthorization;
+  const deletedAgent = prepareDeletedAgentSessionCheck({
+    cfg,
+    sessionKey: canonicalKey,
+    entry,
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
+    assertCurrent: requestAuthority.assertPreparationCurrent,
   });
+  const deletedAgentId = deletedAgent instanceof Promise ? await deletedAgent : deletedAgent;
+  if (deletedAgent instanceof Promise) {
+    requestAuthority.assertPreparationCurrent();
+  }
   if (deletedAgentId !== null) {
     options.respond(
       false,
@@ -143,8 +153,6 @@ async function handleSessionSend(
   const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
-  const requestAuthority = readGatewayRequestMutationAuthority(options);
-  const sessionAuthorization = options.sessionMutationAuthorization;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
     const forwarded = bindGatewayRequestHandlerMutationAuthority(
       options,

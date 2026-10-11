@@ -19,7 +19,6 @@ import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/ga
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
@@ -64,8 +63,8 @@ import { registerSubagentRegistrationPersistenceTests } from "./subagent-registr
 import {
   activateSubagentRegistryWithRecoveryRuntime,
   registerRestoredRequesterWakeSettlementTests,
+  registerRestoredSessionReadTests,
   registerRestoredRollbackPublicationTest,
-  registerRestoredRotationFailureTest,
 } from "./subagent-registry.restored-settlement.test-support.js";
 import {
   makeCompletedCollectorRun,
@@ -617,7 +616,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
-  it("retries registry restore after a transient partial-merge failure", async () => {
+  it("reconciles a partial merge on the next explicit restore", async () => {
     const runId = "run-restore-retry";
     const restored = createSubagentRunRecord({
       runId,
@@ -637,7 +636,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
     expect(mocks.onAgentEvent).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await hydrateAndActivateRegistry();
 
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
     expect(mod.getSubagentRunByRunId(runId)?.runId).toBe(runId);
@@ -648,34 +647,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
   });
 
-  it("routes restored waits for a newer session run", async () => {
-    const runId = "run-restored-orphan-routing";
-    const restored = createSubagentRunRecord({
-      runId,
-      execution: {
-        status: "running",
-        lifecycleGeneration: "retired-generation",
-      },
-    });
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        lifecycleRunId: "newer-run",
-        abortedLastRun: false,
-      }),
-    };
-    mockRestoredRuns(() => [restored]);
-    mockPendingAgentWait();
-
-    await hydrateAndActivateRegistry();
-
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId }),
-      }),
-    );
-  });
+  registerRestoredSessionReadTests({ mocks, hydrateAndActivateRegistry, mockPendingAgentWait });
 
   it("does not double-run reentrant registry restore calls", async () => {
     let reentrantRestore: ReturnType<typeof mod.initSubagentRegistry> | undefined;
@@ -767,15 +739,12 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
     await hydrateAndActivateRegistry();
     await Promise.resolve();
     expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
       [],
     );
 
-    suspension?.release();
     expect(releaseSwarmRun("slot-active")).toBe(true);
     await waitForFast(() => {
       const agentCalls = mocks.callGateway.mock.calls.filter(
@@ -907,15 +876,7 @@ describe("subagent registry seam flow", () => {
     mockRestoredRuns,
   });
 
-  registerRestoredRotationFailureTest({
-    getRegistry: () => mod,
-    mocks,
-    hydrateAndActivateRegistry,
-    mockSingleCollectorConcurrency,
-    mockRestoredRuns,
-  });
-
-  it("retries restored collector session cleanup before announcing deletion", async () => {
+  it("settles restored collector session cleanup before announcing deletion", async () => {
     const now = Date.now();
     mockRestoredRuns(() => [
       makeQueuedRun({
@@ -945,9 +906,6 @@ describe("subagent registry seam flow", () => {
       }
       if (request.method === "sessions.delete") {
         deleteAttempts += 1;
-        if (deleteAttempts === 1) {
-          throw new Error("delete unavailable");
-        }
         return await new Promise<Record<string, unknown>>((resolve) => {
           releaseDelete = () => resolve({});
         });
@@ -963,7 +921,7 @@ describe("subagent registry seam flow", () => {
       }),
     );
     await waitForFast(() => expect(releaseDelete).toBeTypeOf("function"));
-    expect(deleteAttempts).toBe(2);
+    expect(deleteAttempts).toBe(1);
     expect(mocks.emitSessionLifecycleEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:subagent:queued-cleanup-retry",

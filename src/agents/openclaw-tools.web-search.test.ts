@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
 import {
   createOAuthAuthProfileStore,
   createWebSearchTestProvider,
@@ -82,10 +83,29 @@ describe("unconfigured web search tool surface", () => {
     { prepared: true, source: true, provider: "test-search-auth", configured: true },
     { prepared: true, source: undefined, provider: "test-search-auth", configured: true },
     { prepared: false, source: undefined, provider: "test-search-auth", configured: false },
+    {
+      prepared: false,
+      source: undefined,
+      provider: "test-search-auth",
+      configured: false,
+      selectedReader: true,
+    },
   ])(
-    "uses prepared=$prepared and source=$source for $provider during async construction",
-    async ({ prepared, source: authProfileStoreSource, provider, configured }) => {
+    "uses prepared=$prepared and source=$source for $provider during async construction (selectedReader=$selectedReader)",
+    async ({ prepared, source: authProfileStoreSource, provider, configured, selectedReader }) => {
       const agentDir = tempDirs.make("openclaw-search-source-");
+      const reader: SessionEntryCohortReader | undefined = selectedReader
+        ? {
+            database: { agentId: "main", path: agentDir, env: {} },
+            sessionKey: "agent:main:test",
+            logicalAgentId: "main",
+            storePaths: [agentDir],
+            assertCurrent: () => {},
+            withRead: async () => {
+              throw new Error("The auth owner is isolated by the source probe");
+            },
+          }
+        : undefined;
       replaceRuntimeAuthProfileStoreSnapshots([
         {
           agentDir,
@@ -115,20 +135,27 @@ describe("unconfigured web search tool surface", () => {
         .spyOn(authSource, "hasAnyAuthProfileStoreSourceAsync")
         .mockResolvedValue(false);
       const onWebSearchConfiguration = vi.fn();
-      const tools = await createOpenClawToolsAsync({
-        config: {},
-        agentDir,
-        authProfileStoreSource,
-        disableMessageTool: true,
-        disablePluginTools: true,
-        wrapBeforeToolCallHook: false,
-        onWebSearchConfiguration,
-      });
+      const tools = await createOpenClawToolsAsync(
+        {
+          config: {},
+          agentDir,
+          authProfileStoreSource,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+          onWebSearchConfiguration,
+        },
+        { reader },
+      );
       // Source presence still requires a matching provider credential.
       expect(tools.some((tool) => tool.name === "web_search")).toBe(configured);
       expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(configured);
       if (authProfileStoreSource === undefined && !prepared) {
-        expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir);
+        if (reader) {
+          expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir, reader);
+        } else {
+          expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir);
+        }
       } else {
         expect(sourceProbe).not.toHaveBeenCalled();
       }

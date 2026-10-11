@@ -24,8 +24,9 @@ import {
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
+import { canvasWidgetMount } from "./canvas-widget-mount.ts";
 import { exportWidget } from "./widget-export.ts";
-import "./browser-tab-card.ts";
+import "./browser-tab-card.tsx";
 
 registerMcpAppEnglish();
 
@@ -341,12 +342,11 @@ function renderPreviewFrame(params: PreviewFrameParams) {
 }
 
 const loadMcpAppView = async () => {
-  const registration = await import("../../../components/mcp-app-view-registration.ts");
-  registration.registerMcpAppView();
+  await import("../../../components/mcp-app-view-registration.ts");
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
-const loadYouTubeVideo = () => import("./youtube-video-card.ts");
+const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function renderWidgetContent(
   preview: CanvasToolPreview,
@@ -372,20 +372,15 @@ function renderWidgetContent(
     void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
       (error: unknown) => console.error("[openclaw] failed to load widget view", error),
     );
-    return keyed(
-      `${preview.viewId}\0${options?.sessionKey ?? ""}`,
-      html`
-        <openclaw-canvas-widget-view
-          .docId=${preview.viewId!.trim()}
-          .sessionKey=${options?.sessionKey ?? ""}
-          .messageTimestamp=${options?.messageTimestamp}
-          .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
-          .preferredHeight=${preview.preferredHeight}
-          .allowScripts=${sandbox.includes("allow-scripts")}
-          .connectionGeneration=${getCanvasWidgetFrameConnectionGeneration()}
-        ></openclaw-canvas-widget-view>
-      `,
-    );
+    return canvasWidgetMount({
+      docId: preview.viewId!.trim(),
+      sessionKey: options?.sessionKey ?? "",
+      messageTimestamp: options?.messageTimestamp,
+      title: preview.title?.trim() || t("chat.toolCards.canvas"),
+      preferredHeight: preview.preferredHeight,
+      allowScripts: sandbox.includes("allow-scripts"),
+      connectionGeneration: getCanvasWidgetFrameConnectionGeneration(),
+    });
   }
   const promptCapable = isInternalCanvasEntryUrl(preview.url);
   return renderPreviewFrame({
@@ -486,6 +481,19 @@ function widgetActionsPlacementRef() {
   };
 }
 
+function renderWidgetAction(value: "copy" | "download" | "raw-details") {
+  const { icon, labelKey } = {
+    copy: { icon: icons.copyImage, labelKey: "chat.toolCards.copyAsImage" },
+    download: { icon: icons.download, labelKey: "chat.toolCards.downloadAsImage" },
+    "raw-details": { icon: icons.fileText, labelKey: "chat.toolCards.showRawDetails" },
+  }[value];
+  const label = t(labelKey);
+  return html`<wa-dropdown-item class="session-menu__item" value=${value}>
+    <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+    <span class="session-menu__text" ?data-raw-label=${value === "raw-details"}>${label}</span>
+  </wa-dropdown-item>`;
+}
+
 function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
   if (!canExportImage && !hasRawDetails) {
@@ -508,35 +516,8 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
       >
         ${icons.moreHorizontal}
       </button>
-      ${
-        canExportImage
-          ? (
-              [
-                ["copy", icons.copyImage, "chat.toolCards.copyAsImage"],
-                ["download", icons.download, "chat.toolCards.downloadAsImage"],
-              ] as const
-            ).map(
-              ([value, icon, label]) => html`
-                <wa-dropdown-item class="session-menu__item" value=${value}>
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-                  <span class="session-menu__text">${t(label)}</span>
-                </wa-dropdown-item>
-              `,
-            )
-          : nothing
-      }
-      ${
-        hasRawDetails
-          ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                >${icons.fileText}</span
-              >
-              <span class="session-menu__text" data-raw-label
-                >${t("chat.toolCards.showRawDetails")}</span
-              >
-            </wa-dropdown-item>`
-          : nothing
-      }
+      ${canExportImage ? (["copy", "download"] as const).map(renderWidgetAction) : nothing}
+      ${hasRawDetails ? renderWidgetAction("raw-details") : nothing}
     </wa-dropdown>
   `;
 }

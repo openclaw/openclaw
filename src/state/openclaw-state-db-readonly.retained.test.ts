@@ -60,9 +60,9 @@ const tasks: Array<RetainedWorkerTask<OpenClawStateReadReply>> = [];
 const releaseFixtures: Array<() => void> = [];
 const reply: OpenClawStateReadReply = {
   ok: true,
-  type: "fleet.list",
+  type: "backup.runs",
   sourceAdmitted: true,
-  cells: [],
+  runs: [],
 };
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -201,7 +201,7 @@ it("services queued readers through release while retaining native source custod
     backup.resolve({ location: options.path, cleanupAsync });
     nativeCleanup.resolve(true);
   });
-  const read = () => executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  const read = () => executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   const first = owner.run("first", () => withArtifactPreservingStateReads(read));
   observed("first").source.service();
   expect(mock.prepareNative).toHaveBeenCalledOnce();
@@ -266,7 +266,7 @@ it("finishes fresh snapshot preparation, query, and snapshot cleanup without Pro
   });
   const completion = owner.run("fresh", () =>
     withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
     ),
   );
   ready = true;
@@ -317,7 +317,7 @@ it("retains failed preparation custody through a pending close and canonical ret
   try {
     completion = maintenance.run(() =>
       withArtifactPreservingStateReads(() =>
-        executeExistingOpenClawStateRead(options, { type: "fleet.list" }, { mapError }),
+        executeExistingOpenClawStateRead(options, { type: "backup.runs" }, { mapError }),
       ),
     );
     void completion.then(

@@ -85,7 +85,7 @@ async function backups() {
 
 async function repair(state: OpenClawTestState) {
   return withDoctorConfigMaintenance(async () => {
-    const ctx = await prepareDoctorContext(state.configPath);
+    await using ctx = await prepareDoctorContext(state.configPath);
     await runInitialConfigWriteHealth(ctx);
     return ctx;
   });
@@ -482,21 +482,23 @@ it.each([
   "preflight custom store",
   "health write with unsupported delivery",
   "legacy list with a machine-state custom store",
+  "markerless legacy list",
 ])("pins the original owner before the %s and preserves recovery", async (entry) => {
   await withOpenClawTestState(
     { label: "cron-owner-doctor", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
       const machineStore = entry === "legacy list with a machine-state custom store";
+      const markerless = entry === "markerless legacy list";
       const customStore = entry === "preflight custom store" || machineStore;
       const storePath = state.statePath(customStore ? "custom-cron" : "cron", "jobs.json");
       const config = sourceConfig(customStore && !machineStore ? storePath : undefined);
       await state.writeConfig(
-        machineStore
+        machineStore || markerless
           ? {
               ...config,
               agents: {
                 defaults: config.agents.defaults,
-                list: [{ id: "ops", default: true }, { id: "research" }],
+                list: [{ id: "ops", ...(markerless ? {} : { default: true }) }, { id: "research" }],
               },
             }
           : config,

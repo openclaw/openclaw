@@ -10,7 +10,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript, loadTranscriptEvents } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 
 const events = [

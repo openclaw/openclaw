@@ -14,7 +14,7 @@ import { sleep } from "../../utils/sleep.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
-  workerSshOptions,
+  workerSshCommandPrefix,
   workerSshRemoteCommand,
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
@@ -87,15 +87,7 @@ export function workerWorkspaceRsyncRemoteCommand(
   prepared: PreparedWorkerSsh,
   port = prepared.port,
 ): string {
-  return workerSshRemoteCommand([
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-  ]);
+  return workerSshRemoteCommand(workerSshCommandPrefix(prepared, port));
 }
 
 type WorkerWorkspaceRsyncReceiverMode = "accepted-next" | "git-pack" | "workspace-root";
@@ -159,25 +151,6 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
     throw new Error("Worker workspace rsync receiver bundle hash is invalid");
   }
   return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
-}
-
-export function workerWorkspaceSshArgv(
-  prepared: PreparedWorkerSsh,
-  remoteArgv: readonly string[],
-  port = prepared.port,
-): string[] {
-  return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(port),
-    "--",
-    prepared.sshTarget,
-    workerSshRemoteCommand(remoteArgv),
-  ];
 }
 
 export async function resolveRemoteWorkspaceManifest(

@@ -575,12 +575,14 @@ describe("gateway probe endpoints", () => {
       enabled: true,
       configured: true,
       lifecycle: "ready" as "ready" | "blocked",
+      linked: true,
+      terminalDisconnect: false,
       lastStartAt: startedAt,
     };
     const channelManager = {
       getRuntimeSnapshot: () => ({
-        channels: { telegram: account },
-        channelAccounts: { telegram: { default: account } },
+        channels: { whatsapp: account },
+        channelAccounts: { whatsapp: { default: account } },
       }),
       getAutostartSuppression: () => null,
       isAmbientAutostartSuppressed: () => false,
@@ -656,11 +658,15 @@ describe("gateway probe endpoints", () => {
 
         refusals = [];
         account.lifecycle = "blocked";
+        account.running = false;
+        account.connected = false;
+        account.linked = false;
+        account.terminalDisconnect = true;
         const readiness = await sendRequest(server, { path: "/readyz" });
         expect(readiness.res.statusCode).toBe(503);
         expect(JSON.parse(readiness.getBody())).toMatchObject({
           ready: false,
-          failing: ["telegram"],
+          failing: ["whatsapp"],
         });
 
         const channelIndependentStartup = await sendRequest(server, {
@@ -757,8 +763,14 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  it("serves probes before stalled request stages", async () => {
+  it("serves unauthenticated probes before stalled stages, Control UI, and catch-all plugins", async () => {
     const handleHooksRequest = vi.fn((): Promise<boolean> => new Promise(() => {}));
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-owned");
+      return true;
+    });
+    const shouldEnforcePluginGatewayAuth = vi.fn(() => true);
     const getReadiness = vi.fn(() => ({
       ready: true,
       failing: [],
@@ -767,27 +779,37 @@ describe("gateway probe endpoints", () => {
 
     await withGatewayServer({
       prefix: "probe-before-stalled-stages",
-      resolvedAuth: AUTH_NONE,
-      overrides: { getReadiness, handleHooksRequest },
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        getReadiness,
+        handleHooksRequest,
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "missing" },
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth,
+      },
       run: async (server) => {
-        const healthReq = createRequest({ path: "/healthz" });
-        const healthResponse = createResponse();
-        await dispatchRequest(server, healthReq, healthResponse.res);
-
-        expect(healthResponse.res.statusCode).toBe(200);
-        expect(healthResponse.getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
-
-        const readyReq = createRequest({ path: "/readyz" });
-        const readyResponse = createResponse();
-        await dispatchRequest(server, readyReq, readyResponse.res);
-
-        expect(readyResponse.res.statusCode).toBe(200);
-        expect(JSON.parse(readyResponse.getBody())).toEqual({
-          ready: true,
-          failing: [],
-          uptimeMs: 123,
-        });
+        for (const path of ["/health", "/healthz", "/ready", "/readyz", "/startup", "/startupz"]) {
+          const response = await sendRequest(server, { path });
+          expect(response.res.statusCode, path).toBe(200);
+          const body: unknown = JSON.parse(response.getBody());
+          if (path.startsWith("/health")) {
+            expect(body, path).toEqual({ ok: true, status: "live" });
+          } else if (path.startsWith("/ready")) {
+            expect(body, path).toEqual({ ready: true, failing: [], uptimeMs: 123 });
+          } else {
+            expect(body, path).toMatchObject({
+              ok: true,
+              status: "started",
+              version: expect.any(String),
+              uptimeMs: expect.any(Number),
+            });
+          }
+        }
         expect(handleHooksRequest).not.toHaveBeenCalled();
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+        expect(shouldEnforcePluginGatewayAuth).not.toHaveBeenCalled();
       },
     });
   });

@@ -20,6 +20,10 @@ import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import {
   disabledCompactionRuntime,
+  emptyLengthScenario,
+  outputLimitDetails,
+  outputLimitScenario,
+  outputLimitScenarios,
   recoverAfterTransportDrop,
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
@@ -113,25 +117,6 @@ function handleAssistantFailureAfterRecovery(
   });
 }
 
-const outputLimitDetails = {
-  eventType: "response.incomplete",
-  stopReason: "length",
-  incompleteReason: "max_output_tokens",
-};
-
-const outputLimitScenario = {
-  errorCode: "incomplete_tool_call",
-  errorMessage: "Responses stream completed with an incomplete terminal tool call",
-  diagnostics: [
-    {
-      type: "openai_responses_terminal",
-      timestamp: 1,
-      details: outputLimitDetails,
-    },
-  ],
-  usage: createMockUsage(440_445, 128_000),
-} satisfies TransportDropScenario;
-
 const unsettledBatches: Array<[string, TransportDropScenario]> = [
   ["a tool result is missing", { missingToolResult: true }],
   ["a lifecycle item remains active", { activeCount: 1 }],
@@ -202,25 +187,31 @@ describe("recoverEmbeddedRunAttempt", () => {
       );
     },
   );
-  it.each([true, false])(
-    "continues output-limited work without replay (no tools=%s)",
-    async (noTools) => {
+  it.each(
+    outputLimitScenarios.flatMap((scenario) =>
+      [true, false].map((noTools) => ({ scenario, noTools })),
+    ),
+  )(
+    "continues output-limited work without replay (no tools=$noTools)",
+    async ({ scenario, noTools }) => {
       const {
+        attempt,
         recovery,
         markOwnedTranscriptRetry,
         continueFromCurrentTranscript,
         failoverRetryController,
         onAgentEvent,
       } = await recoverAfterTransportDrop({
-        ...outputLimitScenario,
+        ...scenario,
         noTools,
-        assistantTexts: noTools ? [] : ["The change is saved. I am checking its results."],
+        preToolText: noTools ? undefined : "The change is saved. I am checking its results.",
       });
 
       expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
       expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
       expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
+        messages: attempt.messagesSnapshot,
       });
       expect(failoverRetryController.transientRetryCount).toBe(1);
       expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
@@ -234,62 +225,172 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it("does not bypass the output-limit budget through empty-error retries", async () => {
-    const fixture = await recoverAfterTransportDrop({
-      ...outputLimitScenario,
-      noTools: true,
-      retryAvailable: false,
-    });
-    expect(fixture.recovery).toEqual({ action: "proceed" });
+  it.each(outputLimitScenarios)(
+    "does not bypass the output-limit budget through empty-error retries",
+    async (scenario) => {
+      const fixture = await recoverAfterTransportDrop({
+        ...scenario,
+        noTools: true,
+        retryAvailable: false,
+      });
+      expect(fixture.recovery).toEqual({ action: "proceed" });
 
-    await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
-      action: "proceed",
-      emptyErrorRetries: 0,
-    });
-    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
+      await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
+        action: "proceed",
+        emptyErrorRetries: 0,
+      });
+      expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+      expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
 
-  it("allows only one output-limit continuation even after successful model progress", async () => {
-    const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop(outputLimitScenario);
-    expect(recovery.action).toBe("retry");
-    failoverRetryController.observeAttempt({
-      providerRetryMaxRetries: 8,
-      hasSuccessfulModelResponse: true,
-    });
-
-    expect(await recover()).toEqual({ action: "proceed" });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("continues slow output generation without consuming the transient outage window", async () => {
-    const startedAt = Date.now();
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    try {
+  it.each(outputLimitScenarios)(
+    "allows only one output-limit continuation even after successful model progress",
+    async (scenario) => {
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-        await recoverAfterTransportDrop(outputLimitScenario);
+        await recoverAfterTransportDrop(scenario);
       expect(recovery.action).toBe("retry");
-      now.mockReturnValue(startedAt + 16 * 60_000);
+      failoverRetryController.observeAttempt({
+        providerRetryMaxRetries: 8,
+        hasSuccessfulModelResponse: true,
+      });
 
-      expect(await recover()).toMatchObject({ action: "proceed" });
+      expect(await recover()).toEqual({ action: "proceed" });
       expect(failoverRetryController.transientRetryCount).toBe(1);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
-      now.mockReturnValue(startedAt + 32 * 60_000);
-      await expect(
-        failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
-      ).resolves.toBe(true);
-      now.mockReturnValue(startedAt + 34 * 60_000);
-      await expect(
-        failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
-      ).resolves.toBe(false);
-    } finally {
-      now.mockRestore();
-    }
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(outputLimitScenarios)(
+    "continues slow output generation without consuming the transient outage window",
+    async (scenario) => {
+      const startedAt = Date.now();
+      const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+      try {
+        const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
+          await recoverAfterTransportDrop(scenario);
+        expect(recovery.action).toBe("retry");
+        now.mockReturnValue(startedAt + 16 * 60_000);
+
+        expect(await recover()).toMatchObject({ action: "proceed" });
+        expect(failoverRetryController.transientRetryCount).toBe(1);
+        expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
+        now.mockReturnValue(startedAt + 32 * 60_000);
+        await expect(
+          failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
+        ).resolves.toBe(true);
+        now.mockReturnValue(startedAt + 34 * 60_000);
+        await expect(
+          failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
+        ).resolves.toBe(false);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it.each<{ label: string } & TransportDropScenario>([
+    {
+      label: "partial answer",
+      assistant: buildEmbeddedRunnerAssistant({
+        stopReason: "length",
+        content: [{ type: "text", text: "The result so far" }],
+      }),
+    },
+    {
+      label: "completed answer before the empty stop",
+      assistantTexts: ["The result is verified."],
+    },
+    { label: "assistant media", preToolText: "MEDIA:https://example.com/result.png" },
+    {
+      label: "snapshot-only assistant media",
+      preToolText: "MEDIA:https://example.com/result.png",
+      assistantTexts: [],
+    },
+    { label: "voice output", preToolText: "[[audio_as_voice]]" },
+    { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
+    { label: "source reply already delivered", sourceReplyDelivered: true },
+    { label: "silent cron tool result", trigger: "cron", toolResultText: "NO_REPLY" },
+  ])("preserves $label after a length stop", async ({ label: _label, ...scenario }) => {
+    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+      ...emptyLengthScenario,
+      ...scenario,
+    });
+    expect(recovery).toEqual({ action: "proceed" });
+    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "delivered", "error"] as const)(
+    "preserves %s source delivery after an empty length stop",
+    async (state) => {
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...emptyLengthScenario,
+        resolveReplyDelivery: async () => {
+          if (state === "error") {
+            throw new Error("delivery unavailable");
+          }
+          return state;
+        },
+      });
+      expect(recovery).toEqual({ action: "proceed" });
+      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "[[reply_to_current]]"])(
+    "continues after an earlier answer was delivered (reply target: %s)",
+    async (preToolText) => {
+      const previousAssistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "previous_reply",
+            name: "message",
+            arguments: { action: "send", message: "The previous result is ready." },
+          },
+        ],
+      });
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...emptyLengthScenario,
+        preToolText,
+        precedingMessages: [
+          { role: "user", content: "Send the previous result.", timestamp: 0 },
+          previousAssistant,
+          {
+            role: "toolResult",
+            toolCallId: "previous_reply",
+            toolName: "message",
+            content: [{ type: "text", text: "Delivered." }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+        answerSegments: [
+          { textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: previousAssistant },
+        ],
+        resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
+          minimumAssistantMessageIndex <= 1 ? "delivered" : "missing",
+      });
+      expect(recovery.action).toBe("retry");
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("routes a zero-output length overflow to compaction before output retries", async () => {
+    await expect(
+      recoverAfterTransportDrop({
+        assistant: buildEmbeddedRunnerAssistant({
+          stopReason: "length",
+          content: [],
+          usage: createMockUsage(199000, 0),
+        }),
+        compactionEnabled: true,
+      }),
+    ).rejects.toThrow("overflow compaction requested");
   });
 
   it.each([
@@ -557,6 +658,8 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<[string, TransportDropScenario]>([
     ["WebSocket drop", {}],
+    ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],
+    ["overload after settled tools", { errorMessage: "server_overloaded", diagnostics: [] }],
     [
       "WebSocket transport code",
       {
@@ -624,6 +727,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     ],
   ])("continues the existing transcript after %s", async (_label, scenario) => {
     const {
+      attempt,
       recovery,
       markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
@@ -638,6 +742,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
+      messages: attempt.messagesSnapshot,
     });
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -650,7 +755,18 @@ describe("recoverEmbeddedRunAttempt", () => {
   });
 
   it.each([
-    ...recoveryCases("output limit", outputLimitScenario, unsettledBatches),
+    ...outputLimitScenarios.flatMap((scenario) =>
+      recoveryCases("output limit", scenario, [
+        ...unsettledBatches,
+        ["the attempt yielded", { yieldDetected: true }],
+        ["the retry budget is disabled", { retryAvailable: false }],
+        ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
+        [
+          "the run deadline expired",
+          { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
+        ],
+      ]),
+    ),
     ...recoveryCases(
       "overflow",
       {
@@ -829,7 +945,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     const failoverRetryController = {
       resolveAuthProfileFailureReason: vi.fn(),
       advanceAuthProfile: vi.fn(),
-      advanceRateLimitAuthProfile: vi.fn(),
       maybeMarkAuthProfileFailure: vi.fn(),
       maybeRetryTransient: vi.fn(),
       transientRetryCount: 0,
@@ -909,7 +1024,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(recovery).toEqual({ action: "proceed" });
     expect(promptFailover).not.toHaveBeenCalled();
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 });

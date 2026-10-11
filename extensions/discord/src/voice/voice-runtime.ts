@@ -161,10 +161,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       destroyed: () => this.destroyed,
       getTranscripts: this.getTranscripts,
       membership: this.membership,
-      onLeaveFollowState: (guildId) => {
-        this.following.followedVoiceGuilds.delete(guildId);
-        this.following.deleteFollowedUserChannelsForGuild(guildId);
-      },
+      onLeaveFollowState: (guildId) => this.following.clearFollowedGuild(guildId),
       onSessionStopped: (entry, reason) => {
         const lifecycle = this.guildLifecycles.get(entry.guildId);
         if (lifecycle?.status === "active" && lifecycle.instance === entry) {
@@ -536,8 +533,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
         return await this.voiceSessions.leave(params, options);
       }
       if (!options?.preserveFollowState) {
-        this.following.followedVoiceGuilds.delete(guildId);
-        this.following.deleteFollowedUserChannelsForGuild(guildId);
+        this.following.clearFollowedGuild(guildId);
       }
       return {
         ok: true,

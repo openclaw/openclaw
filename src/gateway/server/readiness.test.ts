@@ -399,7 +399,12 @@ describe("createReadinessChecker", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
         accounts: {
-          slack: managedAccount({ lifecycle: "blocked" }),
+          slack: stoppedAccount({
+            lifecycle: "blocked",
+            linked: false,
+            ingressUnavailable: true,
+            restartPending: true,
+          }),
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["slack"]));

@@ -7,9 +7,12 @@ describe("pickFallbackThinkingLevel", () => {
     expect(pickFallbackThinkingLevel({ message: undefined, attempted: new Set() })).toBeUndefined();
   });
 
-  it("extracts supported values from error message", () => {
+  it.each([
+    'Unsupported reasoning.effort. Supported values are: "high", "medium"',
+    'reasoning_effort is not supported. Supported values are: "high", "medium"',
+  ])("extracts supported values from %s", (message) => {
     const result = pickFallbackThinkingLevel({
-      message: 'Unsupported reasoning.effort. Supported values are: "high", "medium"',
+      message,
       attempted: new Set(),
     });
     expect(result).toBe("high");
@@ -65,14 +68,18 @@ describe("pickFallbackThinkingLevel", () => {
   });
 
   it.each([
+    "400 Unknown parameter: 'reasoning_effort'",
+    "400 'reasoning_effort' is not supported for this model",
+    `400 ${JSON.stringify({ error: { message: '"reasoning_effort" is not supported' } })}`,
     "rate limit exceeded, please retry after 30 seconds",
     "The 'unavailable-model' model is not supported when using Codex with a ChatGPT account.",
     "The 'unavailable-thinking-model' model is not supported when using Codex with a ChatGPT account.",
     "The 'unavailable-reasoning-effort-model' model is not supported when using Codex with a ChatGPT account.",
     "The 'unavailable-reasoning.effort-model' model is not supported when using Codex with a ChatGPT account.",
+    "The 'unavailable-reasoning_effort-model' model is not supported by this provider.",
     "This account is not supported by the provider.",
     'Unsupported service tier. Supported values are: "high", "low"',
-  ])("does not retry unrelated provider failures: %s", (message) => {
+  ])("does not retry failures without a supported thinking alternative: %s", (message) => {
     const result = pickFallbackThinkingLevel({
       message,
       attempted: new Set(),

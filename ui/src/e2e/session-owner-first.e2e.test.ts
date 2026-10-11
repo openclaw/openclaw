@@ -7,7 +7,8 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
-const rosterMatch = { includeGlobal: true };
+const rosterMatch = { includeGlobal: true, ownerFirst: true };
+const mineMatch = { includeGlobal: true, ownerId: "profile-ada" };
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
@@ -71,19 +72,45 @@ suite.define(() => {
       expect(subscribe.params).toEqual({});
       const roster = await gateway.waitForRequest("sessions.list", { match: rosterMatch });
       expect(roster.params).toEqual(
-        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+        expect.objectContaining({
+          ownerFirst: true,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        }),
       );
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
-      // The selected session has an optimistic placeholder before roster hydration.
+      // The selected session can resolve independently while the roster is deferred.
       await expect.poll(() => adaRow.count()).toBe(1);
       await expect.poll(() => bobRow.count()).toBe(0);
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
 
       await gateway.resolveDeferred("sessions.list");
+      const mineRoster = await gateway.waitForRequest("sessions.list", { match: mineMatch });
+      expect(mineRoster.params).not.toHaveProperty("ownerFirst");
+      expect(mineRoster.params).toMatchObject({ limit: SIDEBAR_SESSION_ROSTER_LIMIT });
       await adaRow.waitFor();
-      await bobRow.waitFor();
+      // Mine hydrates only the current human; a foreign row requires an explicit All choice.
+      expect(await bobRow.count()).toBe(0);
+      // The canonical owner-first window and Mine are distinct query owners, not duplicate hydration.
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", mineMatch)).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", { includeGlobal: true })).toHaveLength(2);
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
+      const allRoster = await gateway.waitForRequest("sessions.list", {
+        after: 1,
+        match: rosterMatch,
+      });
+      expect(allRoster.params).toEqual(
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      );
+      expect(allRoster.params).not.toHaveProperty("ownerId");
+      await bobRow.waitFor();
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
+      expect(await gateway.getRequests("sessions.list", mineMatch)).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", { includeGlobal: true })).toHaveLength(3);
       await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();

@@ -7,7 +7,6 @@ import {
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
-  settingsNavigationOwnerRoute,
   sidebarMoreRoutes,
   visibleSettingsNavigationGroups,
   isSettingsNavigationRouteVisible,
@@ -15,6 +14,7 @@ import {
 import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
+import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {

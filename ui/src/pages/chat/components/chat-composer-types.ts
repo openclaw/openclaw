@@ -72,6 +72,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
+  /** Provisional/deleted previews must not mount session-scoped extension controllers. */
+  sessionAdmitted?: boolean;
   connected: boolean;
   offline?: boolean;
   queuedOutboxCount?: number;
@@ -146,7 +148,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  onTypingChange?: (typing: boolean, preview?: string) => void;
+  onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
   composerRecovery?: TemplateResult | typeof nothing;

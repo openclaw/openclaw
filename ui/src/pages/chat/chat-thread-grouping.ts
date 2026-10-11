@@ -25,8 +25,11 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
+  readAutomationRun,
 } from "./chat-turn-boundary.ts";
-import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+
+const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
   return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
@@ -138,34 +141,28 @@ function stampReplyAttribution(
   }
   for (const [index, item] of items.entries()) {
     const { sender, message, turnSource } = states[index]!;
-    if (item.kind === "stream") {
+    if (item.kind === "group") {
+      // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
-        item.replyToSender = sender;
-        item.replyToMessage = message;
+        item.replyShared = true;
       }
+      if (item.role !== "assistant" || hasForwardedSource(item)) {
+        continue;
+      }
+      const currentSource =
+        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+          ? runPrompts.get(item.runId)
+          : undefined;
+      if (turnSource) {
+        item.replyTurnSource = turnSource;
+      }
+      if (currentSource) {
+        item.replyCurrentSource = currentSource;
+      }
+    } else if (item.kind !== "stream") {
       continue;
     }
-    if (item.kind !== "group") {
-      continue;
-    }
-    // Every strip follows the thread: an unattributed source is "You" only in 1:1.
-    if (shared) {
-      item.replyShared = true;
-    }
-    if (item.role !== "assistant" || hasForwardedSource(item)) {
-      continue;
-    }
-    const currentSource =
-      item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-        ? runPrompts.get(item.runId)
-        : undefined;
-    if (turnSource) {
-      item.replyTurnSource = turnSource;
-    }
-    if (currentSource) {
-      item.replyCurrentSource = currentSource;
-    }
-    if (shared && sender) {
+    if (shared && (item.kind === "stream" || sender)) {
       item.replyToSender = sender;
       item.replyToMessage = message;
     }
@@ -271,6 +268,10 @@ function groupChatItems(
     if (
       !currentGroup ||
       startsProjectedTurn ||
+      // Each automation input owns a turn, including old rows without a projected marker.
+      Boolean(
+        readAutomationRun(item.message) || readAutomationRun(currentGroup.messages[0]?.message),
+      ) ||
       (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
@@ -501,44 +502,27 @@ export function collapseCompletedTurnWork(
     turns.push(currentTurn);
   }
 
-  const { continuationTurnIndexes, precedingContinuationTurnIndexes } = indexTurnContinuations(
-    turns,
-    turnUserMessages,
-  );
-  const terminalReplies = turns.map((turn, turnIndex) =>
-    continuationTurnIndexes.has(turnIndex) ? undefined : turn.findLast(isFinalReplyGroup),
-  );
-  const finalReplyIndexes = turns.map((turn, index) => {
-    const reply = terminalReplies[index];
-    return reply ? turn.lastIndexOf(reply) : -1;
-  });
-  for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
-    const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
-    if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {
-      terminalReplies[turnIndex] = terminalReplies[continuationTurnIndex];
-    }
-  }
-  const liveTurnIndexes = new Set<number>();
-  if (opts.runWorking) {
-    let liveTurnIndex = turns.length - 1;
-    liveTurnIndexes.add(liveTurnIndex);
-    for (;;) {
-      const precedingTurnIndex = precedingContinuationTurnIndexes.get(liveTurnIndex);
-      if (precedingTurnIndex === undefined) {
-        break;
-      }
-      liveTurnIndex = precedingTurnIndex;
-      liveTurnIndexes.add(liveTurnIndex);
-    }
-  }
+  const steerTarget = opts.runWorking
+    ? turnUserMessages(turns.at(-1) ?? [])
+        .map(persistedSteerTargetRunId)
+        .findLast((runId) => runId !== null)
+    : undefined;
+  const targetTurnIndex = steerTarget
+    ? turns.findIndex((turn) =>
+        turnUserMessages(turn).some((message) => userTurnRunId(message) === steerTarget),
+      )
+    : -1;
+  const liveTurnIndex = opts.runWorking
+    ? targetTurnIndex >= 0
+      ? targetTurnIndex
+      : turns.length - 1
+    : -1;
 
   const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
   for (const [turnIndex, turn] of turns.entries()) {
-    // In-flight content (stream runs, streaming groups) marks the turn live.
-    // While the run works, the trailing turn also stays expanded so activity
-    // is watchable until the terminal rebuild collapses it.
+    // A trailing steer names the still-working turn above it; it does not own that work.
     const isLive =
-      liveTurnIndexes.has(turnIndex) ||
+      turnIndex === liveTurnIndex ||
       turn.some(
         (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
       );
@@ -546,17 +530,17 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const finalReplyIndex = finalReplyIndexes[turnIndex] ?? -1;
-    const terminalReply = terminalReplies[turnIndex];
+    const terminalReply = turn.findLast(isFinalReplyGroup);
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
     if (!terminalReply) {
       result.push(...turn);
       continue;
     }
+    const finalReplyIndex = turn.lastIndexOf(terminalReply);
     // Partition the answer's output segment, including work after the last answer.
     // Never move activity across a user, forwarded input, or structural marker.
-    let segmentStart = finalReplyIndex >= 0 ? finalReplyIndex : turn.length - 1;
+    let segmentStart = finalReplyIndex;
     let segmentEnd = segmentStart;
     while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
       segmentStart -= 1;
@@ -571,20 +555,19 @@ export function collapseCompletedTurnWork(
       // the answer stays last. Nothing moves past a handoff, which keeps a
       // handoff's own sentence above its work, and nothing moves when any of
       // it failed or ended the run: that stays where it happened.
-      const answer = finalReplyIndex >= 0 ? terminalReply : undefined;
       const trailing = turn.slice(finalReplyIndex + 1);
       const answerLast =
-        answer?.runId !== undefined &&
+        terminalReply.runId !== undefined &&
         trailing.length > 0 &&
         trailing.every(
           (item) =>
             isCollapsibleWorkGroup(item) &&
-            item.runId === answer.runId &&
+            item.runId === terminalReply.runId &&
             !groupHasFailedResult(item) &&
             !groupEndsRunInFailure(item),
         );
       result.push(
-        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, answer] : turn),
+        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, terminalReply] : turn),
       );
       continue;
     }
@@ -609,7 +592,7 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
-        (finalReplyIndex < 0 || index < finalReplyIndex || !groupHasFailedResult(item))
+        (index < finalReplyIndex || !groupHasFailedResult(item))
       ) {
         groups.push(item);
         if (precedingAnswerKey) {
@@ -633,20 +616,15 @@ export function collapseCompletedTurnWork(
       session?.key === opts.sessionKey &&
       terminalReply.runId !== undefined &&
       session.lastRunId === terminalReply.runId &&
-      (session.status === "done" ||
-        session.status === "failed" ||
-        session.status === "timeout" ||
-        session.status === "killed") &&
+      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
       typeof runtimeMs === "number" &&
       Number.isFinite(runtimeMs) &&
       runtimeMs >= 0
         ? runtimeMs
         : null;
-    const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     // A completed rollup may span automatic resumptions. Its reply owns the
-    // display only when reaching it crosses neither another answer’s run nor a steer.
+    // display only when earlier answers belong to that same run.
     const replyRunId =
-      finalReplyIndex >= 0 &&
       !hasForwardedSource(terminalReply) &&
       !groups.some(hasForwardedSource) &&
       answers
@@ -663,9 +641,7 @@ export function collapseCompletedTurnWork(
     result.push({
       kind: "work-group",
       // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${
-        finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
-      }`,
+      key: `work:${terminalReply.key}`,
       groups,
       ...(replyRunId ? { replyRunId } : {}),
       ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),

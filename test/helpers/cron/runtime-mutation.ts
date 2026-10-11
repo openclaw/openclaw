@@ -1,13 +1,11 @@
 import { deserialize } from "node:v8";
-import { MessagePort, Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import * as cronStore from "../../../src/cron/store.js";
 import { cronStoreKey } from "../../../src/cron/store/key.js";
 import type { CronRuntimeMutationType } from "../../../src/cron/store/runtime-worker.types.js";
 import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contract.js";
-import * as workerAdmission from "../../../src/infra/sqlite-worker-operation-admission.js";
-import * as workerCpu from "../../../src/infra/worker-cpu.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 
 export function observeCronStoreCommits(storePath: string, observer: () => void): () => void {
@@ -25,7 +23,7 @@ export function observeCronStoreCommits(storePath: string, observer: () => void)
 }
 
 export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRun") {
-  let target: { worker: Worker; requestId: number; nonce: string } | undefined;
+  let target: { worker: Worker; requestId: number } | undefined;
   let stopped: Promise<number> | undefined;
   let dropped = false;
   const attempts: string[] = [];
@@ -40,18 +38,13 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
   ) {
     if (request.type === "execute") {
       const command: unknown = deserialize(request.input);
-      if (
-        isRecord(command) &&
-        command.type === type &&
-        isRecord(command.input) &&
-        typeof command.input.nonce === "string"
-      ) {
+      if (isRecord(command) && command.type === type && isRecord(command.input)) {
         attempts.push(
           isRecord(command.input.proposal) && typeof command.input.proposal.jobId === "string"
             ? command.input.proposal.jobId
             : type,
         );
-        target ??= { worker: this, requestId: request.id, nonce: command.input.nonce };
+        target ??= { worker: this, requestId: request.id };
       }
     }
     return originalPost.call(this, request, transferList);
@@ -72,8 +65,8 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
       reply.value instanceof Uint8Array
     ) {
       const result: unknown = deserialize(reply.value);
-      if (isRecord(result) && result.nonce === target.nonce) {
-        // Withhold only the successful reply; real commit receipts and native settlement still flow.
+      if (isRecord(result) && "outcome" in result) {
+        // Lose the successful reply after the real worker committed; never fabricate a rollback.
         dropped = true;
         stopped = target.worker.terminate();
         return true;
@@ -99,197 +92,37 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
   };
 }
 
-/** Install before opening a fresh actor; terminate its real transaction before the commit grant. */
-export function terminateFirstCronMutationBeforeCommit(type: CronRuntimeMutationType) {
-  const attempts: string[] = [];
-  const restorePosts: Array<() => void> = [];
-  let target: { worker: Worker; nonce: string } | undefined;
-  let stopped: Promise<number> | undefined;
-  let held = false;
-  const create = workerCpu.createCpuTrackedWorker;
-  const created = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
-    const worker = create(...args);
-    const post = worker.postMessage.bind(worker);
-    const posted = vi.spyOn(worker, "postMessage").mockImplementation((message, transferList) => {
-      const request: unknown = message;
-      if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
-        const command: unknown = deserialize(request.input);
-        if (
-          isRecord(command) &&
-          command.type === type &&
-          isRecord(command.input) &&
-          typeof command.input.nonce === "string"
-        ) {
-          attempts.push(type);
-          target ??= { worker, nonce: command.input.nonce };
-        }
-      }
-      return post(message, transferList);
-    });
-    restorePosts.push(() => posted.mockRestore());
-    return worker;
-  });
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admissions = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) => {
-      // Only the real factory's synchronous receive-listener registration is wrapped.
-      const listening = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
-        this: MessagePort,
-        event,
-        listener,
-      ) {
-        if (event !== "message") {
-          return this.addListener(event, listener);
-        }
-        return this.addListener("message", function (this: MessagePort, message: unknown) {
-          if (
-            !held &&
-            target &&
-            isRecord(message) &&
-            message.stage === "commit" &&
-            message.decision instanceof SharedArrayBuffer &&
-            isRecord(message.facts) &&
-            message.facts.nonce === target.nonce &&
-            message.facts.bytes instanceof Uint8Array
-          ) {
-            // Withhold delivery before the real receiver can grant or refuse the native request.
-            held = true;
-            stopped = target.worker.terminate();
-            return;
-          }
-          listener.call(this, message);
-        });
-      });
-      try {
-        return createAdmission(admit, attachment);
-      } finally {
-        listening.mockRestore();
-      }
-    });
-  return {
-    attempts,
-    wasHeld: () => held,
-    waitForExit: () => stopped,
-    async close() {
-      try {
-        await stopped;
-      } finally {
-        admissions.mockRestore();
-        created.mockRestore();
-        for (const restore of restorePosts.toReversed()) {
-          restore();
-        }
-      }
-    },
-  };
-}
-
-let cronJobWriteObserverId = 0;
-
-export function observeCronJobWrites(
+/** Observe persisted state after a real cron write has committed. */
+export function observeCronJobCommits(
   jobId: string,
   observer: (state: { queuedAtMs?: number; runningAtMs?: number }) => void,
 ): () => void {
   const database = openOpenClawStateDatabase().db;
-  const suffix = ++cronJobWriteObserverId;
-  const functionName = `observe_cron_job_write_${suffix}`;
-  const triggerName = `observe_cron_job_write_${suffix}`;
-  database.function(functionName, (writtenJobId, stateJson) => {
-    if (writtenJobId !== jobId || typeof stateJson !== "string") {
-      return 0;
-    }
-    const state = JSON.parse(stateJson) as { queuedAtMs?: number; runningAtMs?: number };
-    observer({
-      ...(typeof state.queuedAtMs === "number" ? { queuedAtMs: state.queuedAtMs } : {}),
-      ...(typeof state.runningAtMs === "number" ? { runningAtMs: state.runningAtMs } : {}),
-    });
-    return 0;
-  });
-  database.exec(`
-    CREATE TEMP TRIGGER ${triggerName}
-    AFTER UPDATE ON cron_jobs
-    BEGIN
-      SELECT ${functionName}(NEW.job_id, NEW.state_json);
-    END;
-  `);
-  const changedJobsByNonce = new Map<string, Set<unknown>>();
-  // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
-  const originalPost = Worker.prototype.postMessage;
-  const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request: SqliteWorkerRequest,
-    transferList,
-  ) {
-    if (request.type === "execute") {
-      const command: unknown = deserialize(request.input);
-      if (
-        isRecord(command) &&
-        command.type === "cron.mutateJobs" &&
-        isRecord(command.input) &&
-        typeof command.input.nonce === "string" &&
-        !command.input.replacement &&
-        isRecord(command.input.changes) &&
-        command.input.changes.changedIds instanceof Set
-      ) {
-        changedJobsByNonce.set(command.input.nonce, command.input.changes.changedIds);
+  const read = (storeKey: string) =>
+    database
+      .prepare(
+        "SELECT job_json, state_json, updated_at FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+      )
+      .get(storeKey, jobId);
+  const previous = new Map(
+    database
+      .prepare("SELECT store_key, job_json, state_json, updated_at FROM cron_jobs WHERE job_id = ?")
+      .all(jobId)
+      .map(({ store_key, ...row }) => [store_key, JSON.stringify(row)]),
+  );
+  const noteCommit = cronStore.noteCronJobsStoreCommit;
+  const publication = vi
+    .spyOn(cronStore, "noteCronJobsStoreCommit")
+    .mockImplementation((storeKey) => {
+      noteCommit(storeKey);
+      const row = read(storeKey);
+      const current = JSON.stringify(row);
+      if (current === previous.get(storeKey) || typeof row?.state_json !== "string") {
+        return;
       }
-    }
-    return originalPost.call(this, request, transferList);
-  });
-  // TEMP triggers cover native scheduling writes. Worker mutations
-  // supply their actual rows after SQL has run but before their retained commit
-  // admission. Observe that boundary without replacing SQL, grants, or outcomes.
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          request.facts.bytes instanceof Uint8Array
-        ) {
-          const outcome: unknown = deserialize(request.facts.bytes);
-          if (isRecord(outcome)) {
-            const changedJobs =
-              typeof request.facts.nonce === "string"
-                ? changedJobsByNonce.get(request.facts.nonce)
-                : undefined;
-            const jobs = isRecord(outcome.activation)
-              ? [outcome.activation.job]
-              : isRecord(outcome.store) && Array.isArray(outcome.store.jobs)
-                ? outcome.store.jobs
-                : Array.isArray(outcome.jobs)
-                  ? outcome.jobs
-                  : Array.isArray(outcome.reservations)
-                    ? outcome.reservations.filter(isRecord).map((reservation) => reservation.job)
-                    : [];
-            for (const job of jobs) {
-              if (
-                isRecord(job) &&
-                job.id === jobId &&
-                isRecord(job.state) &&
-                (!changedJobs || changedJobs.has(jobId))
-              ) {
-                observer({
-                  ...(typeof job.state.queuedAtMs === "number"
-                    ? { queuedAtMs: job.state.queuedAtMs }
-                    : {}),
-                  ...(typeof job.state.runningAtMs === "number"
-                    ? { runningAtMs: job.state.runningAtMs }
-                    : {}),
-                });
-              }
-            }
-          }
-        }
-        admit(request, grant);
-      }, attachment),
-    );
-  return () => {
-    post.mockRestore();
-    admission.mockRestore();
-    database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
-  };
+      previous.set(storeKey, current);
+      const state = JSON.parse(row.state_json) as { queuedAtMs?: number; runningAtMs?: number };
+      observer(state);
+    });
+  return () => publication.mockRestore();
 }

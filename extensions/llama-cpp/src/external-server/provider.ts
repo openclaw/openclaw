@@ -10,11 +10,8 @@ import {
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
-import {
-  hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
-  resolveLlamaServerRuntimeApiKey,
-} from "./auth.js";
+import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";

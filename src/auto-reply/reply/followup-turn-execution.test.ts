@@ -335,6 +335,37 @@ describe("executeFollowupTurn", () => {
     expect(result.commentaryPayloadsEnabled).toBe(false);
   });
 
+  it.each(["optional", "required"] as const)(
+    "uses queued %s requiredness for previews but preserves media",
+    async (expectation) => {
+      const turn = createTurn();
+      turn.queued.run.terminalReplyExpectation = expectation;
+      turn.queued.run.verboseLevelOverride = "off";
+      const onItemEvent = vi.fn(async () => true);
+      const onDurableToolResult = vi.fn(async () => {});
+      const media = { mediaUrl: "https://example.test/result.png" };
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        await params.opts?.onItemEvent?.({ kind: "tool", name: "read", status: "running" });
+        await params.opts?.onToolResult?.(media);
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+      const result = await executeTestTurn({
+        turn,
+        defaults: {
+          opts: {
+            progressRequiresReply: true,
+            suppressDefaultToolProgressMessages: true,
+            onItemEvent,
+          },
+        },
+        onToolResult: onDurableToolResult,
+      });
+      await result.progress.drain();
+      expect(onItemEvent).toHaveBeenCalledTimes(expectation === "required" ? 1 : 0);
+      expect(onDurableToolResult).toHaveBeenCalledExactlyOnceWith(media);
+    },
+  );
+
   it("suppresses queued verbose-off preambles with only a static opt-in", async () => {
     const onItemEvent = vi.fn(async () => true as const);
     let preambleVisible: boolean | void = true;

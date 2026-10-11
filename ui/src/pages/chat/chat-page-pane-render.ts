@@ -139,7 +139,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
           const presentationTitle = presentationRow
             ? resolveSessionDisplayName(resolvedKey, presentationRow)
             : undefined;
-          if (options.context && readDeletedSessionStartup(options.context, sessionKey)) {
+          if (
+            options.context &&
+            (routeData?.creation?.admitted === false ||
+              readDeletedSessionStartup(options.context, sessionKey))
+          ) {
             return keyed(
               sessionKey,
               html`<openclaw-pending-session-create
@@ -150,6 +154,9 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 ?inert=${!presented}
                 .context=${options.context}
                 .sessionKey=${sessionKey}
+                .narrow=${options.narrow}
+                .mergedChrome=${options.mergedChrome && active}
+                .navDrawerOpen=${options.navDrawerOpen && active}
               ></openclaw-pending-session-create>`,
             );
           }
@@ -311,18 +318,4 @@ export function renderChatPageBody(content: unknown, indicator: DropIndicator | 
         : nothing
     }
   </div>`;
-}
-
-export function renderPendingChatPage(
-  context: ApplicationContext,
-  sessionKey: string,
-  presented: boolean,
-) {
-  if (!presented) {
-    return nothing;
-  }
-  return html`<openclaw-pending-session-create
-    .context=${context}
-    .sessionKey=${sessionKey}
-  ></openclaw-pending-session-create>`;
 }

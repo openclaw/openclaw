@@ -144,22 +144,25 @@ export function prepareTranscriptRewriteSync(
             if (!source) {
               throw new Error("Transcript rewrite message has no source entry");
             }
-            const result = withSessionPendingInputRelocation(source.id, entry.message, () =>
-              appendTranscriptMessageInTransaction(
-                current,
-                resolved,
-                {
-                  eventId: entry.id,
-                  parentId: entry.parentId,
-                  now: Date.parse(entry.timestamp),
-                  message: entry.message,
-                  messageAlreadyRedacted: true,
-                  appendMode: entry.appendMode,
-                  idempotencyLookup: "caller-checked",
-                },
-                undefined,
-                preparation,
-              ),
+            const result = withSessionPendingInputRelocation(
+              source.id,
+              entry.message,
+              () =>
+                appendTranscriptMessageInTransaction(
+                  current,
+                  resolved,
+                  {
+                    eventId: entry.id,
+                    parentId: entry.parentId,
+                    now: Date.parse(entry.timestamp),
+                    message: entry.message,
+                    messageAlreadyRedacted: true,
+                    appendMode: entry.appendMode,
+                    idempotencyLookup: "caller-checked",
+                  },
+                  undefined,
+                  preparation,
+                )?.result,
             );
             if (!result?.appended || result.messageId !== entry.id) {
               throw new Error("Transcript rewrite message was not appended");

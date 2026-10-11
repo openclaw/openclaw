@@ -38,7 +38,7 @@ import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
-import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
+import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
 
@@ -88,7 +88,6 @@ export async function handleEmbeddedAssistantFailure(input: {
     | "resolveAuthProfileFailureReason"
     | "maybeMarkAuthProfileFailure"
     | "advanceAuthProfile"
-    | "advanceRateLimitAuthProfile"
     | "transientRetryCount"
     | "overloadProfileRotationLimit"
   >;
@@ -147,7 +146,11 @@ export async function handleEmbeddedAssistantFailure(input: {
     },
   );
   const terminalAssistantError = isTerminalAssistantError(attemptAssistant);
-  if (terminalAssistantError || !isCurrentAttemptReplaySafe(attempt)) {
+  if (
+    terminalAssistantError ||
+    isEmbeddedRunTimeoutFinal(attempt) ||
+    !isCurrentAttemptReplaySafe(attempt)
+  ) {
     return buildOutcome(input, {
       action: "proceed",
       assistantProfileFailureReason: terminalAssistantError ? null : assistantProfileFailureReason,
@@ -309,20 +312,21 @@ export async function handleEmbeddedAssistantFailure(input: {
       retryCount: input.failover.transientRetryCount,
       profileRotationCount: overloadProfileRotations,
     });
-  const throwFailure = (error: FailoverError): never => {
+  const recordTrace = (result: TraceAttempt["result"], status?: number) => {
     input.traceAttempts.push({
       provider: activeErrorContext.provider,
       model: activeErrorContext.model,
-      result:
-        effectiveFailoverReason === "timeout"
-          ? "timeout"
-          : initialDecision.action === "fallback_model"
-            ? "fallback_model"
-            : "error",
+      result: effectiveFailoverReason === "timeout" ? "timeout" : result,
       ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
-      ...(typeof error.status === "number" ? { status: error.status } : {}),
+      ...(typeof status === "number" ? { status } : {}),
     });
+  };
+  const throwFailure = (error: FailoverError): never => {
+    recordTrace(
+      initialDecision.action === "fallback_model" ? "fallback_model" : "error",
+      error.status,
+    );
     if (error.suspend) {
       runInput.suspendForFailure({
         cfg: runInput.runParams.config,
@@ -381,16 +385,11 @@ export async function handleEmbeddedAssistantFailure(input: {
       }
     }
 
-    let rotated: boolean;
-    if (assistantFailoverReason === "rate_limit") {
-      rotated = await input.failover.advanceRateLimitAuthProfile({
-        failoverProvider: activeErrorContext.provider,
-        failoverModel: activeErrorContext.model,
-        logFallbackDecision: logFailoverDecision,
-      });
-    } else {
-      rotated = await input.failover.advanceAuthProfile();
-    }
+    const rotated = await input.failover.advanceAuthProfile(assistantFailoverReason, {
+      failoverProvider: activeErrorContext.provider,
+      failoverModel: activeErrorContext.model,
+      logFallbackDecision: logFailoverDecision,
+    });
 
     const markFailedProfilePromise = markFailedProfile();
     if (timedOut && !runInput.isProbeSession && failedProfileId) {
@@ -410,13 +409,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     if (rotated) {
       // The selected replacement can retry while the failed profile's record settles.
       logDecision("rotate_profile");
-      input.traceAttempts.push({
-        provider: activeErrorContext.provider,
-        model: activeErrorContext.model,
-        result: effectiveFailoverReason === "timeout" ? "timeout" : "rotate_profile",
-        ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
-        stage: "assistant",
-      });
+      recordTrace("rotate_profile");
       return buildOutcome(input, {
         action: "retry",
         thinkLevel: input.getThinkLevel(),

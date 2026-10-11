@@ -154,7 +154,7 @@ separate from the native **OpenClaw** app.
 ### Use the bundled runtime
 
 On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
-fork through the canonical CLI. The install guard requires the service to still
+fork through the standard CLI. The install guard requires the service to still
 be absent. A service that appears during setup blocks that installation. The app's
 runtime marker is informational and never authorizes automatic service changes.
 

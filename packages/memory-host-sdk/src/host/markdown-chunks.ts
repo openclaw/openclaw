@@ -19,7 +19,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 5;
+export const MEMORY_CHUNKING_VERSION = 6;
 
 type CuratedMarkdownEntry = {
   startLine: number;
@@ -32,34 +32,28 @@ function curatedMarkdownEntryKind(line: string): CuratedMarkdownEntry["kind"] | 
   return line.startsWith("- ") ? "entry" : /^#{1,6}(?:\s|$)/u.test(line) ? "section" : undefined;
 }
 
+function* curatedMarkdownEntrySpans(lines: string[]) {
+  let startLine = 1;
+  let kind: CuratedMarkdownEntry["kind"] = lines[0]?.startsWith("- ") ? "entry" : "section";
+  for (let index = 1; index < lines.length; index += 1) {
+    const nextKind = curatedMarkdownEntryKind(lines[index] ?? "");
+    if (nextKind) {
+      yield { startLine, endLine: index, kind };
+      startLine = index + 1;
+      kind = nextKind;
+    }
+  }
+  yield { startLine, endLine: lines.length, kind };
+}
+
 export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEntry[] {
   const lines = content.split("\n");
-  const entries: CuratedMarkdownEntry[] = [];
-  let startIndex = 0;
-  let kind: CuratedMarkdownEntry["kind"] = lines[0]?.startsWith("- ") ? "entry" : "section";
-  const flush = (endIndex: number) => {
-    if (endIndex < startIndex) {
-      return;
-    }
-    entries.push({
-      startLine: startIndex + 1,
-      endLine: endIndex + 1,
-      text: lines.slice(startIndex, endIndex + 1).join("\n"),
-      kind,
-    });
-  };
-  for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextKind = curatedMarkdownEntryKind(line);
-    if (!nextKind) {
-      continue;
-    }
-    flush(index - 1);
-    startIndex = index;
-    kind = nextKind;
-  }
-  flush(lines.length - 1);
-  return entries;
+  return Array.from(curatedMarkdownEntrySpans(lines), ({ startLine, endLine, kind }) => ({
+    startLine,
+    endLine,
+    text: lines.slice(startLine - 1, endLine).join("\n"),
+    kind,
+  }));
 }
 
 /** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
@@ -88,8 +82,6 @@ export function chunkMarkdown(
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
-  let entryStartLine: number | undefined;
-  let entryFirstChunk = 0;
 
   const flush = () => {
     const firstEntry = current[0];
@@ -155,66 +147,55 @@ export function chunkMarkdown(
     currentChars += lineSize;
   };
 
-  const finishEntry = (entryEndLine: number) => {
-    if (entryStartLine === undefined) {
-      return;
-    }
-    // Every size fragment remains part of the same curated entry and inherits
-    // its full annotation span; dropping scope on later fragments can leak them.
-    for (const chunk of chunks.slice(entryFirstChunk)) {
-      chunk.entryStartLine = entryStartLine;
-      chunk.entryEndLine = entryEndLine;
-    }
-  };
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    const lineNo = i + 1;
-    const entryKind = chunking.perEntry
-      ? (curatedMarkdownEntryKind(line) ?? (i === 0 ? "section" : undefined))
-      : undefined;
-    if (entryKind) {
-      if (current.length > 0) {
-        flush();
-      }
-      finishEntry(lineNo - 1);
-      current = [];
-      currentChars = 0;
-      entryStartLine = entryKind === "entry" ? lineNo : undefined;
-      entryFirstChunk = chunks.length;
-    }
-    if (line.length === 0) {
-      appendSegment("", lineNo, 0);
-    } else {
-      for (let start = 0; start < line.length;) {
-        const coarse = truncateUtf16Safe(line.slice(start), maxChars);
-        const coarseChars = estimateStringChars(coarse);
-        if (coarseChars > maxChars) {
-          // Rare and supplementary ideographs can cost several tokens each.
-          // Split by the estimator's units while keeping every code point intact.
-          let partStart = 0;
-          let partEnd = 0;
-          let partChars = 0;
-          for (const character of coarse) {
-            const chars = estimateStringChars(character);
-            if (partChars + chars > maxChars) {
-              appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
-              partStart = partEnd;
-              partChars = 0;
+  const entries = chunking.perEntry
+    ? curatedMarkdownEntrySpans(lines)
+    : [{ startLine: 1, endLine: lines.length, kind: "section" }];
+  for (const entry of entries) {
+    const firstChunk = chunks.length;
+    for (let i = entry.startLine - 1; i < entry.endLine; i += 1) {
+      const line = lines[i] ?? "";
+      const lineNo = i + 1;
+      if (line.length === 0) {
+        appendSegment("", lineNo, 0);
+      } else {
+        for (let start = 0; start < line.length;) {
+          const coarse = truncateUtf16Safe(line.slice(start), maxChars);
+          const coarseChars = estimateStringChars(coarse);
+          if (coarseChars > maxChars) {
+            // Rare and supplementary ideographs can cost several tokens each.
+            // Split by the estimator's units while keeping every code point intact.
+            let partStart = 0;
+            let partEnd = 0;
+            let partChars = 0;
+            for (const character of coarse) {
+              const chars = estimateStringChars(character);
+              if (partChars + chars > maxChars) {
+                appendSegment(coarse.slice(partStart, partEnd), lineNo, partChars);
+                partStart = partEnd;
+                partChars = 0;
+              }
+              partEnd += character.length;
+              partChars += chars;
             }
-            partEnd += character.length;
-            partChars += chars;
+            appendSegment(coarse.slice(partStart), lineNo, partChars);
+          } else {
+            appendSegment(coarse, lineNo, coarseChars);
           }
-          appendSegment(coarse.slice(partStart), lineNo, partChars);
-        } else {
-          appendSegment(coarse, lineNo, coarseChars);
+          start += coarse.length;
         }
-        start += coarse.length;
       }
     }
+    flush();
+    if (entry.kind === "entry") {
+      // Size fragments inherit the full curated entry's annotation span.
+      for (const chunk of chunks.slice(firstChunk)) {
+        chunk.entryStartLine = entry.startLine;
+        chunk.entryEndLine = entry.endLine;
+      }
+    }
+    current = [];
+    currentChars = 0;
   }
-  flush();
-  finishEntry(lines.length);
   return chunks;
 }
 

@@ -271,7 +271,7 @@ async function pollOpenAICodexDeviceCode(params: {
       break;
     }
 
-    let result: DeviceCodeHttpResult;
+    let result: DeviceCodeHttpResult | undefined;
     try {
       result = await runOpenAICodexDeviceRequest({
         fetchFn: params.fetchFn,
@@ -301,14 +301,9 @@ async function pollOpenAICodexDeviceCode(params: {
       if (!retryableTransportError) {
         throw error;
       }
-      await waitForDeviceCodePoll(
-        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
-        params.signal,
-      );
-      continue;
     }
 
-    if (result.ok) {
+    if (result?.ok) {
       const body = parseJsonObject(result.bodyText);
       const authorizationCode = normalizeOptionalString(body?.authorization_code);
       const codeVerifier = normalizeOptionalString(body?.code_verifier);
@@ -321,20 +316,19 @@ async function pollOpenAICodexDeviceCode(params: {
       };
     }
 
-    if (result.status === 403 || result.status === 404) {
-      await waitForDeviceCodePoll(
-        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
-        params.signal,
+    if (result && result.status !== 403 && result.status !== 404) {
+      throw new Error(
+        formatDeviceCodeError({
+          prefix: "OpenAI device authorization failed",
+          status: result.status,
+          bodyText: result.bodyText,
+        }),
       );
-      continue;
     }
 
-    throw new Error(
-      formatDeviceCodeError({
-        prefix: "OpenAI device authorization failed",
-        status: result.status,
-        bodyText: result.bodyText,
-      }),
+    await waitForDeviceCodePoll(
+      resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+      params.signal,
     );
   }
 

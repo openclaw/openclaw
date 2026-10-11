@@ -1,8 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -27,10 +26,7 @@ import {
   rewriteSqliteTranscriptEventRowsInTransaction,
   updateSqliteTranscriptEventJsonInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
-import {
-  prepareSqliteTranscriptSuffixMutation,
-  replaceSqliteTranscriptSuffixInTransaction,
-} from "./session-accessor.sqlite-transcript-suffix.js";
+import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
@@ -136,9 +132,9 @@ describe("SQLite transcript append", () => {
       { seq: 1, event_json: nextJson },
     ]);
     expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
-    expect(policy.counts).toEqual({ policy: 1 });
-    expect(policy.rowCounts).toEqual({ policy: 1 });
-    expect(policy.textBytes).toEqual({ policy: 4 });
+    expect(policy.counts).toEqual({ policy: 0 });
+    expect(policy.rowCounts).toEqual({ policy: 0 });
+    expect(policy.textBytes).toEqual({ policy: 0 });
   });
 });
 
@@ -225,6 +221,34 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
+  it.each([
+    { name: "content", message: { content: "changed" } },
+    { name: "provenance", message: { provenance: { kind: "internal_system" } } },
+    { name: "sender authority", metadata: { senderIsOwner: true } },
+    {
+      name: "model projection",
+      metadata: { modelPromptProjection: { version: 1, text: "changed" } },
+    },
+    { name: "branch parent", envelope: { parentId: null } },
+  ])(
+    "invalidates admissions when steering metadata accompanies $name changes",
+    async ({ message, metadata, envelope }) => {
+      await withRewriteFixture(({ snapshot, rewrite }) => {
+        const before = snapshot();
+        rewrite({
+          ...rewriteEvents[1],
+          ...envelope,
+          message: {
+            ...rewriteEvents[1].message,
+            ...message,
+            __openclaw: { steerTargetRunId: "running-turn", ...metadata },
+          },
+        });
+        expect(snapshot().generation).not.toBe(before.generation);
+      });
+    },
+  );
+
   it("applies exact bindings across both storage arms", async () => {
     const details = { opaque: "preserved metadata ".repeat(2048) };
     const events = [
@@ -524,57 +548,31 @@ function replaceTranscriptSuffixForTest(
   persistedPrefixLength = 0,
   retainedCustomDataIds: readonly string[] = [],
 ): void {
-  const owner = openOpenClawAgentDatabase(scope);
-  const plan = prepareSqliteTranscriptSuffixMutation(
-    owner,
-    scope,
-    expectedEvents,
-    nextEvents,
-    persistedPrefixLength,
-    undefined,
-    false,
-    retainedCustomDataIds,
-  );
   runOpenClawAgentWriteTransaction((database) => {
-    replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
+    replaceSqliteTranscriptSuffixInTransaction(database, scope, {
+      expectedEvents,
+      nextEvents,
+      persistedPrefixLength,
+      retainedCustomDataIds,
+    });
   }, scope);
 }
 
 describe("SQLite exact transcript suffix replacement", () => {
-  it("rejects a changed mutation fence while planning an incremental suffix", async () => {
-    await withRewriteFixture(({ db, scope }) => {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      const originalPrepare = db.prepare.bind(db);
-      let changedFence = false;
-      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sqlText: string) => {
-        if (
-          !changedFence &&
-          sqlText.toLowerCase().includes("session_transcript_active_events") &&
-          sqlText.toLowerCase().includes("event_seq")
-        ) {
-          originalPrepare(
-            `UPDATE session_windows
-             SET transcript_updated_at = transcript_updated_at + 1
-             WHERE session_id = ?`,
-          ).run(scope.sessionId);
-          changedFence = true;
-        }
-        return originalPrepare(sqlText);
-      });
-      try {
-        expect(() =>
-          prepareSqliteTranscriptSuffixMutation(
-            openOpenClawAgentDatabase(scope),
-            scope,
-            rewriteEvents,
-            rewriteEvents.slice(0, -1),
-            rewriteEvents.length - 1,
-          ),
-        ).toThrow(`SQLite transcript changed while planning suffix removal for ${scope.sessionId}`);
-      } finally {
-        prepareSpy.mockRestore();
-      }
-      expect(changedFence).toBe(true);
+  it.each([0, 1])("preserves an intervening append before replacing prefix %i", async (prefix) => {
+    await withRewriteFixture(({ snapshot, scope }) => {
+      runOpenClawAgentWriteTransaction((database) => {
+        appendTranscriptEventInTransaction(database, scope, {
+          type: "custom",
+          id: "intervening",
+          parentId: "answer",
+        });
+      }, scope);
+      const before = snapshot();
+      expect(() =>
+        replaceTranscriptSuffixForTest(scope, rewriteEvents, rewriteEvents.slice(0, -1), prefix),
+      ).toThrow(`SQLite transcript changed while preparing suffix removal for ${scope.sessionId}`);
+      expect(snapshot()).toEqual(before);
     });
   });
 
@@ -713,19 +711,14 @@ describe("SQLite exact transcript suffix replacement", () => {
       const beforeStats = readTranscriptStatsSync(scope);
       expect(before.storage[2]?.event_json).toBeNull();
       expect(before.storage[2]?.event_zstd).toBeInstanceOf(Uint8Array);
-      const plan = prepareSqliteTranscriptSuffixMutation(
-        openOpenClawAgentDatabase(scope),
-        scope,
-        expected,
-        next,
-        1,
-        undefined,
-        false,
-        retainedIds,
-      );
       expect(() =>
         runOpenClawAgentWriteTransaction((database) => {
-          replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
+          replaceSqliteTranscriptSuffixInTransaction(database, scope, {
+            expectedEvents: expected,
+            nextEvents: next,
+            persistedPrefixLength: 1,
+            retainedCustomDataIds: retainedIds,
+          });
           throw new Error("rollback retained suffix");
         }, scope),
       ).toThrow("rollback retained suffix");

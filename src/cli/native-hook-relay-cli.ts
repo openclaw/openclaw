@@ -1,4 +1,3 @@
-import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -113,59 +112,47 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
       return 1;
     }
 
-    if (opts.remoteCredential) {
-      try {
+    try {
+      const remoteCredential = opts.remoteCredential;
+      if (remoteCredential) {
+        // Dedicated mode never falls back to local storage or operator credentials.
         return writeResponse(
-          await withNativeHookRelayDeadline(
-            deadline,
+          await withNativeHookRelayDeadline(deadline, () =>
             invokeRemoteNativeHookRelay(
-              opts.remoteCredential,
+              remoteCredential,
               { provider, relayId, generation, event, rawPayload },
               deadline.signal,
             ),
           ),
         );
+      }
+      try {
+        const remainingMs = remainingNativeHookRelayDeadlineMs(deadline);
+        const response = await withNativeHookRelayDeadline(deadline, () =>
+          invokeNativeHookRelayBridge({
+            signal: deadline.signal,
+            provider,
+            relayId,
+            stateDbPath: opts.stateDb?.trim() || undefined,
+            generation,
+            event,
+            rawPayload,
+            registrationTimeoutMs: Math.min(100, remainingMs),
+            timeoutMs: remainingMs,
+          }),
+        );
+        return writeResponse(response);
       } catch (error) {
-        if (isNativeHookRelayDeadlineError(error)) {
-          return timedOut(error);
+        if (
+          isNativeHookRelayDeadlineError(error) ||
+          isNativeHookRelayBridgeStaleRegistrationError(error)
+        ) {
+          throw error;
         }
-        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        // Dedicated mode never falls back to local storage or operator credentials.
-        return unavailable();
+        // Fall through to the gateway path for embedded/local gateway cases and
+        // older registrations that predate the direct relay bridge.
       }
-    }
-
-    try {
-      const remainingMs = remainingNativeHookRelayDeadlineMs(deadline);
-      const response = await withNativeHookRelayDeadline(
-        deadline,
-        invokeNativeHookRelayBridge({
-          provider,
-          relayId,
-          stateDbPath: opts.stateDb?.trim() || undefined,
-          generation,
-          event,
-          rawPayload,
-          registrationTimeoutMs: Math.min(100, remainingMs),
-          timeoutMs: remainingMs,
-        }),
-      );
-      return writeResponse(response);
-    } catch (error) {
-      if (isNativeHookRelayDeadlineError(error)) {
-        return timedOut(error);
-      }
-      if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        return unavailable();
-      }
-      // Fall through to the gateway path for embedded/local gateway cases and
-      // older registrations that predate the direct relay bridge.
-    }
-
-    try {
-      const response = await withNativeHookRelayDeadline(
-        deadline,
+      const response = await withNativeHookRelayDeadline(deadline, () =>
         callGatewayLazy<NativeHookRelayProcessResponse>({
           method: "nativeHook.invoke",
           params: { provider, relayId, generation, event, rawPayload },
@@ -246,7 +233,10 @@ function formatRelayCliError(prefix: string, error: unknown): string {
 
 function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
-  const timer = setSafeTimeout(() => controller.abort(), timeoutMs);
+  const timer = setSafeTimeout(
+    () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
+    timeoutMs,
+  );
   timer.unref?.();
   return {
     expiresAtMs: performance.now() + timeoutMs,
@@ -270,25 +260,18 @@ function remainingNativeHookRelayDeadlineMs(deadline: NativeHookRelayDeadline): 
 
 async function withNativeHookRelayDeadline<T>(
   deadline: NativeHookRelayDeadline,
-  promise: Promise<T>,
+  run: () => Promise<T>,
 ): Promise<T> {
-  if (deadline.expiresAtMs <= performance.now()) {
-    // Startup may spend the deadline before handing back its already-running promise.
-    void promise.catch(() => undefined);
-    throw new NativeHookRelayDeadlineError(deadline.timeoutMs);
+  remainingNativeHookRelayDeadlineMs(deadline);
+  try {
+    // The deadline aborts the actual transport. Join its socket/worker cleanup
+    // before emitting a response; a losing Promise.race branch is still live work.
+    const result = await run();
+    remainingNativeHookRelayDeadlineMs(deadline);
+    return result;
+  } catch (error) {
+    // Promise reactions may precede an overdue timer after an event-loop stall.
+    remainingNativeHookRelayDeadlineMs(deadline);
+    throw error;
   }
-  return await racePromiseWithAbortSignal(
-    promise.then(
-      (value) => {
-        // Promise reactions can run before an overdue timer after an event-loop stall.
-        remainingNativeHookRelayDeadlineMs(deadline);
-        return value;
-      },
-      (error: unknown) => {
-        throw error instanceof Error ? error : new Error(String(error));
-      },
-    ),
-    deadline.signal,
-    () => new NativeHookRelayDeadlineError(deadline.timeoutMs),
-  );
 }

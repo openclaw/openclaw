@@ -71,6 +71,24 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           return readCurrentSharing(read) ? consume() : undefined;
         });
       const respondNotFound = () => respond(true, { ok: false, unavailableReason: "not_found" });
+      const respondMessage = (message: unknown, applyModelPolicy = false) => {
+        if (!message) {
+          respond(true, { ok: false, unavailableReason: "not_visible" });
+          return;
+        }
+        // maxChars bounds individual fields; structured content must also fit the transport.
+        respond(
+          true,
+          jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
+            ? { ok: false, unavailableReason: "oversized" }
+            : applyModelPolicy
+              ? projectOperatorModelRead(
+                  { context, client, agentId: sessionAgentId },
+                  { ok: true, message },
+                )
+              : { ok: true, message },
+        );
+      };
       if (!sessionId) {
         await withCurrentSession(respondNotFound);
         return;
@@ -110,16 +128,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
             undefined,
             resolveCronJobName,
           );
-          if (!message) {
-            respond(true, { ok: false, unavailableReason: "not_visible" });
-            return;
-          }
-          respond(
-            true,
-            jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
-              ? { ok: false, unavailableReason: "oversized" }
-              : { ok: true, message },
-          );
+          respondMessage(message);
         });
         return;
       }
@@ -177,22 +186,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         const projected = projectedMessage
           ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
           : undefined;
-        if (!projected) {
-          respond(true, { ok: false, unavailableReason: "not_visible" });
-          return;
-        }
-
-        // maxChars bounds individual text fields, not the serialized message: many
-        // blocks or structured output must not bypass the WebSocket payload limit.
-        respond(
-          true,
-          jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
-            ? { ok: false, unavailableReason: "oversized" }
-            : projectOperatorModelRead(
-                { context, client, agentId: sessionAgentId },
-                { ok: true, message: projected },
-              ),
-        );
+        respondMessage(projected, true);
       });
     } finally {
       selection.release();

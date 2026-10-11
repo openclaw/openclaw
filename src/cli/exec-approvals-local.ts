@@ -1,12 +1,12 @@
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import {
-  mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../infra/exec-approvals.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 type LocalExecApprovalsSnapshot = Pick<ExecApprovalsSnapshot, "path" | "exists" | "hash" | "file">;
@@ -20,7 +20,8 @@ export function loadSnapshotLocal(): Promise<LocalExecApprovalsSnapshot> {
     recoveryCommand: "openclaw approvals get --json",
     runLocal: async ({ assertCurrent }) => {
       assertCurrent();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await readExecApprovalsSnapshotAsync();
+      assertCurrent();
       return {
         path: snapshot.path,
         exists: snapshot.exists,
@@ -44,15 +45,15 @@ export function saveSnapshotLocal(
     recoveryCommand: "openclaw approvals get --json",
     runLocal: async ({ assertCurrent }) => {
       assertCurrent();
-      const snapshot = await updateExecApprovals({
-        baseHash,
-        assertCurrent,
-        update: (current) =>
-          mergeExecApprovalsSocketDefaults({
-            normalized,
-            current,
-          }),
-      });
+      const context = captureOpenClawStateWorkerContext();
+      const snapshot = await updateExecApprovals(
+        {
+          baseHash,
+          assertCurrent,
+          update: { kind: "replace", file: normalized, preserveSocket: true },
+        },
+        context,
+      );
       if (!snapshot) {
         throw new Error("Exec approvals changed; reload and retry.");
       }

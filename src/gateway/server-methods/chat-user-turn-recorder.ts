@@ -4,6 +4,11 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
+import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -54,7 +59,7 @@ export function createGatewayChatUserTurnController(params: {
   warn: (message: string) => void;
   mentionInbox?: MentionInbox;
   goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
-  assertOriginalInputCommit?: () => void;
+  assertOriginalInputCommit?: SessionSourceAssertion;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const sender =
@@ -181,27 +186,25 @@ export function createGatewayChatUserTurnController(params: {
         })
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: () => {
-      params.assertOriginalInputCommit?.();
-      admission.operatorAuthority?.assertCurrent();
-    },
+    assertOriginalInputCommit: composeSessionSourceAssertion([
+      params.assertOriginalInputCommit,
+      admission.operatorAuthority?.assertCurrent,
+    ]),
     beforeMessageWrite: (event) => {
-      const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);
-      // This hook runs inside the synchronous writer after durable replay lookup.
-      // Fence only fresh original input, never accepted custody or terminal notices.
-      if (originalInput && next?.role === "user") {
-        recorder.assertOriginalInputCommit?.();
-        if (contextFreeCommand) {
-          return {
-            ...next,
-            excludeFromContext: true,
-            __openclaw: {
-              ...asOptionalRecord(Reflect.get(next, "__openclaw")),
-              contextFreeCommand: true,
-            },
-          };
-        }
+      if (
+        event.message.idempotencyKey === sourceId &&
+        next?.role === "user" &&
+        contextFreeCommand
+      ) {
+        return {
+          ...next,
+          excludeFromContext: true,
+          __openclaw: {
+            ...asOptionalRecord(Reflect.get(next, "__openclaw")),
+            contextFreeCommand: true,
+          },
+        };
       }
       return next;
     },
@@ -255,6 +258,7 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
+  bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: admission.acquireInputActor });
   const persist: GatewayChatUserTurnController["persist"] = async (options) => {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;

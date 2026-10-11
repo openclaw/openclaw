@@ -19,10 +19,13 @@ import {
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
-  readSessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -139,12 +142,23 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
-  await waitForSessionTranscriptProjection(target, abortSignal);
-  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
-    maxBytes: 5 * 1024 * 1024,
-    maxMessages: 500,
-    offset: 0,
-  });
+  abortSignal?.throwIfAborted();
+  const source = captureIncognitoSessionSource(target);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return false;
+  }
+  const incognito = captureIncognitoSessionHistoryBinding(target);
+  const capturedTarget = { ...target, ...(incognito ? { storePath: incognito.actor.path } : {}) };
+  await waitForSessionTranscriptProjection(capturedTarget, abortSignal);
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../../gateway/session-transcript-readers.js");
+  const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
+    capturedTarget,
+    { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
+    abortSignal,
+    incognito,
+  );
   return events.some(
     ({ event }) =>
       isRecord(event) &&
@@ -427,9 +441,8 @@ export function buildClaudeCliFallbackContextPrelude(params: {
 
 /** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
 export function createAcpVisibleTextAccumulator() {
-  let pendingSilentPrefix = "";
   let visibleText = "";
-  let rawVisibleText = "";
+  let rawText = "";
   const resolveNextCandidate = (base: string, chunk: string): string => {
     if (!base) {
       return chunk;
@@ -454,33 +467,30 @@ export function createAcpVisibleTextAccumulator() {
       }
 
       if (!visibleText) {
-        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+        const leadCandidate = resolveNextCandidate(rawText, chunk);
+        rawText = leadCandidate;
         const trimmedLeadCandidate = leadCandidate.trim();
         if (
           isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
         ) {
-          pendingSilentPrefix = leadCandidate;
           return null;
         }
         const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
           ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
           : leadCandidate;
         if (!text) {
-          pendingSilentPrefix = leadCandidate;
           return null;
         }
-        pendingSilentPrefix = "";
-        rawVisibleText = leadCandidate;
         visibleText = text;
         return { text, delta: text };
       }
 
       const delta =
-        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
-          ? chunk.slice(rawVisibleText.length)
+        chunk.startsWith(rawText) && chunk.length > rawText.length
+          ? chunk.slice(rawText.length)
           : chunk;
-      rawVisibleText += delta;
+      rawText += delta;
       visibleText += delta;
       return { text: visibleText, delta };
     },
@@ -493,7 +503,7 @@ export function createAcpVisibleTextAccumulator() {
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
       return buildAgentRunTerminalReplySnapshot({
         visibleText,
-        rawText: pendingSilentPrefix,
+        rawText: visibleText ? "" : rawText,
       });
     },
   };

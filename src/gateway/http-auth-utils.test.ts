@@ -183,8 +183,9 @@ describe("HTTP gateway owner profiles", () => {
           schemaReads: observation.queries.filter((sql) =>
             /sqlite_schema|sqlite_master|pragma_table_info|PRAGMA user_version/iu.test(sql),
           ).length,
-          dataVersionReads: observation.queries.filter((sql) => /PRAGMA data_version/iu.test(sql))
-            .length,
+          dataVersionReads: observation.queries.filter((sql) =>
+            /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
+          ).length,
         };
         expect(counts).toMatchObject({
           profileSchemaWrites: 0,

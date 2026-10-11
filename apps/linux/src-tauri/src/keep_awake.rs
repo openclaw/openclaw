@@ -36,21 +36,21 @@ impl KeepAwake {
         let worker = thread::Builder::new().name("keep-awake".into()).spawn(move || {
             let mut inhibitor = None;
             let mut enabled = false;
-            let restored = read().and_then(|saved| {
+            let mut result = read().and_then(|saved| {
                 enabled = saved;
                 if enabled && !stop.load(Ordering::SeqCst) {
                     inhibitor = Some(acquire()?);
                 }
                 Ok(())
             });
-            if !stop.load(Ordering::SeqCst) {
-                publish(Status { enabled, active: inhibitor.is_some(), error: restored.err() });
-            }
-            for () in receiver {
-                if stop.load(Ordering::SeqCst) { break; }
+            loop {
+                if !stop.load(Ordering::SeqCst) {
+                    publish(Status { enabled, active: inhibitor.is_some(), error: result.err() });
+                }
+                if receiver.recv().is_err() || stop.load(Ordering::SeqCst) { break; }
                 // Saved intent survives failed restoration. Toggle that intent,
                 // not the presence of a guard, so the user can still turn it off.
-                let result = if enabled {
+                result = if enabled {
                     let released = inhibitor.as_mut().map_or(Ok(()), Inhibitor::release);
                     released.and_then(|()| {
                         inhibitor = None;
@@ -71,9 +71,6 @@ impl KeepAwake {
                         Ok(())
                     })
                 };
-                if !stop.load(Ordering::SeqCst) {
-                    publish(Status { enabled, active: inhibitor.is_some(), error: result.err() });
-                }
             }
             // Explicit drop before join returns also releases thread-affine guards.
             drop(inhibitor);

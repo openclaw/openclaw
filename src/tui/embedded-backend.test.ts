@@ -26,6 +26,7 @@ import {
   captureBackendEvents,
   registerEmbeddedBackendStreamTests,
 } from "./embedded-backend.stream.test-support.js";
+import { localSessionEntry } from "./embedded-backend.test-helpers.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -125,29 +126,6 @@ const readChatHistoryPageMock = vi.fn(
     messages: [],
   }),
 );
-type LoadSessionEntryMockResult = {
-  agentId: string;
-  cfg: Record<string, unknown>;
-  canonicalKey: string;
-  storePath?: string;
-  store?: Record<string, unknown>;
-  entry?: Record<string, unknown>;
-};
-function localSessionEntry(
-  sessionKey: string,
-  opts?: { agentId?: string },
-  overrides: Partial<LoadSessionEntryMockResult> = {},
-): LoadSessionEntryMockResult {
-  return {
-    cfg: {},
-    agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
-    canonicalKey: sessionKey,
-    storePath: "/tmp/openclaw-sessions.json",
-    store: {},
-    entry: {},
-    ...overrides,
-  };
-}
 const loadSessionEntryMock = vi.fn(localSessionEntry);
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
@@ -312,7 +290,8 @@ vi.mock("../gateway/server-methods/chat-history-budget.js", async (importOrigina
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
-vi.mock("../gateway/server-methods/chat-history-page-kernel.js", () => ({
+// mock-isolation: The embedded backend fixture bypasses Gateway history presentation.
+vi.mock("../gateway/server-methods/chat-history-response-page.js", () => ({
   enrichChatHistoryCompactionMarkers: (messages: unknown[]) => messages,
 }));
 
@@ -1702,9 +1681,14 @@ describe("EmbeddedTuiBackend", () => {
       expect(abortListener).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(5);
-      await stopPromise;
-
       expect(abortListener).toHaveBeenCalledTimes(1);
+      expect(stopped).toBe(false);
+      expect(isEmbeddedMode()).toBe(true);
+
+      // Cancellation does not own settlement: keep the runtime available for
+      // the aborted turn's final cleanup before releasing embedded ownership.
+      pending.resolve({ payloads: [], meta: { aborted: true } });
+      await stopPromise;
       expect(isEmbeddedMode()).toBe(false);
     });
   });

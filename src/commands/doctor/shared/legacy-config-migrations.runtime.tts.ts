@@ -2,6 +2,7 @@ import {
   ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
+  type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
@@ -51,6 +52,23 @@ function hasLegacyTtsInLocations(raw: Record<string, unknown>, matcher: LegacyTt
     }
   }
   return false;
+}
+
+function ttsLocationRules(
+  matcher: LegacyTtsMatcher,
+  messages: Partial<Record<"tts" | "agents" | "channels" | "plugins", string>>,
+): LegacyConfigRule[] {
+  return Object.entries(messages).map(([scope, message]) => ({
+    path: scope === "plugins" ? ["plugins", "entries"] : [scope],
+    message,
+    match: (value) =>
+      scope === "tts"
+        ? matcher(value)
+        : hasLegacyTtsInLocations(
+            { [scope]: scope === "plugins" ? { entries: value } : value },
+            matcher,
+          ),
+  }));
 }
 
 function mergeLegacyTtsProviderConfig(
@@ -243,21 +261,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
   },
   {
     id: "tts.providers-generic-shape",
-    legacyRules: [
-      {
-        path: ["tts"],
-        message:
-          'tts legacy provider aliases/keys are legacy; use provider: "microsoft" and tts.providers.<provider>. Run "openclaw doctor --fix".',
-        match: hasLegacyTtsProviderKeys,
-      },
-      {
-        path: ["plugins", "entries"],
-        message:
-          'plugins.entries.voice-call.config.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
-        match: (value) =>
-          hasLegacyTtsInLocations({ plugins: { entries: value } }, hasLegacyTtsProviderKeys),
-      },
-    ],
+    legacyRules: ttsLocationRules(hasLegacyTtsProviderKeys, {
+      tts: 'tts legacy provider aliases/keys are legacy; use provider: "microsoft" and tts.providers.<provider>. Run "openclaw doctor --fix".',
+      plugins:
+        'plugins.entries.voice-call.config.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
+    }),
     apply: (raw, changes) => {
       // Provider aliases have a narrower migration scope than speaker keys and enabled.
       for (const [tts, pathLabel] of visitKnownTtsConfigLocations({
@@ -270,34 +278,15 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
   },
   {
     id: "tts.speaker-selection-keys",
-    legacyRules: [
-      {
-        path: ["tts"],
-        message:
-          'tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-        match: hasLegacyTtsSpeakerSelection,
-      },
-      {
-        path: ["agents"],
-        message:
-          'agents.entries.*.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-        match: (value) => hasLegacyTtsInLocations({ agents: value }, hasLegacyTtsSpeakerSelection),
-      },
-      {
-        path: ["channels"],
-        message:
-          'supported channel TTS speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-        match: (value) =>
-          hasLegacyTtsInLocations({ channels: value }, hasLegacyTtsSpeakerSelection),
-      },
-      {
-        path: ["plugins", "entries"],
-        message:
-          'plugins.entries.voice-call.config.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-        match: (value) =>
-          hasLegacyTtsInLocations({ plugins: { entries: value } }, hasLegacyTtsSpeakerSelection),
-      },
-    ],
+    legacyRules: ttsLocationRules(hasLegacyTtsSpeakerSelection, {
+      tts: 'tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      agents:
+        'agents.entries.*.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      channels:
+        'supported channel TTS speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+      plugins:
+        'plugins.entries.voice-call.config.tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
+    }),
     apply: (raw, changes) => {
       for (const [tts, pathLabel] of visitKnownTtsConfigLocations(raw)) {
         for (const [config, path] of visitLegacyTtsSpeakerConfigs(tts, pathLabel)) {
@@ -314,32 +303,15 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
   },
   {
     id: "tts.enabled-auto-mode",
-    legacyRules: [
-      {
-        path: ["tts"],
-        message: 'tts.enabled is legacy; use tts.auto. Run "openclaw doctor --fix".',
-        match: hasLegacyTtsEnabled,
-      },
-      {
-        path: ["agents"],
-        message:
-          'agents.entries.*.tts.enabled is legacy; use agents.entries.*.tts.auto. Run "openclaw doctor --fix".',
-        match: (value) => hasLegacyTtsInLocations({ agents: value }, hasLegacyTtsEnabled),
-      },
-      {
-        path: ["channels"],
-        message:
-          'supported channel TTS enabled fields are legacy; use the same TTS block auto field. Run "openclaw doctor --fix".',
-        match: (value) => hasLegacyTtsInLocations({ channels: value }, hasLegacyTtsEnabled),
-      },
-      {
-        path: ["plugins", "entries"],
-        message:
-          'plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. Run "openclaw doctor --fix".',
-        match: (value) =>
-          hasLegacyTtsInLocations({ plugins: { entries: value } }, hasLegacyTtsEnabled),
-      },
-    ],
+    legacyRules: ttsLocationRules(hasLegacyTtsEnabled, {
+      tts: 'tts.enabled is legacy; use tts.auto. Run "openclaw doctor --fix".',
+      agents:
+        'agents.entries.*.tts.enabled is legacy; use agents.entries.*.tts.auto. Run "openclaw doctor --fix".',
+      channels:
+        'supported channel TTS enabled fields are legacy; use the same TTS block auto field. Run "openclaw doctor --fix".',
+      plugins:
+        'plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. Run "openclaw doctor --fix".',
+    }),
     apply: (raw, changes) => {
       for (const [tts, pathLabel] of visitKnownTtsConfigLocations(raw)) {
         migrateLegacyTtsEnabled(tts, pathLabel, changes);

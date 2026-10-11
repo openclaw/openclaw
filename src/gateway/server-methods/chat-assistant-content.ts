@@ -32,14 +32,10 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
     if (!part.trim()) {
       continue;
     }
-    if (!combined) {
-      combined = part;
-      continue;
-    }
     // Outbound media normalization trims a chunk's trailing newline, so an
     // indented following chunk still needs its original single-line boundary.
     const separator =
-      /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
         ? ""
         : /^[\t ]+\S/.test(part)
           ? "\n"
@@ -304,30 +300,26 @@ function isManagedOutgoingMediaUrl(value: unknown): boolean {
   }
 }
 
+function hasManagedOutgoingMediaBlock(
+  block: AssistantDisplayContentBlock,
+  includeAttachmentBlockUrls = false,
+): boolean {
+  const attachment = block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+  return (
+    ((block?.type === "image" ||
+      block?.type === "audio" ||
+      block?.type === "video" ||
+      (includeAttachmentBlockUrls && Boolean(attachment))) &&
+      (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
+    isManagedOutgoingMediaUrl(attachment?.url)
+  );
+}
+
 export function stripManagedOutgoingAssistantContentBlocks(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): AssistantDisplayContentBlock[] | undefined {
-  if (!content || content.length === 0) {
-    return undefined;
-  }
-  const filtered = content.filter((block) => {
-    const attachment =
-      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
-    if (
-      block?.type !== "image" &&
-      block?.type !== "audio" &&
-      block?.type !== "video" &&
-      !attachment
-    ) {
-      return true;
-    }
-    return !(
-      isManagedOutgoingMediaUrl(block.url) ||
-      isManagedOutgoingMediaUrl(block.openUrl) ||
-      isManagedOutgoingMediaUrl(attachment?.url)
-    );
-  });
-  return filtered.length > 0 ? filtered : undefined;
+  const filtered = content?.filter((block) => !hasManagedOutgoingMediaBlock(block, true));
+  return filtered?.length ? filtered : undefined;
 }
 
 export function hasAssistantDisplayMediaContent(
@@ -361,13 +353,5 @@ export function hasVisibleAssistantFinalMessage(
 export function hasManagedOutgoingAssistantContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
-  return Boolean(
-    content?.some(
-      (block) =>
-        ((block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
-          (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
-        (block?.type === "attachment" &&
-          isManagedOutgoingMediaUrl(asOptionalRecord(block.attachment)?.url)),
-    ),
-  );
+  return Boolean(content?.some((block) => hasManagedOutgoingMediaBlock(block)));
 }

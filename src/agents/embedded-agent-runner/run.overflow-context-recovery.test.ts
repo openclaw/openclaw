@@ -1,13 +1,26 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
+import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+  testModel,
+} from "../sessions/agent-session-loop-correctness.test-support.js";
+import { createCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { prepareEmbeddedAttemptPromptPreflight } from "./run/attempt-prompt-preflight.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
@@ -51,7 +64,8 @@ vi.mock("./provider-prompt-state.js", () => ({
   markLastProviderPromptContextRejected: mocks.markProviderPromptRejected,
 }));
 
-vi.mock("./tool-result-truncation.js", () => ({
+vi.mock("./tool-result-truncation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tool-result-truncation.js")>()),
   resolveLiveToolResultMaxChars: () => 32_000,
   restoreCacheTtlToolResultProjections: vi.fn(),
   sessionLikelyHasOversizedToolResults: mocks.sessionLikelyHasOversizedToolResults,
@@ -140,10 +154,12 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     assertRecoveryActive: vi.fn(),
     // This leaf doubles orchestration; real admission and writer fencing have composed coverage.
     prepareRecoveryOwner: () => {
-      const assertActive = () => {
-        input.runParams.abortSignal?.throwIfAborted();
-        input.assertRecoveryActive();
-      };
+      const assertActive = composeSessionSourceAssertion([
+        () => {
+          input.runParams.abortSignal?.throwIfAborted();
+          input.assertRecoveryActive();
+        },
+      ]);
       assertActive();
       const session = input.getActiveSession();
       return {
@@ -168,7 +184,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     },
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory("/tmp/workspace"),
-      assertActive: vi.fn(),
+      assertActive: composeSessionSourceAssertion([]),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),
@@ -233,6 +249,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
 }
 
 describe("recoverEmbeddedRunOverflow", () => {
+  registerAgentSessionLoopTestLifecycle();
   afterEach(() => clearEmbeddedSessionPromptStates(["session-1", "rotated-session"]));
   beforeEach(() => {
     mocks.compact.mockReset().mockResolvedValue(successfulCompaction());
@@ -463,6 +480,126 @@ describe("recoverEmbeddedRunOverflow", () => {
     // gets its full compaction attempts and its one tool-result truncation.
     expect(input.state.overflowCompactionAttempts).toBe(0);
     expect(input.state.toolResultTruncationAttempted).toBe(false);
+  });
+
+  it("rejects oversized pending input once and answers after its persisted history is compacted", async () => {
+    const contextWindow = 40_000;
+    const systemPrompt = "Follow the project rules. ".repeat(2_000);
+    const oversized = "Oversized source material. ".repeat(8_000);
+    const manager = SessionManager.inMemory();
+    manager.appendMessage({ role: "user", content: "Remember copper.", timestamp: 1 });
+    manager.appendMessage(createAssistant(testModel, [{ type: "text", text: "ACK" }]));
+    manager.appendMessage({ role: "user", content: oversized, timestamp: 3 });
+    const before = structuredClone(manager.getBranch());
+    const requestBudget = createCompactionRequestBudget({
+      contextWindow,
+      reserveTokens: 10_000,
+      systemPrompt,
+      pendingPrompt: oversized,
+    });
+    const preflight = await prepareEmbeddedAttemptPromptPreflight({
+      attempt: {
+        provider: testModel.provider,
+        modelId: testModel.id,
+        model: testModel,
+        sessionId: "session-1",
+        sessionFile: "unused",
+      },
+      compactionReplayEnabled: false,
+      contextEngineAssemblySucceeded: false,
+      contextEnginePromptAuthority: "assembled",
+      contextTokenBudget: contextWindow,
+      hookMessagesForCurrentPrompt: manager.buildSessionContext().messages,
+      includeBoundaryTimestamp: false,
+      promptForPrecheck: oversized,
+      pendingInputTokens: requestBudget.pendingTokens,
+      reserveTokens: 10_000,
+      sessionMessageCount: 3,
+      systemPrompt,
+      toolResultMaxChars: 32_000,
+      state: {
+        contextBudgetStatus: undefined,
+        preflightRecovery: undefined,
+        promptError: null,
+        promptErrorSource: null,
+        skipPromptSubmission: false,
+      },
+    });
+    expect(preflight.skipPromptSubmission).toBe(true);
+    const input = makeInput({
+      contextTokenBudget: contextWindow,
+      promptError: preflight.promptError,
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: preflight.promptError },
+        preflightRecovery: preflight.preflightRecovery,
+      },
+    });
+    input.state.compactionRequestBudget = requestBudget;
+    expect(await recoverEmbeddedRunOverflow(input)).toMatchObject({
+      action: "surface",
+      kind: "context_overflow",
+      userText: expect.stringContaining("Send a smaller message"),
+    });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+    expect(input.state.overflowCompactionAttempts).toBe(0);
+    expect(manager.getBranch()).toEqual(before);
+
+    const pendingPrompt = "What is the code word?";
+    const pendingUserIdempotencyKey = "normal-follow-up";
+    const pendingUser = {
+      role: "user" as const,
+      content: pendingPrompt,
+      timestamp: 4,
+      idempotencyKey: pendingUserIdempotencyKey,
+    };
+    manager.appendMessage(pendingUser);
+    const { session } = await createTestSession({
+      model: { ...testModel, contextWindow },
+      sessionManager: manager,
+      systemPrompt,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false, keepRecentTokens: 20_000, reserveTokens: 10_000 },
+        retry: { enabled: false },
+      }),
+    });
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      const text = session.isCompacting ? "The code word is copper." : "copper";
+      if (!session.isCompacting) {
+        expect(JSON.stringify(context.messages)).not.toContain(oversized);
+        expect(JSON.stringify(context.messages)).toContain("copper");
+        expect(Math.ceil(JSON.stringify(context).length / 4)).toBeLessThan(contextWindow - 10_000);
+      }
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text }]));
+    });
+    mocks.compact.mockImplementation(async ({ runtimeContext }) => {
+      const outcome = await session[agentSessionAutomaticCompaction](
+        undefined,
+        "unresolved",
+        undefined,
+        readCompactionAccountingRecorder(runtimeContext),
+      );
+      if (outcome.status !== "completed") {
+        throw new Error(outcome.reason);
+      }
+      return {
+        ok: true,
+        compacted: true,
+        result: { ...outcome.result, tokensAfter: outcome.tokensAfter },
+      };
+    });
+    input.state.compactionRequestBudget = createCompactionRequestBudget({
+      contextWindow,
+      reserveTokens: 10_000,
+      systemPrompt,
+      pendingPrompt,
+      pendingUserIdempotencyKey,
+    });
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    await session.prompt(pendingPrompt, { persistedUserIdempotencyKey: pendingUserIdempotencyKey });
+    expect(session.getLastAssistantText()).toBe("copper");
+    expect(manager.getEntry(before.at(-1)!.id)).toMatchObject({ message: { content: oversized } });
   });
 
   it("recovers overflow reported only by the assistant error text", async () => {

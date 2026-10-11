@@ -148,17 +148,8 @@ function extractLiteralExecCommand(body: string): string | undefined {
   }
 
   const runSubject = body.match(/^run (.+)$/u)?.[1];
-  if (runSubject && isKnownLiteralRunSummary(runSubject)) {
-    return runSubject;
-  }
-
-  return undefined;
+  return runSubject && isKnownLiteralRunSummary(runSubject) ? runSubject : undefined;
 }
-
-type RawExecContext = {
-  leading: string[];
-  trailing: string[];
-};
 
 function extractRawExecCommand(body: string): string | undefined {
   const codeSpan = extractTrailingMarkdownCodeSpan(body);
@@ -207,7 +198,7 @@ function unwrapMarkdownInlineCodePadding(value: string): string {
   const unwrapped = value.slice(1, -1);
   return /\S/u.test(unwrapped) ? unwrapped : value;
 }
-function extractRawExecContext(prefix: string | undefined, inlineCode: string): RawExecContext {
+function extractRawExecContext(prefix: string | undefined, inlineCode: string) {
   const value = prefix ?? "";
   const leading = [...value.matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
     .map((match) => match[1]?.trim())

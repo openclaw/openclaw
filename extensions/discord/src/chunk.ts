@@ -81,9 +81,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
   let consumed = 0;
   let lineStart = 0;
   // Keep existing soft breaks based on source bytes; render measures the full payload.
-  const raw = (frame: DiscordFrame) => {
+  const raw = (frame: DiscordFrame, body = text.slice(frame.start, frame.end)) => {
     const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
-    const body = text.slice(frame.start, frame.end);
     return prefix + (prefix ? "\n" : "") + body;
   };
   const render = (frame: DiscordFrame) => {
@@ -91,8 +90,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     if (body === undefined) {
       return undefined;
     }
-    const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
-    const result = prefix + (prefix ? "\n" : "") + body;
+    const result = raw(frame, body);
     const close = ranges.fenceAt(frame.end);
     return close?.reopenLine
       ? result + (result.endsWith("\n") ? "" : "\n") + close.closeLine

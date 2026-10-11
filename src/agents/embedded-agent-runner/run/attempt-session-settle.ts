@@ -22,6 +22,11 @@ export function createEmbeddedAttemptSessionSettleTracker(
 ) {
   const inFlight = new Set<Promise<void>>();
   let abortCleanupFailed = false;
+  const recordAbortCleanupFailure = () => {
+    if (abortCleanupFailed) {
+      recordAgentCleanupFailure();
+    }
+  };
   const trackSettlePromise = (promise: Promise<void>): Promise<void> => {
     inFlight.add(promise);
     const settled = () => {
@@ -42,16 +47,10 @@ export function createEmbeddedAttemptSessionSettleTracker(
     buildAbortSettlePromise: () => {
       // Abort callbacks can run outside the caller's async context. Record their
       // retained failure from the cleanup owner that joins settlement.
-      if (abortCleanupFailed) {
-        recordAgentCleanupFailure();
-      }
+      recordAbortCleanupFailure();
       return inFlight.size === 0
         ? null
-        : Promise.allSettled(inFlight).then(() => {
-            if (abortCleanupFailed) {
-              recordAgentCleanupFailure();
-            }
-          });
+        : Promise.allSettled(inFlight).then(recordAbortCleanupFailure);
     },
     trackPromptSettlePromise: trackSettlePromise,
   };

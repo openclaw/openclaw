@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as identityFile from "../../agents/identity-file.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveOpenPathCommand } from "./open-path.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -49,9 +52,15 @@ vi.mock("../session-utils.js", async (original) => ({
   loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
-vi.mock("../session-transcript-readers.js", async (original) => ({
-  ...(await original<typeof import("../session-transcript-readers.js")>()),
-  readSessionTranscriptVisibleMessageDeltaCore: hoisted.readDelta,
+// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
+vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
+  withSessionTranscriptDeltaReader: ((scope, consume) =>
+    consume({
+      visible: async (limits) => hoisted.readDelta(scope, limits),
+      raw: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
+    })) satisfies typeof withSessionTranscriptDeltaReader,
 }));
 
 const sessionKey = "agent:main:main";
@@ -75,10 +84,7 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 
 let workspaceRoot: string;
 beforeEach(() => {
-  workspaceRoot = prepareSessionFilesTest(
-    { ...hoisted, readSessionTranscriptVisibleMessageDeltaCore: hoisted.readDelta },
-    mockVisibleMessages,
-  );
+  workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
 });
 
 afterEach(() => {
@@ -466,6 +472,102 @@ describe("sessions.files RPC handlers", () => {
       type: "session_file_not_found",
     });
   });
+
+  it("refreshes committed identity bytes after a pending pre-write read", async () => {
+    const identityPath = path.join(workspaceRoot, "IDENTITY.md");
+    const original = "- Name: Before\n";
+    const replacement = "- Name: After\n";
+    writeWorkspaceFile(workspaceRoot, "IDENTITY.md", original);
+    const captured = createDeferred();
+    const release = createDeferred();
+    const joined = createDeferred();
+    let firstRead = true;
+    const worker = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async () => {
+      const snapshot = identityFile.readIdentityFileSnapshot({ identityPath });
+      if (firstRead) {
+        firstRead = false;
+        captured.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
+    const loadIdentity = identityFile.loadAgentIdentityFromWorkspaceAsync;
+    let identityLoads = 0;
+    const load = vi
+      .spyOn(identityFile, "loadAgentIdentityFromWorkspaceAsync")
+      .mockImplementation((workspace) => {
+        const pending = loadIdentity(workspace);
+        if (++identityLoads === 2) {
+          joined.resolve();
+        }
+        return pending;
+      });
+    const staleRead = identityFile.loadAgentIdentityFromWorkspaceAsync(workspaceRoot);
+    let publication: Promise<identityFile.AgentIdentityFile | null> | undefined;
+    const broadcast = vi.fn(() => {
+      publication = identityFile.loadAgentIdentityFromWorkspaceAsync(workspaceRoot);
+    });
+    let save: ReturnType<typeof invoke> | undefined;
+    try {
+      await awaitGateBeforeSettlement(captured.promise, staleRead, "identity read was not started");
+      save = invoke(
+        "sessions.files.set",
+        {
+          sessionKey,
+          path: identityPath,
+          content: replacement,
+          expectedHash: hashContent(original),
+        },
+        { broadcast },
+      );
+      await awaitGateBeforeSettlement(joined.promise, save, "identity read was not joined");
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(replacement);
+      expect(broadcast).not.toHaveBeenCalled();
+      release.resolve();
+      expectOkPayload(await save);
+      expect(broadcast).toHaveBeenCalledExactlyOnceWith("agent.identity.changed", {
+        agentId: "main",
+      });
+      expect(await staleRead).toEqual({ name: "Before" });
+      expect(await publication).toEqual({ name: "After" });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([staleRead, ...(save ? [save] : [])]);
+      load.mockRestore();
+      worker.mockRestore();
+    }
+  });
+
+  it.each(["nested", "project", "conflict"] as const)(
+    "does not invalidate agent identity for a %s file save",
+    async (variant) => {
+      const name = variant === "nested" ? "ui/IDENTITY.md" : "IDENTITY.md";
+      const original = "- Name: Before\n";
+      writeWorkspaceFile(workspaceRoot, name, original);
+      if (variant === "project") {
+        hoisted.resolveAgentWorkspaceDir.mockReturnValue(path.join(workspaceRoot, "agent"));
+      }
+      const broadcast = vi.fn();
+      const calls = await invoke(
+        "sessions.files.set",
+        {
+          sessionKey,
+          path: name,
+          content: "- Name: After\n",
+          expectedHash: hashContent(variant === "conflict" ? "stale" : original),
+        },
+        { broadcast },
+      );
+      if (variant === "conflict") {
+        expect(expectError(calls).details.type).toBe("session_file_conflict");
+        expect(fs.readFileSync(path.join(workspaceRoot, name), "utf8")).toBe(original);
+      } else {
+        expectOkPayload(calls);
+        expect(fs.readFileSync(path.join(workspaceRoot, name), "utf8")).toBe("- Name: After\n");
+      }
+      expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";

@@ -149,12 +149,7 @@ extension NodeServiceManager {
             }
             command = AppProfile.current.localCLICommand(
                 prefix: cli.prefix, arguments: ["node", action, "--json"])
-            env = GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
-                installedCLI: cli,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+            env = GatewayLaunchAgentManager.daemonEnvironment(installedCLI: cli)
         } else {
             command = await self.serviceCommand(action)
             var environment = ProcessInfo.processInfo.environment

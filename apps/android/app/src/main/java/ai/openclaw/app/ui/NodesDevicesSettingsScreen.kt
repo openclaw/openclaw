@@ -463,17 +463,10 @@ private fun nodeStatusText(node: GatewayNodeSummary): String =
   }
 
 private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
-  when (node.approvalState) {
-    GatewayNodeCapabilityApproval.Approved -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
-
-    is GatewayNodeCapabilityApproval.PendingApproval,
-    is GatewayNodeCapabilityApproval.PendingReapproval,
-    GatewayNodeCapabilityApproval.Unapproved,
-    -> ClawStatus.Warning
-
-    GatewayNodeCapabilityApproval.Loading,
-    GatewayNodeCapabilityApproval.Unsupported,
-    -> if (node.connected) ClawStatus.Neutral else ClawStatus.Warning
+  when {
+    !node.connected || nodeCapabilityApprovalNeedsUserAction(node.approvalState) -> ClawStatus.Warning
+    node.approvalState == GatewayNodeCapabilityApproval.Approved -> ClawStatus.Success
+    else -> ClawStatus.Neutral
   }
 
 private fun nodeApprovalSubtitle(approvalState: GatewayNodeCapabilityApproval): String? =

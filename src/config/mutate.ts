@@ -89,7 +89,10 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+import {
+  composeConfigWriteAssertions,
+  createConfigWriteAuthorityGuard,
+} from "./write-authority.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,
@@ -275,10 +278,7 @@ function mergeConfigMutationWriteOptions(
   // Caller authority narrows the captured destination; it must never replace
   // that ownership check through retries and post-write validation.
   if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
-    merged.assertConfigPathForWrite = () => {
-      capturedGuard();
-      callerGuard();
-    };
+    merged.assertConfigPathForWrite = composeConfigWriteAssertions(capturedGuard, callerGuard);
   } else if (capturedGuard) {
     merged.assertConfigPathForWrite = capturedGuard;
   }
@@ -1027,42 +1027,23 @@ async function transformConfigFileAttempt<T>(
   };
 }
 
-export async function transformConfigFile<T = void>(
-  params: TransformConfigFileParams<T>,
-): Promise<ConfigMutationResult<T>> {
-  params.writeOptions?.assertConfigPathForWrite?.();
-  if (!params.io) {
-    return await withConfigMutationSnapshotLock(
-      params.writeOptions,
-      async (prepared) =>
-        await transformConfigFileAttempt(
-          params,
-          0,
-          createConfigMutationOwnership(prepared, params.writeOptions),
-          prepared,
-        ),
-    );
-  }
-  return await withConfigMutationLock(
-    { io: params.io, assertCurrent: params.writeOptions?.assertCurrent },
-    async () => await transformConfigFileAttempt(params, 0),
-  );
-}
-
-export async function transformConfigFileWithRetry<T = void>(
+async function runConfigTransform<T>(
   params: TransformConfigFileWithRetryParams<T>,
+  retry = false,
 ): Promise<ConfigMutationResult<T>> {
   params.writeOptions?.assertConfigPathForWrite?.();
-  const maxAttempts = params.maxAttempts ?? DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS;
+  const maxAttempts = retry ? (params.maxAttempts ?? DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS) : 1;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
     throw new Error("Config mutation maxAttempts must be a positive integer.");
   }
   const runWithPrepared = async (
     prepared?: Awaited<ReturnType<typeof readConfigSnapshotForMutation>>,
   ) => {
-    const ownership: ConfigMutationOwnership = prepared
+    const ownership = prepared
       ? createConfigMutationOwnership(prepared, params.writeOptions)
-      : {};
+      : retry
+        ? {}
+        : undefined;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         return await transformConfigFileAttempt(
@@ -1091,6 +1072,18 @@ export async function transformConfigFileWithRetry<T = void>(
     { io: params.io, assertCurrent: params.writeOptions?.assertCurrent },
     async () => await runWithPrepared(),
   );
+}
+
+export async function transformConfigFile<T = void>(
+  params: TransformConfigFileParams<T>,
+): Promise<ConfigMutationResult<T>> {
+  return await runConfigTransform(params);
+}
+
+export async function transformConfigFileWithRetry<T = void>(
+  params: TransformConfigFileWithRetryParams<T>,
+): Promise<ConfigMutationResult<T>> {
+  return await runConfigTransform(params, true);
 }
 
 type MutateConfigFileParams<T> = Omit<TransformConfigFileParams<T>, "transform" | "commit"> & {

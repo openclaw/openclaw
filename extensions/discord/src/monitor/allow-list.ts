@@ -168,11 +168,8 @@ export function resolveDiscordMemberAllowed(params: {
   }
   const userOk = hasUserRestriction
     ? resolveDiscordUserAllowed({
+        ...params,
         allowList: params.userAllowList,
-        userId: params.userId,
-        userName: params.userName,
-        userTag: params.userTag,
-        allowNameMatching: params.allowNameMatching,
       })
     : false;
   // Role allowlists accept role IDs only. Names are ignored.
@@ -225,11 +222,7 @@ export function resolveDiscordOwnerAllowFrom(params: {
   }
   const match = resolveDiscordAllowListMatch({
     allowList,
-    candidate: {
-      id: params.sender.id,
-      name: params.sender.name,
-      tag: params.sender.tag,
-    },
+    candidate: params.sender,
     allowNameMatching: params.allowNameMatching,
   });
   if (!match.allowed || !match.matchKey || match.matchKey === "*") {

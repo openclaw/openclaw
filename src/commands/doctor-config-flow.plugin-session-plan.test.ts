@@ -123,7 +123,7 @@ module.exports = { stateMigrations: [{
               });
             });
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(install).toHaveBeenCalledOnce();
           for (const pluginId of pluginIds) {
             expect(fs.existsSync(path.join(stateDir, `${pluginId}-migrated`))).toBe(false);

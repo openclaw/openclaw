@@ -10,7 +10,6 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
   const pending = new Set<FileWatchNotification>();
   let rejectWrite: ((error: Error) => void) | undefined;
   let accepting = true;
-  let writing = false;
   let failure: Error | undefined;
   let draining: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -29,7 +28,7 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
     }
   };
   const onClose = () => {
-    if (!accepting && !writing && !pending.size) {
+    if (!accepting && !rejectWrite && !pending.size) {
       return;
     }
     fail(new Error("File watch output closed before notification retirement"));
@@ -54,22 +53,19 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
         const event = pending.values().next().value!;
         pending.delete(event);
         await new Promise<void>((resolve, reject) => {
-          rejectWrite = reject;
-          writing = true;
-          try {
-            output.write(JSON.stringify(event) + "\n", (error) => {
-              writing = false;
-              rejectWrite = undefined;
-              if (error) {
-                reject(error);
-              } else {
-                resolve();
-              }
-            });
-          } catch (error) {
-            writing = false;
+          const finishWrite = (error?: Error | null) => {
             rejectWrite = undefined;
-            reject(
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          };
+          rejectWrite = reject;
+          try {
+            output.write(JSON.stringify(event) + "\n", finishWrite);
+          } catch (error) {
+            finishWrite(
               error instanceof Error
                 ? error
                 : new Error("File watch output write failed", { cause: error }),

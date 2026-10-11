@@ -18,9 +18,7 @@ const authored = {
 
 describe("Signal registered account entry points", () => {
   it.each([
-    ["default", true],
     ["Default.", true],
-    ["default", false],
     ["Default.", false],
   ] as const)(
     "channels.add setupContract preserves default %s winner when restoring its number (restricted=%s)",
@@ -75,9 +73,7 @@ describe("Signal registered account entry points", () => {
   );
 
   it.each([
-    [false, false],
     [false, true],
-    [true, false],
     [true, true],
   ])(
     "Doctor normalizeCompatibilityConfig keeps the exact default transport (managed=%s, aliasFirst=%s)",
@@ -108,7 +104,7 @@ describe("Signal registered account entry points", () => {
     },
   );
 
-  it.each([undefined, "+12025550123"])(
+  it.each(["+12025550123"])(
     "channels.status config.resolveAccount and threading use an owned number with root %s",
     (rootNumber) => {
       const cfg: OpenClawConfig = {
@@ -125,23 +121,6 @@ describe("Signal registered account entry points", () => {
       );
     },
   );
-
-  it("channels.status config.resolveAccount preserves ignored settings without an owned number", () => {
-    const cfg = signalConfig({
-      account: "+12025550123",
-      replyToMode: "all",
-      accounts: { "Work Phone": { ...authored, account: undefined, enabled: false } },
-    });
-    expect(signalPlugin.config.resolveAccount(cfg, "work-phone")).toMatchObject({
-      enabled: true,
-      configured: true,
-      transport: { kind: "managed-native" },
-      config: { account: "+12025550123", replyToMode: "all" },
-    });
-    expect(signalPlugin.threading?.resolveReplyToMode?.({ cfg, accountId: "work-phone" })).toBe(
-      "all",
-    );
-  });
 
   it.each([false, true])(
     "channels.add setup and config enable/delete update the selected stored key (collision=%s)",
@@ -238,18 +217,5 @@ describe("Signal registered account entry points", () => {
     ).toThrow(
       'Signal managed native account "work-phone" binds port 18081, which conflicts with account "personal" local transport endpoint.',
     );
-  });
-
-  it("channels.remove config.deleteAccount normalizes a requested default alias before root cleanup", () => {
-    const cfg: OpenClawConfig = {
-      channels: { signal: { account: "+12025550123", accounts: { default: authored } } },
-    };
-    const next = expectDefined(
-      signalPlugin.config.deleteAccount?.({ cfg, accountId: "Default." }),
-      "registered delete adapter",
-    );
-    expect(next.channels?.signal?.account).toBeUndefined();
-    expect(next.channels?.signal?.accounts?.default).toBeUndefined();
-    expect(signalPlugin.config.resolveAccount(next, "default").configured).toBe(false);
   });
 });

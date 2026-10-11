@@ -1,5 +1,9 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -99,7 +103,7 @@ async function compactCliTranscript(
     authProfileId?: string;
     bestEffortMaintenance?: boolean;
     expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"];
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     abortSignal?: AbortSignal;
     onCommitted?: QueuedCompactionHostOptions["onCommitted"];
   },
@@ -235,7 +239,7 @@ async function compactNativeHarnessCliTranscript(
     contextEngine: ContextEngine;
     pluginGeneration?: PreparedModelRuntimePluginGeneration;
     abortSignal?: AbortSignal;
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     sourceAuthority: QueuedCompactionHostOptions["sourceAuthority"];
   },
 ): Promise<NativeHarnessCliCompactionOutcome> {
@@ -376,24 +380,28 @@ export async function runCliTurnCompactionLifecycle(
         ? AbortSignal.any([input.abortSignal, sourceSignal])
         : (input.abortSignal ?? sourceSignal);
     const params = { ...input, abortSignal };
-    const capturedEntry = loadSessionEntryReadOnly({
-      agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-      storePath,
-      readConsistency: "latest",
-    });
+    const assertActive = composeSessionSourceAssertion(
+      [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
+      (assertSources) => {
+        params.abortSignal?.throwIfAborted();
+        assertSources();
+      },
+    );
+    assertActive();
+    const capturedEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      },
+      assertActive,
+    );
     const expectedEntry = {
       sessionId: params.sessionId,
       lifecycleRevision: capturedEntry?.lifecycleRevision,
       activeWriterRunId: capturedEntry?.activeWriterRunId,
     };
-    const assertActive = () => {
-      params.abortSignal?.throwIfAborted();
-      assertSourceActive();
-      operatorAuthority?.assertCurrent();
-      host.assertActive?.();
-    };
-    assertActive();
     const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
       if (params.sessionStore) {
         params.sessionStore[params.sessionKey] = accepted.entry;
@@ -436,7 +444,8 @@ export async function runCliTurnCompactionLifecycle(
       return params.sessionEntry;
     }
 
-    const resolvedBackend = resolveCliBackendConfig(params.provider, params.cfg);
+    const cliBackendId = params.cliBackendId?.trim() || params.provider;
+    const resolvedBackend = resolveCliBackendConfig(cliBackendId, params.cfg);
     const nativeSessionEntry = isNativeHarnessCompactionSession(
       params.sessionEntry,
       params.provider,
@@ -454,7 +463,7 @@ export async function runCliTurnCompactionLifecycle(
       throw new Error("CLI compaction cannot replace a model-locked native harness runtime");
     }
     if (resolvedBackend?.ownsNativeCompaction && !nativeSessionEntry) {
-      log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
+      log.info(`CLI backend "${cliBackendId}" owns native compaction — deferring to backend`);
       return params.sessionEntry;
     }
 

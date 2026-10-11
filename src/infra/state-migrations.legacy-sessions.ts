@@ -8,10 +8,10 @@ import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-h
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import { preserveDeferredPluginSessionSource } from "./deferred-plugin-session-sources.js";
 import { isErrno } from "./errors.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import {
   LEGACY_AGENT_DIR_RECEIPT,
   recordCompletedLegacyAgentDirMigration,
@@ -71,9 +71,9 @@ export function inspectLegacyAgentDir(
     );
   }
 
-  let database: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  let database: ReturnType<typeof openSqliteReadOnlyDatabase> | undefined;
   try {
-    const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    const opened = openSqliteReadOnlyDatabase(databasePath, { readOnly: true });
     database = opened;
     const schemaOwner = readExistingAgentSchemaMeta(opened);
     if (!schemaOwner || schemaOwner.role !== "agent") {

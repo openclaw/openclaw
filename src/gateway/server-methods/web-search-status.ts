@@ -7,7 +7,7 @@ import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-pr
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "../../agents/harness/builtin-openclaw-metadata.js";
 import {
-  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "../../agents/model-catalog-decisions.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
@@ -185,7 +185,7 @@ export async function prepareWebSearchStatus(
       modelId: modelRef.model,
     });
     if (entry) {
-      const decisions = createModelCatalogDecisions({
+      const decisions = await prepareModelCatalogDecisions({
         cfg: config,
         agentId: scope.agentId,
         agentDir: scope.agentDir,

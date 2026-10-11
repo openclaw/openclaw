@@ -54,12 +54,16 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
       )
     : undefined;
   try {
-    const readCandidates = current
-      ? (await import("./subagent-registry.store.sqlite.js"))
-          .loadSubagentMaintenanceCandidatesInDatabase
-      : undefined;
-    // Only this private, unpinned connection observes the snapshot interval.
-    const version = current?.dataVersion();
+    let readCandidates:
+      | typeof import("./subagent-registry.store.sqlite.js").loadSubagentMaintenanceCandidatesInDatabase
+      | undefined;
+    if (current) {
+      const { loadSubagentMaintenanceCandidatesInDatabase } =
+        await import("./subagent-registry.store.sqlite.js");
+      readCandidates = loadSubagentMaintenanceCandidatesInDatabase;
+    }
+    // The owning writer publishes revisions across the asynchronous snapshot interval.
+    const version = current?.writeRevision();
     const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(
       subagentRuns,
       native ? { live: true } : undefined,
@@ -82,8 +86,8 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
             throw new Error("Session subagent source changed before commit");
           }
         }
-        const observed = current?.dataVersion();
-        if (current && readCandidates && observed !== version) {
+        const observed = current?.writeRevision();
+        if (current && readCandidates && (observed === undefined || observed !== version)) {
           const candidates = new Set(sessionKeys.map(normalizeStoreSessionKey));
           // Existing legacy spellings use the same normalized session owner.
           const indexedKeys = new Set(sessionKeys);
@@ -93,7 +97,7 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
             }
           }
           const refreshed = current.read((database) => readCandidates(database, [...indexedKeys]));
-          if (current.dataVersion() !== observed) {
+          if (observed === undefined || current.writeRevision() !== observed) {
             throw new Error("Session subagent facts changed before commit");
           }
           // Lost protection may over-preserve; newly durable protection must win over a stale resident row.
@@ -102,7 +106,6 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
         return keys;
       },
       dispose() {
-        prepared.dispose();
         current?.dispose();
       },
       subagentRunBasis: prepared.basis,

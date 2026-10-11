@@ -9,9 +9,3 @@ export function resolveWorkshopSkillsDir(
 ): string {
   return path.join(resolveAgentDir(config, agentId, env), "workshop-skills");
 }
-
-export function resolveWorkshopWatchRoots(config?: OpenClawConfig, agentId?: string) {
-  return config && agentId
-    ? [{ path: resolveWorkshopSkillsDir(config, agentId), source: "openclaw-workshop" }]
-    : [];
-}

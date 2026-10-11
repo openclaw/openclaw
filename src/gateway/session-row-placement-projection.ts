@@ -51,7 +51,10 @@ type PlacementReadBatch = {
 
 /** Placement facts share the resident row lifecycle; private exact reads retain only their frame. */
 export function createSessionRowPlacementProjection(
-  reader: Pick<WorkerSessionPlacementStore, "readProjection"> | undefined,
+  reader:
+    | (Pick<WorkerSessionPlacementStore, "readProjection"> &
+        Partial<Pick<WorkerSessionPlacementStore, "readPublishedProjection">>)
+    | undefined,
   prepareReadFacts: () => Promise<void> | undefined,
   inputEnv: NodeJS.ProcessEnv = process.env,
 ) {
@@ -254,6 +257,16 @@ export function createSessionRowPlacementProjection(
       registered.delete(id);
       dirty.delete(id);
       resident.delete(id);
+    },
+    publish(id: string, change: SessionRowChange): boolean {
+      const published = reader?.readPublishedProjection?.(change);
+      if (!published?.placements.has(id) || !registered.has(id)) {
+        return false;
+      }
+      invalidateReads(id);
+      resident.set(id, select(published, id));
+      dirty.delete(id);
+      return true;
     },
     invalidate(id?: string) {
       invalidateReads(id);

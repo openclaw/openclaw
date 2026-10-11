@@ -81,10 +81,6 @@ impl Observation {
         })
     }
 
-    pub(crate) fn is_current(&self, runtime: &BundledRuntime) -> bool {
-        self.uses_runtime_path(&runtime.bun)
-    }
-
     pub(crate) fn paused(&self) -> bool {
         self.command().is_some()
             && (self.flag("/service/loaded") == Some(false)
@@ -169,7 +165,7 @@ impl Observation {
         let Some(port) = self.number("/port/port").filter(|port| *port > 0) else {
             return false;
         };
-        self.is_current(runtime)
+        self.uses_runtime_path(&runtime.bun)
             && self.text("/service/runtimeIntent/pin/runtime") == Some("bun")
             && self
                 .text("/service/runtimeIntent/pin/path")
@@ -390,7 +386,7 @@ pub(crate) fn bind_runtime(
 ) -> Result<(), String> {
     validate_runtime(runtime)?;
     let launcher =
-        read_launcher(cli)?.ok_or("The CLI launcher is not a canonical managed installation.")?;
+        read_launcher(cli)?.ok_or("The CLI launcher is not a recognized managed installation.")?;
     publish_launcher(&launcher, runtime, purpose)
 }
 

@@ -27,7 +27,6 @@ export async function prepareCliSessionBinding(params: {
   skillsSnapshot?: Parameters<typeof resolveAuthorizedClaudeCliBinding>[0]["skillsSnapshot"];
   cwd: string;
   cliSessionBinding?: CliSessionBinding;
-  accountId?: string;
   sessionId: string;
   sessionKey?: string;
   mutableCliSessionStore?: MutableCliSessionStore;
@@ -50,9 +49,7 @@ export async function prepareCliSessionBinding(params: {
     params.cliSessionBinding?.sessionId &&
     hasCliLiveSession({
       backendId: params.provider,
-      agentAccountId: params.accountId,
       agentId: params.agentId,
-      authProfileId: params.cliSessionBinding.authProfileId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
     }),

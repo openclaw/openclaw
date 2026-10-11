@@ -150,12 +150,12 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
     (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
 });
 
+const discordPluginBase = createDiscordPluginBase({ setupContract: discordSetupContract });
+
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, unknown, 2> =
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe, unknown, 2>({
     base: {
-      ...createDiscordPluginBase({
-        setupContract: discordSetupContract,
-      }),
+      ...discordPluginBase,
       allowlist: {
         ...buildLegacyDmAccountAllowlistAdapter({
           channelId: "discord",
@@ -184,26 +184,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
         ],
       },
       messaging: {
+        directTargetStyle: discordPluginBase.messaging?.directTargetStyle,
+        inferTargetChatType: discordPluginBase.messaging?.inferTargetChatType,
         resolveConversationRouteOwner: inspectDiscordConversationRouteOwner,
         targetPrefixes: ["discord"],
-        directTargetStyle: "user-prefixed",
         targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,
         resolveInboundConversation: resolveDiscordInboundConversation,
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
-        inferTargetChatType: ({ to }) => {
-          try {
-            const parsed = parseDiscordTarget(to, { defaultKind: "channel" });
-            if (!parsed) {
-              return undefined;
-            }
-            return parsed?.kind === "user" ? "direct" : "channel";
-          } catch {
-            return undefined;
-          }
-        },
         buildCrossContextPresentation: buildDiscordCrossContextPresentation,
         resolveOutboundSessionRoute: resolveDiscordOutboundSessionRoute,
         targetResolver: {
@@ -531,11 +521,11 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
               if (probe.ok) {
                 const username = probe.bot?.username?.trim();
                 if (username) {
-                  ctx.log?.info?.(`[${account.accountId}] Discord bot probe resolved @${username}`);
+                  ctx.log?.info?.(`[${account.accountId}] Discord bot check resolved @${username}`);
                 }
               } else if (getDiscordRuntime().logging.shouldLogVerbose()) {
                 ctx.log?.debug?.(
-                  `[${account.accountId}] bot probe degraded: ${probe.error ?? `status ${probe.status ?? "unknown"}`}`,
+                  `[${account.accountId}] bot check degraded: ${probe.error ?? `status ${probe.status ?? "unknown"}`}`,
                 );
               }
 
@@ -558,7 +548,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
                 });
               }
               if (getDiscordRuntime().logging.shouldLogVerbose()) {
-                ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+                ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
               }
             }
           })();

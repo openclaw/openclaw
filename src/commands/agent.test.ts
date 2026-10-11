@@ -23,6 +23,7 @@ import {
 } from "../agents/prepared-model-catalog.js";
 import {
   createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
 } from "../agents/run-termination.js";
@@ -42,8 +43,8 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -191,12 +192,12 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
+vi.mock("../infra/outbound/channel-bootstrap.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-bootstrap.runtime.js")>()),
   // Every channel fixture in this suite is already active. Bootstrap discovery
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),
   bootstrapOutboundChannelPluginAsync: vi.fn(() => undefined),
-  resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({
@@ -761,11 +762,10 @@ describe("agentCommand", () => {
         runtime,
       );
       expect(prepared.workspaceDir).toBe(configuredWorkspace);
-      const implicitWorkspace = configuredWorkspace;
 
-      expect(fs.existsSync(implicitWorkspace)).toBe(true);
-      expect(fs.existsSync(path.join(implicitWorkspace, "AGENTS.md"))).toBe(false);
-      expect(fs.existsSync(path.join(implicitWorkspace, ".git"))).toBe(false);
+      expect(fs.existsSync(configuredWorkspace)).toBe(true);
+      expect(fs.existsSync(path.join(configuredWorkspace, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(configuredWorkspace, ".git"))).toBe(false);
       expect(() => execFileSync("git", ["-C", repository, "add", "-A"])).not.toThrow();
     });
   });
@@ -791,6 +791,7 @@ describe("agentCommand", () => {
       mockConfig(home, store);
       const worktree = await managedWorktrees.create({
         repoRoot: canonicalWorkspace,
+        baseRef: "HEAD",
         name: "managed",
         ownerKind: "session",
         ownerId: sessionKey,
@@ -1210,7 +1211,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it.each(["generic", "terminal Stop"] as const)(
+  it.each(["generic", "explicit restart", "terminal Stop"] as const)(
     "preserves lifecycle interruption semantics: %s",
     async (interruption) => {
       await withTempHome(async (home) => {
@@ -1225,7 +1226,11 @@ describe("agentCommand", () => {
         const entered = createDeferredCore();
         const cleanup = new AbortController();
         const reason =
-          interruption === "terminal Stop" ? createAgentRunDirectAbortError() : undefined;
+          interruption === "terminal Stop"
+            ? createAgentRunDirectAbortError()
+            : interruption === "explicit restart"
+              ? createAgentRunRestartAbortError()
+              : undefined;
         vi.mocked(runEmbeddedAgent).mockImplementationOnce(
           async (opts) =>
             await new Promise((resolve) => {
@@ -1265,15 +1270,17 @@ describe("agentCommand", () => {
             reason,
           });
           const commandResult = await command;
-          if (interruption === "terminal Stop") {
+          if (reason) {
             expect(observedAbortReason).toBe(reason);
-            expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(true);
           }
+          expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(
+            interruption === "terminal Stop",
+          );
           expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(
-            interruption !== "terminal Stop",
+            interruption === "explicit restart",
           );
           expect(isAgentRunRestartAbortReason(commandResult)).toBe(
-            interruption !== "terminal Stop",
+            interruption === "explicit restart",
           );
         } finally {
           cleanup.abort(createAgentRunDirectAbortError());

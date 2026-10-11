@@ -80,15 +80,9 @@ export function resolveCompactionRuntimeSelection(params: {
       ? undefined
       : params.agentId);
   const policyTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    modelSelectionLocked: params.modelSelectionLocked,
+    ...params,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
   });
   const policyProvider = policyTarget.provider ?? DEFAULT_PROVIDER;
   const policyModelId = policyTarget.model ?? DEFAULT_MODEL;
@@ -274,11 +268,8 @@ export async function prepareCompactionHarnessAuth(params: {
     runtimeAuthPreparation,
     selectedPreparedHarness,
     providerUsesProfileScopedModelMetadata: providerUsesCredentialScopedModelMetadata({
+      ...params,
       provider: params.metadataProvider ?? params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
     }),
   };
 }

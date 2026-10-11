@@ -288,13 +288,10 @@ export function shouldPreferProviderRuntimeResolvedModel(
   );
 }
 
-export function normalizeProviderResolvedModelWithPlugin(
-  params: ProviderRuntimeLookup & {
-    pluginMetadataSnapshot?: PluginMetadataRegistryView;
-    context: ProviderNormalizeResolvedModelContext;
-  },
-): ProviderRuntimeModel | undefined {
-  const context = {
+function completeProviderRuntimeContext<
+  T extends { config?: OpenClawConfig; workspaceDir?: string },
+>(params: ProviderRuntimeLookup & { context: T }): T {
+  return {
     ...params.context,
     ...(params.context.config === undefined && params.config !== undefined
       ? { config: params.config }
@@ -303,6 +300,15 @@ export function normalizeProviderResolvedModelWithPlugin(
       ? { workspaceDir: params.workspaceDir }
       : {}),
   };
+}
+
+export function normalizeProviderResolvedModelWithPlugin(
+  params: ProviderRuntimeLookup & {
+    pluginMetadataSnapshot?: PluginMetadataRegistryView;
+    context: ProviderNormalizeResolvedModelContext;
+  },
+): ProviderRuntimeModel | undefined {
+  const context = completeProviderRuntimeContext(params);
   return (
     resolveProviderRuntimePlugin({
       ...params,
@@ -360,15 +366,7 @@ export function normalizeProviderTransportWithPlugin(
   const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>
     (normalized.api ?? params.context.api) !== params.context.api ||
     (normalized.baseUrl ?? params.context.baseUrl) !== params.context.baseUrl;
-  const context = {
-    ...params.context,
-    ...(params.context.config === undefined && params.config !== undefined
-      ? { config: params.config }
-      : {}),
-    ...(params.context.workspaceDir === undefined && params.workspaceDir !== undefined
-      ? { workspaceDir: params.workspaceDir }
-      : {}),
-  };
+  const context = completeProviderRuntimeContext(params);
   const matchedPlugin = resolveProviderHookPlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeTransport?.(context);
   if (normalizedMatched && hasTransportChange(normalizedMatched)) {

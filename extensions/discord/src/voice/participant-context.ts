@@ -83,28 +83,6 @@ function retainParticipantId(selected: string[], userId: string): void {
   }
 }
 
-function buildParticipantRoster(params: {
-  selectedUserIds: string[];
-  totalCount: number;
-  states: APIVoiceState[];
-}): DiscordVoiceParticipantRoster {
-  const selected = new Set(params.selectedUserIds);
-  const statesByUserId = new Map<string, APIVoiceState>();
-  for (const state of params.states) {
-    const userId = state.user_id?.trim();
-    if (userId && selected.has(userId)) {
-      statesByUserId.set(userId, state);
-    }
-  }
-  return {
-    participants: params.selectedUserIds.map((userId) => ({
-      userId,
-      state: statesByUserId.get(userId),
-    })),
-    totalCount: params.totalCount,
-  };
-}
-
 export function collectDiscordVoiceParticipants(params: {
   states: APIVoiceState[];
   botUserId?: string;
@@ -145,7 +123,18 @@ export function collectDiscordVoiceParticipants(params: {
     totalCount += 1;
     retainParticipantId(selectedUserIds, additionalUserId);
   }
-  return buildParticipantRoster({ selectedUserIds, totalCount, states: params.states });
+  const selected = new Set(selectedUserIds);
+  const statesByUserId = new Map<string, APIVoiceState>();
+  for (const state of params.states) {
+    const userId = state.user_id?.trim();
+    if (userId && selected.has(userId)) {
+      statesByUserId.set(userId, state);
+    }
+  }
+  return {
+    participants: selectedUserIds.map((userId) => ({ userId, state: statesByUserId.get(userId) })),
+    totalCount,
+  };
 }
 
 export function countDiscordVoiceHumanParticipants(params: {

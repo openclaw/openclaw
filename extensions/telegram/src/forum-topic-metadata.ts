@@ -35,11 +35,9 @@ export async function resolveTelegramForumTopicMetadata(params: {
   const edited = msg.forum_topic_edited;
   const patch = edited?.name
     ? { name: edited.name, iconCustomEmojiId: edited.icon_custom_emoji_id }
-    : msg.forum_topic_closed
-      ? { closed: true }
-      : msg.forum_topic_reopened
-        ? { closed: false }
-        : undefined;
+    : msg.forum_topic_closed || msg.forum_topic_reopened
+      ? { closed: Boolean(msg.forum_topic_closed) }
+      : undefined;
   if (patch) {
     await updateTopicName(chatId, threadId, patch, scope);
   }

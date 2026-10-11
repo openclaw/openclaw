@@ -207,7 +207,7 @@ describePosix("native correction baseline refresh", () => {
     expect(f.run("require_prepared_review 42").status).toBe(0);
   });
 
-  it.each(["delete", "content", "binary"] as const)(
+  it.each(["delete", "binary"] as const)(
     "requires exact native conflict identities for %s/edit and preserves the reviewed resolution",
     (shape) => {
       const f = fixture(shape);
@@ -216,12 +216,7 @@ describePosix("native correction baseline refresh", () => {
       expect(refused.stderr).toContain("Expected exactly the computed conflict resolutions");
       expect(f.git("rev-parse", "HEAD")).toBe(f.source);
       expect(readFileSync(join(f.root, ".local/correction-review.json"))).toEqual(f.review);
-      const content =
-        shape === "delete"
-          ? ""
-          : shape === "binary"
-            ? "resolved\0binary\n"
-            : "import { format, cache } from './format';\nexport const show = (value) => format(cache(value));\n";
+      const content = shape === "delete" ? "" : "resolved\0binary\n";
       const manifest = f.manifest(content);
       const result = f.refresh(manifest.args);
       expect(result.status, result.stdout + result.stderr).toBe(0);

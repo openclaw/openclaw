@@ -7,6 +7,10 @@ import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
+  SESSION_NAVIGATION_INTENT_EVENT,
+  type SessionNavigationIntent,
+} from "../lib/sessions/navigation-handoff.ts";
+import {
   CHAT_ROUTE_READY_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
@@ -125,6 +129,72 @@ describe("assistant panel", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+
+  it.each([false, true])(
+    "admits same-route Home selection through the pane owner (global=%s)",
+    async (global) => {
+      const { panel, context } = await mountPanel({ global });
+      panel.homeAvailable = true;
+      panel.pageRouteId = "chat";
+      panel.pageSessionKey = global ? "global" : "agent:main:home";
+      panel.pageAgentId = "main";
+      await panel.updateComplete;
+      let intent: SessionNavigationIntent | undefined;
+      const receive = (event: Event) => {
+        event.preventDefault();
+        intent = (event as CustomEvent<SessionNavigationIntent>).detail;
+      };
+      window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, receive);
+      onTestFinished(() => window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, receive));
+      const navigate = vi.spyOn(context, "navigate");
+      window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+      expect(intent).toMatchObject({
+        sessionKey: panel.pageSessionKey,
+        agentId: "main",
+        face: "chat",
+      });
+      expect(navigate).not.toHaveBeenCalled();
+      expect(intent!.commit()).toBe(true);
+      expect(navigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/main" }),
+      );
+      expect(intent!.commit()).toBe(false);
+    },
+  );
+
+  it.each(["page", "agent", "gateway", "disconnect"])(
+    "retires a deferred Home selection after %s changes",
+    async (retirement) => {
+      const { panel, context } = await mountPanel();
+      panel.homeAvailable = true;
+      panel.pageRouteId = "chat";
+      panel.pageSessionKey = "agent:main:home";
+      panel.pageAgentId = "main";
+      await panel.updateComplete;
+      let intent: SessionNavigationIntent | undefined;
+      const receive = (event: Event) => {
+        event.preventDefault();
+        intent = (event as CustomEvent<SessionNavigationIntent>).detail;
+      };
+      window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, receive);
+      onTestFinished(() => window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, receive));
+      const navigate = vi.spyOn(context, "navigate");
+      window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+      expect(intent).toBeDefined();
+      if (retirement === "page") {
+        panel.pageSessionKey = "agent:main:other";
+      } else if (retirement === "agent") {
+        context.agentSelection.state.selectedId = "research";
+      } else if (retirement === "gateway") {
+        context.gateway.snapshot.hello = null;
+      } else {
+        panel.remove();
+      }
+      expect(intent!.commit()).toBe(false);
+      expect(navigate).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "follows the sidebar agent switcher and suppresses only the selected conversation (global=%s)",

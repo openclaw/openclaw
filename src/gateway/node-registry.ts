@@ -590,12 +590,7 @@ export class NodeRegistry {
         this.publishActiveNodeContext();
       }
     }
-    this.invokeStreams.handleDisconnect(connId);
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.connId === connId) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
+    this.disconnectSessionInvokes(connId);
     reconcileNodeRunnerAvailability(this, nodeId);
     return unregistersCurrentNode ? nodeId : null;
   }
@@ -659,8 +654,8 @@ export class NodeRegistry {
 
   private projectNodePairingLeaseResolutions(
     resolved: readonly NodePairingLeaseResolution[],
-  ): NodeSession[] {
-    const connected: NodeSession[] = [];
+  ): PairingBoundNodeSession[] {
+    const connected: PairingBoundNodeSession[] = [];
     let invalidatedPresence = false;
     for (const result of resolved) {
       if (result.status === "current") {
@@ -689,12 +684,7 @@ export class NodeRegistry {
     forgetNodeRunnerInventory(this, node.connId);
     removeConnectedNodePluginTools(node.nodeId);
     removeRemoteNodeSkills(node.nodeId);
-    this.invokeStreams.handleDisconnect(node.connId);
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.connId === node.connId) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
+    this.disconnectSessionInvokes(node.connId);
     reconcileNodeRunnerAvailability(this, node.nodeId);
     this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
     return node.lastActiveAtMs !== undefined;
@@ -754,10 +744,7 @@ export class NodeRegistry {
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
       invalidateStale: true,
     });
-    if (resolution.status === "stale" && resolution.presenceInvalidated) {
-      this.publishActiveNodeContext();
-    }
-    return resolution.status === "current";
+    return this.projectNodePairingLeaseResolutions([resolution]).length > 0;
   }
 
   private clearDesktopAvailability(node: NodeSession): void {
@@ -919,28 +906,15 @@ export class NodeRegistry {
         resolve(currentConnectionResult(result));
       };
       const onPong = () => finish({ ok: true });
-      const onClose = () =>
-        finish({
-          ok: false,
-          error: { code: "NOT_CONNECTED", message: "node socket closed during connectivity check" },
-        });
+      const fail = (code: string, message: string) =>
+        finish({ ok: false, error: { code, message } });
+      const onClose = () => fail("NOT_CONNECTED", "node socket closed during connectivity check");
       const onError = (err: unknown) =>
-        finish({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message:
-              err instanceof Error ? err.message : "node socket error during connectivity check",
-          },
-        });
-      const timer = setTimeout(
-        () =>
-          finish({
-            ok: false,
-            error: { code: "TIMEOUT", message: "node connectivity check timed out" },
-          }),
-        timeout,
-      );
+        fail(
+          "UNAVAILABLE",
+          err instanceof Error ? err.message : "node socket error during connectivity check",
+        );
+      const timer = setTimeout(() => fail("TIMEOUT", "node connectivity check timed out"), timeout);
 
       socket.once("pong", onPong);
       socket.once("close", onClose);
@@ -948,20 +922,11 @@ export class NodeRegistry {
       try {
         socket.ping(undefined, false, (err?: Error) => {
           if (err) {
-            finish({
-              ok: false,
-              error: { code: "UNAVAILABLE", message: err.message },
-            });
+            fail("UNAVAILABLE", err.message);
           }
         });
       } catch (err) {
-        finish({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: err instanceof Error ? err.message : "node ping failed",
-          },
-        });
+        fail("UNAVAILABLE", err instanceof Error ? err.message : "node ping failed");
       }
     });
   }
@@ -1182,6 +1147,15 @@ export class NodeRegistry {
     this.authorizedSystemRunEvents.delete(authorizedSystemRunEventKey(event));
   }
 
+  private disconnectSessionInvokes(connId: string): void {
+    this.invokeStreams.handleDisconnect(connId);
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (event.connId === connId) {
+        this.authorizedSystemRunEvents.delete(key);
+      }
+    }
+  }
+
   private matchAuthorizedSystemRunEvent(params: {
     nodeId: string;
     connId: string;
@@ -1275,13 +1249,8 @@ export class NodeRegistry {
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
       invalidateStale: true,
     });
-    if (resolution.status !== "current") {
-      if (resolution.status === "stale" && resolution.presenceInvalidated) {
-        this.publishActiveNodeContext();
-      }
-      return false;
-    }
-    return this.sendEventToSession(resolution.session, params.event, params.payload);
+    const [node] = this.projectNodePairingLeaseResolutions([resolution]);
+    return node ? this.sendEventToSession(node, params.event, params.payload) : false;
   }
 
   /** Sends only to a session that still owns the requested persistent pairing generation. */
@@ -1304,13 +1273,10 @@ export class NodeRegistry {
           const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
             invalidateStale: true,
           });
-          if (resolution.status !== "current") {
-            if (resolution.status === "stale" && resolution.presenceInvalidated) {
-              this.publishActiveNodeContext();
-            }
+          node = this.projectNodePairingLeaseResolutions([resolution])[0];
+          if (!node) {
             return false;
           }
-          node = resolution.session;
         }
         // Select stream baselines after queued sends and pairing verification settle.
         const prepared = preparePayload?.(node.connId);

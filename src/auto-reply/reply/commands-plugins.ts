@@ -25,6 +25,7 @@ import {
   commandReply,
   defineAuthorizedTextCommand,
   rejectNonOwnerCommand,
+  renderCommandJsonBlock,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
@@ -35,10 +36,6 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
-
-function renderJsonBlock(label: string, value: unknown): string {
-  return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
-}
 
 function buildPluginInspectJson(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
@@ -199,7 +196,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
               const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
                 buildPluginInspectJson(inspect, ownershipResolver),
               );
-              return renderJsonBlock("🔌 Plugins", reports);
+              return renderCommandJsonBlock("🔌 Plugins", reports);
             }
             const inspect = buildPluginInspectReport({
               id: pluginsCommand.name,
@@ -213,7 +210,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
               inspect,
               createInstalledPluginOwnershipResolver(metadataSnapshot.index),
             );
-            return renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
+            return renderCommandJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
               ...inspect,
               compatibilityWarnings: payload.compatibilityWarnings,
               install: payload.install,
@@ -243,7 +240,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       try {
         await setPluginEnabledFromCommand({
           pluginId: plugin.id,
-          enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
           assertCurrent: hasGatewayAdminScope(params)
             ? undefined

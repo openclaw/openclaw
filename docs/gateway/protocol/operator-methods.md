@@ -129,6 +129,12 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
+Outside the `"provider-config"` view, rows that the
+[recommended models list](/concepts/recommended-models) names for their provider
+carry `recommended: true`. Each provider's recommended rows come before its other
+rows, in list order, after the session's selected model. Pickers may collapse the
+remaining rows behind an "All models" control.
+
 Clients that advertise `model-selection-policy` in connect `caps` receive
 `manualSelectionAllowed` on every `models.list` row. The same fact appears in
 their initial `models.snapshot`. Filter rows with `false` only when deriving

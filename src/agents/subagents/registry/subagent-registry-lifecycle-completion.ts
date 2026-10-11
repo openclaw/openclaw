@@ -127,9 +127,14 @@ function resolveTerminalRequest(
     completionOutcome = { status: "timeout" };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
+  // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
   const terminalReply = mergeAgentRunTerminalReplySnapshot(
     entry.completion?.terminalReply,
-    completeParams.terminalReply,
+    entry.completion?.terminalReply &&
+      typeof existingEndedAt === "number" &&
+      (completeParams.endedAt ?? now) <= existingEndedAt
+      ? undefined
+      : completeParams.terminalReply,
   );
   return {
     requestedEndedAt,

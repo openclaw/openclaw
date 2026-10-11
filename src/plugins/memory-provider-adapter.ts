@@ -19,6 +19,23 @@ import type {
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 
+const refreshHandoffs = new WeakMap<
+  MemoryProviderHandle,
+  (onStarted: () => void) => Promise<void>
+>();
+
+/** Join caller admission before handing asynchronous refresh to the provider owner. */
+export function refreshMemoryProviderWithHandoff(
+  provider: MemoryProviderHandle,
+  onStarted: () => void,
+): Promise<void> {
+  const refresh = refreshHandoffs.get(provider);
+  if (!refresh) {
+    throw new Error("memory refresh requires a bound provider handle");
+  }
+  return refresh(onStarted);
+}
+
 /** Recheck both caller and provider lifetime after every asynchronous boundary. */
 export function bindMemoryProvider(
   provider: MemoryProviderHandle,
@@ -96,7 +113,15 @@ export function bindMemoryProvider(
       throw new Error("memory provider does not support the project filter capability");
     }
   };
-  return {
+  const refresh = provider.refresh
+    ? (onStarted?: () => void) =>
+        invoke(() => {
+          const pending = provider.refresh!();
+          onStarted?.();
+          return pending;
+        })
+    : undefined;
+  const bound: MemoryProviderHandle = {
     capabilities,
     search: (request) =>
       invoke(async () => {
@@ -131,7 +156,7 @@ export function bindMemoryProvider(
           },
         }
       : {}),
-    ...(provider.refresh ? { refresh: () => invoke(() => provider.refresh!()) } : {}),
+    ...(refresh ? { refresh: () => refresh() } : {}),
     async close() {
       if (closed) {
         return;
@@ -141,6 +166,10 @@ export function bindMemoryProvider(
       await runPluginCleanup(provider, () => provider.close());
     },
   };
+  if (refresh) {
+    refreshHandoffs.set(bound, refresh);
+  }
+  return bound;
 }
 
 // Health reaches every operator.read caller; host filesystem layout stays with local status tools.

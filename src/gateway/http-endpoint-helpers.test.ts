@@ -138,18 +138,6 @@ describe("handleGatewayPostJsonEndpoint", () => {
     expect(result).toBeUndefined();
   });
 
-  it("returns body when auth succeeds and JSON parsing succeeds", async () => {
-    const requestAuth = authorizedRequest();
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
-    vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
-    const result = await handleEndpoint();
-    expect(result).toEqual({
-      body: { hello: "world" },
-      requestAuth,
-      operatorScopes: ["operator.write"],
-    });
-  });
-
   it("matches paths without trusting malformed Host headers", async () => {
     const requestAuth = authorizedRequest();
     vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);

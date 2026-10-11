@@ -5,12 +5,10 @@ import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normaliz
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { allowListMatches } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackReactionEvent } from "../types.js";
-import {
-  authorizeAndResolveSlackSystemEventContext,
-  resolveSlackListenerEventScope,
-} from "./system-event-context.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 function shouldEmitSlackReactionNotification(params: {
   ctx: SlackMonitorContext;
@@ -57,7 +55,7 @@ export function registerSlackReactionEvents(params: {
       ) => {
         const { body, context, client } = args;
         const event = args.event as SlackReactionEvent;
-        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
         if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }

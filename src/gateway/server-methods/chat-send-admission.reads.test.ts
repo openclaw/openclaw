@@ -1,11 +1,7 @@
 import { existsSync } from "node:fs";
-import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -202,77 +198,97 @@ it.each([
   });
 });
 
-it("uses fresh worker-prepared admission settings without host metadata reads", async () => {
-  await withOpenClawTestState({ label: "chat-admission-read-count" }, async () => {
-    const cfg = {
-      agents: { ownership: "explicit", entries: { main: {} } },
-    } satisfies OpenClawConfig;
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const sessionKey = "agent:main:dashboard:admission-reads";
-    const runId = "chat-admission-read-count";
-    const scope = { agentId: "main", sessionKey };
-    const entry: SessionEntry = {
-      sessionId: "admission-session",
-      updatedAt: 1,
-      skillsSnapshot: { prompt: "saved prompt".repeat(4096), skills: [] },
-    };
-    replaceSessionEntrySync(scope, entry);
-    const request = await normalizeChatSendRequest({
-      client: null,
-      params: { sessionKey, message: "Hello", idempotencyKey: runId },
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const prepared = await prepareChatSendSession({
-      request: request.value,
-      client: null,
-      context,
-    });
-    if (!prepared.ok) {
-      throw new Error("Session preparation failed");
-    }
-    const session = qualifyChatSendSession(prepared.value);
-    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-    try {
-      // Admission must read current settings even though preparation retained the old entry.
-      replaceSessionEntrySync(scope, { ...entry, permissionMode: "full", updatedAt: 2 });
-      expect(session.entry?.permissionMode).toBeUndefined();
-      const sql = observeSqliteReadSql(StatementSync.prototype);
-      const respond = vi.fn();
-      try {
-        admitted = await admitChatSend({
-          request: request.value,
-          session,
-          client: null,
-          context,
-          respond,
-        });
-        expect(respond).not.toHaveBeenCalled();
-        expect(admitted.ok).toBe(true);
-        if (!admitted.ok) {
-          throw new Error("Session admission failed");
-        }
-        expect(admitted.value.admittedSessionSettings?.permissionMode).toBe("full");
-        expect(admitted.value.admittedSessionId).toBe(entry.sessionId);
-        // Physical-source/absent-key guards may query keys without decoding entry metadata.
-        const metadataReads = sql.queries.filter(
-          (query) => /\bsession_nodes\b/u.test(query) && /\bentry_json\b/u.test(query),
+it.each(["ordinary", "fresh header", "stale header"] as const)(
+  "uses current worker-prepared admission settings and freshness without host SQL (%s)",
+  async (freshness) => {
+    await withOpenClawTestState({ label: "chat-admission-read-count" }, async () => {
+      const restartSafe = freshness !== "ordinary";
+      const now = Date.now();
+      const cfg = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        session: { reset: { mode: "daily" } },
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const sessionKey = "agent:main:dashboard:admission-reads";
+      const runId = "chat-admission-read-count";
+      const scope = { agentId: "main", sessionKey };
+      const entry: SessionEntry = {
+        sessionId: "admission-session",
+        updatedAt: now,
+        skillsSnapshot: { prompt: "saved prompt".repeat(4096), skills: [] },
+      };
+      replaceSessionEntrySync(scope, entry);
+      if (restartSafe) {
+        await sessionAccessor.appendTranscriptEvent(
+          { ...scope, sessionId: entry.sessionId },
+          {
+            type: "session",
+            version: 3,
+            id: entry.sessionId,
+            timestamp: new Date(
+              now - (freshness === "stale header" ? 2 * 24 * 60 * 60 * 1000 : 0),
+            ).toISOString(),
+            cwd: "/synthetic/workspace",
+          },
         );
-        expect(metadataReads, metadataReads.join("\n")).toHaveLength(0);
+      }
+      const request = await normalizeChatSendRequest({
+        client: null,
+        params: { sessionKey, message: "Hello", idempotencyKey: runId },
+      });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const prepared = await prepareChatSendSession({
+        isDirectExternalUser: restartSafe,
+        request: request.value,
+        client: null,
+        context,
+      });
+      if (!prepared.ok) {
+        throw new Error("Session preparation failed");
+      }
+      const session = qualifyChatSendSession(prepared.value);
+      let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+      try {
+        // Admission must read current settings even though preparation retained the old entry.
+        replaceSessionEntrySync(scope, { ...entry, permissionMode: "full", updatedAt: now + 1 });
+        expect(session.entry?.permissionMode).toBeUndefined();
+        expect(session.entry?.sessionStartedAt).toBeUndefined();
+        expect(session.entry?.createdAt).toBeUndefined();
+        const sql = observeHostDataSql();
+        const respond = vi.fn();
+        try {
+          admitted = await admitChatSend({
+            request: request.value,
+            session,
+            client: null,
+            context,
+            respond,
+          });
+          expect(respond).not.toHaveBeenCalled();
+          expect(admitted.ok).toBe(true);
+          if (!admitted.ok) {
+            throw new Error("Session admission failed");
+          }
+          expect(admitted.value.admittedSessionSettings?.permissionMode).toBe("full");
+          expect(admitted.value.admittedSessionId).toBe(entry.sessionId);
+          expect(Boolean(admitted.value.restartSafeAdmission)).toBe(freshness === "fresh header");
+          expect(sql.queries, sql.queries.join("\n")).toEqual([]);
+        } finally {
+          sql.restore();
+        }
       } finally {
-        sql.restore();
+        if (admitted?.ok) {
+          admitted.value.cleanupAdmittedRun();
+        }
+        session.releaseSessionTarget();
+        clearAgentRunContext(runId);
       }
-    } finally {
-      if (admitted?.ok) {
-        admitted.value.cleanupAdmittedRun();
-      }
-      session.releaseSessionTarget();
-      clearAgentRunContext(runId);
-    }
-  });
-});
+    });
+  },
+);
 
 it("releases rejected upload reservations so corrected input can reuse its key", async () => {
   await withOpenClawTestState({ label: "chat-upload-reservation" }, async () => {

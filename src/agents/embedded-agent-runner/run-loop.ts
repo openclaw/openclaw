@@ -229,9 +229,8 @@ export async function runPreparedEmbeddedLoop(
         effectiveModel,
         outerContextTokenMeta,
         lastProfileId,
-        thinkLevel: initialThinkLevel,
+        thinkLevel,
       } = attemptRuntimeSnapshot;
-      let thinkLevel = initialThinkLevel;
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
           `Exceeded retry limit after ${runRetryBudget.attemptsDispatched} attempts ` +
@@ -316,8 +315,6 @@ export async function runPreparedEmbeddedLoop(
             sessionPromptState,
             terminalRetryState,
             replayState: accumulatedReplayState,
-            provider,
-            modelId,
             startupStagesEmitted,
             bootstrapPromptWarningSignaturesSeen,
             resolveRuntimeFallbackReason,
@@ -468,8 +465,7 @@ export async function runPreparedEmbeddedLoop(
         traceAttempts,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
       });
-      thinkLevel = assistantFailureOutcome.thinkLevel;
-      preparedRuntime.setThinkLevel(thinkLevel);
+      preparedRuntime.setThinkLevel(assistantFailureOutcome.thinkLevel);
       authRetryPending = assistantFailureOutcome.authRetryPending;
       emptyErrorRetries = assistantFailureOutcome.emptyErrorRetries;
       overloadProfileRotations = assistantFailureOutcome.overloadProfileRotations;
@@ -522,9 +518,7 @@ export async function runPreparedEmbeddedLoop(
       );
       const {
         attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
         terminalState: resolvedTerminalState,
-        attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
         finalizationOutcome: settledTurnFinalizationOutcome,
       } = finalizedTerminal;
@@ -554,16 +548,12 @@ export async function runPreparedEmbeddedLoop(
         terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
         "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
-        prepared: terminalPrepared,
+        ...finalizedTerminal,
         runParams: params,
         retryState: terminalRetryState,
-        attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
         activeErrorContext,
         modelApi: effectiveModel.api,
         executionContract,
-        terminalState: resolvedTerminalState,
-        attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
         sessionPromptState,
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
@@ -588,7 +578,7 @@ export async function runPreparedEmbeddedLoop(
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         traceAttempts,
-        thinkLevel,
+        thinkLevel: assistantFailureOutcome.thinkLevel,
         contextRecoveryState,
       });
       if (terminalResolution.action === "retry") {

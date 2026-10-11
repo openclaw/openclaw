@@ -8,6 +8,33 @@ import {
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("chunkSlackMrkdwnText", () => {
+  describe.each([0, 2_998])("with a Prepend character at offset %i", (offset) => {
+    const prefix = `${"x".repeat(offset)}\u0600`;
+
+    it.each(["`", "```"])("keeps embedded %s delimiters balanced", (marker) => {
+      const content = "y".repeat(3_100);
+      const chunks = chunkSlackMrkdwnText(`${prefix}${marker}${content}${marker} tail`, 3_000);
+
+      for (const chunk of chunks) {
+        const markers = chunk.match(/`+/g) ?? [];
+        expect(markers).toEqual(chunk.includes("y") ? [marker, marker] : []);
+      }
+      expect(chunks.map((chunk) => chunk.replaceAll(marker, "")).join("")).toBe(
+        `${prefix}${content} tail`,
+      );
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    });
+
+    it.each(["&lt;", "<https://example.com|link>"])("keeps embedded %s tokens intact", (token) => {
+      const text = `${prefix}${token}${"y".repeat(3_100)}`;
+      const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+      expect(chunks.filter((chunk) => chunk.includes(token))).toHaveLength(1);
+      expect(chunks.join("")).toBe(text);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    });
+  });
+
   it.each(["`", "```"])("keeps %s code boundaries after literal backslashes", (marker) => {
     const text = `Path: ${marker}C:\\${marker} ${"ordinary prose ".repeat(220)}done`;
     const chunks = chunkSlackMrkdwnText(text, 3_000);
@@ -35,17 +62,22 @@ describe("chunkSlackMrkdwnText", () => {
     expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
   });
 
-  it.each(["`", "```"])("balances long %s code sections without losing their content", (marker) => {
-    const content = "x".repeat(3_100);
-    const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
+  it.each(["`", "```"])(
+    "balances long %s code sections including oversized graphemes",
+    (marker) => {
+      const content = `\u0301${"x".repeat(3_100)}e${"\u0301".repeat(3_100)}tail`;
+      const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
 
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(true);
-    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
-      content,
-    );
-    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
-  });
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(
+        true,
+      );
+      expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
+        content,
+      );
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    },
+  );
 
   it.each([
     ["inline", "`", [1, 2]],

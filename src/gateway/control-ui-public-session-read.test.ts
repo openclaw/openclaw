@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
+import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -178,23 +181,107 @@ describe("anonymous published session reader", () => {
     });
   });
 
-  it.each(["revoke", "reset"] as const)(
+  it.for(["metadata", "revoke", "reset"] as const)(
     "rechecks %s after awaited history before releasing content",
-    async (action) => {
+    async (action, { signal }) => {
       await withPublicTestState(async () => {
         await seed(["Must not escape after closure"]);
+        const membershipRead = Promise.withResolvers<void>();
+        const releaseMembership = Promise.withResolvers<void>();
+        const revalidation = Promise.withResolvers<void>();
+        let holdMembership = false;
+        let historyReturned = false;
+        if (action === "metadata") {
+          const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+          vi.spyOn(historyReaders, "createSessionHistoryWorkerReaders").mockImplementation(
+            (...args) => {
+              const readers = createReaders(...args);
+              const readMembership = readers.readMembershipFacts;
+              readers.readMembershipFacts = async (...input) => {
+                const result = await readMembership(...input);
+                if (holdMembership) {
+                  membershipRead.resolve();
+                  await withinTest(releaseMembership.promise, signal);
+                }
+                return result;
+              };
+              return readers;
+            },
+          );
+          const owner = currentProjection();
+          const prepare = owner.withPreparedExactRows.bind(owner);
+          vi.spyOn(owner, "withPreparedExactRows").mockImplementation((...args) => {
+            if (historyReturned) {
+              revalidation.resolve();
+            }
+            return prepare(...args);
+          });
+        }
         const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
         vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
           async (...args) => {
             const result = await read(...args);
-            await patchSessionEntryCore(locator, () =>
-              action === "reset" ? { sessionId: "replacement" } : { publicShare: undefined },
+            holdMembership = action === "metadata";
+            await patchSessionEntryCore(
+              locator,
+              () => {
+                if (action === "metadata") {
+                  return { label: "Updated public example" };
+                }
+                return action === "reset"
+                  ? { sessionId: "replacement" }
+                  : { publicShare: undefined };
+              },
+              { workerGuard: {} },
             );
+            if (holdMembership) {
+              // Complete metadata receipts stay ready; explicit invalidation requires reconciliation.
+              sessionChanges.emit({
+                agentId: locator.agentId,
+                sessionKey: locator.sessionKey,
+                factsInvalidated: "category",
+              });
+              // Hold the real worker result before the projection accepts it.
+              await withinTest(membershipRead.promise, signal);
+              expect(
+                currentProjection().sharingTargetState({
+                  key: locator.sessionKey,
+                  agentId: locator.agentId,
+                }).status,
+              ).toBe("pending");
+            }
+            historyReturned = true;
             return result;
           },
         );
-        expect(await readPublicSessionShare(cfg, locator)).toBeNull();
-        expect(loadSessionEntry(locator)?.publicShare).toBeUndefined();
+        const reading = readPublicSessionShare(cfg, locator);
+        try {
+          if (action === "metadata") {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                revalidation.promise,
+                reading,
+                "Public session read settled before rejoining invalidated membership",
+              ),
+              signal,
+            );
+            releaseMembership.resolve();
+          }
+          const result = await reading;
+          if (action === "metadata") {
+            expect(result).toMatchObject({
+              title: "Updated public example",
+              messages: [{ role: "user", content: "Must not escape after closure" }],
+            });
+            expect(resolveSessionPublicShare(loadSessionEntry(locator))?.id).toBe(locator.shareId);
+          } else {
+            expect(result).toBeNull();
+            expect(loadSessionEntry(locator)?.publicShare).toBeUndefined();
+          }
+        } finally {
+          releaseMembership.resolve();
+          await Promise.allSettled([reading]);
+        }
       });
     },
   );

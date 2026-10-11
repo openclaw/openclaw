@@ -952,7 +952,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
   return [
     {
       name: "codex_endpoint_probe",
-      label: "Codex Endpoint Probe",
+      label: "Codex Endpoint Check",
       description: "Check configured Codex app-server endpoints.",
       parameters: EmptyParamsSchema,
       execute: async () => {

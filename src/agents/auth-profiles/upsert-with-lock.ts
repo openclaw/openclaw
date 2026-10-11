@@ -69,21 +69,18 @@ function rejectsOAuthRefreshGenerationReplacement(params: {
   ) {
     return false;
   }
-  let supersedes = false;
+  let supersedes: boolean;
   if (isDeepStrictEqual(params.current, params.observed)) {
-    if (
+    supersedes =
       !params.allowOAuthGenerationReplacement &&
       params.current !== undefined &&
-      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current))
-    ) {
-      supersedes =
-        params.current.type !== "oauth" ||
+      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current)) &&
+      (params.current.type !== "oauth" ||
         !isSameOAuthRefreshGeneration({
           profileId: params.profileId,
           left: params.current,
           right: params.incoming,
-        });
-    }
+        }));
   } else if (params.observed === undefined) {
     supersedes = params.current !== undefined;
   } else {
@@ -149,24 +146,21 @@ export async function persistAuthProfileBatch(
     const result = { unrevertedProfileIds: new Set<string>() };
     return { rollback: () => result };
   }
-  const observedProfiles = new Map(
-    [...profiles.keys()].map((profileId) => [
-      profileId,
-      loadAuthProfileWriteAuthority(params, profileId),
-    ]),
-  );
+  const readAuthorities = () =>
+    new Map(
+      [...profiles.keys()].map((profileId) => [
+        profileId,
+        loadAuthProfileWriteAuthority(params, profileId),
+      ]),
+    );
+  const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
     [...profiles.entries()].flatMap(([profileId, entry]) =>
       entry.credential.type === "oauth" ? [{ profileId, provider: entry.credential.provider }] : [],
     ),
     async () => {
-      const currentAuthorities = new Map(
-        [...profiles.keys()].map((profileId) => [
-          profileId,
-          loadAuthProfileWriteAuthority(params, profileId),
-        ]),
-      );
+      const currentAuthorities = readAuthorities();
       const previousProfiles = new Map<string, AuthProfileCredential | undefined>();
       const previousOrder = new Map<string, readonly string[] | undefined>();
       const appliedProfiles = new Map<string, AuthProfileCredential>();

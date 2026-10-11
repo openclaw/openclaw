@@ -1,10 +1,7 @@
 import type { CodexServiceTier } from "./protocol.js";
 
 export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = typeof value === "string" ? value.trim() : "";
   if (!trimmed) {
     return undefined;
   }

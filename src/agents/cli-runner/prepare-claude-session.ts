@@ -28,9 +28,7 @@ export async function prepareClaudeCliSession(params: {
   config: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   cwd: string;
-  agentAccountId?: string;
   agentId: string;
-  authProfileId?: string;
   sessionId?: string;
   sessionKey?: string;
   hasTranscriptContent: typeof claudeCliSessionTranscriptHasContent;
@@ -78,9 +76,7 @@ export async function prepareClaudeCliSession(params: {
     params.backend.input === "stdin"
       ? getCliLiveSessionGeneration({
           backendId: params.backendId,
-          agentAccountId: params.agentAccountId,
           agentId: params.agentId,
-          authProfileId: params.authProfileId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         })

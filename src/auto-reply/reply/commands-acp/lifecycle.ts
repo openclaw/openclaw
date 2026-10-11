@@ -11,7 +11,6 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
@@ -33,6 +32,7 @@ import {
 } from "./bindings.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
+  acpCommandErrorReply,
   parseSpawnInput,
   parseSteerInput,
   resolveCommandRequestId,
@@ -108,12 +108,10 @@ export async function handleAcpSpawnAction(
   }
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error: agentPolicyError,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "ACP target agent is not allowed by policy.",
-      }),
+    return acpCommandErrorReply(
+      agentPolicyError,
+      "ACP target agent is not allowed by policy.",
+      "ACP_SESSION_INIT_FAILED",
     );
   }
 
@@ -132,12 +130,10 @@ export async function handleAcpSpawnAction(
       explicitCwd: spawn.cwd,
     });
   } catch (error) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Could not resolve ACP session workspace.",
-      }),
+    return acpCommandErrorReply(
+      error,
+      "Could not resolve ACP session workspace.",
+      "ACP_SESSION_INIT_FAILED",
     );
   }
 
@@ -153,12 +149,10 @@ export async function handleAcpSpawnAction(
       cwd: runtimeCwd,
     });
   } catch (err) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error: err,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: "Could not initialize ACP session runtime.",
-      }),
+    return acpCommandErrorReply(
+      err,
+      "Could not initialize ACP session runtime.",
+      "ACP_SESSION_INIT_FAILED",
     );
   }
 
@@ -225,13 +219,7 @@ export async function handleAcpSpawnAction(
       placement,
     });
     if (boundReplyPayload) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: parts.join(" "),
-          ...boundReplyPayload,
-        },
-      };
+      return commandReply({ text: parts.join(" "), ...boundReplyPayload });
     }
   } else {
     parts.push(
@@ -263,13 +251,7 @@ async function resolveAcpSessionForCommandOrStop(params: {
   params.assertCurrent?.();
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error,
-        fallbackCode: "ACP_SESSION_INIT_FAILED",
-        fallbackMessage: error.message,
-      }),
-    );
+    return acpCommandErrorReply(error, error.message, "ACP_SESSION_INIT_FAILED");
   }
   return null;
 }
@@ -337,12 +319,10 @@ export async function handleAcpSteerAction(
 ): Promise<CommandHandlerResult> {
   const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
   if (dispatchPolicyError) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error: dispatchPolicyError,
-        fallbackCode: "ACP_DISPATCH_DISABLED",
-        fallbackMessage: dispatchPolicyError.message,
-      }),
+    return acpCommandErrorReply(
+      dispatchPolicyError,
+      dispatchPolicyError.message,
+      "ACP_DISPATCH_DISABLED",
     );
   }
 
@@ -395,10 +375,9 @@ export async function handleAcpSteerAction(
             closeAdmittedRunDelegatedAuthority(admittedRunContext);
           }
           const steerOutput = output.trim();
-          if (!steerOutput) {
-            return commandReply(`✅ ACP steer sent to ${sessionKey}.`);
-          }
-          return commandReply(`✅ ACP steer sent to ${sessionKey}.\n${steerOutput}`);
+          return commandReply(
+            `✅ ACP steer sent to ${sessionKey}.${steerOutput ? `\n${steerOutput}` : ""}`,
+          );
         },
         fallbackMessage: "ACP steer failed before completion.",
       }),
@@ -426,13 +405,7 @@ export async function handleAcpCloseAction(
         });
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
       } catch (error) {
-        return commandReply(
-          toAcpRuntimeErrorText({
-            error,
-            fallbackCode: "ACP_TURN_FAILED",
-            fallbackMessage: "ACP close failed before completion.",
-          }),
-        );
+        return acpCommandErrorReply(error, "ACP close failed before completion.");
       }
 
       const removedBindings = await getSessionBindingService().unbind({

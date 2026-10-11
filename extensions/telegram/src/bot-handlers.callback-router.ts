@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { Context } from "grammy";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   formatModelsAvailableHeader,
@@ -11,6 +10,7 @@ import {
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   hasTelegramApprovalCallbackPrefix,
@@ -21,7 +21,6 @@ import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
   sendTelegramQuestionFeedback,
-  type TelegramCallbackMessageActions,
 } from "./bot-handlers.callback-actions.js";
 import {
   createTelegramCallbackApprovalRuntime,
@@ -49,7 +48,7 @@ import {
   resolveTelegramMessageThreadSpec,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
-import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import type { TelegramGetChat } from "./bot/types.js";
 import {
   getTelegramCallbackQueryAnswerPromise,
   startTelegramCallbackQueryAnswer,
@@ -338,21 +337,273 @@ export function createTelegramCallbackRouter({
         await terminalizeUnavailableCallback();
         return;
       }
-      if (
-        await handleTelegramModelCallback({
-          data,
-          ctx,
+      const { editCallbackMessage, editCallbackMessageWithButtons: editMessageWithButtons } =
+        actions;
+      const resolveSessionState = () =>
+        messageRuntime.resolveTelegramSessionState({
           chatId,
           isGroup,
           threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
           senderId,
           runtimeCfg,
-          telegramDeps,
-          actions,
-          messageRuntime,
-          authorizeCallback,
-        })
-      ) {
+        });
+      const retryModelAction = async <T>(action: () => Promise<T>): Promise<T> => {
+        try {
+          return await action();
+        } catch (error) {
+          throw new TelegramRetryableCallbackError(error);
+        }
+      };
+
+      const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
+      if (paginationMatch) {
+        const pageValue = paginationMatch[1];
+        if (pageValue === "noop") {
+          return;
+        }
+        const page = parseStrictPositiveInteger(pageValue);
+        if (page === undefined) {
+          return;
+        }
+        const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
+        const result = await retryModelAction(async () => {
+          const skillCommands = await telegramDeps.prepareSkillCommandsForAgents({
+            cfg: runtimeCfg,
+            agentIds: [agentId],
+          });
+          return buildCommandsMessagePaginated(runtimeCfg, skillCommands, {
+            page,
+            forcePaginatedList: true,
+            surface: "telegram",
+          });
+        });
+        const keyboard =
+          result.totalPages > 1
+            ? buildInlineKeyboard(
+                buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
+              )
+            : undefined;
+        try {
+          await editCallbackMessage(markdownToTelegramHtml(result.text), {
+            parse_mode: "HTML",
+            ...(keyboard ? { reply_markup: keyboard } : {}),
+          });
+        } catch (editErr) {
+          if (!String(editErr).includes("message is not modified")) {
+            throw new TelegramRetryableCallbackError(editErr);
+          }
+        }
+        const session = await resolveSessionState();
+        await recordDeliveredCommandExchange({
+          config: runtimeCfg,
+          agentId: session.agentId,
+          sessionKey: session.sessionKey,
+          expectedSessionId: session.sessionEntry?.sessionId,
+          commandText: `/commands ${page}`,
+          commandId: `telegram:${accountId}:${callback.id}`,
+          replyId: String(callbackMessage.message_id),
+          replyText: result.text,
+        });
+        return;
+      }
+
+      const modelCallback = parseModelCallbackData(data);
+      if (modelCallback) {
+        if (!(await authorizeCallback())) {
+          logVerbose(
+            `Blocked telegram model callback from ${senderId || "unknown"} (not authorized for /models)`,
+          );
+          return;
+        }
+
+        const { sessionState, modelData } = await retryModelAction(async () => {
+          const session = await resolveSessionState();
+          const providerData = await telegramDeps.buildModelsProviderData(
+            runtimeCfg,
+            session.agentId,
+            {
+              sessionEntry: session.sessionEntry,
+            },
+          );
+          return { sessionState: session, modelData: providerData };
+        });
+        let commandText = "/model";
+        const showModelReply = async (...args: Parameters<typeof editMessageWithButtons>) => {
+          await editMessageWithButtons(...args);
+          const [text, buttons] = args;
+          await recordDeliveredCommandExchange({
+            config: runtimeCfg,
+            agentId: sessionState.agentId,
+            sessionKey: sessionState.sessionKey,
+            expectedSessionId: sessionState.sessionEntry?.sessionId,
+            commandText,
+            commandId: `telegram:${accountId}:${callback.id}`,
+            replyId: String(callbackMessage.message_id),
+            replyText: [
+              text.replace(/<[^>]*>/g, ""),
+              ...(buttons ?? []).map((row) => row.map((button) => button.text).join(", ")),
+            ].join("\n"),
+          });
+        };
+        const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
+        const providerInfos: ProviderInfo[] = providers.map((provider) => ({
+          id: provider,
+          count: byProvider.get(provider)?.size ?? 0,
+        }));
+        const showChangedModelPicker = () =>
+          retryModelAction(() =>
+            showModelReply(MODEL_PICKER_CHANGED_MESSAGE, buildProviderKeyboard(providerInfos)),
+          );
+
+        if (modelCallback.type === "providers" || modelCallback.type === "back") {
+          if (providers.length === 0) {
+            await retryModelAction(() => showModelReply("No providers available.", []));
+            return;
+          }
+          const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
+            .map((provider) => provider.notice)
+            .filter(Boolean)
+            .join("\n");
+          await retryModelAction(() =>
+            showModelReply(
+              [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
+              buildProviderKeyboard(providerInfos),
+            ),
+          );
+          return;
+        }
+
+        if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
+          const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
+          const modelSet = listSelection && byProvider.get(listSelection.provider);
+          if (!listSelection || !modelSet || modelSet.size === 0) {
+            await showChangedModelPicker();
+            return;
+          }
+          const { provider, page } = listSelection;
+          commandText = `/model ${provider} ${page}`;
+          const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
+          const totalPages = calculateTotalPages(models.length);
+          const safePage = Math.max(1, Math.min(page, totalPages));
+          const currentModel =
+            sessionState.model ||
+            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+          const availability = modelData.modelMenu?.byProvider.get(provider);
+          const buttons = buildModelsKeyboard({
+            provider,
+            models,
+            currentModel,
+            currentPage: safePage,
+            totalPages,
+            modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
+          });
+          const text = `${formatModelsAvailableHeader({
+            provider,
+            total: models.length,
+            cfg: runtimeCfg,
+            agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
+            sessionEntry: sessionState.sessionEntry,
+            availability,
+          })}\nSelecting a model also applies its configured runtime.`;
+          await retryModelAction(() =>
+            showModelReply([modelData.refreshWarning, text].filter(Boolean).join("\n\n"), buttons),
+          );
+          return;
+        }
+
+        const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
+        if (
+          selection.kind !== "resolved" ||
+          !byProvider.get(selection.provider)?.has(selection.model)
+        ) {
+          await showChangedModelPicker();
+          return;
+        }
+
+        commandText = `/model ${selection.provider}/${selection.model}`;
+        try {
+          const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
+            agentId: sessionState.agentId,
+          });
+          const resolvedDefault = resolveDefaultModelForAgent({
+            cfg: runtimeCfg,
+            agentId: sessionState.agentId,
+          });
+          const isDefaultSelection =
+            selection.provider === resolvedDefault.provider &&
+            selection.model === resolvedDefault.model;
+          const persistedSessionEntry =
+            sessionState.sessionEntry ??
+            telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
+            getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
+          const sessionEntryMissing = persistedSessionEntry === undefined;
+          const sessionEntry = persistedSessionEntry ?? {
+            sessionId: randomUUID(),
+            updatedAt: Date.now(),
+          };
+          const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
+          const sessionStore = { [sessionState.sessionKey]: sessionEntry };
+          const currentModelRef = sessionState.model?.trim();
+          const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
+          const currentSelection =
+            currentModelRef && currentModelSeparator > 0
+              ? {
+                  provider: currentModelRef.slice(0, currentModelSeparator),
+                  model: currentModelRef.slice(currentModelSeparator + 1),
+                }
+              : resolvedDefault;
+          const applied = await retryModelAction(() =>
+            applySessionModelSelection({
+              cfg: runtimeCfg,
+              agentId: sessionState.agentId,
+              sessionKey: sessionState.sessionKey,
+              storePath,
+              sessionEntry,
+              sessionStore,
+              allowCreate: sessionEntryMissing,
+              defaultProvider: resolvedDefault.provider,
+              defaultModel: resolvedDefault.model,
+              currentProvider: currentSelection.provider,
+              currentModel: currentSelection.model,
+              modelCatalog: modelData.modelCatalog,
+              canPersistStickyModelSelection: false,
+              request: {
+                provider: selection.provider,
+                model: selection.model,
+                isDefault: isDefaultSelection,
+                runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
+              },
+              markLiveSwitchPending: true,
+            }),
+          );
+          if (applied.status !== "applied") {
+            await showModelReply(`❌ ${applied.message}`, []);
+            return;
+          }
+          const defaultAuthProfileNotice =
+            isDefaultSelection && previousAuthProfileId
+              ? sessionStore[sessionState.sessionKey]?.authProfileOverride?.trim() ===
+                previousAuthProfileId
+                ? "Compatible auth profile retained."
+                : "Incompatible auth profile cleared."
+              : undefined;
+          const actionText = isDefaultSelection
+            ? "reset to default"
+            : `changed to <b>${escapeTelegramHtml(selection.provider)}/${escapeTelegramHtml(selection.model)}</b>`;
+          const runtimeText = `Runtime set to <b>${escapeTelegramHtml(applied.agentRuntime)}</b>${isDefaultSelection ? " from configured policy" : ""}.`;
+          const scopeText = isDefaultSelection
+            ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
+            : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
+          await showModelReply(`✅ Model ${actionText}\n\n${scopeText}`, [], {
+            parse_mode: "HTML",
+          });
+        } catch (err) {
+          if (err instanceof TelegramRetryableCallbackError) {
+            throw err;
+          }
+          await showModelReply(`❌ Failed to change model: ${String(err)}`, []);
+        }
         return;
       }
       if (hasReservedModelPrefix) {
@@ -400,269 +651,4 @@ export function createTelegramCallbackRouter({
   };
 
   return { route: handleCallback };
-}
-
-async function handleTelegramModelCallback(params: {
-  data: string;
-  ctx: Pick<TelegramContext, "me">;
-  chatId: number;
-  isGroup: boolean;
-  threadSpec: ReturnType<typeof resolveTelegramMessageThreadSpec>;
-  senderId: string;
-  runtimeCfg: OpenClawConfig;
-  telegramDeps: RegisterTelegramHandlerParams["telegramDeps"];
-  actions: TelegramCallbackMessageActions;
-  messageRuntime: TelegramCallbackMessageRuntime;
-  authorizeCallback: () => Promise<boolean>;
-}): Promise<boolean> {
-  const {
-    data,
-    ctx,
-    chatId,
-    isGroup,
-    threadSpec,
-    senderId,
-    runtimeCfg,
-    telegramDeps,
-    actions,
-    messageRuntime,
-    authorizeCallback,
-  } = params;
-  const { editCallbackMessage, editCallbackMessageWithButtons: editMessageWithButtons } = actions;
-  const resolveSessionState = () =>
-    messageRuntime.resolveTelegramSessionState({
-      chatId,
-      isGroup,
-      threadSpec,
-      botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-      senderId,
-      runtimeCfg,
-    });
-  const retryModelAction = async <T>(action: () => Promise<T>): Promise<T> => {
-    try {
-      return await action();
-    } catch (error) {
-      throw new TelegramRetryableCallbackError(error);
-    }
-  };
-
-  const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
-  if (paginationMatch) {
-    const pageValue = paginationMatch[1];
-    if (pageValue === "noop") {
-      return true;
-    }
-    const page = parseStrictPositiveInteger(pageValue);
-    if (page === undefined) {
-      return true;
-    }
-    const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
-    const result = await retryModelAction(async () => {
-      const skillCommands = telegramDeps.listSkillCommandsForAgents({
-        cfg: runtimeCfg,
-        agentIds: [agentId],
-      });
-      return buildCommandsMessagePaginated(runtimeCfg, skillCommands, {
-        page,
-        forcePaginatedList: true,
-        surface: "telegram",
-      });
-    });
-    const keyboard =
-      result.totalPages > 1
-        ? buildInlineKeyboard(
-            buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
-          )
-        : undefined;
-    try {
-      await editCallbackMessage(markdownToTelegramHtml(result.text), {
-        parse_mode: "HTML",
-        ...(keyboard ? { reply_markup: keyboard } : {}),
-      });
-    } catch (editErr) {
-      if (!String(editErr).includes("message is not modified")) {
-        throw new TelegramRetryableCallbackError(editErr);
-      }
-    }
-    return true;
-  }
-
-  const modelCallback = parseModelCallbackData(data);
-  if (!modelCallback) {
-    return false;
-  }
-  if (!(await authorizeCallback())) {
-    logVerbose(
-      `Blocked telegram model callback from ${senderId || "unknown"} (not authorized for /models)`,
-    );
-    return true;
-  }
-
-  const { sessionState, modelData } = await retryModelAction(async () => {
-    const session = await resolveSessionState();
-    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId, {
-      sessionEntry: session.sessionEntry,
-    });
-    return { sessionState: session, modelData: providerData };
-  });
-  const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
-  const providerInfos: ProviderInfo[] = providers.map((provider) => ({
-    id: provider,
-    count: byProvider.get(provider)?.size ?? 0,
-  }));
-  const showChangedModelPicker = () =>
-    retryModelAction(() =>
-      editMessageWithButtons(MODEL_PICKER_CHANGED_MESSAGE, buildProviderKeyboard(providerInfos)),
-    );
-
-  if (modelCallback.type === "providers" || modelCallback.type === "back") {
-    if (providers.length === 0) {
-      await retryModelAction(() => editMessageWithButtons("No providers available.", []));
-      return true;
-    }
-    const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
-      .map((provider) => provider.notice)
-      .filter(Boolean)
-      .join("\n");
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
-        buildProviderKeyboard(providerInfos),
-      ),
-    );
-    return true;
-  }
-
-  if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
-    const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
-    if (!listSelection) {
-      await showChangedModelPicker();
-      return true;
-    }
-    const { provider, page } = listSelection;
-    const modelSet = byProvider.get(provider);
-    if (!modelSet || modelSet.size === 0) {
-      await showChangedModelPicker();
-      return true;
-    }
-    const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
-    const totalPages = calculateTotalPages(models.length);
-    const safePage = Math.max(1, Math.min(page, totalPages));
-    const currentModel =
-      sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
-    const availability = modelData.modelMenu?.byProvider.get(provider);
-    const buttons = buildModelsKeyboard({
-      provider,
-      models,
-      currentModel,
-      currentPage: safePage,
-      totalPages,
-      modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
-    });
-    const text = `${formatModelsAvailableHeader({
-      provider,
-      total: models.length,
-      cfg: runtimeCfg,
-      agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
-      sessionEntry: sessionState.sessionEntry,
-      availability,
-    })}\nSelecting a model also applies its configured runtime.`;
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
-        buttons,
-      ),
-    );
-    return true;
-  }
-
-  const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
-  if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
-    await showChangedModelPicker();
-    return true;
-  }
-
-  try {
-    const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
-      agentId: sessionState.agentId,
-    });
-    const resolvedDefault = resolveDefaultModelForAgent({
-      cfg: runtimeCfg,
-      agentId: sessionState.agentId,
-    });
-    const isDefaultSelection =
-      selection.provider === resolvedDefault.provider && selection.model === resolvedDefault.model;
-    const persistedSessionEntry =
-      sessionState.sessionEntry ??
-      telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
-      getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
-    const sessionEntryMissing = persistedSessionEntry === undefined;
-    const sessionEntry = persistedSessionEntry ?? {
-      sessionId: randomUUID(),
-      updatedAt: Date.now(),
-    };
-    const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
-    const sessionStore = { [sessionState.sessionKey]: sessionEntry };
-    const currentModelRef = sessionState.model?.trim();
-    const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
-    const currentProvider =
-      currentModelRef && currentModelSeparator > 0
-        ? currentModelRef.slice(0, currentModelSeparator)
-        : resolvedDefault.provider;
-    const currentModel =
-      currentModelRef && currentModelSeparator > 0
-        ? currentModelRef.slice(currentModelSeparator + 1)
-        : resolvedDefault.model;
-    const applied = await retryModelAction(() =>
-      applySessionModelSelection({
-        cfg: runtimeCfg,
-        agentId: sessionState.agentId,
-        sessionKey: sessionState.sessionKey,
-        storePath,
-        sessionEntry,
-        sessionStore,
-        allowCreate: sessionEntryMissing,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
-        currentProvider,
-        currentModel,
-        modelCatalog: modelData.modelCatalog,
-        canPersistStickyModelSelection: false,
-        request: {
-          provider: selection.provider,
-          model: selection.model,
-          isDefault: isDefaultSelection,
-          runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
-        },
-        markLiveSwitchPending: true,
-      }),
-    );
-    if (applied.status !== "applied") {
-      await editMessageWithButtons(`❌ ${applied.message}`, []);
-      return true;
-    }
-    const defaultAuthProfileNotice =
-      isDefaultSelection && previousAuthProfileId
-        ? sessionStore[sessionState.sessionKey]?.authProfileOverride?.trim() ===
-          previousAuthProfileId
-          ? "Compatible auth profile retained."
-          : "Incompatible auth profile cleared."
-        : undefined;
-    const actionText = isDefaultSelection
-      ? "reset to default"
-      : `changed to <b>${escapeTelegramHtml(selection.provider)}/${escapeTelegramHtml(selection.model)}</b>`;
-    const runtimeText = `Runtime set to <b>${escapeTelegramHtml(applied.agentRuntime)}</b>${isDefaultSelection ? " from configured policy" : ""}.`;
-    const scopeText = isDefaultSelection
-      ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
-      : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
-    await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
-      parse_mode: "HTML",
-    });
-  } catch (err) {
-    if (err instanceof TelegramRetryableCallbackError) {
-      throw err;
-    }
-    await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
-  }
-  return true;
 }

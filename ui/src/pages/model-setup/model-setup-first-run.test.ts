@@ -16,6 +16,7 @@ import {
   mountPage,
   requestParameters,
 } from "./model-setup-first-run.test-support.ts";
+import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("ModelSetupPage first-run inference", () => {
   beforeEach(async () => {
@@ -106,6 +107,7 @@ describe("ModelSetupPage first-run inference", () => {
           ),
         ).toBe(false);
         if (owner === "removed") {
+          unmountModelSetupPage(page);
           page.remove();
         } else if (owner === "route") {
           page.routeData = { firstRun: false };

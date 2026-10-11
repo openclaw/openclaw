@@ -1,14 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { createSessionWorkerOperationContext } from "./session-entry-patch.worker.js";
 import { commitSessionForkMessageCut } from "./session-message-cut.worker.js";
 import type { SessionForkOperations } from "./session-parent-fork.types.js";
 import {
@@ -35,31 +31,7 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
     throw new Error("Session fork lost its canonical database owner");
   }
-  const context: AgentWorkerOperationContext = {
-    options,
-    open: () => database,
-    admit(stage, publication) {
-      bound.admit(stage, (request, dispatch) => {
-        if (!isRecord(request.facts)) {
-          throw new Error("Session fork admission omitted its database identity");
-        }
-        dispatch({ ...request, facts: { ...request.facts, publication } });
-      });
-    },
-    writeTransaction(operationLabel, owner, write) {
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== bound.database) {
-            throw new Error(`${owner} lost its canonical database owner`);
-          }
-          context.admit("transaction");
-          return write(current);
-        },
-        options,
-        { operationLabel },
-      );
-    },
-  };
+  const context = createSessionWorkerOperationContext(database, options, bound, "Session fork");
   return {
     execute(command) {
       switch (command.type) {

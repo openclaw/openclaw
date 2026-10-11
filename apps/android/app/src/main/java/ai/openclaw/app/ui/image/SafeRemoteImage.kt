@@ -157,12 +157,7 @@ internal class SafeRemoteImageStore(
         }
     }
 
-  suspend fun get(url: String): RemoteImageResult {
-    cache.get(url)?.let { return it }
-    val result = fetcher(url)
-    cache.put(url, result)
-    return result
-  }
+  suspend fun get(url: String): RemoteImageResult = cache.get(url) ?: fetcher(url).also { cache.put(url, it) }
 }
 
 internal fun decodeRemoteImageBitmap(

@@ -84,7 +84,6 @@ export async function handleEmbeddedPromptFailure(input: {
     EmbeddedRunFailoverRetryController,
     | "resolveAuthProfileFailureReason"
     | "advanceAuthProfile"
-    | "advanceRateLimitAuthProfile"
     | "maybeMarkAuthProfileFailure"
     | "transientRetryCount"
   >;
@@ -242,15 +241,11 @@ export async function handleEmbeddedPromptFailure(input: {
   let failoverDecision = resolveDecision(false);
   let rotated = false;
   if (failoverDecision.action === "rotate_profile") {
-    if (promptFailoverReason === "rate_limit") {
-      rotated = await input.failover.advanceRateLimitAuthProfile({
-        failoverProvider: preparedRuntime.provider,
-        failoverModel: preparedRuntime.modelId,
-        logFallbackDecision: logFailoverDecision,
-      });
-    } else {
-      rotated = await input.failover.advanceAuthProfile();
-    }
+    rotated = await input.failover.advanceAuthProfile(promptFailoverReason, {
+      failoverProvider: preparedRuntime.provider,
+      failoverModel: preparedRuntime.modelId,
+      logFallbackDecision: logFailoverDecision,
+    });
     if (!rotated) {
       failoverDecision = resolveDecision(true);
     }

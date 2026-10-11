@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   createInitializationContext,
@@ -101,8 +102,14 @@ describe("stored chat snapshot hydration", () => {
       const request = vi.fn().mockResolvedValue({
         messages: [],
         sessionId: "cached-initial-session",
-        sessionInfo: { key: targetSessionKey, hasActiveRun: true, status: "running" },
-      });
+        sessionInfo: {
+          key: targetSessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          hasActiveRun: true,
+          status: "running",
+        },
+      } satisfies ChatHistoryResult);
       const client = createGatewayBrowserClientFixture({ request });
       const context = createInitializationContext(client);
       context.gateway.snapshot.hello = transcriptOnlyHello;

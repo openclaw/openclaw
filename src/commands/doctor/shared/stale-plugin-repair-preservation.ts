@@ -10,9 +10,7 @@ export type StalePluginSurface =
   | "modelByChannel";
 
 function normalizeIds(ids: Iterable<string> | undefined): Set<string> {
-  return new Set(
-    [...(ids ?? [])].map((id) => normalizePluginId(id)).filter((id): id is string => Boolean(id)),
-  );
+  return new Set(Array.from(ids ?? [], normalizePluginId).filter(Boolean));
 }
 
 export function filterRepairableStalePluginHits<
@@ -23,14 +21,14 @@ export function filterRepairableStalePluginHits<
   surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
 }): T[] {
   const preserveIds = normalizeIds(params.preservePluginIds);
-  const surfacePreserveIds = Object.fromEntries(
+  const surfacePreserveIds = new Map(
     Object.entries(params.surfacePreservePluginIds ?? {}).map(([surface, ids]) => [
       surface,
       normalizeIds(ids),
     ]),
-  ) as Partial<Record<StalePluginSurface, Set<string>>>;
+  );
   return params.hits.filter((hit) => {
     const id = normalizePluginId(hit.pluginId);
-    return !preserveIds.has(id) && !surfacePreserveIds[hit.surface]?.has(id);
+    return !preserveIds.has(id) && !surfacePreserveIds.get(hit.surface)?.has(id);
   });
 }

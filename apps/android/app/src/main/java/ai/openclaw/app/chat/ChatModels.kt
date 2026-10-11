@@ -318,9 +318,8 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
 
 internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressCardGetResult {
   val result = element as? JsonObject ?: error("Invalid progressCard.get response")
-  if (!result.containsKey("card")) error("Invalid progressCard.get response")
-  val rawCard = result["card"]
-  if (rawCard == null || rawCard is JsonNull) {
+  val rawCard = result["card"] ?: error("Invalid progressCard.get response")
+  if (rawCard is JsonNull) {
     return ChatProgressCardGetResult(sessionKey = null, card = null)
   }
   val card = rawCard as? JsonObject ?: error("Invalid progressCard.get response")
@@ -347,16 +346,12 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
     }?.takeIf { it.isNotBlank() }
   val steps = parseChatPlanSteps(card["steps"])
   val parsedCard =
-    if (markdown == null && steps.isEmpty()) {
-      null
-    } else {
-      ChatProgressCard(
-        revision = revision,
-        updatedAt = updatedAt,
-        markdown = markdown,
-        steps = steps,
-      )
-    }
+    ChatProgressCard(
+      revision = revision,
+      updatedAt = updatedAt,
+      markdown = markdown,
+      steps = steps,
+    ).takeUnless { markdown == null && steps.isEmpty() }
   return ChatProgressCardGetResult(sessionKey = sessionKey, card = parsedCard)
 }
 

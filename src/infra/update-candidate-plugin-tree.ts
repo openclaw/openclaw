@@ -2,18 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
+  withUpdateCandidatePluginFileHashing,
+  type UpdateCandidatePluginFileHasher,
+} from "./update-candidate-plugin-hash.js";
+import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
+import {
   assertUpdateCandidatePluginEntryStat,
+  ignoreUnresolvedPluginLink,
   isUpdateCandidateHostLauncher,
   publishUpdateCandidatePluginTreeLinks,
   resolveUpdateCandidatePluginTreeTargets,
@@ -69,12 +74,7 @@ async function dependencyOwner(
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
+        (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
       )
     ) {
       return directory;
@@ -101,8 +101,19 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   candidateRoot: string;
   /** Retain selected host entries and the dependency owners reached from them. */
   retainedHostRoot?: string;
+  /** Installed runtime lookups stop at the package manager's owning project. */
+  retainedDependencyRoot?: string;
   onProgress?: () => void | Promise<void>;
 }): Promise<UpdateCandidatePluginTreePlan> {
+  return await withUpdateCandidatePluginFileHashing((hashFile) =>
+    prepareUpdateCandidatePluginTreesWithHashing(params, hashFile),
+  );
+}
+
+async function prepareUpdateCandidatePluginTreesWithHashing(
+  params: Parameters<typeof prepareUpdateCandidatePluginTrees>[0],
+  hashFile: UpdateCandidatePluginFileHasher,
+): Promise<UpdateCandidatePluginTreePlan> {
   const roots = new Map(params.roots);
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
@@ -186,17 +197,12 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         ctimeNs: stat.ctimeNs.toString(),
         uid: stat.uid.toString(),
         gid: stat.gid.toString(),
-        sha256: hashFileMutationSnapshotSync(file, stat),
+        sha256: await hashFile(file, stat),
       };
     } else if (stat.isSymbolicLink()) {
       const target =
         process.platform === "win32"
-          ? await fs.stat(file).catch((error: unknown) => {
-              if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-                return undefined;
-              }
-              throw error;
-            })
+          ? await fs.stat(file).catch(ignoreUnresolvedPluginLink)
           : undefined;
       entry = {
         ...common,
@@ -223,6 +229,10 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     if (!isRecord(manifest)) {
       return;
     }
+    const boundary =
+      params.retainedDependencyRoot && isPathInside(params.retainedDependencyRoot, directory)
+        ? params.retainedDependencyRoot
+        : undefined;
     const names = new Set<string>();
     for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
       const dependencies = manifest[field];
@@ -264,7 +274,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
             break;
           }
         }
-        if (path.dirname(ancestor) === ancestor) {
+        if (ancestor === boundary || path.dirname(ancestor) === ancestor) {
           // Missing optional dependencies remain absent; validation owns required ones.
           break;
         }
@@ -319,12 +329,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       if (entry.name === "node_modules" && (entry.isDirectory() || entry.isSymbolicLink())) {
         const owner = await fs
           .realpath(path.join(directory, entry.name))
-          .catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return undefined;
-            }
-            throw error;
-          });
+          .catch(ignoreUnresolvedPluginLink);
         if (owner) {
           const source = path.join(directory, entry.name);
           assertUpdateCandidatePluginCopySource(owner, privateRoot);
@@ -336,10 +341,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         }
       }
     }
-    const leaves = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: entries
+    const leaves = await runUpdateCandidatePluginTasks(
+      entries
         .filter((entry) => {
           const file = path.join(directory, entry.name);
           return !entry.isDirectory() && !isRecoveryArtifact(file) && !isOwnedHostEdge(file);
@@ -351,19 +354,13 @@ export async function prepareUpdateCandidatePluginTrees(params: {
             return { measured };
           }
           const target = path.resolve(directory, measured.link);
-          const real = await fs.realpath(file).catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return target;
-            }
-            throw error;
-          });
+          const real = await fs
+            .realpath(file)
+            .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
           return { measured, edge: { target, real } };
         }),
-    });
-    if (leaves.hasError) {
-      throw leaves.firstError;
-    }
-    const observations = new Map(leaves.results.map((leaf) => [leaf.measured.path, leaf]));
+    );
+    const observations = new Map(leaves.map((leaf) => [leaf.measured.path, leaf]));
     // Reads can overlap; graph discovery and progress callbacks retain listing order.
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
@@ -406,12 +403,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       if (!exists) {
         continue;
       }
-      const real = await fs.realpath(source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const real = await fs.realpath(source).catch(ignoreMissingUpdateCandidateFile);
       discovered.push({ source, real });
     }
     hosts.clear();
@@ -537,11 +529,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   for (const [sourceRoot, real] of moduleAliases) {
     relocations.push({ sourceRoot, destinationRoot: projected(real) });
   }
-  for (const root of hostRoots) {
+  for (const root of [...hostRoots, ...hosts]) {
     relocations.push({ sourceRoot: root, destinationRoot: candidateRoot });
-  }
-  for (const host of hosts) {
-    relocations.push({ sourceRoot: host, destinationRoot: candidateRoot });
   }
   for (const [file, { target, real }] of edges) {
     const host = isUpdateCandidateHostLauncher(file)
@@ -625,14 +614,7 @@ export async function copyUpdateCandidatePluginTrees(
     params.onProgress?.();
   };
   const assertEntries = async () => {
-    const checked = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: plan.entries.map((entry) => () => assertEntry(entry)),
-    });
-    if (checked.hasError) {
-      throw checked.firstError;
-    }
+    await runUpdateCandidatePluginTasks(plan.entries.map((entry) => () => assertEntry(entry)));
   };
   await targets.assertBindings();
   await assertEntries();
@@ -703,11 +685,8 @@ export async function copyUpdateCandidatePluginTrees(
     onCodeLink: params.onCodeLink,
     onProgress: params.onProgress,
   };
-  for (const alias of privateAliases) {
-    await verifyUpdateCandidatePluginTree(alias, verification);
-  }
-  for (const [, target] of copies) {
-    await verifyUpdateCandidatePluginTree(target, verification);
+  for (const treeRoot of [...privateAliases, ...copies.map(([, target]) => target)]) {
+    await verifyUpdateCandidatePluginTree(treeRoot, verification);
   }
   for (const entry of plan.entries) {
     if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {

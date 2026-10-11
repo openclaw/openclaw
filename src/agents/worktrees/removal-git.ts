@@ -257,18 +257,15 @@ export async function retireExactWorktree<T>(params: {
       try {
         // Caller cancellation cannot abandon a complete source at a temporary name.
         // Allocation ownership, not the revoked caller, owns this joined rollback.
-        await requireGit(record.repoRoot, ["worktree", "move", "--", destination, record.path], {
-          beforeRun: params.assertRollbackCurrent,
-          killProcessTree: true,
-        });
-        await requireGit(
-          record.repoRoot,
+        for (const args of [
+          ["worktree", "move", "--", destination, record.path],
           ["update-ref", "-d", `refs/openclaw/removals/${record.id}`, params.snapshot],
-          {
+        ]) {
+          await requireGit(record.repoRoot, args, {
             beforeRun: params.assertRollbackCurrent,
             killProcessTree: true,
-          },
-        );
+          });
+        }
       } catch (rollbackError) {
         throw new AggregateError(
           [error, rollbackError],
@@ -381,15 +378,11 @@ export async function restoreRetiredExactWorktree<T>(params: {
   ]);
   const retainedRegistered = registrations.some((entry) => entry.path === retained);
   const liveRegistered = registrations.some((entry) => entry.path === record.path);
-  if (!retainedStat && !retainedRegistered && !liveStat && !liveRegistered) {
-    return undefined;
-  }
   if (
     !retainedStat &&
     !retainedRegistered &&
-    liveStat?.isDirectory() &&
     !liveRegistered &&
-    (await fs.readdir(record.path)).length === 0
+    (!liveStat || (liveStat.isDirectory() && (await fs.readdir(record.path)).length === 0))
   ) {
     return undefined;
   }

@@ -59,8 +59,9 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
   return header ? parseRetryAfterHeaderSeconds(header) : undefined;
 }
 
-function formatRetryAfterSeconds(value: number | undefined): string | undefined {
-  if (value === undefined || !Number.isFinite(value) || value < 0) {
+function formatRetryAfterSeconds(raw: unknown): string | undefined {
+  const value = parseDiscordRetryAfterBodySeconds(raw);
+  if (value === undefined) {
     return undefined;
   }
   const rounded = value < 10 ? value.toFixed(1) : Math.round(value).toString();
@@ -91,17 +92,8 @@ function formatDiscordApiErrorTextUntrusted(text: string, response: Response): s
     typeof payload.message === "string" && payload.message.trim()
       ? payload.message.trim()
       : "unknown error";
-  const retryAfter = formatRetryAfterSeconds(
-    parseDiscordRetryAfterBodySeconds(payload.retry_after),
-  );
+  const retryAfter = formatRetryAfterSeconds(payload.retry_after);
   return retryAfter ? `${message} (retry after ${retryAfter})` : message;
-}
-
-function formatDiscordApiErrorText(text: string, response: Response): string | undefined {
-  const detail = formatDiscordApiErrorTextUntrusted(text, response);
-  // Keep the final error boundary shared by JSON and text responses redacted;
-  // upstreams can reflect the request Authorization value through either shape.
-  return detail ? redactToolPayloadText(detail) : detail;
 }
 
 export class DiscordApiError extends Error {
@@ -131,10 +123,8 @@ type DiscordApiRequestOptions = DiscordFetchOptions & {
 };
 
 function normalizeDiscordRequestBody(body: unknown, headers: Headers): BodyInit | null | undefined {
-  if (body === undefined) {
-    return undefined;
-  }
   if (
+    body === undefined ||
     typeof body === "string" ||
     body instanceof Blob ||
     body instanceof FormData ||
@@ -206,7 +196,9 @@ export async function requestDiscord<T>(
           const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
             () => "",
           );
-          const detail = formatDiscordApiErrorText(text, res);
+          const untrustedDetail = formatDiscordApiErrorTextUntrusted(text, res);
+          // JSON and text errors can both reflect the request Authorization value.
+          const detail = untrustedDetail ? redactToolPayloadText(untrustedDetail) : untrustedDetail;
           const suffix = detail ? `: ${detail}` : "";
           const retryAfter =
             res.status === 429

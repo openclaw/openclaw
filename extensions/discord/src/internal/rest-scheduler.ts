@@ -53,14 +53,6 @@ const laneSchedule: readonly RequestPriority[] = [
   "background",
 ];
 
-function createLaneQueues<TData>(): LaneQueues<TData> {
-  return {
-    critical: [],
-    standard: [],
-    background: [],
-  };
-}
-
 function countPending<TData>(bucket: BucketState<TData>): number {
   return requestPriorities.reduce((count, lane) => count + bucket.pending[lane].length, 0);
 }
@@ -135,7 +127,7 @@ export class RestScheduler<TData> {
     }
     const bucket: BucketState<TData> = {
       active: 0,
-      pending: createLaneQueues(),
+      pending: { critical: [], standard: [], background: [] },
       resetAt: 0,
       routeKeys: new Set([key]),
     };
@@ -388,6 +380,6 @@ export class RestScheduler<TData> {
 
 function isGlobalRateLimit(parsed: unknown): boolean {
   return parsed && typeof parsed === "object" && "global" in parsed
-    ? Boolean((parsed as { global?: unknown }).global)
+    ? Boolean(parsed.global)
     : false;
 }

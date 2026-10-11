@@ -85,11 +85,9 @@ export function applyTargetToParams(params: {
     // SAFETY: Missing keys fall back to "none"; only "to" and "channelId" map a target below.
     MESSAGE_ACTION_TARGET_MODE[params.action as keyof typeof MESSAGE_ACTION_TARGET_MODE] ?? "none";
 
-  if (mode !== "none") {
-    if (hasLegacyTo || hasLegacyChannelId) {
-      throw new Error("Use `target` instead of `to`/`channelId`.");
-    }
-  } else if (hasLegacyTo) {
+  if (mode !== "none" && (hasLegacyTo || hasLegacyChannelId)) {
+    throw new Error("Use `target` instead of `to`/`channelId`.");
+  } else if (mode === "none" && hasLegacyTo) {
     throw new Error("Use `target` for actions that accept a destination.");
   }
 

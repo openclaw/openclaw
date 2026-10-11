@@ -1,6 +1,7 @@
 import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
+import { createRenderEffect, onCleanup, untrack } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import {
   subscribeTranscriptScroll,
@@ -15,6 +16,8 @@ import {
 
 export type ComposerProgressDisclosureContext = {
   presented?: boolean;
+  /** Details is a user-opened surface, not a transcript-scroll sheet. */
+  manualOnly?: boolean;
   gatewayScope?: object;
   sessionIdentity?: string;
   cardLifetime?: object;
@@ -77,7 +80,7 @@ class ProgressDisclosureController {
     this.rememberedChoice = this.cardLifetime ? choicesByCard.get(this.cardLifetime) : undefined;
     return resolveProgressDisclosure(undefined, {
       type: "mount",
-      open: initialOpen && !isMobileNavLayout(),
+      open: initialOpen && (lifecycle?.manualOnly === true || !isMobileNavLayout()),
       manualOpen: this.rememberedChoice?.choice,
       readingHistory: lifecycle?.readingHistory === true,
     });
@@ -251,7 +254,7 @@ class ProgressDisclosureController {
       return;
     }
     const transcript =
-      this.lifecycle?.presented === false
+      this.lifecycle?.presented === false || this.lifecycle?.manualOnly
         ? null
         : (this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
     if (transcript === this.transcript) {
@@ -266,7 +269,7 @@ class ProgressDisclosureController {
   }
 
   private connectHeader(): void {
-    if (this.disposed || this.lifecycle?.presented === false) {
+    if (this.disposed || this.lifecycle?.presented === false || this.lifecycle?.manualOnly) {
       return;
     }
     this.summary ??= this.element.querySelector<HTMLElement>("summary") ?? undefined;
@@ -534,3 +537,15 @@ class ProgressDisclosureDirective extends AsyncDirective {
 }
 
 export const composerDisclosure = directive(ProgressDisclosureDirective);
+
+/** Share the disclosure owner with Solid without copying its gesture state. */
+export function createComposerDisclosure(input: () => DisclosureInput) {
+  let controller: ProgressDisclosureController | undefined;
+  createRenderEffect(input, (value) => controller?.update(value));
+  onCleanup(() => controller?.dispose());
+  return (element: HTMLDetailsElement) => {
+    const initial = untrack(input);
+    controller = new ProgressDisclosureController(element, initial);
+    controller.update(initial);
+  };
+}

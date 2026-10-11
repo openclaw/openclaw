@@ -16,7 +16,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { POLICY_CHECK_IDS } from "./doctor/check-ids.js";
-import { evaluatePolicy } from "./doctor/evaluation.js";
+import { evaluatePolicy, toAttestedFinding } from "./doctor/evaluation.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import {
   buildPolicyConformanceReport,
@@ -393,18 +393,8 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
 }
 
 function toAttestedJsonFinding(finding: HealthFinding) {
-  return {
-    checkId: finding.checkId,
-    severity: finding.severity,
-    message: finding.message,
-    ...(finding.source !== undefined ? { source: finding.source } : {}),
-    ...(finding.path !== undefined ? { path: finding.path } : {}),
-    ...(finding.line !== undefined ? { line: finding.line } : {}),
-    ...(finding.ocPath !== undefined ? { ocPath: finding.ocPath } : {}),
-    ...(finding.target !== undefined ? { target: finding.target } : {}),
-    ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
-    ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
-  };
+  const { column: _column, ...json } = toAttestedFinding(finding);
+  return json;
 }
 
 function toJsonFinding(finding: HealthFinding) {

@@ -76,8 +76,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
 
   let queuedFinal = false;
   let routedFinalCount = 0;
-  let attemptedFinalDelivery = false;
-  let acceptedFinal = false;
   let sessionWriterDeliveryRevoked = false;
   let channelTransformSuppressedFinal = false;
   const finalDeliveries: Array<Awaited<ReturnType<typeof state.sendFinalPayload>>> = [];
@@ -116,35 +114,33 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
-      if (
+      const laneSuppressed =
         (reply.isReasoning === true && !state.reasoningPayloadsEnabled) ||
-        (reply.isCommentary === true && !state.commentaryPayloadsEnabled)
+        (reply.isCommentary === true && !state.commentaryPayloadsEnabled);
+      const sourceSuppressed =
+        !laneSuppressed &&
+        suppressDelivery &&
+        !shouldDeliverDespiteSourceReplySuppression(reply, state);
+      if (sourceSuppressed && hasOutboundReplyContent(reply, { trimText: true })) {
+        logVerbose(
+          [
+            `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
+            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `provider=${ctx.Provider ?? "unknown"}`,
+            `surface=${ctx.Surface ?? "unknown"}`,
+            `chatType=${chatType ?? "unknown"}`,
+            `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
+            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+            `${formatSuppressedReplyPayloadForLog(reply)})`,
+          ].join(" "),
+        );
+      }
+      const finalPayloadDedupeKey =
+        laneSuppressed || sourceSuppressed ? undefined : createFinalDispatchPayloadDedupeKey(reply);
+      if (
+        finalPayloadDedupeKey === undefined ||
+        sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)
       ) {
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
-        continue;
-      }
-      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply, state)) {
-        if (hasOutboundReplyContent(reply, { trimText: true })) {
-          logVerbose(
-            [
-              `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
-              `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
-              `provider=${ctx.Provider ?? "unknown"}`,
-              `surface=${ctx.Surface ?? "unknown"}`,
-              `chatType=${chatType ?? "unknown"}`,
-              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
-              `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
-              `${formatSuppressedReplyPayloadForLog(reply)})`,
-            ].join(" "),
-          );
-        }
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
-        continue;
-      }
-      const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
-      if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
         await heartbeatReply?.settle?.("cancelled");
         continue;
@@ -180,7 +176,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         }
       }
       finalDeliveries.push(finalReply);
-      acceptedFinal = true;
       if (shouldAttachDeferredText) {
         deferredTtsTextPending = "";
       }
@@ -203,7 +198,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         }
         continue;
       }
-      attemptedFinalDelivery = true;
       if (finalReply.pendingBlock) {
         // Final-only media cannot confirm or clear the block's independent pending text.
         continue;
@@ -247,9 +241,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let channelTransformSuppressed =
     (state.progressState.channelTransformSuppressed || channelTransformSuppressedFinal) &&
     !state.progressState.acceptedReplyPayload &&
-    !acceptedFinal;
+    finalDeliveries.length === 0;
 
-  if (attemptedFinalDelivery) {
+  if (finalDeliveries.some((reply) => !reply.blockDeliveryOutcome)) {
     if (
       queuedFinal &&
       finalDeliveries.every((reply) => !reply.queuedFinal || reply.dispatcherOutcome !== undefined)
@@ -309,15 +303,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       try {
         await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
         throwIfDispatchOperationAborted();
-        const ttsSyntheticReply = await state.maybeApplyTtsWithFinalizationLease({
-          payload: { text: deferredTtsTextPending },
-          cfg,
-          channel: deliveryChannel,
-          kind: "final",
-          ttsAuto: state.sessionTtsAuto,
-          agentId: sessionAgentId,
-          accountId: replyRoute.accountId,
-        });
+        const ttsSyntheticReply = await state.maybeApplyTtsWithFinalizationLease(
+          { text: deferredTtsTextPending },
+          "final",
+        );
         throwIfDispatchOperationAborted();
         let ttsOnlyPayload: ReplyPayload | undefined;
         if (ttsSyntheticReply.mediaUrl || (deferFinalTtsText && ttsSyntheticReply.text?.trim())) {
@@ -558,8 +547,5 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   if (agentRunTerminalOutcome) {
     recordAgentRunTerminalOutcome(result, agentRunTerminalOutcome);
   }
-  return {
-    status: "complete" as const,
-    result,
-  };
+  return result;
 }

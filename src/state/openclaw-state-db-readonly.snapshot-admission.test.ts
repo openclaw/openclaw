@@ -85,7 +85,7 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 beforeEach(() => {
   mocks.forbiddenNative.mockClear();
   mocks.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] },
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
   mocks.assertCurrent.mockReset();
   mocks.assertFresh.mockReset();
@@ -266,7 +266,7 @@ async function probeRetiredAdmission(source: string) {
       withSynchronousArtifactPreservingStateSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withOpenClawStateDatabaseReadSnapshot(async () => "nested", options),
     nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
-    worker: () => executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+    worker: () => executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
   };
   return Object.fromEntries(
     await Promise.all(
@@ -302,7 +302,7 @@ it.each(["snapshot", "disposable"] as const)(
       const finishRead = createDeferredCore();
       const startedClosing = createDeferredCore();
       const expected: OpenClawStateReadOutcome = {
-        value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] },
+        value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
       };
       mocks.read.mockImplementation(async (_source, authority) => {
         const scopeSignal = getAsyncWorkSignal();
@@ -319,7 +319,7 @@ it.each(["snapshot", "disposable"] as const)(
       let read!: ReturnType<typeof executeExistingOpenClawStateRead>;
       const callback = async () => {
         escape = AsyncLocalStorage.snapshot();
-        read = executeExistingOpenClawStateRead({ path: source }, { type: "fleet.list" });
+        read = executeExistingOpenClawStateRead({ path: source }, { type: "backup.runs" });
         await started.promise;
       };
       const closing =
@@ -356,15 +356,15 @@ it("keeps captured schema authority while selecting current rows", async () => {
             expect(location.context).toBe(context);
             expect(getExistingOpenClawStateSchemaPath()).toBe(source);
             expect(location.location).toBe(source);
-            return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+            return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
           });
           await expect(
             executeExistingOpenClawStateRead(
               { path: source },
-              { type: "fleet.list" },
+              { type: "backup.runs" },
               { current: true, context },
             ),
-          ).resolves.toMatchObject({ ok: true, cells: [] });
+          ).resolves.toMatchObject({ ok: true, runs: [] });
           expect(mocks.read).toHaveBeenCalledOnce();
         },
         { path: source },

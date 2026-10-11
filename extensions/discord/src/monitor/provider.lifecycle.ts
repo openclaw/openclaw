@@ -34,6 +34,19 @@ const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
 
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
 
+function createGatewayNotReadyStatusPatch(
+  at: number,
+  reason: "runtime-not-ready" | "startup-not-ready",
+): Parameters<DiscordMonitorStatusSink>[0] {
+  return {
+    connected: false,
+    lifecycle: "recovering",
+    lastEventAt: at,
+    lastDisconnect: { at, error: reason },
+    lastError: reason,
+  };
+}
+
 function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
   const numeric = parseStrictPositiveInteger(value);
   if (numeric === undefined) {
@@ -65,7 +78,7 @@ async function restartGatewayAfterReadyTimeout(params: {
     let drainTimeout: ReturnType<typeof setTimeout> | undefined;
     let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
     const ignoreSocketError = () => {};
-    const clearTimers = () => {
+    const cleanup = () => {
       if (drainTimeout) {
         clearTimeout(drainTimeout);
         drainTimeout = undefined;
@@ -74,9 +87,6 @@ async function restartGatewayAfterReadyTimeout(params: {
         clearTimeout(terminateCloseTimeout);
         terminateCloseTimeout = undefined;
       }
-    };
-    const cleanup = () => {
-      clearTimers();
       socket.removeListener("close", onClose);
       socket.removeListener("error", ignoreSocketError);
     };
@@ -209,16 +219,7 @@ function createGatewayStatusObserver(params: {
         const error = new Error(
           `discord gateway opened but did not reach READY within ${params.runtimeReadyTimeoutMs}ms`,
         );
-        params.pushStatus({
-          connected: false,
-          lifecycle: "recovering",
-          lastEventAt: at,
-          lastDisconnect: {
-            at,
-            error: "runtime-not-ready",
-          },
-          lastError: "runtime-not-ready",
-        });
+        params.pushStatus(createGatewayNotReadyStatusPatch(at, "runtime-not-ready"));
         params.runtime.error?.(danger(error.message));
         triggerForceStop(error);
       }, params.runtimeReadyTimeoutMs);
@@ -334,22 +335,9 @@ async function waitForGatewayReady(params: {
         `discord: gateway READY wait timed out after ${params.readyTimeoutMs}ms; reconnecting with backoff (attempt ${attempt})`,
       ),
     );
-    params.pushStatus?.({
-      connected: false,
-      lifecycle: "recovering",
-      lastEventAt: restartAt,
-      lastDisconnect: {
-        at: restartAt,
-        error: "startup-not-ready",
-      },
-      lastError: "startup-not-ready",
-    });
+    params.pushStatus?.(createGatewayNotReadyStatusPatch(restartAt, "startup-not-ready"));
     await params.beforeRestart?.();
-    await restartGatewayAfterReadyTimeout({
-      gateway: params.gateway,
-      abortSignal: params.abortSignal,
-      runtime: params.runtime,
-    });
+    await restartGatewayAfterReadyTimeout(params);
     if (params.abortSignal?.aborted) {
       return;
     }

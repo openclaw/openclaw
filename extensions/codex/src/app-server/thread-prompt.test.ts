@@ -205,6 +205,16 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it.each([{ pluginHarnessToolPolicyRestricted: true }, { requireWorkspaceOnly: true }] as const)(
+    "does not advertise native helpers for restricted runs (%j)",
+    (overrides) => {
+      const instructions = buildInstructions(overrides);
+      expect(instructions).not.toContain("spawn_agent");
+      expect(instructions).not.toContain("wait_agent");
+      expect(instructions).toContain("sessions_spawn");
+    },
+  );
+
   it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
     const params = createParams({ toolsAllow: [] });
     const instructions = buildDeveloperInstructions(params);

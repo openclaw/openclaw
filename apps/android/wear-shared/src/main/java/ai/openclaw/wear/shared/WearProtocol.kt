@@ -40,15 +40,7 @@ object WearProtocol {
 
   fun realtimeAudioChannelPath(attemptId: String): String {
     require(attemptId.isNotBlank())
-    val digest = MessageDigest.getInstance("SHA-256").digest(attemptId.encodeToByteArray())
-    return buildString(REALTIME_AUDIO_CHANNEL_PATH_PREFIX.length + digest.size * 2) {
-      append(REALTIME_AUDIO_CHANNEL_PATH_PREFIX)
-      digest.forEach { byte ->
-        val value = byte.toInt() and 0xff
-        append(LOWER_HEX[value ushr 4])
-        append(LOWER_HEX[value and 0x0f])
-      }
-    }
+    return REALTIME_AUDIO_CHANNEL_PATH_PREFIX + wearSha256Hex(attemptId)
   }
 
   fun isRealtimeAudioChannelPath(path: String): Boolean = path == LEGACY_REALTIME_AUDIO_CHANNEL_PATH || isAttemptScopedRealtimeAudioChannelPath(path)
@@ -61,7 +53,11 @@ object WearProtocol {
   }
 
   private const val REALTIME_AUDIO_ATTEMPT_TOKEN_CHARS = 64
-  private const val LOWER_HEX = "0123456789abcdef"
+}
+
+fun wearSha256Hex(value: String): String {
+  val digest = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray())
+  return digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
 
 enum class WearProxyCapability(

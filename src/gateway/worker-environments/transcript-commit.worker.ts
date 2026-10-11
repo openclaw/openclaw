@@ -10,11 +10,13 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import {
   applyPreparedTranscriptCommit,
   prepareTranscriptCommit,
-  type ApplyTranscriptCommitResult,
-  type CommittedAgentMessage,
   type PreparedTranscriptCommit,
-  type TranscriptCommitInput,
 } from "./transcript-commit.kernel.js";
+import type {
+  ApplyTranscriptCommitResult,
+  CommittedAgentMessage,
+  TranscriptCommitInput,
+} from "./transcript-commit.types.js";
 
 export type WorkerTranscriptOperations = {
   "transcript.prepare": {

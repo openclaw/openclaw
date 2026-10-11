@@ -1,4 +1,3 @@
-// Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {

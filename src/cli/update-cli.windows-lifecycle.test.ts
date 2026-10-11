@@ -2,13 +2,14 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -20,7 +21,6 @@ import {
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
-  databasePreflightMocks,
   gatewayFixturePid,
   readPackageVersion,
   restartHealthTestControl,
@@ -71,6 +71,43 @@ import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.t
 import { registerWindowsTaskAdmissionTests } from "./update-cli/update-command-windows-preflight.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
+
+let resetNativeLoader: (() => void) | undefined;
+beforeAll(async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  // Match fs-safe's Windows simulation: retain native publication, add host identity facts.
+  const nativeUrl = new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href;
+  const {
+    __loadBundledNativeForTest: loadBundledNative,
+    __setNativeLoaderForTest: setNativeLoader,
+    __resetNativeLoaderForTest: resetLoader,
+  } = await vi.importActual<{
+    __loadBundledNativeForTest: () => Record<string, unknown>;
+    __setNativeLoaderForTest: (loader: () => Record<string, unknown>) => void;
+    __resetNativeLoaderForTest: () => void;
+  }>(nativeUrl);
+  const binding = loadBundledNative();
+  setNativeLoader(() => ({
+    ...binding,
+    fstatIdentity(fd: number) {
+      const stat = fsSync.fstatSync(fd);
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        mode: stat.mode,
+        nlink: stat.nlink,
+        size: stat.size,
+        isFile: stat.isFile(),
+        isDirectory: stat.isDirectory(),
+        isSymbolicLink: stat.isSymbolicLink(),
+      };
+    },
+  }));
+  resetNativeLoader = resetLoader;
+});
+afterAll(() => resetNativeLoader?.());
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
@@ -356,6 +393,7 @@ describe("update-cli", () => {
               settled: true,
             },
             steps: [
+              expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
               expect.objectContaining({ stderrTail: expect.stringContaining("enable denied") }),
               recoveryVerificationStep(undefined, root),
             ],
@@ -480,12 +518,7 @@ describe("update-cli", () => {
   it("restores package files without re-enabling Windows autostart after interruption", async () => {
     await fixture.useFileBackedConfig();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const processOnSpy = vi.spyOn(process, "on");
-    const exitCalled = createDeferred();
-    const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      exitCalled.resolve();
-      return undefined as never;
-    });
+    const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-lifecycle-signal");
     fixture.primeServiceCommand(
       [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
@@ -501,19 +534,23 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
       if (argv[2] === "doctor") {
         await fs.unlink(path.join(root, "dist", "index.js"));
-        const listener = processOnSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
-        if (typeof listener !== "function") {
-          throw new Error("missing signal handler");
+        const listeners = process
+          .listeners("SIGINT")
+          .filter((listener) => !priorSigintListeners.has(listener));
+        expect(listeners.length).toBeGreaterThan(0);
+        for (const listener of listeners) {
+          listener("SIGINT");
         }
-        listener();
         throw new Error("interrupted lifecycle");
       }
       return runFixtureCommand(argv, options);
     });
 
+    const priorSigintListeners = new Set(process.listeners("SIGINT"));
     await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
-    await exitCalled.promise;
-    expect(processExitSpy).toHaveBeenCalledWith(130);
+    await expect(waitForCliSignalExit()).resolves.toBe(130);
+    expect(process.exitCode).toBe(130);
+    expect(processExitSpy).not.toHaveBeenCalled();
     expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
     await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
     expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
@@ -609,17 +646,13 @@ describe("update-cli", () => {
   it.each([
     { signal: "SIGINT", phase: "package suspension" },
     { signal: "SIGINT", phase: "service pre-stop inspection" },
-    { signal: "SIGBREAK", phase: "Git schema preflight" },
+    { signal: "SIGBREAK", phase: "Git task suspension" },
   ] as const)(
     "restores Windows Scheduled Task autostart on $signal during $phase",
     async ({ signal, phase }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const processOnSpy = vi.spyOn(process, "on");
-      const exitCalled = createDeferred();
-      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-        exitCalled.resolve();
-        return undefined as never;
-      });
+      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
       const gate = createDeferred();
       const entered = createDeferred();
       const gitMutation = vi.fn();
@@ -633,9 +666,12 @@ describe("update-cli", () => {
           await waitForSignal();
         }
         taskSuspended = true;
+        if (phase === "Git task suspension") {
+          await waitForSignal();
+        }
         return true;
       });
-      if (phase === "Git schema preflight") {
+      if (phase === "Git task suspension") {
         fixture.mockOwnedGitService();
         serviceLoaded.mockResolvedValue(true);
         vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
@@ -645,12 +681,6 @@ describe("update-cli", () => {
           )({ schemaVersions: { state: 3, agent: 11 } });
           gitMutation();
           return makeOkUpdateResult({ mode: "git" });
-        });
-        databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(async () => {
-          if (taskSuspended) {
-            await waitForSignal();
-          }
-          return { incompatible: [], indeterminate: [] };
         });
       } else {
         const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-suspension-signal");
@@ -714,16 +744,16 @@ describe("update-cli", () => {
         await updatePromise;
         expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
         expect(serviceStop).not.toHaveBeenCalled();
-        expect(Boolean(packageInstallCommandCall())).toBe(phase !== "Git schema preflight");
+        expect(Boolean(packageInstallCommandCall())).toBe(phase !== "Git task suspension");
         expect(gitMutation).not.toHaveBeenCalled();
         expect(freshRestartCalls()).toEqual([]);
         expect(listUpdateRuns({ limit: 1 })).toMatchObject([
           { phase: "finished", status: "skipped", reason: "cancelled" },
         ]);
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        await exitCalled.promise;
-        expect(processExitSpy).toHaveBeenCalledWith(130);
-        expect(processExitSpy.mock.calls.every(([code]) => code === 130)).toBe(true);
+        await expect(waitForCliSignalExit()).resolves.toBe(130);
+        expect(process.exitCode).toBe(130);
+        expect(processExitSpy).not.toHaveBeenCalled();
       } finally {
         gate.resolve();
         await updatePromise;

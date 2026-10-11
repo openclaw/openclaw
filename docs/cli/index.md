@@ -27,7 +27,7 @@ Setup commands by intent:
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/reference/database-schemas) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                     |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`claws`](/cli/claws) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                 |
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
-| Gateway and logs             | [`fleet`](/cli/fleet) · [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                     |
+| Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
 | Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
@@ -55,7 +55,7 @@ Place command-specific options after their command name, for example `openclaw s
 
 Unknown root options fail with an option error and a help hint instead of starting onboarding or the TUI.
 
-A named `--profile` replaces canonical state and config paths inherited from
+A named `--profile` replaces standard state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
 state directories and config paths remain unchanged.
 
@@ -100,6 +100,10 @@ also record the accepted `runId` and `origin: "gateway"` beside the envelope, so
 scripts can report the in-flight run. Failure messages are sanitized. Human-readable
 diagnostics may also be written to stderr, so scripts should parse stdout and still
 check the exit status.
+
+Onboarding and setup failures retain `phase` and the top-level `message` beside
+the envelope. Use `error.message` for the shared failure description and `phase`
+for onboarding-specific recovery.
 
 ## Color palette
 
@@ -204,7 +208,7 @@ openclaw [--dev] [--profile <name>] <command>
     install
     update
     verify
-    workshop list|inspect|propose-create|propose-update|revise|apply|reject|quarantine
+    workshop list|changes|show|archive|restore
     list
     info
     check
@@ -328,19 +332,6 @@ openclaw [--dev] [--profile <name>] <command>
     stop
     restart
     run
-  fleet
-    create
-    backup
-    restore
-    doctor
-    list
-    status
-    logs
-    start
-    stop
-    restart
-    upgrade
-    rm
   worktrees
     list
     create

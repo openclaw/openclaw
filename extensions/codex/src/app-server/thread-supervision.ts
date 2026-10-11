@@ -17,7 +17,7 @@ import {
   assertExactSupervisionModelSelection,
   readSupervisionResponseThreadId,
 } from "./protocol-validators.js";
-import type { CodexDynamicToolSpec, CodexThread, CodexThreadForkParams } from "./protocol.js";
+import type { CodexDynamicToolSpec, CodexThreadForkParams } from "./protocol.js";
 import { matchesPendingSupervisionBranch } from "./session-binding-record.js";
 import type {
   CodexBindingAuthority,
@@ -97,7 +97,7 @@ export async function materializePendingSupervisionBranch(
           }
           throw new CodexAppServerUnsafeSubscriptionError(
             kind === "probe"
-              ? "Codex model probe fork may have materialized without a response"
+              ? "Codex model test fork may have materialized without a response"
               : "Canonical Codex branch may have started without a response",
             { cause: error },
           );
@@ -137,7 +137,14 @@ export async function materializePendingSupervisionBranch(
       `Codex supervision source read returned ${sourceThread.id} for ${pending.sourceThreadId}`,
     );
   }
-  assertPendingSupervisionSnapshotUnchanged(sourceThread, pending);
+  if (
+    !pending.lastTurnId &&
+    (sourceThread.status?.type === "active" || (sourceThread.turns?.length ?? 0) > 0)
+  ) {
+    throw new Error(
+      "Codex source changed after Continue; reopen the source session before sending a message",
+    );
+  }
   const history = projectBoundedCodexThreadHistory({
     thread: sourceThread,
     throughTurnId: pending.lastTurnId ?? null,
@@ -162,7 +169,7 @@ export async function materializePendingSupervisionBranch(
       });
     } catch (error) {
       try {
-        const current = params.bindingStore.read(params.bindingIdentity);
+        const current = await params.bindingStore.readAsync(params.bindingIdentity);
         if (matchesPendingSupervisionState(current, pending)) {
           cleanupExpected = pending;
         } else if (matchesPendingSupervisionState(current, expected)) {
@@ -198,7 +205,7 @@ export async function materializePendingSupervisionBranch(
     const probeThreadId = requireDistinctSupervisionThreadId({
       threadId: readSupervisionResponseThreadId(rawProbeResponse),
       sourceThreadId: pending.sourceThreadId,
-      role: "model probe",
+      role: "model test",
     });
     let probeResponse: ReturnType<typeof assertCodexThreadForkResponse>;
     try {
@@ -216,17 +223,23 @@ export async function materializePendingSupervisionBranch(
         CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       ).catch((cause: unknown) => {
         throw new CodexAppServerUnsafeSubscriptionError(
-          `Codex model probe subscription could not be released: ${probeThreadId}`,
+          `Codex model test subscription could not be released: ${probeThreadId}`,
           { cause },
         );
       });
     }
     params.throwIfAborted();
     const nativeModel = requireNonBlankSupervisionValue(probeResponse.model, "native model");
-    const nativeModelProvider = requireNativeSupervisionModelProvider({
-      responseModelProvider: probeResponse.modelProvider,
-      responseThreadModelProvider: probeResponse.thread.modelProvider,
-    });
+    const nativeModelProvider = requireNonBlankSupervisionValue(
+      probeResponse.modelProvider,
+      "native model provider",
+    );
+    const threadProvider = probeResponse.thread.modelProvider?.trim();
+    if (threadProvider && threadProvider !== nativeModelProvider) {
+      throw new Error(
+        `Codex supervision model provider mismatch: ${nativeModelProvider} != ${threadProvider}`,
+      );
+    }
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
     const startParams = buildThreadStartParams(nativeAttempt, {
@@ -325,7 +338,7 @@ export async function materializePendingSupervisionBranch(
     } catch (error) {
       let current: CodexAppServerThreadBinding | undefined;
       try {
-        current = params.bindingStore.read(params.bindingIdentity);
+        current = await params.bindingStore.readAsync(params.bindingIdentity);
       } catch (readError) {
         provisionalCleanupSafe = false;
         throw new CodexAppServerUnsafeSubscriptionError(
@@ -334,14 +347,14 @@ export async function materializePendingSupervisionBranch(
         );
       }
       if (
-        matchesMaterializedSupervisionBranch(current, {
-          sourceThreadId: pending.sourceThreadId,
-          connectionFingerprint,
-          threadId: finalThreadId,
-          model: nativeModel,
-          modelProvider: bindingModelProvider,
-          historyCoveredThrough,
-        })
+        current?.threadId === finalThreadId &&
+        current.connectionScope === "supervision" &&
+        current.supervisionSourceThreadId === pending.sourceThreadId &&
+        current.appServerRuntimeFingerprint === connectionFingerprint &&
+        current.pendingSupervisionBranch === undefined &&
+        current.model === nativeModel &&
+        current.modelProvider === bindingModelProvider &&
+        current.historyCoveredThrough === historyCoveredThrough
       ) {
         committed = true;
       } else {
@@ -462,42 +475,11 @@ function buildPendingSupervisionProbeForkParams(
   };
 }
 
-function assertPendingSupervisionSnapshotUnchanged(
-  thread: CodexThread,
-  pending: CodexAppServerPendingSupervisionBranch,
-): void {
-  if (pending.lastTurnId) {
-    return;
-  }
-  if (thread.status?.type === "active" || (thread.turns?.length ?? 0) > 0) {
-    throw new Error(
-      "Codex source changed after Continue; reopen the source session before sending a message",
-    );
-  }
-}
-
 function requireNonBlankSupervisionValue(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Codex supervision ${label} is missing`);
   }
   return value.trim();
-}
-
-function requireNativeSupervisionModelProvider(params: {
-  responseModelProvider?: string | null;
-  responseThreadModelProvider?: string | null;
-}): string {
-  const responseProvider = requireNonBlankSupervisionValue(
-    params.responseModelProvider,
-    "native model provider",
-  );
-  const threadProvider = params.responseThreadModelProvider?.trim();
-  if (threadProvider && threadProvider !== responseProvider) {
-    throw new Error(
-      `Codex supervision model provider mismatch: ${responseProvider} != ${threadProvider}`,
-    );
-  }
-  return responseProvider;
 }
 
 function matchesPendingSupervisionState(
@@ -508,29 +490,6 @@ function matchesPendingSupervisionState(
     binding?.connectionScope === "supervision" &&
     binding.supervisionSourceThreadId === expected.sourceThreadId &&
     matchesPendingSupervisionBranch(binding, expected)
-  );
-}
-
-function matchesMaterializedSupervisionBranch(
-  binding: CodexAppServerThreadBinding | undefined,
-  expected: {
-    sourceThreadId: string;
-    connectionFingerprint: string;
-    threadId: string;
-    model: string;
-    modelProvider: string | undefined;
-    historyCoveredThrough: string;
-  },
-): boolean {
-  return (
-    binding?.threadId === expected.threadId &&
-    binding.connectionScope === "supervision" &&
-    binding.supervisionSourceThreadId === expected.sourceThreadId &&
-    binding.appServerRuntimeFingerprint === expected.connectionFingerprint &&
-    binding.pendingSupervisionBranch === undefined &&
-    binding.model === expected.model &&
-    binding.modelProvider === expected.modelProvider &&
-    binding.historyCoveredThrough === expected.historyCoveredThrough
   );
 }
 

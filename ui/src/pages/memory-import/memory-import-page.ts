@@ -201,17 +201,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       : this.context.agents.ensureList().then(() => undefined);
   }
 
-  private selectAgent(agentId: string) {
-    this.context.agentSelection.set(agentId);
-    this.resetMutationState();
-    this.resetBackfillState();
-  }
-
-  private setReplaceExisting(enabled: boolean) {
-    this.replaceExisting = enabled;
-    this.resetMutationState();
-  }
-
   private toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
     const next = new Set(this.selectedByProvider[providerId] ?? []);
     for (const itemId of itemIds) {
@@ -338,15 +327,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.backfillError = null;
   }
 
-  private backfillRequest(agentId: string) {
-    return {
-      agentId,
-      ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
-      ...(this.backfillTo ? { to: this.backfillTo } : {}),
-      limitDays: SESSION_BACKFILL_BATCH_DAYS,
-    };
-  }
-
   private async runBackfill(operation: "preview" | "apply" | "rollback") {
     const client = this.context.gateway.snapshot.client;
     const agentId = this.currentAgentId();
@@ -371,6 +351,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     if (operation !== "rollback") {
       this.clearBackfillResults();
     }
+    const requestBackfill = (method: "preview" | "apply") =>
+      client.request<SessionBackfillGatewayResult>(`memory.sessionBackfill.${method}`, {
+        agentId,
+        ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
+        ...(this.backfillTo ? { to: this.backfillTo } : {}),
+        limitDays: SESSION_BACKFILL_BATCH_DAYS,
+      });
     try {
       if (operation === "rollback") {
         const result = await client.request<SessionBackfillRollbackResult>(
@@ -384,10 +371,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.backfillRollbackPending = false;
         }
       } else if (operation === "preview") {
-        const result = await client.request<SessionBackfillGatewayResult>(
-          "memory.sessionBackfill.preview",
-          this.backfillRequest(agentId),
-        );
+        const result = await requestBackfill("preview");
         if (isCurrent()) {
           this.backfillPreview = result;
         }
@@ -401,10 +385,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
         this.backfillProgress = progress;
         const processedDays = new Set<string>();
         while (true) {
-          const chunk = await client.request<SessionBackfillGatewayResult>(
-            "memory.sessionBackfill.apply",
-            this.backfillRequest(agentId),
-          );
+          const chunk = await requestBackfill("apply");
           if (!isCurrent()) {
             return;
           }
@@ -473,8 +454,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       backfillProgress: this.backfillProgress,
       backfillRollbackResult: this.backfillRollbackResult,
       backfillRollbackPending: this.backfillRollbackPending,
-      onSelectAgent: (nextAgentId) => this.selectAgent(nextAgentId),
-      onReplaceExisting: (enabled) => this.setReplaceExisting(enabled),
+      onSelectAgent: (nextAgentId) => {
+        this.context.agentSelection.set(nextAgentId);
+        this.resetMutationState();
+        this.resetBackfillState();
+      },
+      onReplaceExisting: (enabled) => {
+        this.replaceExisting = enabled;
+        this.resetMutationState();
+      },
       onRefresh: () => void this.refresh(),
       onToggleCollection: (providerId, itemIds, selected) =>
         this.toggleCollection(providerId, itemIds, selected),

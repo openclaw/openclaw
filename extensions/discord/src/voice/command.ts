@@ -178,8 +178,7 @@ export function createDiscordVoiceCommand(
         return "Voice manager is not available yet.";
       }
 
-      const result = await manager.join({ guildId: access.guildId, channelId: channel.id });
-      return result.message;
+      return (await manager.join({ guildId: access.guildId, channelId: channel.id })).message;
     }
   }
 
@@ -210,8 +209,7 @@ export function createDiscordVoiceCommand(
         return access.message;
       }
       if (this.name === "leave") {
-        const result = await manager.leave({ guildId });
-        return result.message;
+        return (await manager.leave({ guildId })).message;
       }
       if (sessions.length === 0) {
         return "No active voice sessions.";

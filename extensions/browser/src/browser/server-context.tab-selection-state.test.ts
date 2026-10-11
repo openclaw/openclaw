@@ -15,6 +15,11 @@ import {
   originalFetch,
 } from "./server-context.remote-tab-ops.harness.js";
 import { mockLaunchedChrome } from "./server-context.test-harness.js";
+import {
+  volatileSessionTabTargetKey,
+  volatileTabsBySession,
+  type VolatileSessionTab,
+} from "./session-tab-process-state.js";
 import * as sessionTabStore from "./session-tab-store.js";
 
 afterEach(async () => {
@@ -23,10 +28,60 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   vi.useRealTimers();
   vi.restoreAllMocks();
+  volatileTabsBySession().delete("agent:main:eviction");
 });
 
 function mockCreatedTarget(targetId: string, finalUrl: string) {
   return vi.spyOn(cdp, "createTargetViaCdp").mockResolvedValue({ targetId, finalUrl });
+}
+
+type DurableTabRecord = Awaited<
+  ReturnType<typeof sessionTabStore.readBrowserDashboardTabs>
+>[number];
+
+function retainedDashboardRecord(targetId: string): DurableTabRecord {
+  return {
+    version: 1,
+    sessionKey: "agent:main:main",
+    nativeTargetId: targetId,
+    profile: "openclaw",
+    profileFingerprint: "profile",
+    browserInstanceFingerprint: "browser",
+    interactionTargetKind: "native",
+    trackedAt: 1,
+    lastUsedAt: 1,
+    storageKey: `retained-${targetId.toLowerCase()}`,
+    dashboard: {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      name: "service",
+      instanceId: "widget-one",
+      url: "http://service.example/",
+      state: "active",
+    },
+  };
+}
+
+function seedVolatileTabActivity(entries: Array<{ targetId: string; lastUsedAt: number }>) {
+  const sessionKey = "agent:main:eviction";
+  const sessions = volatileTabsBySession();
+  const tabs = sessions.get(sessionKey) ?? new Map<string, VolatileSessionTab>();
+  for (const { targetId, lastUsedAt } of entries) {
+    const identity = {
+      sessionKey,
+      targetId,
+      route: { kind: "browser-control" } as const,
+      profile: "openclaw",
+    };
+    tabs.set(volatileSessionTabTargetKey(identity), {
+      ...identity,
+      kind: "volatile",
+      registration: {},
+      trackedAt: lastUsedAt,
+      lastUsedAt,
+    });
+  }
+  sessions.set(sessionKey, tabs);
 }
 
 function page(id: string, url = "about:blank", title = id) {
@@ -184,26 +239,7 @@ describe("browser tab selection and ownership", () => {
 
   it("retains dashboard and just-opened tabs when evicting excess managed tabs", async () => {
     vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
-      {
-        version: 1,
-        sessionKey: "agent:main:main",
-        nativeTargetId: "OLD1",
-        profile: "openclaw",
-        profileFingerprint: "profile",
-        browserInstanceFingerprint: "browser",
-        interactionTargetKind: "native",
-        trackedAt: 1,
-        lastUsedAt: 1,
-        storageKey: "retained-old1",
-        dashboard: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          name: "service",
-          instanceId: "widget-one",
-          url: "http://service.example/",
-          state: "active",
-        },
-      },
+      retainedDashboardRecord("OLD1"),
     ]);
     mockCreatedTarget("NEW", "http://127.0.0.1:3009");
     const closed: string[] = [];
@@ -238,7 +274,87 @@ describe("browser tab selection and ownership", () => {
     });
     expect(runtime.lastTargetId).toBe("NEW");
     await cleanup.promise;
+    // Chrome lists targets most-recently-activated first, so the eviction
+    // walks from the stale end: OLD1 is dashboard-retained, OLD8 is the
+    // least recently used of the rest, and the fresh NEW tab is kept.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
+  });
+
+  it("orders managed eviction by recorded activity, not CDP listing position", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    seedVolatileTabActivity(
+      Array.from({ length: 7 }, (_, index) => ({
+        targetId: `OLD${index + 2}`,
+        lastUsedAt: 2_000 + index,
+      })),
+    );
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+      }
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    // OLD1 is dashboard-retained; among the rest OLD2 carries the oldest
+    // recorded activity, so it is evicted even though OLD8 sits last in the
+    // CDP listing. Losing the activity read would close OLD8 instead.
     expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
+  });
+
+  it("evicts untracked managed tabs ahead of recently tracked ones", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    seedVolatileTabActivity(
+      Array.from({ length: 5 }, (_, index) => ({
+        targetId: `OLD${index + 4}`,
+        lastUsedAt: 5_000 + index,
+      })),
+    );
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+      }
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    // OLD2 and OLD3 carry no recorded activity, so OLD3 (ahead of OLD2 in the
+    // reversed CDP listing) is evicted before any tracked tab.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD3"]);
   });
 
   it("does not block opening on an ordinary managed-tab cleanup close", async () => {
@@ -250,7 +366,7 @@ describe("browser tab selection and ownership", () => {
       if (url.includes("/json/list")) {
         return Response.json(makeManagedTabsWithNew());
       }
-      if (url.includes("/json/close/OLD1")) {
+      if (url.includes("/json/close/OLD8")) {
         requests.push(url);
         started.resolve();
         return closed.promise;
@@ -261,7 +377,7 @@ describe("browser tab selection and ownership", () => {
     try {
       expect((await openclaw.openTab("http://127.0.0.1:3009")).targetId).toBe("NEW");
       await started.promise;
-      expect(requests).toEqual(["http://127.0.0.1:18800/json/close/OLD1"]);
+      expect(requests).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
     } finally {
       closed.resolve(new Response());
     }

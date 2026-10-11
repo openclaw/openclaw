@@ -20,14 +20,6 @@ import type {
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
-export type ThreadBindingPersistence = {
-  targetKey: string;
-  deletingTarget: boolean;
-  nextRecord: ThreadBindingRecord | null;
-  writingKey?: string;
-  committedKeys: Set<string>;
-};
-
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
   bindingsByThreadId: Map<string, ThreadBindingRecord>;
@@ -40,10 +32,8 @@ type ThreadBindingsGlobalState = {
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
-  revision: number;
   mutationTail: Promise<void>;
   accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
-  activePersistence?: ThreadBindingPersistence;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
@@ -63,7 +53,6 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     loadedPersistentBindings: false,
     persistenceAvailable: true,
     lastPersistedAtMs: 0,
-    revision: 0,
     mutationTail: Promise.resolve(),
     accountOperationTails: new WeakMap(),
   };
@@ -84,8 +73,8 @@ export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
   THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
 export const PERSIST_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.persistByAccountId;
 export const THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS = 15_000;
-export const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
-export const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
+const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
+const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
 
 export function rememberThreadBindingToken(params: { accountId?: string; token?: string }) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
@@ -115,6 +104,13 @@ export function openThreadBindingsStore() {
   });
 }
 
+export function openThreadBindingsStoreAsync() {
+  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+  });
+}
+
 export function normalizeTargetKind(
   raw: unknown,
   targetSessionKey: string,
@@ -125,7 +121,7 @@ export function normalizeTargetKind(
   return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";
 }
 
-export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
+export function toBindingRecordKey(params: { accountId?: string; threadId: string }): string {
   return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
 }
 
@@ -137,10 +133,7 @@ export function resolveBindingRecordKey(params: {
   if (!threadId) {
     return undefined;
   }
-  return toBindingRecordKey({
-    accountId: normalizeAccountId(params.accountId),
-    threadId,
-  });
+  return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
 export function normalizePersistedBinding(
@@ -318,7 +311,6 @@ export function setBindingRecord(record: ThreadBindingRecord) {
     unlinkSessionBinding(existing.targetSessionKey, bindingKey);
   }
   BINDINGS_BY_THREAD_ID.set(bindingKey, record);
-  THREAD_BINDINGS_STATE.revision += 1;
   linkSessionBinding(record.targetSessionKey, bindingKey);
   rememberReusableWebhook(record);
 }
@@ -333,7 +325,6 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
     return null;
   }
   BINDINGS_BY_THREAD_ID.delete(key);
-  THREAD_BINDINGS_STATE.revision += 1;
   unlinkSessionBinding(existing.targetSessionKey, key);
   return existing;
 }
@@ -341,7 +332,6 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
 function beginBindingsLoad() {
   THREAD_BINDINGS_STATE.loadedBindings = true;
   BINDINGS_BY_THREAD_ID.clear();
-  THREAD_BINDINGS_STATE.revision += 1;
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
   THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
@@ -352,10 +342,9 @@ function restoreBindings(entries: PluginStateEntry<ThreadBindingRecord>[]) {
   THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
   for (const entry of entries) {
     const normalized = normalizePersistedBinding(entry.key, entry.value);
-    if (!normalized) {
-      continue;
+    if (normalized) {
+      setBindingRecord(normalized);
     }
-    setBindingRecord(normalized);
   }
 }
 
@@ -377,12 +366,7 @@ export function ensureBindingsLoaded() {
 async function loadBindingsAsync() {
   let entries: PluginStateEntry<ThreadBindingRecord>[];
   try {
-    entries = await getDiscordRuntime()
-      .state.openKeyedStore<ThreadBindingRecord>({
-        namespace: THREAD_BINDINGS_NAMESPACE,
-        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-      })
-      .entries();
+    entries = await openThreadBindingsStoreAsync().entries();
   } catch {
     if (!THREAD_BINDINGS_STATE.loadedBindings) {
       beginBindingsLoad();

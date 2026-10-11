@@ -62,23 +62,18 @@ function resolveDiscordChannelKey(
   return groupChannel && channelEntries[channelSlug] ? channelSlug : undefined;
 }
 
-function buildDiscordPolicyTree(guilds: DiscordConfig["guilds"]): ScopeTree {
-  const scopes: ScopeTree["scopes"] = {};
-  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
-    scopes[guildScopeKey(guildKey)] = guild;
-    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
-      scopes[channelScopeKey(guildKey, channelKey)] = channel;
-    }
-  }
-  return { scopes };
-}
-
 function resolveDiscordPolicyScope(params: ChannelGroupContext) {
   const guilds =
     (params.accountId
       ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
-  const tree = buildDiscordPolicyTree(guilds);
+  const tree: ScopeTree = { scopes: {} };
+  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
+    tree.scopes[guildScopeKey(guildKey)] = guild;
+    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
+      tree.scopes[channelScopeKey(guildKey, channelKey)] = channel;
+    }
+  }
   // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
   // Within the selected guild, channel fields still cascade to guild fields.
   const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace);

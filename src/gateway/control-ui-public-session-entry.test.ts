@@ -1,7 +1,11 @@
 import { runInNewContext } from "node:vm";
 import { JSDOM } from "jsdom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
+
+const readers: JSDOM[] = [];
+afterEach(() => readers.splice(0).forEach((dom) => dom.window.close()));
 
 function openReader(
   options: {
@@ -12,6 +16,8 @@ function openReader(
     device?: string;
     storedScope?: string;
     probeStatus?: number;
+    probe?: Promise<{ status: number }>;
+    unavailable?: boolean;
     blockedStorage?: boolean;
   } = {},
 ) {
@@ -21,15 +27,18 @@ function openReader(
       title: "Conversation unavailable",
       messages: [],
       truncated: false,
-      unavailable: true,
+      unavailable: options.unavailable !== false,
       latestUrl: "/control/chat/main/private",
       cardUrl: "https://gateway.test/control/share/card.png",
+      assetBasePath: basePath,
       entryUrl: `${basePath}/__openclaw__/session-entry?path=${encodeURIComponent(`${basePath}/chat/main/private`)}`,
       ...(options.clientAuth !== false ? { clientAuthBasePath: basePath } : {}),
     }),
     { url: options.url ?? "https://gateway.test/control/chat/main/private" },
   );
   const { document, localStorage, sessionStorage, location } = dom.window;
+  // The script runs below; match a browser with JavaScript enabled.
+  document.querySelectorAll("noscript").forEach((node) => node.remove());
   const scope =
     options.storedScope ??
     `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${basePath}`;
@@ -40,7 +49,9 @@ function openReader(
     localStorage.setItem(`openclaw.device.auth.v1:${scope}`, options.device);
   }
   const replace = vi.fn();
-  const fetch = vi.fn().mockResolvedValue({ status: options.probeStatus ?? 401 });
+  const fetch = vi
+    .fn()
+    .mockReturnValue(options.probe ?? Promise.resolve({ status: options.probeStatus ?? 401 }));
   const storage = options.blockedStorage
     ? {
         getItem() {
@@ -59,8 +70,10 @@ function openReader(
     setTimeout: vi.fn(),
     clearTimeout: vi.fn(),
   });
-  dom.window.close();
-  return { replace, fetch };
+  readers.push(dom);
+  const loginVisibility = () =>
+    dom.window.getComputedStyle(document.getElementById("session-login")!).visibility;
+  return { replace, fetch, document, loginVisibility };
 }
 
 const device = JSON.stringify({
@@ -79,6 +92,70 @@ const entry =
   "https://gateway.test/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Fprivate";
 
 describe("public reader operator handoff", () => {
+  it.each([204, 401])(
+    "keeps the unavailable result pending through a delayed %s handoff",
+    async (status) => {
+      const probe = createDeferred<{ status: number }>();
+      const f = openReader({ probe: probe.promise, token: "synthetic-token" });
+      const main = f.document.querySelector("main")!;
+      expect(main.hasAttribute("data-entry-pending")).toBe(true);
+      expect(f.document.title).not.toContain("unavailable");
+      expect(f.loginVisibility()).toBe("hidden");
+      expect(f.replace).not.toHaveBeenCalled();
+      probe.resolve({ status });
+      await probe.promise;
+      expect(f.replace).toHaveBeenCalledWith(entry);
+      expect(main.hasAttribute("data-entry-pending")).toBe(true);
+    },
+  );
+
+  it.each([401, 403])(
+    "reveals confirmed unavailability after a delayed %s response",
+    async (status) => {
+      const probe = createDeferred<{ status: number }>();
+      const f = openReader({ probe: probe.promise });
+      const main = f.document.querySelector("main")!;
+      expect(main.hasAttribute("data-entry-pending")).toBe(true);
+      probe.resolve({ status });
+      await probe.promise;
+      expect(main.hasAttribute("data-entry-pending")).toBe(false);
+      expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+      expect(f.loginVisibility()).toBe("visible");
+      expect(f.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["network", "timeout", "server"])(
+    "does not present %s failures as denied access",
+    async (kind) => {
+      const probe = createDeferred<{ status: number }>();
+      const f = openReader({ probe: probe.promise });
+      if (kind === "server") {
+        probe.resolve({ status: 503 });
+      } else {
+        probe.reject(new Error(kind));
+      }
+      await probe.promise.catch(() => {});
+      await Promise.resolve();
+      expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(true);
+      expect(f.document.querySelector(".entry-status")?.textContent).toContain(
+        "Could not check access",
+      );
+      expect(f.document.querySelector(".entry-status")?.textContent).toContain("reload or log in");
+      expect(f.document.title).not.toContain("unavailable");
+      expect(f.loginVisibility()).toBe("visible");
+      expect(f.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves a public transcript readable while the optional handoff is pending", () => {
+    const probe = createDeferred<{ status: number }>();
+    const f = openReader({ probe: probe.promise, unavailable: false });
+    expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(false);
+    expect(f.document.querySelector(".transcript")).not.toBeNull();
+    expect(f.document.querySelector(".entry-status")).toBeNull();
+  });
+
   it.each([
     { name: "session token on reload", token: "synthetic-token" },
     { name: "paired token/password device in a new tab", device },
@@ -163,6 +240,8 @@ describe("public reader operator handoff", () => {
     const f = openReader(options);
     await Promise.resolve();
     expect(f.replace).not.toHaveBeenCalled();
+    expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(false);
+    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
     expect(f.fetch).toHaveBeenCalledWith(
       `${entry}&probe=1`,
       expect.objectContaining({ credentials: "same-origin", redirect: "error" }),

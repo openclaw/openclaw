@@ -22,18 +22,6 @@ export type VoiceChannelResidency = {
   whenOccupied?: boolean;
 };
 
-type FollowUserReconcileGuildPlan = {
-  guildId: string;
-  userIds: string[];
-  checkedAllUsers: boolean;
-  checkBotVoiceState: boolean;
-};
-
-type FollowUserReconcileUserSelection = {
-  userIds: string[];
-  completedCycle: boolean;
-};
-
 export function normalizeVoiceChannelResidencies(
   entries: Array<{ guildId?: string; channelId?: string; whenOccupied?: boolean }> | undefined,
 ): VoiceChannelResidency[] {
@@ -66,20 +54,13 @@ function logFollowUserReconcileVerbose(reason: string, message: string): void {
   logVoiceVerbose(message);
 }
 
-function cyclicId(ids: string[], index: number, label: string): string {
-  return expectDefined(ids[index % ids.length], label);
-}
-
 export class DiscordVoiceFollowing {
   private readonly followUserIds: Set<string>;
   readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
-  readonly followedVoiceGuilds = new Set<string>();
+  private readonly followedVoiceGuilds = new Set<string>();
   private readonly scheduler: PluginServiceSchedulerV1;
   private followUsersReconcileTask: Promise<void> | null = null;
-  private followUsersReconcileGuildCursor = 0;
-  private followUsersReconcileBotGuildCursor = 0;
-  private readonly followUsersReconcileUserCursors = new Map<string, number>();
-  private readonly followEventGenerations = new Map<string, number>();
+  private reconcileCursor = 0;
 
   constructor(
     private readonly params: {
@@ -187,9 +168,6 @@ export class DiscordVoiceFollowing {
     }
     const { guildId, channelId, userId } = params;
     const followKey = `${guildId}:${userId}`;
-    const eventGeneration = (this.followEventGenerations.get(followKey) ?? 0) + 1;
-    this.followEventGenerations.set(followKey, eventGeneration);
-    const isCurrentEvent = () => this.followEventGenerations.get(followKey) === eventGeneration;
     const previousFollowedChannelId = this.followedUserChannels.get(followKey)?.channelId;
     const existing = this.params.getSession(guildId);
     const wasFollowedVoiceSession =
@@ -218,7 +196,8 @@ export class DiscordVoiceFollowing {
       }
       return;
     }
-    this.followedUserChannels.set(followKey, { guildId, channelId });
+    const followedChannel = { guildId, channelId };
+    this.followedUserChannels.set(followKey, followedChannel);
     if (existing?.channelId === channelId) {
       this.followedVoiceGuilds.add(guildId);
       return;
@@ -237,7 +216,7 @@ export class DiscordVoiceFollowing {
       `discord voice: following user guild=${guildId} user=${userId} channel=${channelId}`,
     );
     const result = await this.params.join({ guildId, channelId }, { preserveFollowState: true });
-    if (!isCurrentEvent()) {
+    if (this.followedUserChannels.get(followKey) !== followedChannel) {
       return;
     }
     if (!result.ok) {
@@ -260,7 +239,6 @@ export class DiscordVoiceFollowing {
     await this.followUsersReconcileTask;
     this.followedUserChannels.clear();
     this.followedVoiceGuilds.clear();
-    this.followEventGenerations.clear();
   }
 
   isFollowOwnedGuild(guildId: string): boolean {
@@ -270,7 +248,8 @@ export class DiscordVoiceFollowing {
     );
   }
 
-  deleteFollowedUserChannelsForGuild(guildId: string): void {
+  clearFollowedGuild(guildId: string): void {
+    this.followedVoiceGuilds.delete(guildId);
     for (const [key, entry] of this.followedUserChannels.entries()) {
       if (entry.guildId === guildId) {
         this.followedUserChannels.delete(key);
@@ -279,21 +258,19 @@ export class DiscordVoiceFollowing {
   }
 
   private resolveFollowGuildIds(): string[] {
-    const guildIds = new Set<string>();
-    for (const guildId of Object.keys(this.params.discordConfig.guilds ?? {})) {
-      const normalized = guildId.trim();
-      if (normalized) {
-        guildIds.add(normalized);
+    const guildIds = new Set(
+      Object.keys(this.params.discordConfig.guilds ?? {})
+        .map((guildId) => guildId.trim())
+        .filter(Boolean),
+    );
+    for (const entries of [
+      this.params.autoJoinChannels,
+      this.params.allowedChannels ?? [],
+      this.params.listSessions(),
+    ]) {
+      for (const entry of entries) {
+        guildIds.add(entry.guildId);
       }
-    }
-    for (const entry of this.params.autoJoinChannels) {
-      guildIds.add(entry.guildId);
-    }
-    for (const entry of this.params.allowedChannels ?? []) {
-      guildIds.add(entry.guildId);
-    }
-    for (const entry of this.params.listSessions()) {
-      guildIds.add(entry.guildId);
     }
     return Array.from(guildIds);
   }
@@ -326,123 +303,53 @@ export class DiscordVoiceFollowing {
       reason,
       `follow user reconcile reason=${reason}: ${this.followUserIds.size} users across ${guildIds.length} guilds`,
     );
-    const plans = this.selectFollowUserReconcilePlans(guildIds, reason);
-    for (const plan of plans) {
-      for (const userId of plan.userIds) {
-        const voiceState = await this.readReconcileVoiceState(plan.guildId, userId, reason);
-        if (this.scheduler.signal.aborted) {
-          return;
-        }
-        if (voiceState === "transient-error") {
-          continue;
-        }
-        const channelId = voiceState?.channel_id?.trim();
+    const userIds = [...this.followUserIds];
+    const slotsPerGuild = userIds.length + (this.params.botUserId() ? 1 : 0);
+    const totalSlots = guildIds.length * slotsPerGuild;
+    const start = this.reconcileCursor % totalSlots;
+    const visitedGuilds = new Set<string>();
+
+    // One cursor walks users and then the bot in each guild. Large lists converge
+    // over multiple runs without separate user, guild, and bot scheduling state.
+    for (
+      let offset = 0;
+      offset < Math.min(totalSlots, FOLLOW_USERS_RECONCILE_MAX_REST_LOOKUPS_PER_RUN);
+      offset += 1
+    ) {
+      if (this.scheduler.signal.aborted) {
+        return;
+      }
+      const slot = (start + offset) % totalSlots;
+      const guildId = expectDefined(
+        guildIds[Math.floor(slot / slotsPerGuild)],
+        "voice reconciliation guild",
+      );
+      if (
+        !visitedGuilds.has(guildId) &&
+        visitedGuilds.size >= FOLLOW_USERS_RECONCILE_MAX_GUILDS_PER_RUN
+      ) {
+        break;
+      }
+      visitedGuilds.add(guildId);
+      this.reconcileCursor = (slot + 1) % totalSlots;
+      const userIndex = slot % slotsPerGuild;
+      if (userIndex === userIds.length) {
+        await this.disconnectStaleFollowedBotVoiceState({ guildId, reason });
+        continue;
+      }
+      const userId = expectDefined(userIds[userIndex], "voice reconciliation user");
+      const voiceState = await this.readReconcileVoiceState(guildId, userId, reason);
+      if (this.scheduler.signal.aborted) {
+        return;
+      }
+      if (voiceState !== "transient-error") {
         await this.handleFollowedUserVoiceStateUpdate({
-          guildId: plan.guildId,
-          channelId,
+          guildId,
+          channelId: voiceState?.channel_id?.trim(),
           userId,
         });
       }
-      if (plan.checkBotVoiceState) {
-        if (this.scheduler.signal.aborted) {
-          return;
-        }
-        await this.disconnectStaleFollowedBotVoiceState({ guildId: plan.guildId, reason });
-      }
     }
-  }
-
-  private selectFollowUserReconcilePlans(
-    guildIds: string[],
-    reason: string,
-  ): FollowUserReconcileGuildPlan[] {
-    const followedUserIds = Array.from(this.followUserIds);
-    if (followedUserIds.length === 0) {
-      return [];
-    }
-    let remainingLookups = FOLLOW_USERS_RECONCILE_MAX_REST_LOOKUPS_PER_RUN;
-    const guildLimit = Math.min(guildIds.length, FOLLOW_USERS_RECONCILE_MAX_GUILDS_PER_RUN);
-    const start = this.followUsersReconcileGuildCursor % guildIds.length;
-    const plans: FollowUserReconcileGuildPlan[] = [];
-
-    for (let offset = 0; offset < guildLimit && remainingLookups > 0; offset += 1) {
-      if (this.params.botUserId() && remainingLookups === 1) {
-        break;
-      }
-      const guildId = cyclicId(guildIds, start + offset, "voice reconciliation guild index");
-      let userLimit = Math.min(followedUserIds.length, remainingLookups);
-      if (this.params.botUserId() && followedUserIds.length > userLimit && remainingLookups > 1) {
-        userLimit = remainingLookups - 1;
-      }
-      if (userLimit <= 0) {
-        break;
-      }
-      const selection = this.selectFollowUserReconcileUserIds(guildId, followedUserIds, userLimit);
-      plans.push({
-        guildId,
-        userIds: selection.userIds,
-        checkedAllUsers: selection.completedCycle,
-        checkBotVoiceState: false,
-      });
-      remainingLookups -= selection.userIds.length;
-    }
-
-    this.followUsersReconcileGuildCursor = (start + plans.length) % guildIds.length;
-    this.assignFollowUserReconcileBotChecks(guildIds, plans, remainingLookups);
-    if (
-      plans.length < guildIds.length ||
-      plans.some((plan) => plan.userIds.length < followedUserIds.length)
-    ) {
-      logVoiceVerbose(
-        `follow user reconcile reason=${reason}: sampling ${plans.length}/${guildIds.length} guilds and up to ${FOLLOW_USERS_RECONCILE_MAX_REST_LOOKUPS_PER_RUN} REST lookups`,
-      );
-    }
-    return plans;
-  }
-
-  private assignFollowUserReconcileBotChecks(
-    guildIds: string[],
-    plans: FollowUserReconcileGuildPlan[],
-    remainingLookups: number,
-  ): void {
-    if (!this.params.botUserId() || remainingLookups <= 0 || plans.length === 0) {
-      return;
-    }
-    const plansByGuild = new Map(plans.map((plan) => [plan.guildId, plan]));
-    const start = this.followUsersReconcileBotGuildCursor % guildIds.length;
-    let scanned = 0;
-    let assigned = 0;
-    for (; scanned < guildIds.length && assigned < remainingLookups; scanned += 1) {
-      const guildId = cyclicId(guildIds, start + scanned, "bot voice reconciliation guild index");
-      const plan = plansByGuild.get(guildId);
-      if (!plan?.checkedAllUsers) {
-        continue;
-      }
-      plan.checkBotVoiceState = true;
-      assigned += 1;
-    }
-    this.followUsersReconcileBotGuildCursor = (start + scanned) % guildIds.length;
-  }
-
-  private selectFollowUserReconcileUserIds(
-    guildId: string,
-    followedUserIds: string[],
-    limit: number,
-  ): FollowUserReconcileUserSelection {
-    const start =
-      followedUserIds.length <= limit
-        ? 0
-        : (this.followUsersReconcileUserCursors.get(guildId) ?? 0);
-    const selected = Array.from(
-      { length: Math.min(Math.ceil(limit), followedUserIds.length) },
-      (_, offset) => cyclicId(followedUserIds, start + offset, "followed user selection index"),
-    );
-    const completedCycle = start + selected.length >= followedUserIds.length;
-    this.followUsersReconcileUserCursors.set(
-      guildId,
-      (start + selected.length) % followedUserIds.length,
-    );
-    return { userIds: selected, completedCycle };
   }
 
   private hasFollowedUserInChannel(entry: VoiceChannelResidency): boolean {
@@ -485,8 +392,7 @@ export class DiscordVoiceFollowing {
         logger.warn(
           `discord voice: failed to hand off followed user session guild=${params.guildId} channel=${target.channelId}: ${result.message}`,
         );
-        this.followedVoiceGuilds.delete(params.guildId);
-        this.deleteFollowedUserChannelsForGuild(params.guildId);
+        this.clearFollowedGuild(params.guildId);
         await this.params.leave({ guildId: params.guildId });
       }
       return;

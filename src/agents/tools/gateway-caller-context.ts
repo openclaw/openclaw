@@ -3,11 +3,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
@@ -46,7 +48,7 @@ import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type ReceiptAuthority = (() => boolean | void) &
-  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource">;
+  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource" | "opaqueCommitGuard">;
 
 type GatewayToolCallerIdentity = {
   personalToolParticipants?: ReplyTurnParticipants;
@@ -55,6 +57,12 @@ type GatewayToolCallerIdentity = {
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  /** Restrict-only executable surface captured for internal follow-ups. */
+  sessionEventToolsAllow?: readonly string[];
+  /** An object with no mode retains the producer's default permission posture. */
+  sessionEventSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
+  /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
+  sessionEventDelivery?: false;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
@@ -219,6 +227,7 @@ export function captureGatewayToolReceiptAssertion(
   const prepare = receipt.prepareSessionSource?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
+    opaqueCommitGuard: receipt.opaqueCommitGuard,
     ...(prepare
       ? {
           async prepareSessionSource() {
@@ -227,6 +236,7 @@ export function captureGatewayToolReceiptAssertion(
             const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
             return {
               nativeSource: prepared.nativeSource,
+              opaqueCommitGuard: prepared.opaqueCommitGuard,
               checks: prepared.checks,
               assertCurrent: () => assertAllowed(prepared.assertCurrent()),
               ...(assertPrepared
@@ -607,6 +617,23 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      sessionEventDelivery:
+        inheritedOwner?.sessionEventDelivery === false || identity.sessionEventDelivery === false
+          ? false
+          : undefined,
+      sessionEventSettings:
+        identity.sessionEventSettings && inheritedOwner?.sessionEventSettings
+          ? narrowSessionEventSettings(
+              inheritedOwner.sessionEventSettings,
+              identity.sessionEventSettings,
+            )
+          : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
+      sessionEventToolsAllow:
+        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
+          ? identity.sessionEventToolsAllow.filter((name) =>
+              inheritedOwner.sessionEventToolsAllow!.includes(name),
+            )
+          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),
       personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),

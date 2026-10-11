@@ -24,7 +24,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
-import "./chat-comment-pins.ts";
+import "./chat-comment-pins.tsx";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
@@ -93,7 +93,7 @@ function renderTranscriptShell(
     ? renderLoadingState()
     : projection.showLoadingSkeleton || projection.isEmpty
       ? html`
-          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+          <div class="chat-thread-inner">
             ${historySentinel}
             ${
               projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
@@ -106,7 +106,7 @@ function renderTranscriptShell(
                 : nothing
             }
             ${
-              projection.isEmpty && !projection.searchOpen
+              projection.isEmpty && !projection.showLoadingSkeleton && !projection.searchOpen
                 ? renderWelcomeState({ ...props, onModelSetup: undefined })
                 : nothing
             }

@@ -4,11 +4,11 @@ import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-ru
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
+  replyUnavailableComponentInteraction,
   resolveComponentInteractionContext,
   resolveDiscordChannelContext,
 } from "./agent-components-context.js";
 import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
-import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
@@ -28,7 +28,7 @@ async function ensureDmComponentAuthorized(params: {
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (ctx.discordConfig?.dm?.enabled === false || dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
-    await replySilently(interaction, { content: "DM interactions are disabled.", ephemeral: true });
+    await replyUnavailableComponentInteraction(interaction, "DM interactions are disabled.");
     return false;
   }
   const access = await resolveDiscordDmCommandAccess({
@@ -52,10 +52,10 @@ async function ensureDmComponentAuthorized(params: {
     eventKind: "button",
   });
   if (ctx.isPolicyCurrent?.() === false) {
-    await replySilently(interaction, {
-      content: "Access policy changed. Try this interaction again.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      interaction,
+      "Access policy changed. Try this interaction again.",
+    );
     return false;
   }
   if (access.senderAccess.decision === "allow") {
@@ -63,10 +63,10 @@ async function ensureDmComponentAuthorized(params: {
   }
   if (access.senderAccess.decision !== "pairing") {
     logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
-    await replySilently(interaction, {
-      content: `You are not authorized to use this ${componentLabel}.`,
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      interaction,
+      `You are not authorized to use this ${componentLabel}.`,
+    );
     return false;
   }
   const pairingResult = await createChannelPairingChallengeIssuer({
@@ -94,10 +94,10 @@ async function ensureDmComponentAuthorized(params: {
     },
   });
   if (!pairingResult.created) {
-    await replySilently(interaction, {
-      content: "Pairing already requested. Ask the bot owner to approve your code.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      interaction,
+      "Pairing already requested. Ask the bot owner to approve your code.",
+    );
   }
   return false;
 }
@@ -112,10 +112,7 @@ async function ensureGroupDmComponentAuthorized(params: {
   const groupDmEnabled = ctx.discordConfig?.dm?.groupEnabled ?? false;
   if (!groupDmEnabled) {
     logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (group DMs disabled)`);
-    await replySilently(interaction, {
-      content: "Group DM interactions are disabled.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(interaction, "Group DM interactions are disabled.");
     return false;
   }
 
@@ -131,10 +128,10 @@ async function ensureGroupDmComponentAuthorized(params: {
   }
 
   logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (not allowlisted)`);
-  await replySilently(interaction, {
-    content: `You are not authorized to use this ${componentLabel}.`,
-    ephemeral: true,
-  });
+  await replyUnavailableComponentInteraction(
+    interaction,
+    `You are not authorized to use this ${componentLabel}.`,
+  );
   return false;
 }
 
@@ -156,10 +153,10 @@ export async function resolveInteractionContextWithDmAuth(params: {
     return null;
   }
   if (ctx.isPolicyCurrent?.() === false) {
-    await replySilently(params.interaction, {
-      content: "Access policy changed. Try this interaction again.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "Access policy changed. Try this interaction again.",
+    );
     return null;
   }
   const authorize = interactionCtx.isDirectMessage

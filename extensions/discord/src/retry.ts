@@ -140,15 +140,6 @@ function isRetryableDiscordError(
   );
 }
 
-function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
-  if (!isRetryableDiscordError(err) || err instanceof RateLimitError) {
-    return false;
-  }
-  return !collectDiscordErrorCandidates(err).some(
-    (candidate) => readDiscordErrorStatus(candidate) !== undefined,
-  );
-}
-
 export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
   verbose?: boolean;
@@ -183,7 +174,12 @@ export function createDiscordRetryRunner(params: {
     const shouldRetry = (err: unknown, attempt: number) =>
       isRetryableDiscordError(err, safety) &&
       (attempt < retryConfig.attempts ||
-        (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err)));
+        (observedGatewayDisconnect &&
+          isRetryableDiscordError(err) &&
+          !(err instanceof RateLimitError) &&
+          !collectDiscordErrorCandidates(err).some(
+            (candidate) => readDiscordErrorStatus(candidate) !== undefined,
+          )));
     const retryAfterMs = (err: unknown) =>
       err instanceof RateLimitError ? err.retryAfter * 1000 : undefined;
     const signal = params.signal;

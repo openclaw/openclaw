@@ -1760,7 +1760,7 @@ class ChatComposerLayoutTest {
         viewModel.chatComposerState.reportAttachmentOmission(owner, 1)
       }
       val steps = List(20) { "Compact viewport progress step ${it + 1}" }
-      showProgressCard(steps)
+      showProgressCard(viewModel, steps)
       val editor = composerEditor()
       val draft = "Editable first line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line"
       editor.performClick()
@@ -5317,9 +5317,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun longProgressPlanKeepsEditorAndStopVisibleAndLastStepReachable() {
-    showChat()
+    val viewModel = showChat()
     val steps = List(20) { index -> "Step ${index + 1}: verify the Android chat behavior and document the result." }
-    showProgressCard(steps)
+    showProgressCard(viewModel, steps)
 
     assertComposerControlsVisible()
     if (composeRule.onAllNodesWithContentDescription("Expand progress card").fetchSemanticsNodes().isNotEmpty()) {
@@ -5332,8 +5332,8 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
-    showChat()
-    showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
+    val viewModel = showChat()
+    showProgressCard(viewModel, listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
     val card = composeRule.onNodeWithTag("chat-progress-card", useUnmergedTree = true)
     val composer = composeRule.onNodeWithTag("chat-composer-surface")
@@ -5373,8 +5373,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardRendersProgressMarkupAsANativeBar() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5413,8 +5414,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardKeepsWarningAfterDisclosure() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5434,8 +5436,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardRendersAdjacentBarsWithoutLeakingMarkup() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5479,7 +5482,7 @@ class ChatComposerLayoutTest {
           """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
         )
       }
-      showProgressCard(listOf("Keep voice-note progress independent"))
+      showProgressCard(viewModel, listOf("Keep voice-note progress independent"))
       composeRule
         .onNode(
           SemanticsMatcher("voice-note long press") { node ->
@@ -5596,6 +5599,7 @@ class ChatComposerLayoutTest {
   }
 
   private fun showProgressCard(
+    viewModel: MainViewModel,
     steps: List<String>,
     markdown: String? = null,
   ) {
@@ -5651,16 +5655,16 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
       )
     }
-    // The controller publishes from IO, outside Compose's automatic synchronization.
+    // The UI's ViewModel bridge publishes after the controller's IO result.
     val progressCardRefresh =
       object : IdlingResource {
         override val isIdleNow: Boolean
           get() =
-            controller.progressCard.value
-              ?.steps
-              ?.size == steps.size
+            viewModel.chatProgressCard.value?.let { card ->
+              card.revision == 1 && card.markdown == markdown && card.steps.map { it.step } == steps
+            } == true
 
-        override fun getDiagnosticMessageIfBusy(): String = "Progress card steps=${controller.progressCard.value?.steps?.size} expected=${steps.size}"
+        override fun getDiagnosticMessageIfBusy(): String = "Rendered progress card=${viewModel.chatProgressCard.value} expected steps=$steps markdown=$markdown"
       }
     composeRule.registerIdlingResource(progressCardRefresh)
     try {
@@ -5669,11 +5673,11 @@ class ChatComposerLayoutTest {
       composeRule.unregisterIdlingResource(progressCardRefresh)
     }
     assertEquals(
-      "The progress card must publish all fixture steps",
-      steps.size,
-      controller.progressCard.value
+      "The rendered progress card must publish all fixture steps",
+      steps,
+      viewModel.chatProgressCard.value
         ?.steps
-        ?.size,
+        ?.map { it.step },
     )
   }
 

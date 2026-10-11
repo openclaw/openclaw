@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
+import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
@@ -144,7 +147,7 @@ describe("embedded compaction recovery authority", () => {
   it.each(["overflow", "timeout"] as const)(
     "accepts a healthy declared successor through the host writer (%s)",
     async (kind) => {
-      await withRecoveryFixture({ oversized: false }, async (fixture) => {
+      await withRecoveryFixture({ oversized: false, replyAdmission: true }, async (fixture) => {
         const before = fixture.loadEntry();
         expect(before).toHaveProperty("activeWriterRunId", fixture.runId);
         const successorId = randomUUID();
@@ -185,13 +188,27 @@ describe("embedded compaction recovery authority", () => {
           expect.objectContaining({ sessionId: successorId }),
         );
         fixture.assertActive();
+        const refresh = () =>
+          refreshSessionEntryFromStore({
+            ...fixture.target,
+            expectedGeneration: after,
+            reader: getReplyOperationSessionReader(fixture.replyOperation),
+          });
+        await expect(refresh()).resolves.toMatchObject({ sessionId: successorId });
+        await upsertSessionEntryCore(fixture.target, {
+          ...after,
+          sessionId: successorId,
+          lifecycleRevision: "external-reset-after-compaction",
+          updatedAt: Date.now(),
+        });
+        await expect(refresh()).rejects.toThrow("Session entry changed during read");
       });
     },
   );
 
   recoveryTest(
     "records successor target and tokens before an identity observer aborts recovery",
-    { oversized: false },
+    { oversized: false, replyAdmission: true },
     async (fixture) => {
       const { onSessionIdentityMutation } =
         await import("../../sessions/session-lifecycle-events.js");

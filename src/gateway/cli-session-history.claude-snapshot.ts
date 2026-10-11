@@ -32,6 +32,10 @@ const OVERSIZED_ENTRY_WORKER_SOURCE = `
       if ((type !== "user" && type !== "assistant") || !message || message.role !== type) {
         parentPort.postMessage(null);
       } else {
+        // An oversized tool result stays a tool result; as plain text it would render as a user turn.
+        const blocks = Array.isArray(message.content) ? message.content : [];
+        const toolResultsOnly = type === "user" && blocks.length > 0 &&
+          blocks.every((block) => block?.type === "tool_result" && boundedString(block.tool_use_id, 1_024));
         const rawUsage = message.usage;
         const usage = rawUsage && typeof rawUsage === "object"
           ? Object.fromEntries(
@@ -49,7 +53,14 @@ const OVERSIZED_ENTRY_WORKER_SOURCE = `
           isVisibleInTranscriptOnly: entry.isVisibleInTranscriptOnly === true,
           message: {
             role: type,
-            content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
+            content: toolResultsOnly
+              ? blocks.slice(0, 64).map((block) => ({
+                  type: "tool_result",
+                  tool_use_id: block.tool_use_id,
+                  ...(block.is_error === true ? { is_error: true } : {}),
+                  content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
+                }))
+              : ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
             model: boundedString(message.model, 256),
             stop_reason: boundedString(message.stop_reason, 128),
             usage,

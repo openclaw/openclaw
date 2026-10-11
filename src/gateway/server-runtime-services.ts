@@ -26,7 +26,6 @@ import {
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withAuthorizedQueuedConversationDelivery } from "./conversation-route-ownership.js";
 import {
@@ -516,16 +515,6 @@ export function activateGatewayScheduledServices(params: {
       .child("heartbeat")
       .warn(
         "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
-      );
-  }
-  if (
-    !params.cronEnabled &&
-    resolveSkillWorkshopConfig(params.cfgAtStart).autonomous.mode === "auto"
-  ) {
-    params.log
-      .child("skill-workshop")
-      .warn(
-        "scheduled skill collection reviews are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
       );
   }
   // Scheduled heartbeat wakes fire from a timer with no Gateway request, so

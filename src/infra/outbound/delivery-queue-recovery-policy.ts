@@ -1,6 +1,37 @@
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 
 const DEFAULT_MAX_RETRIES = 5;
+const TEXT_FINAL_FIELDS: Record<string, true> = {
+  text: true,
+  replyToId: true,
+  replyToTag: true,
+  replyToCurrent: true,
+};
+
+export function isOrdinaryFinalText(
+  payloads: readonly ReplyPayload[],
+  isTextOnlyChannelData?: (channelData: NonNullable<ReplyPayload["channelData"]>) => boolean,
+): boolean {
+  const payload = payloads[0];
+  return (
+    payloads.length === 1 &&
+    payload !== undefined &&
+    Boolean(payload.text?.trim()) &&
+    Object.entries(payload).every(
+      ([field, value]) =>
+        value === undefined ||
+        Object.hasOwn(TEXT_FINAL_FIELDS, field) ||
+        (field === "channelData" &&
+          payload.channelData !== undefined &&
+          isTextOnlyChannelData?.(payload.channelData) === true),
+    )
+  );
+}
+
+export function canReplayAmbiguousFinalText(entry: QueuedDelivery): boolean {
+  return entry.retryAmbiguousFinalText === true && entry.ambiguousTransportError === true;
+}
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
@@ -15,18 +46,11 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /User .* not in room/i,
 ];
 
-function integerAtLeast(value: unknown, minimum: number, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= minimum
-    ? value
-    : fallback;
-}
-
 export function resolveMaxRetries(entry: QueuedDelivery): number {
-  return integerAtLeast(entry.maxRetries, 1, DEFAULT_MAX_RETRIES);
-}
-
-export function resolveAttemptCount(entry: QueuedDelivery): number {
-  return Math.max(integerAtLeast(entry.attemptCount, 0, 0), entry.retryCount);
+  const configured = entry.maxRetries;
+  return typeof configured === "number" && Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_MAX_RETRIES;
 }
 
 export function isPermanentDeliveryError(error: string): boolean {

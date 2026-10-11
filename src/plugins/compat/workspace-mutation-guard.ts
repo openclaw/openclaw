@@ -16,10 +16,7 @@ export const WORKSPACE_MUTATION_GUARD_COMPAT_RECORD = {
     "@deprecated JSDoc and one DEP_WORKSPACE_MUTATION_GUARD warning per process",
     "Warning explains before-dispatch timing and deprecated but allowed synchronous OpenClaw DB access",
   ],
-  tests: [
-    "src/plugins/runtime/runtime-agent.workspace.test.ts",
-    "src/plugins/compat/registry.test.ts",
-  ],
+  tests: ["src/plugins/runtime/runtime-agent.test.ts", "src/plugins/compat/registry.test.ts"],
   releaseNote:
     "Released callbacks and their synchronous OpenClaw DB access remain supported. The legacy check runs once before worker dispatch, outside admission grants; use the typed guard for live revocation at commit. Removal requires the next Plugin SDK major.",
 } as const satisfies PluginCompatRecord;

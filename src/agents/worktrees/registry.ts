@@ -8,7 +8,6 @@ import {
 import { withStateDatabaseSchemaMaintenance } from "../../infra/state-database-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -19,6 +18,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
 import { rowToRecord } from "./registry-read.kernel.js";
 import { runWorktreeRunEndCommand } from "./registry-run-end.js";
 import type { WorktreeRegistryPatch } from "./registry-run-end.worker.js";
@@ -121,18 +121,20 @@ export function discardLegacyRegistryWorktrees(
     return 0;
   }
   return runRegistryMigration(
-    (db) =>
-      Number(
-        executeSqliteQuerySync(
-          db,
-          // Delete only the owner rows captured in the migration receipt. A row that
-          // appears after planning belongs to the next Doctor run.
-          kyselyFor(db)
-            .deleteFrom("worktrees")
-            .where("provisioned_paths_json", "is", null)
-            .where("id", "in", [...worktreeIds]),
-        ).numAffectedRows ?? 0n,
-      ),
+    (db) => {
+      const removed = executeSqliteQuerySync(
+        db,
+        // Delete only the owner rows captured in the migration receipt. A row that
+        // appears after planning belongs to the next Doctor run.
+        kyselyFor(db)
+          .deleteFrom("worktrees")
+          .where("provisioned_paths_json", "is", null)
+          .where("id", "in", [...worktreeIds])
+          .returningAll(),
+      ).rows;
+      worktreeRegistryPublication.deleted(db, removed);
+      return removed.length;
+    },
     { env },
   );
 }
@@ -148,21 +150,19 @@ export function rewriteRegistryWorktreePathsForMigration(
   // Runtime updates deliberately keep `path` outside their patch surface.
   return runRegistryMigration(
     (db) =>
-      rewrites.reduce(
-        (count, rewrite) =>
-          count +
-          Number(
-            executeSqliteQuerySync(
-              db,
-              kyselyFor(db)
-                .updateTable("worktrees")
-                .set({ path: rewrite.toPath })
-                .where("id", "=", rewrite.id)
-                .where("path", "=", rewrite.fromPath),
-            ).numAffectedRows ?? 0n,
-          ),
-        0,
-      ),
+      rewrites.reduce((count, rewrite) => {
+        const changed = executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .updateTable("worktrees")
+            .set({ path: rewrite.toPath })
+            .where("id", "=", rewrite.id)
+            .where("path", "=", rewrite.fromPath)
+            .returningAll(),
+        ).rows;
+        worktreeRegistryPublication.rows(db, changed);
+        return count + changed.length;
+      }, 0),
     { env },
   );
 }
@@ -309,15 +309,4 @@ export function assertWorktreeRemovalAvailable(
       "Worktree removal is in progress; retry after cleanup settles",
     );
   }
-}
-
-export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      ({ db }) =>
-        collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(worktreeId), false).livePids
-          .length > 0,
-      { env },
-    ) ?? false
-  );
 }

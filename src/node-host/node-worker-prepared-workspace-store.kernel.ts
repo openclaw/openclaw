@@ -5,7 +5,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -18,6 +21,7 @@ import type {
   NodeWorkerPreparedWorkspaceBinding,
   NodeWorkerPreparedWorkspaceRegistration,
 } from "../worker/node-workspace-prepared-protocol.js";
+import { nodePreparedWorkspacePublication } from "./node-worker-prepared-workspace-publication.js";
 
 type PreparedDatabase = Pick<DB, "node_worker_prepared_workspaces">;
 export type NodeWorkerPreparedWorkspaceRow = Selectable<DB["node_worker_prepared_workspaces"]>;
@@ -55,7 +59,18 @@ export class NodeWorkerPreparedWorkspaceKernel {
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        return operation(db);
+        const { result, receipt } = nodePreparedWorkspacePublication.capture(db, () =>
+          operation(db),
+        );
+        deferSqliteWorkerCommitReceipt(
+          db,
+          {
+            kind: "node-prepared-workspace",
+            receipt: nodePreparedWorkspacePublication.bound(receipt),
+          },
+          receipt.facts.size === 0 ? "settlement" : "commit",
+        );
+        return result;
       },
       this.options,
       { operationLabel },
@@ -133,7 +148,8 @@ export class NodeWorkerPreparedWorkspaceKernel {
         retired_at_ms: null,
       };
       executeSqliteQuerySync(db, query(db).insertInto(TABLE).values(row));
-      return selectRow(db, input.preparationKey)!;
+      nodePreparedWorkspacePublication.stagePostimages(db, [row]);
+      return row;
     });
   }
 
@@ -182,6 +198,7 @@ export class NodeWorkerPreparedWorkspaceKernel {
         db,
         query(db).updateTable(TABLE).set(bound).where("preparation_key", "=", input.preparationKey),
       );
+      nodePreparedWorkspacePublication.stagePostimages(db, [bound]);
       return bound;
     });
   }
@@ -196,6 +213,7 @@ export class NodeWorkerPreparedWorkspaceKernel {
           .set({ state: "bound" })
           .where("preparation_key", "=", retiring.preparation_key),
       );
+      nodePreparedWorkspacePublication.stagePostimages(db, [{ ...retiring, state: "bound" }]);
     });
   }
 
@@ -222,6 +240,7 @@ export class NodeWorkerPreparedWorkspaceKernel {
           .set(retired)
           .where("preparation_key", "=", row.preparation_key),
       );
+      nodePreparedWorkspacePublication.stagePostimages(db, [retired]);
       return retired;
     });
   }

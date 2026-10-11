@@ -2,7 +2,7 @@ import { matchControlUiResourceUrl } from "../../../../src/gateway/control-ui-re
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import { fetchProxiedIconBlobUrl, type PluginThemeArtworkFetchParams } from "./icon-loader.ts";
 
-// Content-addressed URLs retain both hits and misses for this page's lifetime.
+// Content-addressed hits are stable; failed loads may recover on the next request.
 const themeArtwork = new Map<string, Promise<string | null>>();
 
 export function loadPluginThemeArtwork(
@@ -27,7 +27,14 @@ export function loadPluginThemeArtwork(
     },
     `${resourceBasePath}${params.url}`,
     true,
-  ).catch(() => null);
+  )
+    .catch(() => null)
+    .then((source) => {
+      if (source === null && themeArtwork.get(params.url) === request) {
+        themeArtwork.delete(params.url);
+      }
+      return source;
+    });
   themeArtwork.set(params.url, request);
   return request;
 }

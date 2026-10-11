@@ -75,42 +75,24 @@ function collectAgentModelRefs(params: {
   if (!agent) {
     return;
   }
-  for (const key of AGENT_MODEL_CONFIG_KEYS) {
-    collectModelConfigSlot({
+  const collect = (key: string, value: unknown, stringOnly = false) =>
+    (stringOnly ? collectStringModelSlot : collectModelConfigSlot)({
       ...params,
       path: `${params.path}.${key}`,
-      value: agent[key],
+      value,
     });
+  for (const key of AGENT_MODEL_CONFIG_KEYS) {
+    collect(key, agent[key]);
   }
   const mediaModels = asMutableRecord(agent.mediaModels);
   for (const key of ["image", "video", "music"] as const) {
-    collectModelConfigSlot({
-      ...params,
-      path: `${params.path}.mediaModels.${key}`,
-      value: mediaModels?.[key],
-    });
+    collect(`mediaModels.${key}`, mediaModels?.[key]);
   }
-  collectStringModelSlot({
-    ...params,
-    path: `${params.path}.heartbeat.model`,
-    value: asMutableRecord(agent.heartbeat)?.model,
-  });
-  collectModelConfigSlot({
-    ...params,
-    path: `${params.path}.subagents.model`,
-    value: asMutableRecord(agent.subagents)?.model,
-  });
+  collect("heartbeat.model", asMutableRecord(agent.heartbeat)?.model, true);
+  collect("subagents.model", asMutableRecord(agent.subagents)?.model);
   const compaction = asMutableRecord(agent.compaction);
-  collectStringModelSlot({
-    ...params,
-    path: `${params.path}.compaction.model`,
-    value: compaction?.model,
-  });
-  collectStringModelSlot({
-    ...params,
-    path: `${params.path}.compaction.memoryFlush.model`,
-    value: asMutableRecord(compaction?.memoryFlush)?.model,
-  });
+  collect("compaction.model", compaction?.model, true);
+  collect("compaction.memoryFlush.model", asMutableRecord(compaction?.memoryFlush)?.model, true);
   collectModelsMapRefs({
     ...params,
     path: `${params.path}.models`,
@@ -297,8 +279,6 @@ export function enableCodexPluginForRequiredRoutes(params: {
     changes.push(
       "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
     );
-  } else if (entries.codex !== codexEntry) {
-    entries.codex = codexEntry;
   }
   if (
     Array.isArray(plugins.allow) &&

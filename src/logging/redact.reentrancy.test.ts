@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { redactSensitiveText } from "../plugin-sdk/security-runtime.js";
 import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import {
+  computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
   redactInputTextWithSourcePolicy,
   redactSensitiveFieldValue,
-  redactText,
   resolveRedactOptions,
 } from "./redact.js";
 
@@ -25,33 +25,56 @@ function sharedPatternMatching(input: string): RegExp {
 }
 
 describe("nested redaction calls", () => {
-  it.each([false, true])(
-    "keeps nested matcher input and pattern order (fullContext=%s)",
-    (fullContext) => {
-      const inputs: string[] = [];
-      const nested: string[] = [];
-      const matcher = {
-        source: "bracketed fixture values",
-        *exec(input: string) {
-          inputs.push(input);
-          for (const match of input.matchAll(/\[(outer-[a-z]+)\]/g)) {
-            nested.push(redactSensitiveText("inside private", { patterns: [/private/g] }));
-            yield { match: match[0], groups: [match[1] ?? ""], input, offset: match.index };
-          }
-        },
-      };
-
-      const input = "prefix [outer-one] [outer-two] suffix";
-      const patterns = [/prefix/g, matcher, /suffix/g];
+  it("preserves shared regex state across nested bitmap scans", () => {
+    const pattern = /fixture/g;
+    const exec = pattern.exec.bind(pattern);
+    let nested = false;
+    const resolved = { mode: "tools" as const, patterns: [pattern] };
+    const spy = vi.spyOn(pattern, "exec").mockImplementation((input) => {
+      const match = exec(input);
+      if (match && !nested) {
+        nested = true;
+        try {
+          expect(computeSensitiveRedactionBitmap("fixture!", resolved).map(Number).join("")).toBe(
+            "11111110",
+          );
+        } finally {
+          nested = false;
+        }
+      }
+      return match;
+    });
+    pattern.lastIndex = 3;
+    try {
       expect(
-        fullContext
-          ? redactText(input, patterns, { fullContext })
-          : redactSensitiveText(input, { patterns }),
-      ).toBe("*** [***] [***] ***");
-      expect(inputs).toEqual(["*** [outer-one] [outer-two] suffix"]);
-      expect(nested).toEqual(["inside ***", "inside ***"]);
-    },
-  );
+        computeSensitiveRedactionBitmap("fixture fixture", resolved).map(Number).join(""),
+      ).toBe("111111101111111");
+      expect(pattern.lastIndex).toBe(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps nested matcher input and pattern order", () => {
+    const inputs: string[] = [];
+    const nested: string[] = [];
+    const matcher = {
+      source: "bracketed fixture values",
+      *exec(input: string) {
+        inputs.push(input);
+        for (const match of input.matchAll(/\[(outer-[a-z]+)\]/g)) {
+          nested.push(redactSensitiveText("inside private", { patterns: [/private/g] }));
+          yield { match: match[0], groups: [match[1] ?? ""], input, offset: match.index };
+        }
+      },
+    };
+
+    const input = "prefix [outer-one] [outer-two] suffix";
+    const patterns = [/prefix/g, matcher, /suffix/g];
+    expect(redactSensitiveText(input, { patterns })).toBe("*** [***] [***] ***");
+    expect(inputs).toEqual(["*** [outer-one] [outer-two] suffix"]);
+    expect(nested).toEqual(["inside ***", "inside ***"]);
+  });
 
   it.each(["API_TOKEN=", "pass: "])("keeps nested source assignment policy for %s", (prefix) => {
     const input = `${prefix}computeFirst()\n${prefix}computeSecond()`;
@@ -104,6 +127,7 @@ describe("shared compiled redaction patterns", () => {
       const { source, flags } = pattern;
       try {
         pattern.compile("(fixtureTOKEN)", "g");
+        resolveRedactOptions({ patterns: getDefaultRedactPatterns() });
         expect(redactSensitiveText("fixtureTOKEN", { mode: "tools" })).toBe("***");
         expect(redactSensitiveFieldValue("content", "fixtureTOKEN", { mode: "tools" })).toBe("***");
       } finally {
@@ -135,22 +159,6 @@ describe("shared compiled redaction patterns", () => {
         );
       } finally {
         pattern.lastIndex = 0;
-      }
-    },
-  );
-
-  it.each(["API_TOKEN=tiny-value", "ghp_abcdefghij"])(
-    "uses a recompiled rule originally matching %s",
-    (fixture) => {
-      const pattern = sharedPatternMatching(fixture);
-      const { source, flags } = pattern;
-      try {
-        pattern.compile("(fixture-unlisted)", "g");
-        // Resolving the cached object again must not reauthorize its original prefilter.
-        resolveRedactOptions({ patterns: getDefaultRedactPatterns() });
-        expect(redactSensitiveText("fixture-unlisted", { patterns: [pattern] })).toBe("***");
-      } finally {
-        pattern.compile(source, flags);
       }
     },
   );

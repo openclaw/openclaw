@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
+import {
+  resolveConfigWidePluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync,
+} from "../config/io.plugin-metadata.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -18,6 +21,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
@@ -28,9 +33,9 @@ import {
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
+import { loadFreshManagedPluginMetadata } from "./management-service.js";
 import {
   createPluginCache,
-  invalidatePluginCacheMetadata,
   PluginCacheFactInvalidatedError,
   retirePluginCache,
   withPluginCache,
@@ -304,44 +309,38 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
     },
     plugins: { allow: ["primary", "secondary"] },
   };
+  const boot = resolveConfigWidePluginMetadataSnapshot({ config, env, allowCurrent: false });
+  setGatewayPluginMetadataSnapshot(boot, { config, env });
   bundledDiscovery.clearBundledDiscoveryModeMemo();
   const prepareMode = bundledDiscovery.prepareBundledDiscoveryMode;
   const mode = vi
     .spyOn(bundledDiscovery, "prepareBundledDiscoveryMode")
-    .mockImplementationOnce(async (capturedEnv) => {
-      const activate = await prepareMode(capturedEnv);
+    .mockImplementationOnce(async (capturedEnv, readPreparedRow) => {
+      const activate = await prepareMode(capturedEnv, readPreparedRow);
       await prepareMode(otherEnv);
       await prepareMode(capturedEnv);
       return activate;
     });
   const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+  const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
   try {
     await withoutMainThreadSql(() =>
       withPluginCache(createPluginCache(), async () => {
-        const first = await resolveConfigWidePluginMetadataSnapshotAsync({
-          config,
-          env,
-          allowCurrent: false,
-        });
-        const second = await resolveConfigWidePluginMetadataSnapshotAsync({
-          config,
-          env,
-          allowCurrent: false,
-        });
+        const first = await loadFreshManagedPluginMetadata(config, env);
+        const second = await loadFreshManagedPluginMetadata(config, env);
         expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
         expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
         expect(first.registrySource).toBe("derived");
         expect(second).toBe(first);
-        expect(reads.mock.calls.map(([selector]) => selector)).toEqual([
-          "bundled-discovery",
-          "bundled-discovery",
-          "installed-index",
-        ]);
+        expect(reads.mock.calls.map(([selector]) => selector)).toEqual(["bundled-discovery"]);
+        expect(batches).toHaveBeenCalledOnce();
       }),
     );
   } finally {
     reads.mockRestore();
+    batches.mockRestore();
     mode.mockRestore();
+    clearCurrentPluginMetadataSnapshot();
   }
 });
 
@@ -373,21 +372,6 @@ it("uses a newer synchronous index publication when an older worker read finishe
     row.resolve({ value_json: JSON.stringify({ revision: 1, index: index("stale ledger") }) });
     expect(await pending).toBe(current);
     expect(current?.diagnostics).toEqual([{ level: "warn", message: "current ledger" }]);
-  });
-});
-
-it("does not leak an invalidated worker mode into synchronous discovery", async () => {
-  const env = environment();
-  const row = createDeferredCore<{ value_json: string }>();
-  vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
-  await using cache = createPluginCache();
-  await withPluginCache(cache, async () => {
-    const pending = bundledDiscovery.prepareBundledDiscoveryMode(env);
-    const rejected = expect(pending).rejects.toThrow("Plugin state changed during preparation");
-    invalidatePluginCacheMetadata(cache);
-    row.resolve({ value_json: JSON.stringify("compat") });
-    await rejected;
-    expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBeUndefined();
   });
 });
 

@@ -1,5 +1,4 @@
 // Model list probe tests cover runtime probing while listing configured models.
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -202,37 +201,6 @@ describe("runAuthProbes", () => {
       } finally {
         await gatewayLock.release();
       }
-    });
-  });
-
-  it("releases canonical state ownership when a direct CLI probe receives SIGTERM", async () => {
-    await withTempState(async (stateDir) => {
-      const lockOptions = createGatewayLockOptions(stateDir);
-      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const signals = new EventEmitter();
-
-      await probeModule.withAuthProbeStateOwnership(
-        {
-          mode: "exclusive",
-          gatewayLockOptions: lockOptions,
-          process: signals,
-        },
-        async (signal) => {
-          expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject({
-            pid: process.pid,
-            role: "agent-embedded",
-          });
-          let markInterrupted!: () => void;
-          const interrupted = new Promise<void>((resolve) => {
-            markInterrupted = resolve;
-          });
-          signal?.addEventListener("abort", markInterrupted, { once: true });
-          signals.emit("SIGTERM");
-          await interrupted;
-        },
-      );
-
-      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

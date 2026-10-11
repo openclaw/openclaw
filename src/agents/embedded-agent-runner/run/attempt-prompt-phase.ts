@@ -10,7 +10,7 @@ import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -102,7 +102,7 @@ export async function runEmbeddedAttemptPromptPhase(
   } = preparedStreamRuntime;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
-    withOwnedTranscriptWrite(() => withSessionManagerWrite(sessionManager, write));
+    withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
   const observeForegroundRequests = (
     onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
   ) => {
@@ -278,11 +278,6 @@ export async function runEmbeddedAttemptPromptPhase(
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
       }
-      const { onModelRequest } = preparedStreamRuntime.cache;
-      if (onModelRequest) {
-        // Observe canonical inputs before managed caches consume system/tools.
-        observeForegroundRequests(onModelRequest);
-      }
     }
 
     const imageResult = await prepareEmbeddedAttemptPromptExecution({
@@ -392,6 +387,7 @@ export async function runEmbeddedAttemptPromptPhase(
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
+      pendingInputTokens: compactionRequestBudget?.pendingTokens,
       reserveTokens,
       sessionMessageCount: activeSession.messages.length,
       state,
@@ -410,6 +406,7 @@ export async function runEmbeddedAttemptPromptPhase(
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
         compactionRequestBudget,
+        onModelRequest: preparedStreamRuntime.cache.onModelRequest,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,
@@ -417,6 +414,8 @@ export async function runEmbeddedAttemptPromptPhase(
           promptState.finalPromptText = prompt;
         },
         assertHostActive: promptAssembly.assertHostActive,
+        withTranscriptWrite,
+        getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
         preparePrimaryModelRequest: () =>
           promptToolPolicy.prepareForDispatch(async () => {
             promptAssembly.decisionPrefilter.restrictionApplied = false;
@@ -490,6 +489,7 @@ export async function runEmbeddedAttemptPromptPhase(
           ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
           : {}),
         runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
+        setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
         systemPrompt: promptContext.systemPromptForHook,
         toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
         toolResultMaxChars: promptContext.promptToolResultMaxChars,

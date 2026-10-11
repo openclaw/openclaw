@@ -7,6 +7,7 @@ import type {
 } from "../../auto-reply/reply/queue/types.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   completeQueuedChatTurn,
@@ -32,7 +33,10 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   sessionBinding: Readonly<
     Pick<ChatAbortControllerEntry, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
   > &
-    Pick<ChatAbortControllerEntry, "abortDiagnosticReason" | "abortStopReason">;
+    Pick<
+      ChatAbortControllerEntry,
+      "abortDiagnosticReason" | "abortStopReason" | "terminalOutcomeObserved"
+    >;
   sessionKey: string;
   agentId?: string;
   ownerConnId?: string;
@@ -75,6 +79,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       return;
     }
     terminalKnown = true;
+    markChatAbortTerminalOutcome(params.sessionBinding);
     const now = Date.now();
     const failed = completion.kind === "failed";
     setGatewayDedupeEntry({
@@ -102,6 +107,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
     });
     if (publish && !params.suppressReplies) {
       broadcastChatTerminal({
+        terminalEntry: params.sessionBinding,
         context: params.context,
         runId: params.runId,
         sessionKey: params.sessionKey,
@@ -126,6 +132,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   const finalizeReply = params.suppressReplies
     ? undefined
     : createChatSendLateReplyFinalizer({
+        terminalEntry: params.sessionBinding,
         requesterContext: params.requesterContext,
         abortSignal: params.controller.signal,
         accountId: params.accountId,
@@ -138,6 +145,14 @@ export function createChatSendTurnAdoptionLifecycle(params: {
     logGateway: params.context.logGateway,
     onTerminalDrop: (completion) => recordQueuedTerminal(completion, true),
     deliver: async (batch) => {
+      if (
+        batch.clientRunId === params.runId &&
+        batch.completion.kind !== "progress" &&
+        batch.isCurrent() &&
+        ownsQueueIdentity()
+      ) {
+        markChatAbortTerminalOutcome(params.sessionBinding);
+      }
       try {
         const result = finalizeReply
           ? await finalizeReply({

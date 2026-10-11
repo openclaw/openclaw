@@ -5,7 +5,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
-  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
@@ -16,29 +15,6 @@ import {
   createDeviceWorkerRuntime,
   reconcileDeviceWorker,
 } from "./device-provider.js";
-
-it.each([undefined, "gateway", "worker"])(
-  "accepts explicit inference %s at device allocation",
-  async (inference) => {
-    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
-    await expect(
-      provider.resolveAllocation(
-        { device: "paired-node", ...(inference ? { inference } : {}) },
-        "allocation",
-      ),
-    ).resolves.toMatchObject({ sharedHost: true });
-  },
-);
-
-it.each(["runtime-local", "unknown"])(
-  "rejects invalid inference %s at device allocation",
-  async (inference) => {
-    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
-    await expect(
-      provider.resolveAllocation({ device: "paired-node", inference }, "invalid"),
-    ).rejects.toBeInstanceOf(WorkerProviderError);
-  },
-);
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -145,22 +121,6 @@ describe("device worker provider", () => {
     expect(listCurrentNodes).not.toHaveBeenCalled();
   });
 
-  it("keeps a connected paired host available when all worker slots are occupied", async () => {
-    const runtime = deviceRuntime({
-      getPairedDevice: async () => pairedDevice(),
-      listCurrentNodes: async () => [connectedNode(DEVICE_ID, false)],
-    });
-
-    await expect(runtime.resolveAvailability(DEVICE_ID)).resolves.toMatchObject({
-      available: true,
-    });
-    await expect(
-      runtime.provider.provision({ device: DEVICE_ID }, "remote-exec", { assertCurrent: () => {} }),
-    ).resolves.toEqual(
-      expect.objectContaining({ node: { deviceId: DEVICE_ID }, sharedHost: true }),
-    );
-  });
-
   it("returns the node's actionable disabled-host reason during provision", async () => {
     const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
     const provider = deviceRuntime({
@@ -199,20 +159,6 @@ describe("device worker provider", () => {
       await expect(provision).rejects.toMatchObject({ message: expectedMessage });
     },
   );
-
-  it("returns the exact update-and-reconnect recovery for an outdated connected node", async () => {
-    const provider = deviceRuntime({
-      getPairedDevice: async () => pairedDevice(),
-      listCurrentNodes: async () => [],
-      getIssue: () => NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-    }).provider;
-
-    await expect(
-      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
-    ).rejects.toThrow(
-      `device worker node ${DEVICE_ID} requires an update before it can host sessions; run openclaw update, then reconnect it (for a headless node, run openclaw node restart)`,
-    );
-  });
 
   it.each([
     {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Context } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type * as TelegramMediaRuntime from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
@@ -26,6 +27,58 @@ vi.mock("./sticker-vision.runtime.js", { spy: true });
 const base = { date: 1736380800, from, chat };
 
 describe("registered Telegram stickers and local media", () => {
+  it.each([
+    { caption: "Animation caption", companionDocument: true },
+    { caption: "Animation caption", companionDocument: false },
+    { caption: undefined, companionDocument: true },
+    { caption: undefined, companionDocument: false },
+  ])("downloads animation as video: %j", async ({ caption, companionDocument }) => {
+    const animationBytes = Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex");
+    mediaDownload.mockImplementation((params) =>
+      saveMediaBuffer(
+        animationBytes,
+        "video/mp4",
+        "inbound",
+        params.maxBytes,
+        params.originalFilename,
+      ),
+    );
+    const bot = await createBot(false);
+    const animation = {
+      file_id: "animation-file",
+      file_unique_id: "animation-unique",
+      width: 32,
+      height: 32,
+      duration: 1,
+      file_name: "animation.mp4",
+      mime_type: "video/mp4",
+    };
+    const messageId = nextTelegramTestMessageId();
+    await bot.handleUpdate({
+      update_id: messageId,
+      message: {
+        ...base,
+        message_id: messageId,
+        animation,
+        ...(companionDocument ? { document: animation } : {}),
+        ...(caption ? { caption } : {}),
+      },
+    });
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    const context = harness.replySpy.mock.calls[0]![0];
+    expect(context.BodyForAgent).toBe(caption ?? "");
+    expect(context.media).toEqual([
+      expect.objectContaining({
+        kind: "video",
+        contentType: "video/mp4",
+        fileName: "animation.mp4",
+      }),
+    ]);
+    expect(await readFile(context.media![0]!.path!)).toEqual(animationBytes);
+    expect(mediaDownload).toHaveBeenCalledOnce();
+    expect(apiCalls.mock.calls.filter(([method]) => method === "getFile")).toHaveLength(1);
+  });
+
   it("reuses a stored description, refreshes its file identity, and skips unsupported sticker bytes", async () => {
     vi.mocked(resolveStickerVisionSupportRuntime).mockResolvedValue(false);
     await cacheSticker({

@@ -54,6 +54,7 @@ import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
+  GatewayRequestHandler,
   GatewayRequestHandlers,
   GatewayRequestHandlerOptions,
   RespondFn,
@@ -71,52 +72,153 @@ function redactPairedDevice(device: PairedDevice, connected?: boolean): Redacted
   };
 }
 
-function prepareDeviceTokenMutation(
-  operation: "rotate" | "revoke",
-  params: DeviceTokenRotateParams,
-  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond">,
-) {
-  const { deviceId, role } = params;
-  const { client, context, respond } = options;
-  const authz = resolveDeviceManagementAuthz(client, deviceId);
-  const deny = (
-    reason:
-      | RotateDeviceTokenDenyReason
-      | RevokeDeviceTokenDenyReason
-      | "device-ownership-mismatch"
-      | "role-management-requires-admin",
-    scope?: string | null,
-  ) => {
-    const noun = operation === "rotate" ? "rotation" : "revocation";
-    const message = `device token ${noun} denied`;
-    const suffix = scope ? ` scope=${scope}` : "";
-    context.logGateway.warn(`${message} device=${deviceId} role=${role} reason=${reason}${suffix}`);
-    emitDeviceManagementSecurityEvent({
-      outcome: "denied",
-      severity: "medium",
-      policyId: "gateway.device-token",
-      decision: "deny",
-      action: `device.token.${noun}_denied`,
+function createDeviceTokenHandler(operation: "rotate" | "revoke"): GatewayRequestHandler {
+  const method = `device.token.${operation}`;
+  const validate =
+    operation === "rotate" ? validateDeviceTokenRotateParams : validateDeviceTokenRevokeParams;
+  return async ({ params, client, context, respond }) => {
+    if (!assertValidParams<DeviceTokenRotateParams>(params, validate, method, respond)) {
+      return;
+    }
+    const { deviceId, role } = params;
+    const authz = resolveDeviceManagementAuthz(client, deviceId);
+    const deny = (
+      reason:
+        | RotateDeviceTokenDenyReason
+        | RevokeDeviceTokenDenyReason
+        | "device-ownership-mismatch"
+        | "role-management-requires-admin",
+      scope?: string | null,
+    ) => {
+      const noun = operation === "rotate" ? "rotation" : "revocation";
+      const message = `device token ${noun} denied`;
+      const suffix = scope ? ` scope=${scope}` : "";
+      context.logGateway.warn(
+        `${message} device=${deviceId} role=${role} reason=${reason}${suffix}`,
+      );
+      emitDeviceManagementSecurityEvent({
+        outcome: "denied",
+        severity: "medium",
+        policyId: "gateway.device-token",
+        decision: "deny",
+        action: `device.token.${noun}_denied`,
+        authz,
+        targetDeviceId: deviceId,
+        controlId: `device.token.${operation}`,
+        reason,
+        attributes: { role: role.trim() },
+      });
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+    };
+    const denial = deniesCrossDeviceManagement(authz)
+      ? "device-ownership-mismatch"
+      : deniesDeviceTokenRoleManagement(authz, role)
+        ? "role-management-requires-admin"
+        : undefined;
+    if (denial) {
+      deny(denial);
+      return;
+    }
+    // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
+    const result =
+      operation === "rotate"
+        ? await rotateDeviceToken({ deviceId, role, scopes: params.scopes, callerScopes })
+        : await revokeDeviceToken({ deviceId, role, callerScopes });
+    if (!result.ok) {
+      deny(result.reason, result.scope);
+      return;
+    }
+    const entry = result.entry;
+    const normalizedDeviceId = deviceId.trim();
+    if (operation === "rotate") {
+      context.logGateway.info(
+        `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
+      );
+      emitDeviceTokenLifecycleSecurityEvent({
+        action: "device.token.rotated",
+        severity: "medium",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.rotate",
+        role: entry.role,
+        scopeCount: entry.scopes.length,
+      });
+      if (entry.role === "node") {
+        invalidateNodeWakeState(normalizedDeviceId);
+      }
+      // Claim after the awaited commit, while the caller is still current. Fence
+      // pipelined frames even if the claim fails; close after the synchronous reply.
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(normalizedDeviceId, {
+          role: entry.role,
+          reason: "device-token-rotated",
+        });
+        queueMicrotask(() => {
+          context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+        });
+      }
+      // Record the delivery decision on the wire: an absent token alone cannot tell a
+      // client whether the rotation withheld the secret by policy or the response
+      // predates this field, and the two need different operator-facing outcomes.
+      const deliversTokenInBand = Boolean(
+        authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId,
+      );
+      respond(
+        true,
+        {
+          deviceId,
+          role: entry.role,
+          ...(deliversTokenInBand ? { token: entry.token } : {}),
+          scopes: entry.scopes,
+          rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
+          tokenDelivery: deliversTokenInBand ? "in-band" : "withheld-cross-device",
+        },
+        undefined,
+      );
+      return;
+    }
+    context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
+    emitDeviceTokenLifecycleSecurityEvent({
+      action: "device.token.revoked",
+      severity: "high",
       authz,
-      targetDeviceId: deviceId,
-      controlId: `device.token.${operation}`,
-      reason,
-      attributes: { role: role.trim() },
+      targetDeviceId: normalizedDeviceId,
+      controlId: "device.token.revoke",
+      role: entry.role,
     });
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+    // Claim the reply and fence revoked clients before worker cleanup can yield.
+    // Cleanup and disconnect remain owned even when that claim fails.
+    try {
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(normalizedDeviceId, {
+          role: entry.role,
+          reason: "device-token-revoked",
+        });
+        if (entry.role === "node") {
+          clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
+          await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
+        }
+      }
+    } finally {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+      });
+    }
+    respond(
+      true,
+      {
+        deviceId: normalizedDeviceId,
+        role: entry.role,
+        revokedAtMs: entry.revokedAtMs ?? Date.now(),
+      },
+      undefined,
+    );
   };
-  const denial = deniesCrossDeviceManagement(authz)
-    ? "device-ownership-mismatch"
-    : deniesDeviceTokenRoleManagement(authz, role)
-      ? "role-management-requires-admin"
-      : undefined;
-  if (denial) {
-    deny(denial);
-    return undefined;
-  }
-  // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
-  const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
-  return { authz, callerScopes, deny };
 }
 
 async function runDevicePairingMutation(params: {
@@ -470,128 +572,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
     });
   },
-  "device.token.rotate": async ({ params, respond, context, client }) => {
-    if (
-      !assertValidParams(params, validateDeviceTokenRotateParams, "device.token.rotate", respond)
-    ) {
-      return;
-    }
-    const { deviceId, role, scopes } = params;
-    const mutation = prepareDeviceTokenMutation("rotate", params, { client, context, respond });
-    if (!mutation) {
-      return;
-    }
-    const { authz, callerScopes, deny } = mutation;
-    const result = await rotateDeviceToken({ deviceId, role, scopes, callerScopes });
-    if (!result.ok) {
-      deny(result.reason, result.scope);
-      return;
-    }
-    const entry = result.entry;
-    const normalizedDeviceId = deviceId.trim();
-    context.logGateway.info(
-      `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
-    );
-    emitDeviceTokenLifecycleSecurityEvent({
-      action: "device.token.rotated",
-      severity: "medium",
-      authz,
-      targetDeviceId: deviceId,
-      controlId: "device.token.rotate",
-      role: entry.role,
-      scopeCount: entry.scopes.length,
-    });
-    if (entry.role === "node") {
-      invalidateNodeWakeState(normalizedDeviceId);
-    }
-    // Claim after the awaited commit, while the caller is still current. Fence
-    // pipelined frames even if the claim fails; close after the synchronous reply.
-    try {
-      holdGatewayPolicyResponse(respond);
-    } finally {
-      context.invalidateClientsForDevice?.(normalizedDeviceId, {
-        role: entry.role,
-        reason: "device-token-rotated",
-      });
-      queueMicrotask(() => {
-        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
-      });
-    }
-    // Record the delivery decision on the wire: an absent token alone cannot tell a
-    // client whether the rotation withheld the secret by policy or the response
-    // predates this field, and the two need different operator-facing outcomes.
-    const deliversTokenInBand = Boolean(
-      authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId,
-    );
-    respond(
-      true,
-      {
-        deviceId,
-        role: entry.role,
-        ...(deliversTokenInBand ? { token: entry.token } : {}),
-        scopes: entry.scopes,
-        rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
-        tokenDelivery: deliversTokenInBand ? "in-band" : "withheld-cross-device",
-      },
-      undefined,
-    );
-  },
-  "device.token.revoke": async ({ params, respond, context, client }) => {
-    if (
-      !assertValidParams(params, validateDeviceTokenRevokeParams, "device.token.revoke", respond)
-    ) {
-      return;
-    }
-    const { deviceId, role } = params;
-    const mutation = prepareDeviceTokenMutation("revoke", params, { client, context, respond });
-    if (!mutation) {
-      return;
-    }
-    const { authz, callerScopes, deny } = mutation;
-    const result = await revokeDeviceToken({ deviceId, role, callerScopes });
-    if (!result.ok) {
-      deny(result.reason, result.scope);
-      return;
-    }
-    const entry = result.entry;
-    const normalizedDeviceId = deviceId.trim();
-    context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
-    emitDeviceTokenLifecycleSecurityEvent({
-      action: "device.token.revoked",
-      severity: "high",
-      authz,
-      targetDeviceId: normalizedDeviceId,
-      controlId: "device.token.revoke",
-      role: entry.role,
-    });
-    // Claim the reply and fence revoked clients before worker cleanup can yield.
-    // Cleanup and disconnect remain owned even when that claim fails.
-    try {
-      try {
-        holdGatewayPolicyResponse(respond);
-      } finally {
-        context.invalidateClientsForDevice?.(normalizedDeviceId, {
-          role: entry.role,
-          reason: "device-token-revoked",
-        });
-        if (entry.role === "node") {
-          clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
-          await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
-        }
-      }
-    } finally {
-      queueMicrotask(() => {
-        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
-      });
-    }
-    respond(
-      true,
-      {
-        deviceId: normalizedDeviceId,
-        role: entry.role,
-        revokedAtMs: entry.revokedAtMs ?? Date.now(),
-      },
-      undefined,
-    );
-  },
+  "device.token.rotate": createDeviceTokenHandler("rotate"),
+  "device.token.revoke": createDeviceTokenHandler("revoke"),
 };

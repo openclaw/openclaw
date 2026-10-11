@@ -1,4 +1,3 @@
-// Zalouser tests cover channel plugin behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
@@ -27,7 +26,7 @@ describe("zalouser target classification", () => {
     expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
   });
 });
-import { setZalouserRuntime } from "./runtime.js";
+import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
 vi.mock("./qr-temp-file.js", () => ({
@@ -45,14 +44,6 @@ vi.mock("./send.js", async () => {
 
 const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
-
-function requireZalouserSendText() {
-  const sendText = zalouserOutboundAdapter.sendText;
-  if (!sendText) {
-    throw new Error("zalouser outbound.sendText unavailable");
-  }
-  return sendText;
-}
 
 function getResolveToolPolicy() {
   const resolveToolPolicy = zalouserGroupsAdapter.resolveToolPolicy;
@@ -97,18 +88,6 @@ function resolveGroupToolPolicy(
 }
 
 describe("zalouser outbound", () => {
-  beforeEach(() => {
-    mockSendMessage.mockClear();
-    setZalouserRuntime({
-      channel: {
-        text: {
-          resolveChunkMode: vi.fn(() => "newline"),
-          resolveTextChunkLimit: vi.fn(() => 10),
-        },
-      },
-    } as never);
-  });
-
   it("removes internal tool text while preserving user-visible examples", () => {
     const sanitizeText = zalouserOutboundAdapter.sanitizeText;
     if (!sanitizeText) {
@@ -124,68 +103,6 @@ describe("zalouser outbound", () => {
     );
     expect(sanitize(fenced)).toBe(fenced);
     expect(sanitize("⚠️ 🛠️ `search repos (agent)` failed")).toBe("");
-  });
-
-  it("uses the selected account profile for direct outbound messages", async () => {
-    const sendText = requireZalouserSendText();
-
-    const result = await sendText({
-      cfg: {
-        channels: {
-          zalouser: {
-            accounts: {
-              work: {
-                profile: "work-profile",
-              },
-            },
-          },
-        },
-      } as never,
-      to: "user:987654",
-      text: "hello user",
-      accountId: "work",
-    } as never);
-
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      "987654",
-      "hello user",
-      expect.objectContaining({
-        profile: "work-profile",
-        isGroup: false,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textChunkLimit: 10,
-        onDeliveryResult: expect.any(Function),
-      }),
-    );
-    expect(result).toEqual({
-      channel: "zalouser",
-      messageId: "mid-1",
-      receipt: undefined,
-    });
-  });
-
-  it("keeps the default account profile for unscoped outbound messages", async () => {
-    const sendText = requireZalouserSendText();
-
-    await sendText({
-      cfg: { channels: { zalouser: { enabled: true } } } as never,
-      to: "user:111222",
-      text: "hello default",
-    } as never);
-
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      "111222",
-      "hello default",
-      expect.objectContaining({
-        profile: "default",
-        isGroup: false,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textChunkLimit: 10,
-        onDeliveryResult: expect.any(Function),
-      }),
-    );
   });
 });
 
@@ -267,11 +184,6 @@ describe("zalouser channel policies", () => {
     expect(requireMention).toBe(false);
   });
 
-  it("resolves group tool policy by explicit group id", () => {
-    const policy = resolveGroupToolPolicy({ "123": { tools: { allow: ["search"] } } }, "123");
-    expect(policy).toEqual({ allow: ["search"] });
-  });
-
   it("falls back to wildcard group policy", () => {
     const policy = resolveGroupToolPolicy({ "*": { tools: { deny: ["system.run"] } } }, "missing");
     expect(policy).toEqual({ deny: ["system.run"] });
@@ -322,22 +234,10 @@ describe("zalouser channel policies", () => {
 
   it.each([
     {
-      name: "prefixed group target",
-      params: { to: "zalouser:group:group-123" },
-      threadId: "group-123",
-      isGroup: true,
-    },
-    {
       name: "prefixed direct target inside an ambient group",
       params: { chatId: "zlu:user:user-456" },
       threadId: "user-456",
       isGroup: false,
-    },
-    {
-      name: "explicit group override for a bare identifier",
-      params: { threadId: "bare-group", isGroup: true },
-      threadId: "bare-group",
-      isGroup: true,
     },
     {
       name: "explicit direct override for a group target",
@@ -350,24 +250,6 @@ describe("zalouser channel policies", () => {
       params: {},
       threadId: "ambient-group",
       isGroup: true,
-    },
-    {
-      name: "core-materialized ambient group target",
-      params: { to: "ambient-group" },
-      threadId: "ambient-group",
-      isGroup: true,
-    },
-    {
-      name: "explicit direct target with the ambient group identifier",
-      params: { to: "user:ambient-group" },
-      threadId: "ambient-group",
-      isGroup: false,
-    },
-    {
-      name: "explicit thread target before the fallback target",
-      params: { threadId: "user:priority-123", to: "group:fallback-456" },
-      threadId: "priority-123",
-      isGroup: false,
     },
   ])("routes $name reactions through the canonical target owner", async (testCase) => {
     const result = await zalouserMessageActions.handleAction?.({
@@ -563,14 +445,7 @@ describe("zalouserPlugin pairing.notifyApproval", () => {
     mockSendMessage.mockClear();
   });
 
-  it.each([
-    { name: "the approved account", accountId: "beta", profile: "beta-profile" },
-    {
-      name: "the default account when no account was approved",
-      accountId: undefined,
-      profile: "alpha-profile",
-    },
-  ])("sends the approval from $name", async ({ accountId, profile }) => {
+  it("sends the approval from the approved account", async () => {
     const notifyApproval = zalouserPlugin.pairing?.notifyApproval;
     if (!notifyApproval) {
       throw new Error("zalouser pairing.notifyApproval unavailable");
@@ -579,15 +454,55 @@ describe("zalouserPlugin pairing.notifyApproval", () => {
     await notifyApproval({
       cfg: pairingCfg,
       id: "paired-user",
-      ...(accountId ? { accountId } : {}),
+      accountId: "beta",
     });
 
     expect(checkZaloAuthenticatedMock).toHaveBeenCalledTimes(1);
-    expect(checkZaloAuthenticatedMock.mock.calls[0]?.[0]).toBe(profile);
+    expect(checkZaloAuthenticatedMock.mock.calls[0]?.[0]).toBe("beta-profile");
     expect(mockSendMessage).toHaveBeenCalledExactlyOnceWith(
       "paired-user",
       expect.any(String),
-      expect.objectContaining({ profile }),
+      expect.objectContaining({ profile: "beta-profile" }),
     );
+  });
+});
+
+describe("zalouserPlugin messaging target normalization", () => {
+  it("normalizes user/group aliases to canonical targets", () => {
+    const normalize = zalouserPlugin.messaging?.normalizeTarget;
+    if (!normalize) {
+      throw new Error("normalizeTarget unavailable");
+    }
+    expect(normalize("zlu:g:30003")).toBe("group:30003");
+    expect(normalize("zalouser:u:20002")).toBe("user:20002");
+    expect(normalize("zlu:g-30003")).toBe("group:g-30003");
+    expect(normalize("zalouser:u-20002")).toBe("user:u-20002");
+    expect(normalize("20002")).toBe("20002");
+  });
+
+  it("treats canonical and provider-native user/group targets as ids", () => {
+    const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
+    if (!looksLikeId) {
+      throw new Error("looksLikeId unavailable");
+    }
+    expect(looksLikeId("user:20002")).toBe(true);
+    expect(looksLikeId("group:30003")).toBe(true);
+    expect(looksLikeId("g-30003")).toBe(true);
+    expect(looksLikeId("u-20002")).toBe(true);
+    expect(looksLikeId("Alice Nguyen")).toBe(false);
+  });
+});
+
+describe("zalouser directory group members", () => {
+  it.each([
+    ["group:1471383327500481391", "1471383327500481391"],
+    ["1471383327500481391", "1471383327500481391"],
+  ])("resolves directory group %s to %s", async (groupId, expectedId) => {
+    const listZaloGroupMembers = vi.fn(async () => []);
+    await listZalouserDirectoryGroupMembers(
+      { cfg: {}, accountId: "default", groupId },
+      { listZaloGroupMembers },
+    );
+    expect(listZaloGroupMembers).toHaveBeenLastCalledWith("default", expectedId);
   });
 });

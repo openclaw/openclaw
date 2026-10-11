@@ -51,7 +51,7 @@ function buildThreadTitleCompletionUserMessage(params: {
   channelName?: string;
   channelDescription?: string;
 }): string {
-  const sourceText = truncateThreadTitleSourceText(params.sourceText);
+  const sourceText = truncateThreadTitleText(params.sourceText, MAX_THREAD_TITLE_SOURCE_CHARS);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -69,11 +69,11 @@ function buildThreadTitleCompletionUserMessage(params: {
     .join("\n\n");
 }
 
-function truncateThreadTitleSourceText(sourceText: string): string {
-  if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
-    return sourceText;
+function truncateThreadTitleText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
   }
-  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+  return `${truncateUtf16Safe(text, maxChars)}...`;
 }
 
 function normalizeGeneratedThreadTitle(raw: string): string {
@@ -111,9 +111,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (!value) {
     return undefined;
   }
-  const singleLine = value.replace(/\s+/g, " ");
-  if (singleLine.length <= maxChars) {
-    return singleLine;
-  }
-  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
+  return truncateThreadTitleText(value.replace(/\s+/g, " "), maxChars);
 }

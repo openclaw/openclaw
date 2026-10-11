@@ -269,7 +269,9 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     this.pendingResampledAudio = Buffer.alloc(0);
     this.inboundResampler.flush();
     this.outboundResampler.flush();
-    this.resetInboundRtpState();
+    this.clearInboundFlushTimer(this.inboundRtpState);
+    this.inboundRtpState.nextSequence = undefined;
+    this.inboundRtpState.pendingPackets.clear();
     this.state.encoder.free();
     this.state.decoder.free();
     void this.state.peer.close().catch(() => undefined);
@@ -337,12 +339,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     }
   }
 
-  private resetInboundRtpState(): void {
-    this.clearInboundFlushTimer(this.inboundRtpState);
-    this.inboundRtpState.nextSequence = undefined;
-    this.inboundRtpState.pendingPackets.clear();
-  }
-
   private flushInboundReorderWindow(state: InboundRtpState, force = false): void {
     const expected = state.nextSequence;
     if (expected === undefined || state.pendingPackets.size === 0) {
@@ -367,7 +363,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     const concealCount = Math.min(nearest.distance, INBOUND_REORDER_DEPTH);
     for (let index = 0; index < concealCount; index += 1) {
       state.nextSequence = ((state.nextSequence ?? 0) + 1) & 0xffff;
-      this.decodeInboundPacketLoss();
+      this.emitInboundPcm(this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES));
     }
     if (nearest.distance > INBOUND_REORDER_DEPTH) {
       state.nextSequence = nearest.sequenceNumber;
@@ -444,10 +440,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       decoded = this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES);
     }
     this.emitInboundPcm(decoded);
-  }
-
-  private decodeInboundPacketLoss(): void {
-    this.emitInboundPcm(this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES));
   }
 
   private emitInboundPcm(decoded: Int16Array): void {

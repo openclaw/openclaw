@@ -510,22 +510,17 @@ private fun buildTableRows(
           is TableRow -> sequenceOf(section)
           else -> emptySequence()
         }
-      rows.map { readTableRow(it, isHeader = section is TableHead, inlineStyles = inlineStyles) }
+      rows.map { row ->
+        TableRenderRow(
+          isHeader = section is TableHead,
+          cells =
+            markdownSiblings(row.firstChild)
+              .filterIsInstance<TableCell>()
+              .map { buildInlineMarkdown(it.firstChild, inlineStyles) }
+              .toList(),
+        )
+      }
     }.toList()
-
-private fun readTableRow(
-  row: TableRow,
-  isHeader: Boolean,
-  inlineStyles: InlineStyles,
-): TableRenderRow =
-  TableRenderRow(
-    isHeader = isHeader,
-    cells =
-      markdownSiblings(row.firstChild)
-        .filterIsInstance<TableCell>()
-        .map { buildInlineMarkdown(it.firstChild, inlineStyles) }
-        .toList(),
-  )
 
 private fun buildInlineMarkdown(
   start: Node?,
@@ -581,12 +576,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
       }
 
       is MarkdownImage -> {
-        val alt = buildPlainText(current.firstChild)
-        if (alt.isNotBlank()) {
-          append(alt)
-        } else {
-          append("image")
-        }
+        append(buildPlainText(current.firstChild).ifBlank { "image" })
       }
 
       is HtmlInline -> {
@@ -891,7 +881,7 @@ private class DisclosureTokenizer {
     }
 
     private fun kind(raw: String): TagKind =
-      when (raw.lowercase(Locale.US)) {
+      when (val lower = raw.lowercase(Locale.US)) {
         "<details>" -> {
           TagKind.DETAILS_OPEN
         }
@@ -913,7 +903,6 @@ private class DisclosureTokenizer {
         }
 
         else -> {
-          val lower = raw.lowercase(Locale.US)
           when {
             lower.startsWith("</details") -> TagKind.UNSUPPORTED_DETAILS_CLOSE
             lower.startsWith("<details") -> TagKind.UNSUPPORTED_DETAILS_OPEN

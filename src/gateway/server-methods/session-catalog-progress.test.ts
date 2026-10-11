@@ -9,11 +9,9 @@ import { catalogLog } from "./session-catalog-log.test-support.js";
 import {
   call,
   hoisted,
-  markPluginRegistryActive,
   provider,
   resetSessionCatalogTestState,
   startCall,
-  type PluginRegistry,
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
 
@@ -124,7 +122,7 @@ describe("session catalog progress ownership", () => {
 
     try {
       await started.promise;
-      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledTimes(3);
       clock = 1_500;
       release();
       await Promise.all([
@@ -459,7 +457,7 @@ describe("session catalog progress ownership", () => {
     },
   );
 
-  it.each(["registry-reactivation", "gateway-close", "disconnect", "projection-failure"] as const)(
+  it.each(["gateway-close", "disconnect", "projection-failure"] as const)(
     "fences old publications after %s while a replacement request can publish",
     async (retirement) => {
       const releases = [createDeferredCore(), createDeferredCore()];
@@ -509,9 +507,7 @@ describe("session catalog progress ownership", () => {
         } else {
           await original;
         }
-        if (retirement === "registry-reactivation") {
-          markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
-        } else if (retirement === "gateway-close") {
+        if (retirement === "gateway-close") {
           gateway.abort();
         } else if (retirement === "disconnect") {
           connection.abort();

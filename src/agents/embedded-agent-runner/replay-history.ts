@@ -198,18 +198,6 @@ function sanitizeUserReplayContent(
   return touched ? { ...message, content: sanitizedContent } : message;
 }
 
-function normalizeAssistantReplayTextContent(
-  message: AssistantReplayMessage,
-  replayContent: string,
-): AssistantReplayMessage | null {
-  const strippedText = stripInternalMetadataForDisplay(replayContent);
-  const trimmed = strippedText.trim();
-  if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
-    return null;
-  }
-  return replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
-}
-
 function normalizeAssistantReplayBlockContent(
   message: AssistantReplayMessage,
   replayContent: unknown[],
@@ -304,7 +292,11 @@ function normalizeAssistantReplayMessage(
   }
   const replayContent = (message as { content?: unknown }).content;
   if (typeof replayContent === "string") {
-    return normalizeAssistantReplayTextContent(message, replayContent);
+    const strippedText = stripInternalMetadataForDisplay(replayContent);
+    const trimmed = strippedText.trim();
+    return !trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)
+      ? null
+      : replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
   }
   const blockContent = Array.isArray(replayContent)
     ? replayContent
@@ -316,12 +308,9 @@ function normalizeAssistantReplayMessage(
       ? message
       : replaceCompactionReplayOwnerContent(message, blockContent as typeof message.content);
   const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
-  if (!normalized) {
-    return null;
-  }
-  if (isReasoningOnlyLengthAssistantTurn(normalized)) {
-    // Token-limited thinking is incomplete provider state. Replaying it can
-    // resend a partial signature, while visible text or tool calls remain useful.
+  // Token-limited thinking is incomplete provider state. Replaying it can
+  // resend a partial signature, while visible text or tool calls remain useful.
+  if (!normalized || isReasoningOnlyLengthAssistantTurn(normalized)) {
     return null;
   }
   // Historical side-branch rebuilds could strip every mirror marker while
@@ -581,20 +570,20 @@ export async function sanitizeSessionHistory(
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
   // request.
-  const validatedThinkingSignatures =
-    signedThinkingProvider || policy.preserveSignatures
-      ? stripInvalidThinkingSignatures(
-          stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages),
-          { preserveLatestAssistant: preserveLatestAssistantThinking },
-        )
-      : sanitizedImages;
-  const droppedReasoning = policy.dropReasoningFromHistory
-    ? dropReasoningFromHistory(validatedThinkingSignatures)
-    : validatedThinkingSignatures;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(droppedReasoning)
-    : droppedReasoning;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  let messages = sanitizedImages;
+  if (signedThinkingProvider || policy.preserveSignatures) {
+    messages = stripInvalidThinkingSignatures(
+      stripStaleThinkingSignaturesForCompactionReplay(messages),
+      { preserveLatestAssistant: preserveLatestAssistantThinking },
+    );
+  }
+  if (policy.dropReasoningFromHistory) {
+    messages = dropReasoningFromHistory(messages);
+  }
+  if (policy.dropThinkingBlocks) {
+    messages = dropThinkingBlocks(messages);
+  }
+  messages = sanitizeToolCallInputs(messages, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
@@ -602,33 +591,29 @@ export async function sanitizeSessionHistory(
   // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
   // so both call and result ids are rewritten together. Covered by unit replay
   // tests plus live OpenAI/Codex and generic replay-repair model tests.
-  const pairedToolCalls = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairingForModel(sanitizedToolCalls, isOpenAIResponsesApi)
-    : sanitizedToolCalls;
-  const openAISafeToolCalls = isOpenAIResponsesApi
-    ? downgradeOpenAIFunctionCallReasoningPairs(
-        normalizeOpenAIResponsesToolCallIds(
-          // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
-          // invalidated by a switch, every later replay must keep dropping them.
-          dropStaleOpenAIReasoning(pairedToolCalls, latestModelSwitchTimestamp ?? undefined),
-        ),
-      )
-    : pairedToolCalls;
-  const sanitizedToolIds =
-    !isOpenAIResponsesApi && policy.sanitizeToolCallIds && policy.toolCallIdMode
-      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
-          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
-          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
-          allowedToolNames: params.allowedToolNames,
-        })
-      : openAISafeToolCalls;
-  const sanitizedToolResults = stripToolResultDetails(sanitizedToolIds);
-  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+  if (policy.repairToolUseResultPairing) {
+    messages = sanitizeToolUseResultPairingForModel(messages, isOpenAIResponsesApi);
+  }
+  if (isOpenAIResponsesApi) {
+    messages = downgradeOpenAIFunctionCallReasoningPairs(
+      normalizeOpenAIResponsesToolCallIds(
+        // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
+        // invalidated by a switch, every later replay must keep dropping them.
+        dropStaleOpenAIReasoning(messages, latestModelSwitchTimestamp ?? undefined),
+      ),
+    );
+  } else if (policy.sanitizeToolCallIds && policy.toolCallIdMode) {
+    messages = sanitizeToolCallIdsForCloudCodeAssist(messages, policy.toolCallIdMode, {
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
+      preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+      allowedToolNames: params.allowedToolNames,
+    });
+  }
+  messages = ensureAssistantUsageSnapshots(
+    stripStaleAssistantUsageBeforeLatestCompaction(stripToolResultDetails(messages)),
   );
   const provider = params.provider?.trim();
-  let providerSanitized: AgentMessage[] | undefined;
   if (provider) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const replaySession = createProviderReplaySessionState(params.sessionManager);
@@ -638,25 +623,23 @@ export async function sanitizeSessionHistory(
         context: {
           ...pluginParams.context,
           sessionId: params.sessionId ?? "",
-          messages: sanitizedCompactionUsage,
+          messages,
           allowedToolNames: params.allowedToolNames,
           sessionState: replaySession.state,
         },
       });
-      providerSanitized = providerResult ?? undefined;
+      messages = providerResult ?? messages;
     } finally {
       replaySession.close();
     }
   }
-  const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
   // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
-  const responsesProviderRepaired =
-    isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairingForModel(sanitizedWithProvider, true)
-      : sanitizedWithProvider;
-  const responsesInvariantChecked = isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
-    : responsesProviderRepaired;
+  if (isOpenAIResponsesApi) {
+    if (policy.repairToolUseResultPairing) {
+      messages = sanitizeToolUseResultPairingForModel(messages, true);
+    }
+    assertOpenAIResponsesToolUseResultInvariant(messages);
+  }
 
   if (currentSnapshot && (!priorSnapshot || modelChanged)) {
     try {
@@ -671,7 +654,7 @@ export async function sanitizeSessionHistory(
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return responsesInvariantChecked;
+    return messages;
   }
 
   // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
@@ -680,7 +663,7 @@ export async function sanitizeSessionHistory(
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
+  const googleOrdered = sanitizeGoogleTurnOrdering(messages);
   return isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
     : googleOrdered;

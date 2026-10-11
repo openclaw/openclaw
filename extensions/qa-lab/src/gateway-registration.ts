@@ -63,7 +63,7 @@ export const qaLabGatewayDefinition = {
     api.registerTool(
       {
         name: "qa_restart_unsafe_probe",
-        label: "QA Restart Unsafe Probe",
+        label: "QA Restart Unsafe Check",
         description: "Detect whether restart recovery permits a non-replay-safe plugin call.",
         parameters: EMPTY_TOOL_PARAMETERS,
         async execute() {

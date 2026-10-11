@@ -16,6 +16,7 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { planFileEdit } from "./file-tool-planning.js";
 import {
   type PersistedFileStat,
@@ -145,9 +146,7 @@ export function createEditTool(
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
       return withFileMutationQueueKeyResolution(queueKey, async () => {
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
+        assertFileToolNotAborted(signal);
         assertCurrent();
 
         let editCount = 0;
@@ -168,18 +167,14 @@ export function createEditTool(
         const buffer = await ops.readFile(absolutePath);
         const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
 
           const plan = await planFileEdit(
             { path, content: rawContent, edits: originalEdits },
             signal,
           );
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
           if (!plan.changed) {
             return textResult(plan.message, { changed: false } satisfies EditToolDetails);
@@ -187,9 +182,7 @@ export function createEditTool(
           editCount = plan.editCount;
           expectedContent = plan.content;
           await ops.writeFile(absolutePath, expectedContent);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
+          assertFileToolNotAborted(signal);
           assertCurrent();
           if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
             throw new Error(

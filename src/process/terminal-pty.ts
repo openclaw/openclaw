@@ -48,16 +48,14 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
-  platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
 }): { file: string; args: string[] | string } {
-  const platform = params.platform ?? process.platform;
-  if (!isWindowsBatchCommand(params.file, platform)) {
+  if (!isWindowsBatchCommand(params.file)) {
     return { file: params.file, args: params.args };
   }
   const program = resolveWindowsSpawnProgram({
     command: params.file,
-    platform,
+    platform: process.platform,
     env: params.env,
     execPath: process.execPath,
     allowShellFallback: true,
@@ -72,9 +70,7 @@ function resolveTerminalPtyInvocation(params: {
     return { file: invocation.command, args: invocation.argv };
   }
   return {
-    file:
-      resolveEnvironmentValue(params.env, "COMSPEC")?.trim() ||
-      resolveTrustedWindowsCmdExe(platform),
+    file: resolveEnvironmentValue(params.env, "COMSPEC")?.trim() || resolveTrustedWindowsCmdExe(),
     // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
     args: `/d /s /c ${buildWindowsCmdExeCommandLine(params.file, params.args)}`,
   };

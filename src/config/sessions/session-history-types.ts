@@ -17,6 +17,7 @@ import type {
   SessionTranscriptSummaryResult,
 } from "../../gateway/session-transcript-summary.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
+import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { ConversationRecord } from "./conversation-registry.types.js";
 import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
@@ -40,7 +41,7 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number };
+  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
   nextOffset?: number;
   olderCursor?: string;
   newerCursor?: string;
@@ -96,6 +97,7 @@ export type ChatHistoryPageParams = {
   maxHistoryBytes: number;
   responseHistoryBytes?: number;
   effectiveMaxChars: number;
+  toolResultMaxChars?: number;
   offset: number | undefined;
   messageId: string | undefined;
   pageCursor?: ChatHistoryPageCursor;
@@ -204,7 +206,10 @@ export function isNativeHistoryAuthorizationDenied(error: unknown): boolean {
   return error instanceof Error && error.message === NATIVE_HISTORY_AUTHORIZATION_DENIED;
 }
 
-export type SessionHistoryWorkerHostRequestHandler = (value: unknown) => void | Promise<void>;
+export type SessionHistoryWorkerHostRequestHandler = (
+  value: unknown,
+  signal: AbortSignal,
+) => void | Promise<WorkerTaskResponse | void>;
 
 export type SessionHistoryWorkerRequest =
   | {

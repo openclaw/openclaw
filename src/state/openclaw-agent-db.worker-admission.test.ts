@@ -8,18 +8,21 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "./agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  hasOpenClawAgentReadOnlySchema,
+} from "./openclaw-agent-db-readonly-open.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import * as validationCache from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -74,9 +77,9 @@ function expectAdmittedSchemaObjects(database: DatabaseSync) {
   const facts = getAdmittedSqliteSchemaFacts(database);
   expect(facts?.tables.has("session_nodes")).toBe(true);
   expect(facts?.indexes).toContain("idx_agent_session_nodes_updated_at");
-  expect(facts?.triggers?.get("session_nodes_canonical_pending_after_update")).toEqual({
-    table: "session_nodes",
-    sql: expect.stringContaining("INSERT INTO session_canonical_validation_pending"),
+  expect(facts?.triggers?.get("session_entry_snapshots_after_update")).toEqual({
+    table: "session_entry_snapshots",
+    sql: expect.stringContaining("UPDATE session_nodes SET snapshot_revision"),
   });
   return facts;
 }
@@ -99,6 +102,47 @@ it("retains the schema receipt after first-use TEMP generation tracking", () => 
     expect(Atomics.load(new Int32Array(schema!.valid), 0)).toBe(1);
   } finally {
     observed.restore();
+  }
+});
+
+it("adopts worker admission after a retained reader observes an already-revalidated schema", async () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-reader-readmission-") },
+  };
+  const database = await withOpenClawAgentDatabaseWrite(options, (opened) => opened);
+  const reader = openOpenClawAgentDatabaseReadOnly(options);
+  assert(reader.found);
+  expect(validationCache.hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
+  const foreign = openNodeSqliteDatabase(database.path);
+  foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
+  foreign.close();
+  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+  const observeReader = vi.fn(() => {
+    expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+  });
+  const publication = vi
+    .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
+    .mockImplementation((target) => {
+      const publish = capture(target);
+      return (identity, received) => {
+        publish(identity, received);
+        // A retained read can run after worker publication, before the awaiting host adopts it.
+        observeReader();
+      };
+    });
+  try {
+    await expect(
+      withOpenClawAgentDatabaseWrite(options, ({ db }) => {
+        expect(getAdmittedSqliteSchemaFacts(db)?.tables.has("late_reader_fixture")).toBe(true);
+        return db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
+      }),
+    ).resolves.toBe(0);
+    expect(observeReader).toHaveBeenCalled();
+  } finally {
+    publication.mockRestore();
+    reader.database.close();
   }
 });
 
@@ -192,6 +236,7 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
   openOpenClawStateDatabase({ env: options.env })
     .db.prepare("UPDATE agent_database_leases SET owner_start_time=-1 WHERE lease_id=?")
     .run(staleLease);
+  canonical.db.exec("CREATE TABLE coldadmit_alias_fixture(value TEXT)");
   const observed = observeCallerSchemaInspections(canonical.path, aliasPath);
   try {
     await expect(
@@ -201,7 +246,6 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
           database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count,
       ),
     ).resolves.toBe(0);
-    canonical.db.exec("CREATE TABLE coldadmit_alias_fixture(value TEXT)");
     await withOpenClawAgentDatabaseWrite({ ...options, path: aliasPath }, (database) => {
       expect(getAdmittedSqliteSchemaFacts(database.db)?.tables.has("coldadmit_alias_fixture")).toBe(
         true,
@@ -362,13 +406,13 @@ it.each([
   { change: "metadata-missing", retainWorker: true },
   { change: "warm-schema", retainWorker: true },
 ] as const)(
-  "refuses $change drift after worker admission with retained worker=$retainWorker",
+  "refuses $change drift at worker admission with retained worker=$retainWorker",
   async ({ change, retainWorker }) => {
     const options = {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-admit-drift-") },
     };
-    const retainedExecution = retainWorker
+    let retainedExecution = retainWorker
       ? captureOpenClawAgentDatabaseExecution(options)
       : undefined;
     try {
@@ -383,6 +427,15 @@ it.each([
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }
+      const metadataChange = change === "owner" || change.startsWith("metadata-");
+      if (metadataChange) {
+        await retainedExecution?.release();
+        retainedExecution = undefined;
+        await closeOpenClawAgentDatabasesAsync();
+        // Immutable ownership is checked on the replacement's first admission.
+        fs.copyFileSync(pathname, `${pathname}.replacement`);
+        fs.renameSync(`${pathname}.replacement`, pathname);
+      }
       if (change === "replacement") {
         fs.copyFileSync(pathname, `${pathname}.replacement`);
         fs.renameSync(`${pathname}.replacement`, pathname);
@@ -393,7 +446,6 @@ it.each([
       } else if (change !== "warm-schema") {
         const editor = openNodeSqliteDatabase(pathname);
         try {
-          const metadataChange = change === "owner" || change.startsWith("metadata-");
           const schemaBefore = metadataChange
             ? editor.prepare("PRAGMA schema_version").get()
             : undefined;
@@ -412,6 +464,9 @@ it.each([
         } finally {
           editor.close();
         }
+      }
+      if (metadataChange && retainWorker) {
+        retainedExecution = captureOpenClawAgentDatabaseExecution(options);
       }
       const operation = vi.fn();
       const observed = retainWorker ? observeCallerSchemaInspections(pathname) : undefined;

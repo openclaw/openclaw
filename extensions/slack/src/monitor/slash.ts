@@ -15,7 +15,7 @@ import {
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   parseCommandArgs,
   resolveCommandArgMenu,
   resolveEffectiveAgentRuntime,
@@ -61,7 +61,7 @@ import {
 } from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
-import { resolveSlackListenerEventScope } from "./event-scope.js";
+import { resolveSlackMonitorEventScope } from "./event-scope.js";
 import {
   createSlackExternalArgMenuStore,
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
@@ -534,7 +534,7 @@ export function createSlackCommandHandler(params: {
         if (p.threadTs) {
           if (p.sessionTarget) {
             resolvedSlashRoute = p.sessionTarget;
-            isCurrentSession = captureSlackSessionTargetGuard(
+            isCurrentSession = await captureSlackSessionTargetGuard(
               ctx,
               p.sessionTarget,
               p.isSessionTargetCurrent,
@@ -784,16 +784,14 @@ export function createSlackCommandHandler(params: {
               return;
             }
             const pending = pendingSlashReplies.splice(0);
-            const settled = new Set<number>();
             try {
               await deliverSlashPayloads(
                 pending.map((entry) => entry.payload),
                 ({ replyIndex, visibleReplySent, error }) => {
                   const entry = pending[replyIndex];
-                  if (!entry || settled.has(replyIndex)) {
+                  if (!entry) {
                     return;
                   }
-                  settled.add(replyIndex);
                   if (error !== undefined) {
                     entry.finalization.reject(error);
                     return;
@@ -805,10 +803,9 @@ export function createSlackCommandHandler(params: {
               const unsettledError = isChannelPartialDeliveryError(error)
                 ? (error.cause ?? error)
                 : error;
-              for (const [replyIndex, entry] of pending.entries()) {
-                if (!settled.has(replyIndex)) {
-                  entry.finalization.reject(unsettledError);
-                }
+              // Settled promises retain their outcome; reject the undispatched tail too.
+              for (const entry of pending) {
+                entry.finalization.reject(unsettledError);
               }
               throw error;
             }
@@ -866,20 +863,14 @@ export async function registerSlackMonitorSlashCommands(params: {
   const { ctx, account, trackEvent } = params;
   const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) =>
-    resolveSlackListenerEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
+  const resolveEventScope = (
+    args: { body: unknown } & Pick<AllMiddlewareArgs, "context" | "client">,
+  ) =>
+    resolveSlackMonitorEventScope({
+      ...args,
+      ctx,
       onDrop: (reason) => runtime.log?.(`slack: drop slash payload (${reason})`),
     });
-
   const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
   let supportsExternalArgMenus = typeof ctx.app.options === "function";
 
@@ -949,7 +940,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       providerSetting: account.config.commands?.nativeSkills,
       globalSetting: startupCfg.commands?.nativeSkills,
     })
-      ? listSkillCommandsForAgents({ cfg: startupCfg })
+      ? await prepareSkillCommandsForAgents({ cfg: startupCfg })
       : [];
     nativeCommands = listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,

@@ -30,6 +30,21 @@ import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lif
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 
+function prepareCurrentSteeringRead(assertCurrent: () => void) {
+  return {
+    prepareCurrent: async () => {
+      assertCurrent();
+      if (isToolAuthorityReadCaptureActive()) {
+        recordPreparedToolAuthorityRead({
+          reads: [],
+          assertPrepared: assertCurrent,
+          assertLegacyCurrent: assertCurrent,
+        });
+      }
+    },
+  };
+}
+
 /** Carry terminal-delivery eligibility into the target's final prepared admission. */
 export function prepareSteeringDelivery(params: {
   agentId: string;
@@ -79,18 +94,7 @@ export function prepareSteeringDelivery(params: {
       claim.assertCurrent();
       assertEntry(binding.actor.sessions.readSteering(scope.sessionKey));
     };
-    return {
-      prepareCurrent: async () => {
-        assertActorCurrent();
-        if (isToolAuthorityReadCaptureActive()) {
-          recordPreparedToolAuthorityRead({
-            reads: [],
-            assertPrepared: assertActorCurrent,
-            assertLegacyCurrent: assertActorCurrent,
-          });
-        }
-      },
-    };
+    return prepareCurrentSteeringRead(assertActorCurrent);
   }
   if (isNativeSessionEntryRead(scope, agentId)) {
     const storePath = isIncognitoSessionKey(scope.sessionKey)
@@ -106,18 +110,7 @@ export function prepareSteeringDelivery(params: {
         owner ? readIncognitoSessionSteeringEntry(owner.db, scope.sessionKey) : undefined,
       );
     };
-    return {
-      prepareCurrent: async () => {
-        assertNativeCurrent();
-        if (isToolAuthorityReadCaptureActive()) {
-          recordPreparedToolAuthorityRead({
-            reads: [],
-            assertPrepared: assertNativeCurrent,
-            assertLegacyCurrent: assertNativeCurrent,
-          });
-        }
-      },
-    };
+    return prepareCurrentSteeringRead(assertNativeCurrent);
   }
   const candidates = captureSessionStoreReadCandidates(scope.storePath!);
   const identities = captureSessionStoreCandidateIdentities(candidates);

@@ -2,6 +2,7 @@ import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   beginPreparedModelRuntimePluginDrain,
@@ -11,7 +12,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -53,7 +54,6 @@ import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   disposeMcpRuntimesWithTimeout,
-  revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
@@ -101,12 +101,25 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
     const committedConfig = getRuntimeConfig();
+    const committedSourceConfig = projectConfigOntoRuntimeSourceSnapshot(committedConfig);
     const refreshModelRuntime = doesReloadAffectProviderAuth(plan, committedConfig, nextConfig);
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds([
       ...plan.changedPaths,
       ...diffConfigPaths(committedConfig, nextConfig),
     ]);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
+    const refreshModelRuntimeSnapshots = (
+      config: OpenClawConfig,
+      isPublicationCurrent?: () => boolean,
+    ) =>
+      withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+        mrReload.refreshModelRuntimeAfterHotReload({
+          config,
+          agentIds: modelRuntimeAgentIds,
+          pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+          ...(isPublicationCurrent ? { isPublicationCurrent } : {}),
+        }),
+      );
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
@@ -156,6 +169,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ...(params.resolveGatewayContext
           ? { resolveGatewayContext: params.resolveGatewayContext }
           : {}),
+        resolvePluginRegistry: params.getPluginRegistry,
       });
       if (
         state.cronState.cronEnabled &&
@@ -228,16 +242,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (!preparedModelRuntimeReplacementGateId) {
             return;
           }
-          await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-            mrReload.refreshModelRuntimeAfterHotReload({
-              config: previousConfig,
-              agentIds: modelRuntimeAgentIds,
-              pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-              isPublicationCurrent: () =>
-                isCurrentGatewayReloadGeneration(myGeneration) &&
-                !isLifecycleReloadAborted() &&
-                !isRestartRetryStopped(),
-            }),
+          await refreshModelRuntimeSnapshots(
+            previousConfig,
+            () =>
+              isCurrentGatewayReloadGeneration(myGeneration) &&
+              !isLifecycleReloadAborted() &&
+              !isRestartRetryStopped(),
           );
         },
       };
@@ -290,7 +300,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
-        revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
         if (refreshModelRuntime) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
@@ -593,14 +602,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           // Failed activation leaves the committed registry authoritative. Restore its
           // model/reply owners independently, without clearing the plugin failure.
           try {
-            await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-              mrReload.refreshModelRuntimeAfterHotReload({
-                config: nextConfig,
-                agentIds: modelRuntimeAgentIds,
-                pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-                isPublicationCurrent: isReloadOwnerActive,
-              }),
-            );
+            await refreshModelRuntimeSnapshots(nextConfig, isReloadOwnerActive);
           } catch (refreshError) {
             rejectPendingPreparedModelRuntimeReplacement(
               preparedModelRuntimeReplacementGateId,
@@ -642,15 +644,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     try {
       if (refreshModelRuntime) {
-        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-          mrReload.refreshModelRuntimeAfterHotReload({
-            config: nextConfig,
-            agentIds: modelRuntimeAgentIds,
-            pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-          }),
+        await mrReload.pruneRemovedProviderModelCatalogs(
+          committedSourceConfig,
+          publication?.sourceConfig ?? nextConfig,
         );
+        await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
+      if (err instanceof PreparedModelRuntimePublicationSupersededError) {
+        // Credential writes can retire models before their queued config applies.
+        // The replacement owns publication; cancellation creates no restart debt.
+        throw createReloadCancellationError(true);
+      }
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return "applied-restart-required";
     } finally {

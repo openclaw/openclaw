@@ -13,7 +13,6 @@ import {
 export function registerRunEntryFailureTests(state: {
   runWithModelFallback: Mock;
   finalizedAttempts: string[];
-  discardedAttempts: string[];
 }) {
   it.each([
     { runtime: "cli", revokeAtCleanup: false, errorResult: false },
@@ -364,7 +363,6 @@ export function registerRunEntryFailureTests(state: {
       "saved-fallback-provider",
     );
     expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["fallback-provider"]);
   });
 
   it("does not replay a thrown channel-delivery attempt that already delivered its reply (#113788)", async () => {
@@ -417,6 +415,5 @@ export function registerRunEntryFailureTests(state: {
 
     expect(runCandidate).toHaveBeenCalledTimes(1);
     expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
   });
 }

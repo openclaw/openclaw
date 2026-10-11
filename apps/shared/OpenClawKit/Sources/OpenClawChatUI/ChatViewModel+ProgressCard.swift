@@ -3,6 +3,12 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension OpenClawChatViewModel {
+    private struct ProgressCardRequest {
+        let session: SessionSnapshot
+        let id: UInt64
+        let generation: UInt64
+    }
+
     @discardableResult
     func handleProgressCardChanged(_ event: ProgressCardChangedEvent) -> Task<Void, Never>? {
         let session = self.currentSessionSnapshot()
@@ -29,25 +35,20 @@ extension OpenClawChatViewModel {
         let session = session ?? self.currentSessionSnapshot()
         guard self.isCurrentSession(session) else { return nil }
         self.lastIssuedProgressCardRequestID &+= 1
-        let requestID = self.lastIssuedProgressCardRequestID
-        let generation = self.progressCardGeneration
+        let request = ProgressCardRequest(
+            session: session,
+            id: self.lastIssuedProgressCardRequestID,
+            generation: self.progressCardGeneration)
         return Task { [weak self] in
             guard let self else { return }
             let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
-            guard self.isCurrentProgressCardRequest(
-                session: session,
-                generation: generation,
-                requestID: requestID)
-            else { return }
+            guard self.isCurrentProgressCardRequest(request) else { return }
             self.progressCardStoreAvailable = storeAvailable
             // Gateways without the durable store reject the fetch outright
             // (2026.7.x: "missing scope: operator.admin"); the legacy
             // stream:"plan" fallback owns the card there.
             guard storeAvailable != false else { return }
-            await self.fetchProgressCard(
-                for: session,
-                generation: generation,
-                requestID: requestID)
+            await self.fetchProgressCard(request)
         }
     }
 
@@ -94,11 +95,8 @@ extension OpenClawChatViewModel {
         return OpenClawChatSessionTarget(sessionKey: "global", agentID: owner)
     }
 
-    private func fetchProgressCard(
-        for session: SessionSnapshot,
-        generation: UInt64,
-        requestID: UInt64) async
-    {
+    private func fetchProgressCard(_ request: ProgressCardRequest) async {
+        let session = request.session
         guard let target = self.progressCardTarget(for: session), let owner = target.agentID else {
             self.logDiagnostic("chat.ui progress card waits for canonical history identity")
             return
@@ -108,11 +106,7 @@ extension OpenClawChatViewModel {
             let card = try await self.transport.fetchProgressCard(
                 sessionKey: target.sessionKey,
                 agentID: owner)
-            guard self.isCurrentProgressCardRequest(
-                session: session,
-                generation: generation,
-                requestID: requestID)
-            else { return }
+            guard self.isCurrentProgressCardRequest(request) else { return }
             if let card, card.sessionkey != expectedKey {
                 self.logDiagnostic("chat.ui progress card response rejected: session identity changed")
                 return
@@ -122,11 +116,7 @@ extension OpenClawChatViewModel {
                 self.errorText = nil
             }
         } catch {
-            guard self.isCurrentProgressCardRequest(
-                session: session,
-                generation: generation,
-                requestID: requestID)
-            else { return }
+            guard self.isCurrentProgressCardRequest(request) else { return }
             if let response = error as? GatewayResponseError,
                response.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED"
             {
@@ -143,14 +133,10 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func isCurrentProgressCardRequest(
-        session: SessionSnapshot,
-        generation: UInt64,
-        requestID: UInt64) -> Bool
-    {
-        self.progressCardGeneration == generation &&
-            self.lastIssuedProgressCardRequestID == requestID &&
-            self.isCurrentSession(session)
+    private func isCurrentProgressCardRequest(_ request: ProgressCardRequest) -> Bool {
+        self.progressCardGeneration == request.generation &&
+            self.lastIssuedProgressCardRequestID == request.id &&
+            self.isCurrentSession(request.session)
     }
 
     func applyProgressCard(_ card: ProgressCard?) {

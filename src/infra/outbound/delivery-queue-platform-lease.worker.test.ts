@@ -82,6 +82,9 @@ describe("outbound producer claim worker", () => {
       const database = openOpenClawStateDatabase({ env });
       const context: WorkerWriteOperationContext = {
         open: () => database,
+        writeAdmitted: () => {
+          throw new Error("Outbound mutations retain their custom admission");
+        },
         write: (operation, options) =>
           runOpenClawStateWriteTransaction(operation, { database, env }, options),
         stateOptions: () => ({ path: database.path, env }),

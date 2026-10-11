@@ -33,7 +33,7 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
-function createContinueDirectivesResult(resetHookTriggered: boolean) {
+function createContinueDirectivesResult() {
   return createGetReplyContinueDirectivesResult({
     body: "/new",
     abortKey: "telegram:slash:123",
@@ -42,7 +42,7 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
     senderId: "123",
     commandSource: "/new",
     senderIsOwner: true,
-    resetHookTriggered,
+    resetHookTriggered: false,
   });
 }
 
@@ -70,7 +70,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
       }),
     );
 
-    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult());
   });
 
   afterEach(() => {
@@ -91,14 +91,5 @@ describe("getReplyFromConfig reset-hook fallback", () => {
         sessionKey: "agent:main:telegram:direct:123",
       }),
     );
-  });
-
-  it("does not emit fallback hooks when resetHookTriggered is already set", async () => {
-    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
-    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
-
-    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
-
-    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
   });
 });

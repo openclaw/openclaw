@@ -109,7 +109,7 @@ describe("CLI-imported history under a selected Claude configuration directory",
                 expect(value).toEqual(NATIVE_HISTORY_AUTHORIZATION_REQUEST);
                 nativeAuthorizationRequests += 1;
                 revoke();
-                await onRequest?.(value);
+                await onRequest?.(value, signal ?? new AbortController().signal);
               });
             });
           }
@@ -174,7 +174,7 @@ describe("CLI-imported history under a selected Claude configuration directory",
                 expect(value).toEqual(NATIVE_HISTORY_AUTHORIZATION_REQUEST);
                 nativeAuthorizationRequests += 1;
                 revoke();
-                await onRequest?.(value);
+                await onRequest?.(value, signal ?? new AbortController().signal);
               });
             });
           }

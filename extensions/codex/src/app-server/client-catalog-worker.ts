@@ -95,6 +95,8 @@ export class CodexCatalogWorker {
       }
       this.pool = new WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult>({
         workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
+        workerClass: "singleton",
+        // Retain decoder affinity on the published plugin's older supported hosts.
         maxWorkers: 1,
         maxPendingTasks: 1,
         // Framing admits one line at a time. Completed native messages have no size cap;

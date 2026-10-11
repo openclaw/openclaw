@@ -5,7 +5,7 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
@@ -89,13 +89,14 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined;
   const forkedSession =
     !mutable.startupBinding?.threadId && params.sessionTarget
-      ? getSessionEntry({
+      ? await getSessionEntryAsync({
           ...params.sessionTarget,
           sessionKey: contextSessionKey,
           hydrateSkillPromptRefs: false,
           readConsistency: "latest",
         })
       : undefined;
+  connection.assertCurrent();
   // A copied spawn transcript promises completed tool evidence to this child.
   const preserveForkedToolResults = Boolean(
     forkedSession?.sessionId === params.sessionId &&
@@ -165,11 +166,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   const applyContinuityProjection = async (messages: typeof historyState.messages) => {
     const projection = await projectContextEngineAssemblyForCodex({
-      assembledMessages: messages,
+      assembledMessages: [...messages, ...(params.continuation?.messages ?? [])],
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
       toolPayloadMode:
-        params.pluginRuntimeRefreshMessages || preserveForkedToolResults ? "preserve" : "elide",
+        params.continuation || params.pluginRuntimeRefreshMessages || preserveForkedToolResults
+          ? "preserve"
+          : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
     });
@@ -211,25 +214,27 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       const contextEngineProjection = readContextEngineThreadBootstrapProjection(
         assembled.contextProjection,
       );
-      const projectionDecision = contextEngineProjection
-        ? resolveContextEngineBootstrapProjectionDecision({
-            startupBinding: decisionStartupBinding,
-            expectedBinding: buildContextEngineBinding(
-              { ...runtimeParams },
-              contextEngineProjection,
-            ),
-            projection: contextEngineProjection,
-            dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-            legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
-          })
-        : { project: true, reason: "per-turn-projection" };
+      const projectionDecision =
+        contextEngineProjection && !params.continuation
+          ? resolveContextEngineBootstrapProjectionDecision({
+              startupBinding: decisionStartupBinding,
+              expectedBinding: buildContextEngineBinding(
+                { ...runtimeParams },
+                contextEngineProjection,
+              ),
+              projection: contextEngineProjection,
+              dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+              legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
+            })
+          : { project: true, reason: "per-turn-projection" };
       const projection = await projectContextEngineAssemblyForCodex({
-        assembledMessages: assembled.messages,
+        assembledMessages: [...assembled.messages, ...(params.continuation?.messages ?? [])],
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
         maxRenderedContextChars: codexContextProjectionMaxChars,
         toolPayloadMode:
           contextEngineProjection ||
+          params.continuation ||
           params.pluginRuntimeRefreshMessages ||
           preserveForkedToolResults
             ? "preserve"
@@ -269,6 +274,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     } catch (assembleErr) {
       if (
         assembleErr instanceof CodexContextAttachmentError ||
+        params.continuation ||
         params.pluginRuntimeRefreshMessages
       ) {
         throw assembleErr;
@@ -494,7 +500,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     connection.initialInactiveThreadBootstrapBindingForcedFreshStart;
   const precomputeNoContextEngineStaleBindingProjection = async () => {
     const binding = mutable.startupBinding;
-    if (activeContextEngine || !binding?.threadId || binding.pendingSupervisionBranch) {
+    if (
+      activeContextEngine ||
+      params.continuation ||
+      !binding?.threadId ||
+      binding.pendingSupervisionBranch
+    ) {
       return false;
     }
     if (isInactiveThreadBootstrapBinding(binding)) {
@@ -520,7 +531,14 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             (message.role === "assistant" &&
               message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
-    if (activeContextEngine || (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length)) {
+    if (activeContextEngine) {
+      return false;
+    }
+    if (params.continuation) {
+      await applyContinuityProjection(action === "started" ? historyState.messages : []);
+      return true;
+    }
+    if (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length) {
       return false;
     }
     if (action === "resumed" && precomputedStaleBindingContinuityProjectionApplied) {

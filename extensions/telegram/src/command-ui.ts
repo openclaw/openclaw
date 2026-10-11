@@ -2,6 +2,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
+  buildPaginationRow,
   buildProviderKeyboard,
   type ProviderInfo,
   type ModelsKeyboardParams,
@@ -19,29 +20,14 @@ export function buildCommandsPaginationKeyboard(
   totalPages: number,
   agentId?: string,
 ): Array<Array<{ text: string; callback_data: string }>> {
-  const buttons: Array<{ text: string; callback_data: string }> = [];
   const suffix = agentId ? `:${agentId}` : "";
-
-  if (currentPage > 1) {
-    buttons.push({
-      text: "◀ Prev",
-      callback_data: `commands_page_${currentPage - 1}${suffix}`,
-    });
-  }
-
-  buttons.push({
-    text: `${currentPage}/${totalPages}`,
-    callback_data: `commands_page_noop${suffix}`,
-  });
-
-  if (currentPage < totalPages) {
-    buttons.push({
-      text: "Next ▶",
-      callback_data: `commands_page_${currentPage + 1}${suffix}`,
-    });
-  }
-
-  return [buttons];
+  return [
+    buildPaginationRow(
+      currentPage,
+      totalPages,
+      (page) => `commands_page_${page ?? "noop"}${suffix}`,
+    ),
+  ];
 }
 
 export function buildTelegramCommandsListChannelData(params: {

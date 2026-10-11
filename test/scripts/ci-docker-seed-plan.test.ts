@@ -17,12 +17,10 @@ it("retains every Docker seed owner in full release validation", () => {
     "cron-mcp-cleanup",
     "mcp-code-mode-gateway",
     "update-channel-switch",
-    "fleet-cache",
   ]);
 });
 
 it.each([
-  ["scripts/e2e/lib/fleet-cache/assertions.mjs", ["fleet-cache"]],
   ["scripts/e2e/mcp-channels-seed.ts", ["mcp-channels"]],
   ["scripts/e2e/lib/update-channel-switch/assertions.mjs", ["update-channel-switch"]],
   ["src/state/openclaw-state-schema.ts", []],
@@ -32,10 +30,6 @@ it.each([
 
 it("deduplicates owner lanes in the canonical execution order", () => {
   expect(
-    resolveChangedDockerSeedLanes([
-      "scripts/e2e/mcp-channels-seed.ts",
-      ".github/workflows/ci.yml",
-      "scripts/e2e/lib/fleet-cache/assertions.mjs",
-    ]),
-  ).toEqual(["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway", "fleet-cache"]);
+    resolveChangedDockerSeedLanes(["scripts/e2e/mcp-channels-seed.ts", ".github/workflows/ci.yml"]),
+  ).toEqual(["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway"]);
 });

@@ -831,6 +831,18 @@ class ChatController internal constructor(
     }
   }
 
+  // Physical socket ownership precedes logical state authority, as it does at request enqueue.
+  private fun <T> publishGatewayState(
+    lease: GatewaySession.RequestLease?,
+    isCurrent: () -> Boolean = { true },
+    action: () -> T,
+  ): T? {
+    var result: T? = null
+    val publish = { synchronized(gatewayScopeApplyLock) { if (isCurrent()) result = action() } }
+    if (lease == null) publish() else lease.commitIfCurrent(publish)
+    return result
+  }
+
   private val _outboxItems = MutableStateFlow<List<ChatOutboxItem>>(emptyList())
   val outboxItems: StateFlow<List<ChatOutboxItem>> = _outboxItems.asStateFlow()
 
@@ -1275,27 +1287,25 @@ class ChatController internal constructor(
             }
           val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
           lease.request("sessions.patch", params.toString(), 10 * 60_000L)
-          lease.commitIfCurrent {
-            synchronized(gatewayScopeApplyLock) {
-              // ACK retirement belongs to the captured choice, even after an agent switch.
-              // A newer explicit choice or a history-observed successor keeps its intent.
-              if (
-                requestCacheScope == currentCacheScope() &&
-                rememberedOwner != null && remembered != null &&
-                (remembered.observedSessionId == null || remembered.observedSessionId == lifecycleSessionId)
-              ) {
-                lastSelectedChatSessionByOwner.remove(rememberedOwner, remembered)
-              }
-              // Same-key history and default-owner changes need not move selection generation.
-              // Only the selection captured at entry may navigate after the archive completes.
-              if (
-                selection != null &&
-                isCurrentSessionAction(selection) &&
-                _sessionId.value == lifecycleSessionId &&
-                (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
-              ) {
-                fallBackFromRetiredActiveSession(sessionKey)
-              }
+          publishGatewayState(lease) {
+            // ACK retirement belongs to the captured choice, even after an agent switch.
+            // A newer explicit choice or a history-observed successor keeps its intent.
+            if (
+              requestCacheScope == currentCacheScope() &&
+              rememberedOwner != null && remembered != null &&
+              (remembered.observedSessionId == null || remembered.observedSessionId == lifecycleSessionId)
+            ) {
+              lastSelectedChatSessionByOwner.remove(rememberedOwner, remembered)
+            }
+            // Same-key history and default-owner changes need not move selection generation.
+            // Only the selection captured at entry may navigate after the archive completes.
+            if (
+              selection != null &&
+              isCurrentSessionAction(selection) &&
+              _sessionId.value == lifecycleSessionId &&
+              (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
+            ) {
+              fallBackFromRetiredActiveSession(sessionKey)
             }
           }
         } else {
@@ -1342,12 +1352,7 @@ class ChatController internal constructor(
     fun ownsCurrentAgent(): Boolean = gatewayScope == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
 
     fun reportError(error: Throwable) {
-      val publish = {
-        synchronized(gatewayScopeApplyLock) {
-          if (ownsCurrentAgent()) updateErrorText(error.message)
-        }
-      }
-      if (lease == null) publish() else lease.commitIfCurrent(publish)
+      publishGatewayState(lease, ::ownsCurrentAgent) { updateErrorText(error.message) }
     }
 
     runCatchingCancellable {
@@ -1522,35 +1527,31 @@ class ChatController internal constructor(
       return null
     }
     val actionHistoryGeneration = historyLoadGeneration.incrementAndGet()
-    return try {
-      runOutboxBranchMutation(snapshot, mutationLease, reportStaleError = true) {
-        val params =
-          sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
-            put("entryId", JsonPrimitive(entry))
-          }
-        val root = requestGatewayJson(snapshot.gatewayScope?.gatewayId, "sessions.rewind", params).asObjectOrNull()
-        if (!isCurrentSessionAction(snapshot)) {
-          recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-          return@runOutboxBranchMutation null
+    return runOutboxSessionMutation(snapshot, mutationLease) {
+      val params =
+        sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
+          put("entryId", JsonPrimitive(entry))
         }
-        val editorText = root?.get("editorText").asStringOrNull()
-        val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
-        val branchApplied =
-          historyApplied != null &&
-            refreshSessionBranches(
-              snapshot,
-              previousState = null,
-              purpose = BranchRefreshPurpose.FinalizeMutation,
-              mutationLease = mutationLease,
-            )
-        if (!branchApplied) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-        SessionRewindResult(
-          editorText = editorText,
-          editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
-        )
+      val root = requestGatewayJson(snapshot.gatewayScope?.gatewayId, "sessions.rewind", params).asObjectOrNull()
+      if (!isCurrentSessionAction(snapshot)) {
+        recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+        return@runOutboxSessionMutation null
       }
-    } finally {
-      releaseOutboxSessionMutation(snapshot, mutationLease)
+      val editorText = root?.get("editorText").asStringOrNull()
+      val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
+      val branchApplied =
+        historyApplied != null &&
+          refreshSessionBranches(
+            snapshot,
+            previousState = null,
+            purpose = BranchRefreshPurpose.FinalizeMutation,
+            mutationLease = mutationLease,
+          )
+      if (!branchApplied) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+      SessionRewindResult(
+        editorText = editorText,
+        editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
+      )
     }
   }
 
@@ -1567,7 +1568,7 @@ class ChatController internal constructor(
       cancelOutboxSessionMutation(snapshot, mutationLease)
       return null
     }
-    return try {
+    return runOutboxSessionMutation(snapshot, mutationLease, mutatesBranch = false) {
       val params =
         sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
           put("entryId", JsonPrimitive(entry))
@@ -1575,28 +1576,16 @@ class ChatController internal constructor(
       val root = requestGatewayJson(snapshot.gatewayScope?.gatewayId, "sessions.fork", params).asObjectOrNull()
       // Fork leaves the source branch unchanged; its durable lease is only an entry gate.
       cancelOutboxSessionMutation(snapshot, mutationLease)
-      val createdKey = root.nonBlankString("sessionKey") ?: return null
+      val createdKey = root.nonBlankString("sessionKey") ?: return@runOutboxSessionMutation null
       if (!isCurrentSessionAction(snapshot)) {
         fetchSessionsForCurrentWindow()
-        return null
+        return@runOutboxSessionMutation null
       }
       SessionForkResult(
         sessionKey = createdKey,
         editorText = root?.get("editorText").asStringOrNull(),
         editorAttachments = parseSessionEditorAttachments(root?.get("editorAttachments")),
       )
-    } catch (err: CancellationException) {
-      withContext(NonCancellable) {
-        cancelOutboxSessionMutation(snapshot, mutationLease)
-      }
-      throw err
-    } catch (err: Throwable) {
-      // sessions.fork has no idempotency token, so an outcome-unknown retry can create a duplicate.
-      // Web and Swift accept that recoverable extra session; protocol-level idempotency is the
-      // follow-up rather than heuristic session-list matching here.
-      cancelOutboxSessionMutation(snapshot, mutationLease)
-      updateErrorText(err.message)
-      null
     }
   }
 
@@ -1625,28 +1614,20 @@ class ChatController internal constructor(
       return false
     }
     val actionHistoryGeneration = historyLoadGeneration.incrementAndGet()
-    return try {
-      runOutboxBranchMutation(snapshot, mutationLease, reportStaleError = false) {
-        val params =
-          sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
-            put("leafEntryId", JsonPrimitive(leaf))
-          }
-        requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.branches.switch", params.toString())
-        val branchConfirmed = confirmOutboxBranchChange(snapshot, leaf, mutationLease)
-        if (!isCurrentBranchSwitch(snapshot, switchGeneration)) return@runOutboxBranchMutation false
-        val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
-        val branchesApplied =
-          historyApplied?.let { refreshSessionBranches(snapshot, it.branchState, BranchRefreshPurpose.ReadOnly) } == true
-        if (!branchConfirmed || historyApplied == null) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-        branchConfirmed && branchesApplied
-      } ?: false
-    } finally {
-      releaseOutboxSessionMutation(snapshot, mutationLease)
-      if (switchGeneration == sessionBranchSwitchGeneration.get()) {
-        sessionBranchSwitchClaimed.set(false)
-        _sessionBranchSwitching.value = false
-      }
-    }
+    return runOutboxSessionMutation(snapshot, mutationLease, switchGeneration = switchGeneration) {
+      val params =
+        sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
+          put("leafEntryId", JsonPrimitive(leaf))
+        }
+      requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.branches.switch", params.toString())
+      val branchConfirmed = confirmOutboxBranchChange(snapshot, leaf, mutationLease)
+      if (!isCurrentBranchSwitch(snapshot, switchGeneration)) return@runOutboxSessionMutation false
+      val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
+      val branchesApplied =
+        historyApplied?.let { refreshSessionBranches(snapshot, it.branchState, BranchRefreshPurpose.ReadOnly) } == true
+      if (!branchConfirmed || historyApplied == null) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+      branchConfirmed && branchesApplied
+    } ?: false
   }
 
   suspend fun refreshSessionBranches(): Boolean {
@@ -1754,12 +1735,8 @@ class ChatController internal constructor(
             }
           parseFullMessage(response, message.entryId)
         }.getOrDefault(ChatFullMessageState.Failed)
-      capturedLease.commitIfCurrent {
-        synchronized(gatewayScopeApplyLock) {
-          if (caller.isActive && isCurrentFullMessage(snapshot, owner, catalogRevision, message)) {
-            result.value = next
-          }
-        }
+      publishGatewayState(capturedLease, { caller.isActive && isCurrentFullMessage(snapshot, owner, catalogRevision, message) }) {
+        result.value = next
       }
     }
   }
@@ -1920,30 +1897,45 @@ class ChatController internal constructor(
     return durable
   }
 
-  private suspend fun <T> runOutboxBranchMutation(
+  private suspend fun <T> runOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
     mutationLease: ChatOutboxMutationLease,
-    reportStaleError: Boolean,
+    mutatesBranch: Boolean = true,
+    switchGeneration: Long? = null,
     action: suspend () -> T,
   ): T? =
     try {
       action()
     } catch (err: CancellationException) {
       withContext(NonCancellable) {
-        recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+        if (mutatesBranch) {
+          recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+        } else {
+          cancelOutboxSessionMutation(snapshot, mutationLease)
+        }
       }
       throw err
-    } catch (err: GatewayRequestDefinitiveFailure) {
-      cancelOutboxSessionMutation(snapshot, mutationLease)
-      if (isCurrentSessionAction(snapshot)) {
-        refreshHistoryForSessionAction(snapshot, historyLoadGeneration.incrementAndGet())
-      }
-      if (reportStaleError || isCurrentSessionAction(snapshot)) updateErrorText(err.message)
-      null
     } catch (err: Throwable) {
-      recoverOutboxAfterAmbiguousSessionMutation(snapshot, mutationLease)
-      if (reportStaleError || isCurrentSessionAction(snapshot)) updateErrorText(err.message)
+      if (!mutatesBranch) {
+        // Fork has no idempotency token. An unknown result may have created a child;
+        // release the unchanged source without replay or heuristic session matching.
+        cancelOutboxSessionMutation(snapshot, mutationLease)
+      } else if (err is GatewayRequestDefinitiveFailure) {
+        cancelOutboxSessionMutation(snapshot, mutationLease)
+        if (isCurrentSessionAction(snapshot)) {
+          refreshHistoryForSessionAction(snapshot, historyLoadGeneration.incrementAndGet())
+        }
+      } else {
+        recoverOutboxAfterAmbiguousSessionMutation(snapshot, mutationLease)
+      }
+      if (switchGeneration == null || isCurrentSessionAction(snapshot)) updateErrorText(err.message)
       null
+    } finally {
+      if (mutatesBranch) releaseOutboxSessionMutation(snapshot, mutationLease)
+      if (switchGeneration != null && switchGeneration == sessionBranchSwitchGeneration.get()) {
+        sessionBranchSwitchClaimed.set(false)
+        _sessionBranchSwitching.value = false
+      }
     }
 
   private suspend fun cancelOutboxSessionMutation(
@@ -2287,28 +2279,15 @@ class ChatController internal constructor(
     }
     val lease = captureRequestLease(createGatewayScope)
 
-    fun <T> applyIfCurrent(action: () -> T): T? {
-      var result: T? = null
-
-      fun apply() {
-        synchronized(gatewayScopeApplyLock) {
-          // History refreshes do not cancel New. Selection, known parent identity,
-          // routing-owner changes, and the captured socket still fence navigation.
-          if (
-            isCurrentSessionAction(selection) &&
-            (parentSessionId == null || parentSessionId == _sessionId.value) &&
-            (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
-          ) {
-            result = action()
-          }
-        }
-      }
-      if (lease == null) apply() else lease.commitIfCurrent(::apply)
-      return result
-    }
+    // History refreshes do not cancel New. Selection, known parent identity,
+    // routing-owner changes, and the captured socket still fence navigation.
+    fun ownsSelection(): Boolean =
+      isCurrentSessionAction(selection) &&
+        (parentSessionId == null || parentSessionId == _sessionId.value) &&
+        (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
     val normalizedCatalogId = catalogId?.trim()?.takeIf(String::isNotEmpty)
     return try {
-      applyIfCurrent {
+      publishGatewayState(lease, ::ownsSelection) {
         createContext.ensureActive()
         updateErrorText(null)
       } ?: return false
@@ -2337,7 +2316,7 @@ class ChatController internal constructor(
       val res = requestSessionCreate(createGatewayScope, params, lease)
       val createdKey = parseCreatedSessionKey(json, res) ?: parentKey
       val generation =
-        applyIfCurrent {
+        publishGatewayState(lease, ::ownsSelection) {
           createContext.ensureActive()
           beginHistoryLoad(
             createdKey,
@@ -2350,7 +2329,7 @@ class ChatController internal constructor(
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      applyIfCurrent { updateErrorText(err.message) }
+      publishGatewayState(lease, ::ownsSelection) { updateErrorText(err.message) }
       false
     } finally {
       _isCreatingSession.value = false
@@ -2565,13 +2544,9 @@ class ChatController internal constructor(
       succeeded = true
       if (change is SessionSettingsChange.Model) change.ref?.let(recordModelRecent)
       var acknowledgedEntry: ChatSessionEntry? = null
-      capturedLease.commitIfCurrent {
-        synchronized(gatewayScopeApplyLock) {
-          if (ownsLane() && dispatchObservation === lane.observation) {
-            acknowledgedEntry = applyAcceptedSessionSettings(queued, change, resolution)
-            dispatchObservation = null
-          }
-        }
+      publishGatewayState(capturedLease, { ownsLane() && dispatchObservation === lane.observation }) {
+        acknowledgedEntry = applyAcceptedSessionSettings(queued, change, resolution)
+        dispatchObservation = null
       }
       acknowledgedEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
       true
@@ -2579,22 +2554,17 @@ class ChatController internal constructor(
       throw err
     } catch (err: Throwable) {
       succeeded = false
-      val reportFailure = {
-        synchronized(gatewayScopeApplyLock) {
-          if (ownsLane()) {
-            updateLocalizedErrorText(
-              err.message?.let(::verbatimText)
-                ?: when (change) {
-                  is SessionSettingsChange.Model -> nativeText("Could not update model.")
-                  is SessionSettingsChange.Thinking -> nativeText("Could not update thinking level.")
-                  is SessionSettingsChange.Permission -> nativeText("Could not update permissions.")
-                  is SessionSettingsChange.FastMode -> nativeText("Could not update fast mode.")
-                },
-            )
-          }
-        }
+      publishGatewayState(lease, ::ownsLane) {
+        updateLocalizedErrorText(
+          err.message?.let(::verbatimText)
+            ?: when (change) {
+              is SessionSettingsChange.Model -> nativeText("Could not update model.")
+              is SessionSettingsChange.Thinking -> nativeText("Could not update thinking level.")
+              is SessionSettingsChange.Permission -> nativeText("Could not update permissions.")
+              is SessionSettingsChange.FastMode -> nativeText("Could not update fast mode.")
+            },
+        )
       }
-      if (lease == null) reportFailure() else lease.commitIfCurrent(reportFailure)
       false
     } finally {
       synchronized(gatewayScopeApplyLock) {
@@ -2728,25 +2698,23 @@ class ChatController internal constructor(
         val entry = if (thinkingLevel == null) info else info.copy(thinkingLevel = thinkingLevel)
         val entryOwner = resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId ?: ownerAgentId
         if (entry.key != settingsKey.sessionKey || entryOwner != ownerAgentId) error("session settings owner changed")
-        lease.commitIfCurrent {
-          synchronized(gatewayScopeApplyLock) {
-            if (!ownsReconciliation() || !ownerIsCurrent()) return@synchronized
-            if (
-              settingsRevision != settingsMutationRevision(settingsKey.gatewayScope) ||
-              refresh.hasConflictingSettings(listOf(entry))
-            ) {
-              return@synchronized
-            }
-            // This read owns settings, not transcript/run/usage publication.
-            val current = _sessions.value.firstOrNull { it.key == settingsKey.sessionKey } ?: lane.confirmed
-            val settings = mergeChatSessionSettings(current, entry, authoritativeSessionSettings = true)
-            upsertSessionEntry(settings.copy(ownerAgentId = ownerAgentId), replace = true, authoritativeSessionSettings = true)
-            lane.needsRefresh = false
-            lane.reconciliation = null
-            removeCompletedSessionSettingsLane(settingsKey, lane, completion.pending)
-            if (_errorText.value == sessionSettingsRefreshError) updateErrorText(null)
-            ready = true
+        publishGatewayState(lease) {
+          if (!ownsReconciliation() || !ownerIsCurrent()) return@publishGatewayState
+          if (
+            settingsRevision != settingsMutationRevision(settingsKey.gatewayScope) ||
+            refresh.hasConflictingSettings(listOf(entry))
+          ) {
+            return@publishGatewayState
           }
+          // This read owns settings, not transcript/run/usage publication.
+          val current = _sessions.value.firstOrNull { it.key == settingsKey.sessionKey } ?: lane.confirmed
+          val settings = mergeChatSessionSettings(current, entry, authoritativeSessionSettings = true)
+          upsertSessionEntry(settings.copy(ownerAgentId = ownerAgentId), replace = true, authoritativeSessionSettings = true)
+          lane.needsRefresh = false
+          lane.reconciliation = null
+          removeCompletedSessionSettingsLane(settingsKey, lane, completion.pending)
+          if (_errorText.value == sessionSettingsRefreshError) updateErrorText(null)
+          ready = true
         }
         if (ready) return
         if (!lease.isCurrent() || !synchronized(gatewayScopeApplyLock) { ownsReconciliation() && ownerIsCurrent() }) return
@@ -3057,14 +3025,7 @@ class ChatController internal constructor(
     val cacheScope = currentCacheScope()
     val effectiveSessionKey = normalizeRequestedSessionKey(_sessionKey.value)
     if (effectiveSessionKey == "main" && _sessionOwnerAgentId.value == null) return false
-    val routingOwner =
-      resolveChatComposerRoutingOwner(
-        gatewayStableId = cacheScope?.gatewayId,
-        gatewayDefaultAgentId = _sessionOwnerAgentId.value ?: effectiveDefaultAgentId(),
-        sessionKey = effectiveSessionKey,
-        mainSessionKey = appliedMainSessionKey,
-      ) ?: return false
-    return expectedOwner == routingOwner
+    return expectedOwner.matches(cacheScope, effectiveSessionKey)
   }
 
   internal suspend fun sendMessageAwaitAcceptance(
@@ -5067,22 +5028,16 @@ class ChatController internal constructor(
               }.getOrDefault(false)
             }
           var applied = false
-          val publish = {
-            synchronized(gatewayScopeApplyLock) {
-              if (isCurrent()) {
-                pendingHealthRefresh = null
-                if (healthy == true) {
-                  if (historyGeneration != null) restoreRunStateOnReconnect = false
-                  markHealthOk()
-                } else if (healthy == false) {
-                  _healthOk.value = false
-                }
-                applied = true
-              }
+          publishGatewayState(lease, ::isCurrent) {
+            pendingHealthRefresh = null
+            if (healthy == true) {
+              if (historyGeneration != null) restoreRunStateOnReconnect = false
+              markHealthOk()
+            } else if (healthy == false) {
+              _healthOk.value = false
             }
+            applied = true
           }
-          // Socket ownership precedes the logical lock, matching request enqueue and disconnect.
-          if (lease == null) publish() else lease.commitIfCurrent(publish)
           if (!applied || lease?.isCurrent() != true || !synchronized(gatewayScopeApplyLock) { ownsSelection() }) return@async
           if (healthy == true && !hasCurrentChatMetadata()) fetchChatMetadata()
           if (refresh.refreshSessions && lease.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsSelection() }) fetchSessions(limit = 50)
@@ -6715,32 +6670,26 @@ class ChatController internal constructor(
     scope.launch {
       val lease = captureRequestLease(target.selection.gatewayScope) ?: return@launch
 
-      fun publishIfCurrent(block: () -> Unit) {
-        lease.commitIfCurrent {
-          synchronized(gatewayScopeApplyLock) {
-            if (isCurrentReactionTarget(target) && reactionState.isCurrentRead(generation)) block()
-          }
-        }
-      }
+      fun isCurrent(): Boolean = isCurrentReactionTarget(target) && reactionState.isCurrentRead(generation)
       try {
         val params = SessionReactionsListParams(sessionKey = target.selection.sessionKey, agentId = target.selection.ownerAgentId)
         val response =
           lease.request("session.reactions.list", json.encodeToString(params)) { enqueue ->
             synchronized(gatewayScopeApplyLock) {
-              if (!isCurrentReactionTarget(target) || !reactionState.isCurrentRead(generation)) throw CancellationException("Reaction reader changed")
+              if (!isCurrent()) throw CancellationException("Reaction reader changed")
               enqueue()
             }
           }
         val result = json.decodeFromString<SessionReactionsListResult>(response)
         if (result.sessionId != target.sessionId) return@launch
         val reactions = result.reactions.mapValues { (_, values) -> values.map { it.toChatReactionSummary() } }
-        publishIfCurrent { reactionState.applyRead(generation, reactions) }
+        publishGatewayState(lease, ::isCurrent) { reactionState.applyRead(generation, reactions) }
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        publishIfCurrent { updateErrorText(err.message) }
+        publishGatewayState(lease, ::isCurrent) { updateErrorText(err.message) }
       } finally {
-        publishIfCurrent { reactionState.finishRead(generation) }
+        publishGatewayState(lease, ::isCurrent) { reactionState.finishRead(generation) }
       }
     }
   }
@@ -6765,9 +6714,6 @@ class ChatController internal constructor(
 
         fun isCurrent(): Boolean = isCurrentReactionTarget(target) && reactionState.isCurrent(write)
 
-        fun publishIfCurrent(block: () -> Unit) {
-          lease.commitIfCurrent { synchronized(gatewayScopeApplyLock) { if (isCurrent()) block() } }
-        }
         runCatchingCancellable {
           val params =
             SessionReactionsSetParams(
@@ -6788,9 +6734,9 @@ class ChatController internal constructor(
           val result = json.decodeFromString<SessionReactionsSetResult>(response)
           check(result.messageId == messageId) { "Reaction response belongs to another message" }
           val reactions = result.reactions.map { it.toChatReactionSummary() }
-          publishIfCurrent { reactionState.applyWrite(write, reactions) }
+          publishGatewayState(lease, ::isCurrent) { reactionState.applyWrite(write, reactions) }
         }.onFailure { err ->
-          publishIfCurrent { updateErrorText(err.message) }
+          publishGatewayState(lease, ::isCurrent) { updateErrorText(err.message) }
         }
       }.invokeOnCompletion {
         synchronized(gatewayScopeApplyLock) { reactionState.finishWrite(write) }
@@ -6834,11 +6780,6 @@ class ChatController internal constructor(
       // Hello may arrive while queued. Capability and dispatch must belong to the same socket.
       val lease = captureRequestLease(gatewayScope) ?: return@launch
 
-      fun publishIfCurrent(block: () -> Unit) {
-        lease.commitIfCurrent {
-          synchronized(gatewayScopeApplyLock) { if (isCurrent()) block() }
-        }
-      }
       try {
         val routing = sessionRouting()
         val keyAgent = resolveAgentIdFromMainSessionKey(sessionKey)
@@ -6852,7 +6793,7 @@ class ChatController internal constructor(
             else -> sessionKey
           }
         if (requestKey == "global" && (agentId == null || gatewayAdvertisesCapability("progress-card-agent-scope-v1") != true)) {
-          publishIfCurrent {
+          publishGatewayState(lease, ::isCurrent) {
             if (_errorText.value == null) updateLocalizedErrorText(progressCardUpgradeError)
           }
           return@launch
@@ -6870,7 +6811,7 @@ class ChatController internal constructor(
           check(agentId == null || resolveAgentIdFromMainSessionKey(key) == agentId) { "Progress card response belongs to another agent" }
           check(expectedKey == null || key == expectedKey) { "Progress card response belongs to another session" }
         }
-        publishIfCurrent {
+        publishGatewayState(lease, ::isCurrent) {
           parsed.sessionKey?.let { progressCardScopeKey = it }
           _progressCard.value = parsed.card
           if (_errorText.value == progressCardUpgradeError) updateErrorText(null)
@@ -6879,7 +6820,7 @@ class ChatController internal constructor(
         throw err
       } catch (err: Throwable) {
         if (err is GatewayRequestRejected && err.gatewayError.details?.code == "SESSION_PARTICIPATION_REQUIRED") {
-          publishIfCurrent { _progressCard.value = null }
+          publishGatewayState(lease, ::isCurrent) { _progressCard.value = null }
         }
         // Transient failures retain the last durable card.
         Log.w("OpenClawChat", "Progress card refresh failed: ${err.message}")

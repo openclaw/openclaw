@@ -30,6 +30,7 @@ import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./ad
 import { workerInferencePlacement } from "./inference-placement.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import {
   bindWorkerTurnCapabilities,
   getWorkerTurnToolSurface,
@@ -339,12 +340,7 @@ export async function executeWorkerTurn(
         assertActive();
         signal.throwIfAborted();
         const current = params.environments.get(placement.environmentId);
-        return (
-          current?.state === "attached" &&
-          current.ownerEpoch === placement.activeOwnerEpoch &&
-          current.attachedSessionIds.length === 1 &&
-          current.attachedSessionIds[0] === placement.sessionId
-        );
+        return isWorkerEnvironmentAttachedTo(current, placement);
       } catch {
         return false;
       }
@@ -374,6 +370,8 @@ export async function executeWorkerTurn(
           params.environments.createGatewayTools?.({
             identity,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+            inheritedToolDenylist: capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny,
+            delegatedToolPolicyActive: Boolean(capabilityProfile.policy.delegatedToolPolicy),
             skillWorkshop,
             portalAvailable,
             prepareTools: async (adapters) => {

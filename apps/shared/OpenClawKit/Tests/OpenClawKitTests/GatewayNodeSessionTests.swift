@@ -118,7 +118,7 @@ private final class PingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 }
 
-private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
+final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
 
     private let lock = NSLock()
@@ -140,6 +140,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var receivePhase = 0
     private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
     private var pendingInboundFrames: [ReceiveResult] = []
+    private var holdsPongs = false
+    private var pingCount = 0
+    private var pendingPongs: [@Sendable (Error?) -> Void] = []
     private var waiters = StateWaiters()
 
     init(
@@ -272,7 +275,38 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        pongReceiveHandler(nil)
+        let held = self.lock.withLock {
+            self.pingCount += 1
+            if self.holdsPongs { self.pendingPongs.append(pongReceiveHandler) }
+            self.waiters.resumeSatisfied()
+            return self.holdsPongs
+        }
+        if !held { pongReceiveHandler(nil) }
+    }
+
+    func holdPongs() {
+        self.lock.withLock { self.holdsPongs = true }
+    }
+
+    func finishPongs(error: Error? = nil) {
+        let callbacks = self.lock.withLock {
+            defer { self.pendingPongs.removeAll() }
+            return self.pendingPongs
+        }
+        callbacks.forEach { $0(error) }
+    }
+
+    func snapshotPingCount() -> Int {
+        self.lock.withLock { self.pingCount }
+    }
+
+    func waitForPings(count: Int) async {
+        await withCheckedContinuation { continuation in
+            self.lock.withLock {
+                self.waiters.append(continuation) { self.pingCount >= count }
+                self.waiters.resumeSatisfied()
+            }
+        }
     }
 
     func receive() async throws -> URLSessionWebSocketTask.Message {
@@ -509,7 +543,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 }
 
-private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
+final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
 {
     private let lock = NSLock()
@@ -2575,6 +2609,58 @@ struct GatewayNodeSessionTests {
         #expect(await channel.currentConnectionGeneration() == nil)
     }
     #endif
+
+    @Test
+    func `external authorization failure stays actionable without sending Gateway credentials`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                credentials: .init(bootstrapToken: "unused-bootstrap"),
+                options: nodeConnectOptions(),
+                session: session,
+                extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
+            Issue.record("unauthorized upgrade unexpectedly connected")
+        } catch {
+            let problem = GatewayConnectionProblemMapper.map(error: error)
+            #expect(problem?.kind == .externalAuthorizationRequired)
+            #expect(problem?.actionLabel == "Sign in")
+            #expect(problem?.pauseReconnect == true)
+            #expect(problem?.retryable == true)
+        }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await gateway.currentRoute() == nil)
+        await gateway.disconnect()
+    }
+
+    @Test(arguments: [false, true])
+    func `public request and send preserve actionable upgrade denial`(send: Bool) async throws {
+        let session = FakeGatewayWebSocketSession()
+        let url = try testURL("wss://gateway.example.invalid")
+        let channel = GatewayChannelActor(
+            url: url, token: nil,
+            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
+        do {
+            if send {
+                try await channel.send(method: "status", params: nil)
+            } else {
+                _ = try await channel.request(method: "status", params: nil)
+            }
+            Issue.record("unauthorized operation unexpectedly connected")
+        } catch {
+            #expect(error is GatewayExternalAuthorizationError)
+            let problem = GatewayConnectionProblemMapper.map(error: error)
+            #expect(problem?.kind == .externalAuthorizationRequired)
+            #expect(problem?.actionLabel == "Sign in")
+            #expect(problem?.pauseReconnect == true)
+            #expect(problem?.retryable == true)
+        }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await channel.currentConnectionGeneration() == nil)
+        await channel.shutdown()
+    }
 
     @Test
     func `cleartext upgrade never reads or attaches custom headers`() async throws {

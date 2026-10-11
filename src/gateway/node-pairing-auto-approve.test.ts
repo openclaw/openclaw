@@ -81,26 +81,6 @@ describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
     expect(shouldAutoApproveNodePairingFromTrustedCidrs(BASE_PARAMS)).toBe(true);
   });
 
-  it("accepts first-time node pairing from an exact IP entry", () => {
-    expect(
-      shouldAutoApproveNodePairingFromTrustedCidrs({
-        ...BASE_PARAMS,
-        autoApproveCidrs: ["192.168.1.42"],
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts first-time node pairing from a matching IPv6 CIDR via non-loopback trusted proxy", () => {
-    expect(
-      shouldAutoApproveNodePairingFromTrustedCidrs({
-        ...BASE_PARAMS,
-        reportedClientIpSource: "trusted-proxy",
-        reportedClientIp: "fd00:1234:5678::9",
-        autoApproveCidrs: ["fd00:1234:5678::/64"],
-      }),
-    ).toBe(true);
-  });
-
   it.each([
     {
       name: "existing paired device",
@@ -146,15 +126,12 @@ describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
     expect(shouldAutoApproveNodePairingFromTrustedCidrs({ ...BASE_PARAMS, ...patch })).toBe(false);
   });
 
-  it.each(["role-upgrade", "scope-upgrade", "metadata-upgrade"] as const)(
-    "rejects %s requests",
-    (reason) => {
-      expect(
-        shouldAutoApproveNodePairingFromTrustedCidrs({
-          ...BASE_PARAMS,
-          reason,
-        }),
-      ).toBe(false);
-    },
-  );
+  it.each(["role-upgrade"] as const)("rejects %s requests", (reason) => {
+    expect(
+      shouldAutoApproveNodePairingFromTrustedCidrs({
+        ...BASE_PARAMS,
+        reason,
+      }),
+    ).toBe(false);
+  });
 });

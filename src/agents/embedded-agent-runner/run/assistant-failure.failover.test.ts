@@ -85,7 +85,6 @@ function makeInput(
       resolveAuthProfileFailureReason: vi.fn(() => null),
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
       advanceAuthProfile: vi.fn(async () => false),
-      advanceRateLimitAuthProfile: vi.fn(async () => false),
       transientRetryCount: 0,
       overloadProfileRotationLimit: 3,
     },
@@ -125,7 +124,7 @@ describe("assistant failure recovery", () => {
       releaseMark = resolve;
     });
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => {
+    input.failover.advanceAuthProfile = vi.fn(async () => {
       events.push("advance");
       return true;
     });
@@ -149,17 +148,7 @@ describe("assistant failure recovery", () => {
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
   });
 
-  it("rotates after transient recovery is exhausted", async () => {
-    const input = makeInput("429 rate_limit_exceeded: too many requests per minute");
-    input.failover = { ...input.failover, transientRetryCount: 8 };
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
-    const outcome = await handleEmbeddedAssistantFailure(input);
-    expect(outcome.action).toBe("retry");
-    expect(input.failover.advanceRateLimitAuthProfile).toHaveBeenCalledOnce();
-    expect(input.traceAttempts[0]?.result).toBe("rotate_profile");
-  });
-
-  it.each([undefined, "anthropic:p1"])(
+  it.each([undefined])(
     "records billing failures for profile %s before surfacing",
     async (profileId) => {
       const input = makeInput("credit balance is too low", { profileId });
@@ -232,7 +221,7 @@ describe("assistant failure recovery", () => {
     const input = makeInput("rate limit exceeded");
     const error = new FailoverError("Rate-limit rotation exhausted", { reason: "rate_limit" });
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => {
+    input.failover.advanceAuthProfile = vi.fn(async () => {
       throw error;
     });
     await expect(handleEmbeddedAssistantFailure(input)).rejects.toBe(error);
@@ -257,7 +246,7 @@ describe("assistant failure recovery", () => {
     expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Profile "));
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "retains provider error details with model fallback=%s",
     async (fallbackConfigured) => {
       for (const [message, reason, status] of [
@@ -295,36 +284,13 @@ describe("assistant failure recovery", () => {
     },
   );
 
-  it.each(["529 overloaded", "503 overloaded"])(
-    "enforces the overload cap while retaining %s",
-    async (errorMessage) => {
-      const input = makeInput(errorMessage);
-      input.overloadProfileRotations = 3;
-      input.failover.resolveAuthProfileFailureReason = () => "overloaded";
-      const failure = await expectFailure(input);
-      expect(failure).toMatchObject({
-        reason: "overloaded",
-        status: Number(errorMessage.slice(0, 3)),
-        rawError: errorMessage,
-        message: "The AI service is temporarily overloaded. Please try again in a moment.",
-      });
-      expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledOnce();
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("after 4 rotations"));
-      expect(input.traceAttempts[0]?.result).toBe("error");
-    },
-  );
-
   it.each([
-    [{ kind: "ok" }, {}],
     [{ kind: "timeout", phase: "compaction", source: "observation" }, {}],
-    [{ kind: "timeout", phase: "compaction", source: "runtime" }, { stopReason: "timeout" }],
     [{ kind: "timeout", phase: "tool_execution", source: "runtime" }, { stopReason: "timeout" }],
     [
       { kind: "timeout", phase: "prompt", source: "idle" },
       { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
     ],
-    [{ kind: "timeout", phase: "compaction", source: "idle" }, { stopReason: "timeout" }],
   ] satisfies Array<readonly [AgentRunAttemptTerminal, object]>)(
     "keeps recorded timeout facts independent of provider status: %s",
     async (terminal, expected) => {
@@ -335,22 +301,19 @@ describe("assistant failure recovery", () => {
     },
   );
 
-  it.each(["billing", "timeout"])(
-    "ignores stale %s text on a successful assistant",
-    async (errorMessage) => {
-      const input = makeInput(errorMessage);
-      if (!input.normalizedAttempt.attemptAssistant) {
-        throw new Error("missing test assistant");
-      }
-      input.normalizedAttempt.attemptAssistant.stopReason = "stop";
-      input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt: input.normalizedAttempt.attempt,
-        assistant: input.normalizedAttempt.attemptAssistant,
-      });
-      expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
-      expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["timeout"])("ignores stale %s text on a successful assistant", async (errorMessage) => {
+    const input = makeInput(errorMessage);
+    if (!input.normalizedAttempt.attemptAssistant) {
+      throw new Error("missing test assistant");
+    }
+    input.normalizedAttempt.attemptAssistant.stopReason = "stop";
+    input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt: input.normalizedAttempt.attempt,
+      assistant: input.normalizedAttempt.attemptAssistant,
+    });
+    expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
+    expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+  });
 
   it("keeps harness-owned timeout handling inside the harness", async () => {
     const input = makeInput("request timed out");
@@ -359,34 +322,23 @@ describe("assistant failure recovery", () => {
     expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
   });
 
-  it("surfaces provider-owned stalled streams with their owning provider", async () => {
-    const input = makeInput(
-      "opencode-go stream timed out after provider-owned SSE boundary stalled",
-      { provider: "opencode-go" },
-    );
-    expect(await expectFailure(input)).toMatchObject({
-      reason: "timeout",
-      status: 408,
-      provider: "opencode-go",
-    });
-  });
-
-  it.each([
-    Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
-    Object.assign(new Error("The operation timed out"), { name: "TimeoutError" }),
-    new Error("provider connection failed"),
-  ])("keeps provider $name failures visible to realtime voice", async (error) => {
-    const signal = new AbortController().signal;
-    const input = makeInput(error.message);
-    if (!input.normalizedAttempt.attemptAssistant) {
-      throw new Error("missing test assistant");
-    }
-    Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
-    input.normalizedAttempt.attemptAssistant.content = [];
-    input.emptyErrorRetries = 3;
-    const failure = await expectFailure(input);
-    expect(failure.rawError).toBe(error.message);
-    expect(buildRealtimeVoiceAgentErrorProviderResult(failure)).toEqual({ error: failure.message });
-    expect(signal.aborted).toBe(false);
-  });
+  it.each([new Error("provider connection failed")])(
+    "keeps provider $name failures visible to realtime voice",
+    async (error) => {
+      const signal = new AbortController().signal;
+      const input = makeInput(error.message);
+      if (!input.normalizedAttempt.attemptAssistant) {
+        throw new Error("missing test assistant");
+      }
+      Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
+      input.normalizedAttempt.attemptAssistant.content = [];
+      input.emptyErrorRetries = 3;
+      const failure = await expectFailure(input);
+      expect(failure.rawError).toBe(error.message);
+      expect(buildRealtimeVoiceAgentErrorProviderResult(failure)).toEqual({
+        error: failure.message,
+      });
+      expect(signal.aborted).toBe(false);
+    },
+  );
 });

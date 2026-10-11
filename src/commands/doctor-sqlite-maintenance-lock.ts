@@ -89,22 +89,25 @@ export function assertDoctorSqliteMaintenancePathsNotAliased(
   }
 }
 
-function inspectMaintenancePath(
-  operation: string,
-  protectedPath: string,
-  ownershipRoots: readonly string[],
-): fs.Stats | undefined {
-  assertPathComponentsNotSymbolicLinks(operation, protectedPath, ownershipRoots);
-  let stat: fs.Stats;
+function readMaintenancePathStat(filePath: string): fs.Stats | undefined {
   try {
-    stat = fs.lstatSync(protectedPath);
+    return fs.lstatSync(filePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
     throw error;
   }
-  if (stat.isSymbolicLink()) {
+}
+
+function inspectMaintenancePath(
+  operation: string,
+  protectedPath: string,
+  ownershipRoots: readonly string[],
+): fs.Stats | undefined {
+  assertPathComponentsNotSymbolicLinks(operation, protectedPath, ownershipRoots);
+  const stat = readMaintenancePathStat(protectedPath);
+  if (stat?.isSymbolicLink()) {
     throw new Error(
       `Cannot run ${operation} for a symbolic-link path: ${protectedPath}. Replace the symbolic link with an owned regular file and retry.`,
     );
@@ -125,14 +128,9 @@ function assertPathComponentsNotSymbolicLinks(
   let currentPath = rootPath;
   for (const segment of relativePath.split(path.sep).filter(Boolean)) {
     currentPath = path.join(currentPath, segment);
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(currentPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      throw error;
+    const stat = readMaintenancePathStat(currentPath);
+    if (!stat) {
+      return;
     }
     if (stat.isSymbolicLink()) {
       throw new Error(

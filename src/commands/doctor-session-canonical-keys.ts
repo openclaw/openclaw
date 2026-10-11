@@ -381,7 +381,7 @@ async function repairCanonicalSessionGroup(
   }
 
   const destinationStore = byDatabase.get(destination.sqlitePath) ?? [];
-  const preArchivedDirectories: string[] = [];
+  const archivedDirectories = new Set<string>();
   if (winner.sqlitePath !== destination.sqlitePath) {
     const generationIds = new Set([
       ...listSessionGenerationIdsForCanonicalRepair({
@@ -431,9 +431,7 @@ async function repairCanonicalSessionGroup(
         reason: "deleted",
         sessionId,
       });
-      if (!preArchivedDirectories.includes(archiveDirectory)) {
-        preArchivedDirectories.push(archiveDirectory);
-      }
+      archivedDirectories.add(archiveDirectory);
     }
   }
   setCanonicalSqliteSessionMainKey(
@@ -468,10 +466,9 @@ async function repairCanonicalSessionGroup(
     storePath: destination.storePath,
     upserts: [{ entry: selected.entry, sessionKey: winner.canonicalKey }],
   });
-  const archivedDirectories = new Set([
-    ...preArchivedDirectories,
-    ...winnerResult.archivedTranscriptDirectories,
-  ]);
+  for (const directory of winnerResult.archivedTranscriptDirectories) {
+    archivedDirectories.add(directory);
+  }
 
   for (const [sqlitePath, storeCandidates] of byDatabase) {
     if (sqlitePath === destination.sqlitePath) {
@@ -546,40 +543,36 @@ export async function repairCanonicalSessionKeys(params: {
         cfg: params.cfg,
         env,
       });
-      if (!singleDatabaseGroup) {
-        for (const directory of await repairCanonicalSessionGroup(candidates, {
-          cfg: params.cfg,
-          env,
-        })) {
-          archivedTranscriptDirectories.add(directory);
+      const batch = singleDatabaseGroup ? [singleDatabaseGroup] : [];
+      if (singleDatabaseGroup) {
+        // Keep commits bounded and preserve the original order around cross-store moves, while
+        // collapsing the repeated whole-store projections for the common same-database path.
+        for (const nextCandidates of hydratedGroups.slice(1)) {
+          const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(
+            nextCandidates,
+            {
+              cfg: params.cfg,
+              env,
+            },
+          );
+          if (
+            !nextSingleDatabaseGroup ||
+            nextSingleDatabaseGroup.selected.destination.sqlitePath !==
+              singleDatabaseGroup.selected.destination.sqlitePath
+          ) {
+            break;
+          }
+          batch.push(nextSingleDatabaseGroup);
         }
-        repairBatches += 1;
-        repairedGroups += 1;
-        repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
-        continue;
       }
-      const batch = [singleDatabaseGroup];
-      // Keep commits bounded and preserve the original order around cross-store moves, while
-      // collapsing the repeated whole-store projections for the common same-database path.
-      for (const nextCandidates of hydratedGroups.slice(1)) {
-        const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(nextCandidates, {
-          cfg: params.cfg,
-          env,
-        });
-        if (
-          !nextSingleDatabaseGroup ||
-          nextSingleDatabaseGroup.selected.destination.sqlitePath !==
-            singleDatabaseGroup.selected.destination.sqlitePath
-        ) {
-          break;
-        }
-        batch.push(nextSingleDatabaseGroup);
-      }
-      for (const directory of await repairCanonicalSessionGroupsInSingleDatabase(batch)) {
+      const directories = singleDatabaseGroup
+        ? await repairCanonicalSessionGroupsInSingleDatabase(batch)
+        : await repairCanonicalSessionGroup(candidates, { cfg: params.cfg, env });
+      for (const directory of directories) {
         archivedTranscriptDirectories.add(directory);
       }
       repairBatches += 1;
-      repairedGroups += batch.length;
+      repairedGroups += singleDatabaseGroup ? batch.length : 1;
       repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
     }
   }

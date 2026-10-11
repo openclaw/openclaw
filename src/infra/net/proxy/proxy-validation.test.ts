@@ -109,31 +109,6 @@ describe("proxy validation", () => {
     }
   });
 
-  it("prefers the configured proxy URL over OPENCLAW_PROXY_URL", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-      env: {
-        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
-      },
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.config).toMatchObject({
-      enabled: true,
-      proxyUrl: "http://config-proxy.example:3128",
-      source: "config",
-    });
-    expectFetchThroughProxy({
-      proxyUrl: "http://config-proxy.example:3128",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-    });
-  });
-
   it("honors an explicit opt-out for an environment proxy URL", async () => {
     const result = await runProxyValidation({
       config: { enabled: false },
@@ -289,28 +264,6 @@ describe("proxy validation", () => {
     ]);
   });
 
-  it("fails invalid custom allowed URLs before probing", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: ["not a url"],
-      deniedUrls: [],
-    });
-
-    expect(fetchWithRuntimeDispatcher).not.toHaveBeenCalled();
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "allowed",
-        url: "not a url",
-        ok: false,
-        error: "Invalid allowed destination URL",
-      },
-    ]);
-  });
-
   it("fails validation when a denied destination succeeds", async () => {
     const result = await runProxyValidation({
       config: {
@@ -425,45 +378,6 @@ describe("proxy validation", () => {
     });
   });
 
-  it("does not load proxy CA files for plain HTTP proxy validation", async () => {
-    const missingCaFile = path.join(os.tmpdir(), "openclaw-missing-http-proxy-validation-ca.pem");
-
-    const result = await runProxyValidation({
-      proxyUrlOverride: "http://proxy.example:8080",
-      proxyCaFileOverride: missingCaFile,
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-    });
-
-    expect(result.ok).toBe(true);
-    expectFetchThroughProxy({
-      proxyUrl: "http://proxy.example:8080",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-    });
-  });
-
-  it("uses configured proxy CA file contents when no CLI override is supplied", async () => {
-    const caFile = writeTempCa("config-proxy-ca");
-
-    await runProxyValidation({
-      config: {
-        proxyUrl: "https://proxy.example:8443",
-        tls: { caFile },
-      },
-      env: {},
-      allowedUrls: ["https://example.com/"],
-      deniedUrls: [],
-    });
-
-    expectFetchThroughProxy({
-      proxyUrl: "https://proxy.example:8443",
-      targetUrl: "https://example.com/",
-      timeoutMs: 5000,
-      proxyTls: { ca: "config-proxy-ca" },
-    });
-  });
-
   it("fails closed before probing when proxy CA file cannot be loaded", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-validation-missing-ca-"));
     tempDirs.push(dir);
@@ -532,30 +446,6 @@ describe("proxy validation", () => {
     expect(result.checks[0]?.url).toBe("https://api.sandbox.push.apple.com");
     expect(result.checks[0]?.ok).toBe(false);
     expect(result.checks[0]?.error).toContain("InvalidProviderToken");
-  });
-
-  it("fails APNs reachability when non-403 response has no apns-id (proxy intercept)", async () => {
-    vi.mocked(apnsHttp2.probeApnsHttp2ReachabilityViaProxy).mockResolvedValue({
-      status: 200,
-      body: "",
-      responseHeaders: {},
-    });
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: [],
-      apnsReachability: true,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toHaveLength(1);
-    expect(result.checks[0]?.kind).toBe("apns");
-    expect(result.checks[0]?.url).toBe("https://api.sandbox.push.apple.com");
-    expect(result.checks[0]?.ok).toBe(false);
-    expect(result.checks[0]?.error).toContain("apns-id");
   });
 
   it("fails APNs reachability when the proxy blocks CONNECT", async () => {

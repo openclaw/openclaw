@@ -268,15 +268,18 @@ export function readSessionMutationTarget(params: {
           : null,
       };
     }
-    return {
-      target: resolveSessionSharingTarget({
-        cfg: params.cfg,
-        sessionKey: params.targetRef.sessionKey,
-        agentId: input.value,
-        ...params.lookupCaches(),
-        exactRead: params.targetCount === 1,
-      }),
-    };
+    let preparedReadSource: SessionSharingTarget["readSource"];
+    const target = resolveSessionSharingTarget({
+      cfg: params.cfg,
+      sessionKey: params.targetRef.sessionKey,
+      agentId: input.value,
+      ...params.lookupCaches(),
+      exactRead: params.targetCount === 1,
+      onReadSource: (source) => {
+        preparedReadSource = source;
+      },
+    });
+    return { target, preparedReadSource };
   } catch (error) {
     if (error instanceof AgentSelectionRequiredError) {
       return {

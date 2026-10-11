@@ -91,37 +91,33 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }
 
   async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
-    const target = this.resolveTarget(params);
-    const hostPath = target.hostPath;
-    this.ensureWritable(target, "write files");
-    const buffer = Buffer.isBuffer(params.data)
-      ? params.data
-      : Buffer.from(params.data, params.encoding ?? "utf8");
-    const root = await fsRoot(target.mountHostRoot);
-    await root.write(relativeToRoot(target, hostPath), buffer, {
-      mkdir: params.mkdir,
-      mutationSymlinks: "reject",
-    });
-    await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
+    await this.writeLocalFile(params, "write");
   }
 
   async createFileExclusive(
     params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
   ): Promise<"created" | "exists"> {
+    return this.writeLocalFile(params, "create");
+  }
+
+  private async writeLocalFile(
+    params: Parameters<SandboxFsBridge["writeFile"]>[0],
+    method: "write" | "create",
+  ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
     const hostPath = target.hostPath;
-    this.ensureWritable(target, "create files");
+    this.ensureWritable(target, method === "create" ? "create files" : "write files");
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const root = await fsRoot(target.mountHostRoot);
     try {
-      await root.create(relativeToRoot(target, hostPath), buffer, {
-        mkdir: params.mkdir !== false,
+      await root[method](relativeToRoot(target, hostPath), buffer, {
+        mkdir: method === "create" ? params.mkdir !== false : params.mkdir,
         mutationSymlinks: "reject",
       });
     } catch (error) {
-      if (error instanceof FsSafeError && error.code === "already-exists") {
+      if (method === "create" && error instanceof FsSafeError && error.code === "already-exists") {
         return "exists";
       }
       throw error;

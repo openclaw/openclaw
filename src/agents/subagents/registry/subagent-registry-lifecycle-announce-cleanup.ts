@@ -1,6 +1,7 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -253,7 +254,10 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       if (cleanup === "delete" && (await prepareChildSessionEffects())) {
-        const cleanupSessionEntry = await loadSessionEntryByKey(entry.childSessionKey);
+        const cleanupSessionEntry = await loadSessionEntryByKey(
+          entry.childSessionKey,
+          parseAgentSessionKey(entry.childSessionKey) ? undefined : entry.childAgentId,
+        );
         const cleanupSessionIdentity =
           cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
             ? {
@@ -278,6 +282,7 @@ export const startSubagentAnnounceCleanupFlow = (
             isCurrent: childSessionEffectsAllowed,
             prepareCurrent: prepareChildSessionEffects,
             childSessionKey: entry.childSessionKey,
+            childAgentId: entry.childAgentId,
             spawnMode: entry.spawnMode,
             expectedSessionId: cleanupSessionIdentity.sessionId,
             expectedLifecycleRevision: cleanupSessionIdentity.lifecycleRevision,

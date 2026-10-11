@@ -97,6 +97,8 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
       answeredThrough += prompt.index + prompt[0].length;
       const question = prompt[1]!.trim();
       if (
+        question ===
+          "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished." ||
         question === "Migrate auth profile JSON files into SQLite now?" ||
         question === "Apply recommended config repairs now?"
       ) {

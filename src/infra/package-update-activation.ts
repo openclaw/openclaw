@@ -1,14 +1,20 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutablePath } from "./executable-path.js";
-import { supersedePackageActivationCustody } from "./package-update-activation-custody.js";
+import { retainMutationAuthority } from "./mutation-authority.js";
+import {
+  archivePackageActivationCustody,
+  settlePackageActivationCustody,
+} from "./package-update-activation-custody.js";
 import {
   openPackageActivationJournal,
   assertPackageActivationOperation,
@@ -18,9 +24,12 @@ import {
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
   packageActivationIdentity,
+  type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
   preparePackageActivationJournal,
+  PackageActivationArchiveError,
   resolvePackageActivationRecoveryCommand as recoveryCommand,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
@@ -35,16 +44,34 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-  type ManagedUpdateLeaseDatabaseIdentity,
+  prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
 
+function inspectPackageActivationLease({
+  databasePath,
+  databaseIdentity,
+  parentIdentity,
+}: PackageActivationRecord["descriptor"]["authority"]) {
+  let current: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity> | undefined;
+  try {
+    current = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT") || fs.lstatSync(databasePath, { throwIfNoEntry: false })) {
+      throw error;
+    }
+  }
+  return {
+    current,
+    changed: !isDeepStrictEqual(current, { databasePath, databaseIdentity, parentIdentity }),
+  };
+}
+
 /** Reconcile completed receipts; unfinished operations still require a live fence. */
-function readPackageActivationContinuation(installKey: string) {
+function readPackageActivationContinuation(installKey: string, dryRun?: boolean) {
   const anchor = resolvePackageActivationAnchor(installKey);
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
@@ -69,8 +96,17 @@ function readPackageActivationContinuation(installKey: string) {
   if (isPackageActivationComplete(anchor, record)) {
     return undefined;
   }
-  if (record.descriptor.authority.installKey !== installKey) {
-    throw new Error("Package publication is incomplete; its original continuation cannot run.");
+  if (
+    dryRun &&
+    ["prepared", "publishing", "publication-complete", "aborted", "superseded"].includes(
+      record.phase,
+    ) &&
+    [record.descriptor.previous.identity, record.descriptor.candidate.identity].includes(
+      packageActivationIdentity(installKey, true),
+    ) &&
+    inspectPackageActivationLease(record.descriptor.authority).changed
+  ) {
+    return undefined;
   }
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   if (record.phase === "superseded") {
@@ -81,25 +117,26 @@ function readPackageActivationContinuation(installKey: string) {
       `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
-  return record.descriptor.authority;
+  return record;
 }
 
 export function assertNoPendingPackageActivation(
   installKey: string,
-  options?: { continuation?: UpdateRecoveryFence },
+  options?: { continuation?: UpdateRecoveryFence; dryRun?: boolean },
 ): void {
-  const authority = readPackageActivationContinuation(installKey);
-  if (!authority) {
+  const record = readPackageActivationContinuation(installKey, options?.dryRun);
+  if (!record) {
     return;
   }
   if (
     options?.continuation &&
-    isDeepStrictEqual(authority, captureUpdateCommandExecutorAuthority(options.continuation))
+    isDeepStrictEqual(
+      record.descriptor.authority,
+      captureUpdateCommandExecutorAuthority(options.continuation),
+    )
   ) {
     return;
   }
-  const anchor = resolvePackageActivationAnchor(installKey);
-  const record = openPackageActivationJournal(anchor).read();
   throw new Error(
     `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
@@ -109,7 +146,7 @@ export async function preparePackageActivation(
   params: PackageActivationPreparation & { installTarget: ResolvedGlobalInstallTarget },
 ) {
   const fence = params.options.fence;
-  const assertOriginal = fence.assertCurrent.bind(fence);
+  const assertOriginal = retainMutationAuthority(fence.assertCurrent.bind(fence));
   const options = { ...params.options, fence };
   if (
     process.platform === "win32" ||
@@ -137,14 +174,24 @@ export async function preparePackageActivation(
     );
     return undefined;
   }
-  const prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
+  let prepared;
+  try {
+    prepared = await preparePackageActivationJournal({ ...params, options }, assertOriginal);
+  } catch (error) {
+    if (!(error instanceof PackageActivationArchiveError)) {
+      throw error;
+    }
+    // Closed evidence cannot regain rollback authority; use ordinary package swap.
+    options.onUnavailable?.(error.message);
+    return undefined;
+  }
   const owner = createPublicationOwner(
     prepared.anchor,
     prepared.journal,
     assertOriginal,
     prepared.initial,
-    undefined,
     options.onWarning,
+    true,
   );
   return { ...prepared, ...owner };
 }
@@ -166,11 +213,7 @@ export function readPackageActivationReceipt(installKey: string):
   }
   const record = openPackageActivationJournal(anchor).read();
   const receipt = status(record);
-  if (
-    receipt.phase !== "complete" ||
-    (record.intent?.kind !== "recovery-lease-identity-changed" &&
-      record.intent?.kind !== "recovery-lease-missing")
-  ) {
+  if (receipt.phase !== "complete") {
     assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   }
   return receipt.phase === "complete" || record.phase === "superseded"
@@ -178,83 +221,100 @@ export function readPackageActivationReceipt(installKey: string):
     : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
 }
 
+type PackageActivationSettlement = {
+  operationId: string;
+  reason: string;
+  retained: string | undefined;
+  detail: string | undefined;
+  warning?: string;
+};
+
 /** Explicit repair settles untouched preparation or obsolete custody, never pending restoration. */
-export async function settlePendingPackageActivation(installKey: string) {
+export async function settlePendingPackageActivation(
+  installKey: string,
+  onSettled?: (settlement: PackageActivationSettlement) => void,
+  expectedCompleted?: PackageActivationRecord,
+  options?: { onlyStaleLease?: boolean; dryRun?: boolean },
+) {
   const anchor = resolvePackageActivationAnchor(installKey);
-  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+  if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   const journal = openPackageActivationJournal(anchor);
-  const admission = await journal.readForRecovery();
-  const initial = admission.record;
+  const admission = options?.dryRun ? undefined : await journal.readForRecovery();
+  const initial = admission?.record ?? journal.read();
   const complete = isPackageActivationComplete(anchor, initial);
-  const receipt =
-    initial.intent && "detail" in initial.intent && initial.intent.detail
+  if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
+    throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
+  }
+  if (initial.phase === "rollback-in-progress") {
+    throw new Error("Package restoration is unfinished; its rollback owner must finish recovery.");
+  }
+  const priorSettlement =
+    initial.phase === "superseded" && initial.intent && "settled" in initial.intent
+      ? initial.intent
+      : undefined;
+  const receipt: PackageActivationSettlement | undefined =
+    priorSettlement || complete
       ? {
           operationId: initial.descriptor.operationId,
-          reason: initial.intent.kind,
+          reason: priorSettlement?.kind ?? "publication-retired",
           retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
-          detail: initial.intent.detail,
+          detail: priorSettlement?.detail,
         }
       : undefined;
-  if (complete && initial.intent?.kind !== "publication-settled-external-change") {
-    return receipt;
+  if (options?.onlyStaleLease && complete) {
+    return options.dryRun ? receipt : undefined;
   }
   const originalAuthority = initial.descriptor.authority;
-  let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
-  // A recreated file can reuse the lost inode. Keep the recorded loss when
-  // resuming an interrupted custody transfer.
-  let leaseWasMissing =
-    initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing";
-  try {
-    currentDatabase = captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath);
-  } catch (error) {
-    if (
-      !hasErrnoCode(error, "ENOENT") ||
-      fs.lstatSync(originalAuthority.databasePath, { throwIfNoEntry: false })
-    ) {
-      throw error;
-    }
-    // A reboot can remove the temporary store. Its owner provisions it; the
-    // fresh executor below still fences every change to retained package custody.
-    currentDatabase = createManagedHandoffLeaseDatabase(originalAuthority.databasePath)(true, () =>
-      captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath),
-    );
-    leaseWasMissing = true;
+  const replacementIdentity = packageActivationIdentity(installKey, true);
+  if (
+    options?.onlyStaleLease &&
+    ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
+      replacementIdentity,
+    )
+  ) {
+    return undefined;
   }
-  const leaseIdentityChanged =
-    leaseWasMissing ||
-    currentDatabase.databasePath !== originalAuthority.databasePath ||
-    currentDatabase.databaseIdentity !== originalAuthority.databaseIdentity ||
-    currentDatabase.parentIdentity !== originalAuthority.parentIdentity;
-  // Reporting can replay a completed receipt, but an external settlement must
-  // first release its old lease identity after reboot so the next preparation works.
-  if (complete && !leaseIdentityChanged) {
-    return receipt;
+  const lease = inspectPackageActivationLease(originalAuthority);
+  const leaseWasMissing =
+    !lease.current ||
+    (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
+  const leaseIdentityChanged = leaseWasMissing || lease.changed;
+  if (options?.onlyStaleLease && !leaseIdentityChanged) {
+    return undefined;
   }
   const reason = leaseWasMissing
     ? "recovery-lease-missing"
     : leaseIdentityChanged
       ? "recovery-lease-identity-changed"
       : "superseded-by-manual-install";
-  const replacementIdentity = packageActivationIdentity(installKey, true);
   const externalPublication =
-    !leaseIdentityChanged &&
     replacementIdentity === initial.descriptor.candidate.identity &&
-    (initial.phase === "publishing" ||
+    (initial.phase === "prepared" ||
+      initial.phase === "publishing" ||
+      initial.phase === "publication-complete" ||
       (initial.phase === "superseded" &&
         initial.intent?.kind === "publication-settled-external-change"));
-  const publicationNotStarted =
-    !leaseIdentityChanged &&
+  const unusedPreparation =
     replacementIdentity === initial.descriptor.previous.identity &&
     ((initial.phase === "prepared" &&
       initial.intent === null &&
       initial.publications.length === 0) ||
       initial.phase === "aborted");
+  const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
   if (
+    !complete &&
     !publicationNotStarted &&
     !externalPublication &&
-    !leaseIdentityChanged &&
+    !(
+      leaseIdentityChanged &&
+      (unusedPreparation ||
+        (initial.phase === "publication-complete" &&
+          replacementIdentity === initial.descriptor.previous.identity) ||
+        initial.phase === "superseded")
+    ) &&
     [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
     )
@@ -262,19 +322,52 @@ export async function settlePendingPackageActivation(installKey: string) {
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
+  if (options?.dryRun) {
+    if (externalPublication) {
+      await verifyPackagePublicationSettlement(initial, () => journal.assertCurrent(initial));
+    }
+    return {
+      operationId: initial.descriptor.operationId,
+      reason,
+      retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
+      detail: undefined,
+      warning: undefined,
+    };
+  }
+  const currentDatabase =
+    lease.current ??
+    (await prepareManagedHandoffLeaseDatabaseIdentity(originalAuthority.databasePath));
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
       const fence = await executor.enter(installKey);
+      const assertCurrent = retainMutationAuthority(fence.assertCurrent);
       assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
-      admission.admit(fence.assertCurrent);
+      admission!.admit(assertCurrent);
       journal.assertCurrent(initial);
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
         throw new Error("The installed package changed before recovery settlement.");
       }
+      const finish = (settled: PackageActivationSettlement, archive = true) => {
+        // Keep the active receipt replayable until the caller has recorded the
+        // outcome. Archival then removes history from old readers' admission path.
+        onSettled?.(settled);
+        if (archive && settled.retained) {
+          settled.warning = archivePackageActivationCustody(
+            anchor,
+            journal,
+            journal.read(),
+            assertCurrent,
+          );
+        }
+        return settled;
+      };
+      if (complete && receipt) {
+        return finish(receipt);
+      }
       if (publicationNotStarted) {
         const assertPrevious = () => {
-          fence.assertCurrent();
+          assertCurrent();
           if (
             packageActivationIdentity(installKey, true) !== initial.descriptor.previous.identity
           ) {
@@ -283,39 +376,83 @@ export async function settlePendingPackageActivation(installKey: string) {
         };
         const owner = createPublicationOwner(anchor, journal, assertPrevious, initial);
         if (initial.phase === "prepared") {
-          await owner.preflight("repair");
-          await owner.disarmRollback();
+          try {
+            await owner.disarmRollback();
+          } catch {
+            // A damaged unused candidate is not restoration input. Verified
+            // retirement rechecks the live previous package, launchers, journal
+            // and sticky authority before preserving that candidate as evidence.
+          }
         }
-        await owner.retire();
-        return {
+        const settled: PackageActivationSettlement = {
           operationId: initial.descriptor.operationId,
           reason: "publication-not-started",
           retained: undefined,
           detail: undefined,
         };
+        const warning = await owner.retireVerified((detail) => {
+          settled.retained = `${anchor}.superseded-${initial.descriptor.operationId}`;
+          settled.detail = detail;
+          onSettled?.(settled);
+        });
+        // Preserved custody reported before archival; ordinary retirement keeps
+        // its bounded active receipt, so either reporting failure is replayable.
+        return warning ? { ...settled, warning } : finish(settled, false);
       }
-      const verified = externalPublication
-        ? await verifyPackagePublicationSettlement(anchor, initial, fence.assertCurrent)
-        : undefined;
-      const settlement: Parameters<typeof supersedePackageActivationCustody>[4] = verified
-        ? {
+      if (externalPublication) {
+        const verified = await verifyPackagePublicationSettlement(initial, assertCurrent);
+        // Persist a lost launcher rename acknowledgement before disarming recovery.
+        const outcome = await syncDirectory(initial.descriptor.binDir);
+        verified.assertUnchanged();
+        journal.assertCurrent(initial);
+        requireDirectorySync(outcome, "Package settlement launcher directory");
+        const settled = {
+          operationId: initial.descriptor.operationId,
+          retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
+          reason: "publication-settled-external-change",
+          detail: receipt?.detail ?? verified.detail,
+        };
+        const result = settlePackageActivationCustody({
+          anchor,
+          journal,
+          record: initial,
+          settlement: {
             kind: "publication-settled-external-change",
-            detail: receipt?.detail ?? verified.detail,
-          }
-        : { kind: reason, detail: receipt?.detail };
-      const retained = await supersedePackageActivationCustody(
-        anchor,
-        journal,
-        initial,
-        verified?.assertUnchanged ?? fence.assertCurrent,
-        settlement,
-      );
-      return {
+            replacementIdentity,
+            settled: true,
+            detail: settled.detail,
+          },
+          assertCurrent: verified.assertUnchanged,
+          onSettled: () => onSettled?.(settled),
+        });
+        return { ...settled, warning: result.archiveWarning };
+      }
+      // Legacy half-transfers retain their original replacement fact. Today's
+      // live identity guards this closure; old artifact identities do not.
+      const settlement: Parameters<typeof settlePackageActivationCustody>[0]["settlement"] =
+        initial.phase === "superseded" && initial.intent && "settled" in initial.intent
+          ? initial.intent
+          : { kind: reason, replacementIdentity, settled: true, detail: receipt?.detail };
+      const settled = {
         operationId: initial.descriptor.operationId,
-        retained,
+        retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
         reason: settlement.kind,
         detail: settlement.detail,
       };
+      const result = settlePackageActivationCustody({
+        anchor,
+        journal,
+        record: initial,
+        settlement,
+        assertCurrent: () => {
+          assertCurrent();
+          if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
+            throw new Error("The installed package changed during recovery settlement.");
+          }
+        },
+        onSettled: () => onSettled?.(settled),
+      });
+      return { ...settled, warning: result.archiveWarning };
     },
     { existingAuthority: { ...originalAuthority, ...currentDatabase } },
   );
@@ -326,8 +463,11 @@ export async function readPackageActivationStatus(
 ): Promise<PackageActivationStatus> {
   const record = openPackageActivationJournal(anchor).read();
   assertPackageActivationOperation(record, operationId);
-  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
-  return status(record);
+  const receipt = status(record);
+  if (receipt.phase !== "complete") {
+    assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  }
+  return receipt;
 }
 
 export async function runPackageActivationRecovery(
@@ -339,35 +479,42 @@ export async function runPackageActivationRecovery(
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   assertPackageActivationOperation(initial, operationId);
+  const recoveryAction =
+    action === "repair" &&
+    initial.phase === "aborted" &&
+    initial.descriptor.helperDigest === LEGACY_PACKAGE_RECOVERY_HELPER
+      ? "retire"
+      : action;
   const complete = isPackageActivationComplete(anchor, initial);
-  if (complete) {
-    assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-  } else {
-    // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
-    // Admission is still followed by the same observations under the fresh fence.
-    await createPublicationOwner(
-      anchor,
-      journal,
-      () => {
-        assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-      },
-      initial,
-      admission.assertUnchanged,
-    ).preflight(action);
-  }
+  const authority = complete
+    ? {
+        ...initial.descriptor.authority,
+        ...(await prepareManagedHandoffLeaseDatabaseIdentity(
+          initial.descriptor.authority.databasePath,
+        )),
+      }
+    : initial.descriptor.authority;
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
       const fence = await executor.enter(initial.descriptor.authority.installKey);
-      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      assertManagedUpdateLeaseDatabaseIdentity(authority);
       admission.admit(fence.assertCurrent);
       journal.assertCurrent(initial);
-      const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
       if (complete) {
-        return owner.persistRetirement();
+        // Finish a lost directory-sync acknowledgement under today's authority,
+        // without granting any effect from the historical package identities.
+        const outcome = await syncDirectory(
+          path.dirname(resolvePackageActivationJournalPath(anchor)),
+        );
+        fence.assertCurrent();
+        journal.assertCurrent(initial);
+        requireDirectorySync(outcome, "Package helper retirement");
+        return status(initial);
       }
-      return action === "repair" ? owner.publish(true) : owner.retire();
+      const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
+      return recoveryAction === "repair" ? owner.publish(true) : owner.retire();
     },
-    { existingAuthority: initial.descriptor.authority },
+    { existingAuthority: authority },
   );
 }

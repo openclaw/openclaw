@@ -238,28 +238,18 @@ class MessageImageResourceDirective extends AsyncDirective {
           : decodeFailed
             ? t("chat.imageLightbox.loadFailed")
             : undefined;
-      if (reason === undefined) {
-        return this.present(this.renderImagePlaceholder(image));
-      }
       return this.present(
-        this.renderImageFrame(
-          image,
-          renderAssistantAttachmentStatusCard({
-            label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
-            badge: t("chat.attachments.unavailable"),
-            reason,
-            path: isLocalAssistantAttachmentSource(source) ? source : undefined,
-            onAllow:
-              !decodeFailed && availability.status === "unavailable" && availability.canAllow
-                ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
-                : undefined,
-            onRetry:
-              !decodeFailed && availability.status === "unavailable" && availability.recoverable
-                ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
-                : undefined,
-          }),
-          "unavailable",
-        ),
+        this.renderImagePlaceholder(image, reason, {
+          path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+          onAllow:
+            !decodeFailed && availability.status === "unavailable" && availability.canAllow
+              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
+              : undefined,
+          onRetry:
+            !decodeFailed && availability.status === "unavailable" && availability.recoverable
+              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
+              : undefined,
+        }),
       );
     }
     if (!this.managed) {
@@ -342,15 +332,11 @@ class MessageImageResourceDirective extends AsyncDirective {
               : html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`
           }
         </button>
-        ${
-          this.managed && previewUrl
-            ? renderChatImageActions(title, () =>
-                loadManagedImageBlob(img.url, opts, img.artifactId),
-              )
-            : nothing
-        }
       `,
       previewUrl ? undefined : "loading",
+      this.managed && previewUrl
+        ? renderChatImageActions(title, () => loadManagedImageBlob(img.url, opts, img.artifactId))
+        : nothing,
     );
   }
 
@@ -380,6 +366,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     img: ImageBlock,
     content: TemplateResult | typeof nothing,
     state?: "loading" | "unavailable",
+    actions: TemplateResult | typeof nothing = nothing,
   ) {
     const { width: imageWidth = 0, height: imageHeight = 0 } = img;
     const sized =
@@ -407,11 +394,18 @@ class MessageImageResourceDirective extends AsyncDirective {
       aria-busy=${pending ? "true" : "false"}
       role=${pending ? "status" : nothing}
       aria-label=${pending ? t("common.loading") : nothing}
-      >${content}</span
+      >${compact ? content : html`<span class="chat-image-surface">${content}</span>`}${actions}</span
     >`;
   }
 
-  private renderImagePlaceholder(image: ImageBlock, reason?: string) {
+  private renderImagePlaceholder(
+    image: ImageBlock,
+    reason?: string,
+    actions?: Pick<
+      Parameters<typeof renderAssistantAttachmentStatusCard>[0],
+      "path" | "onAllow" | "onRetry"
+    >,
+  ) {
     if (reason === undefined) {
       return this.renderImageElement(image, undefined, this.options);
     }
@@ -435,6 +429,7 @@ class MessageImageResourceDirective extends AsyncDirective {
               this.refreshImage();
             }
           : undefined,
+        ...actions,
       }),
       "unavailable",
     );
@@ -613,11 +608,7 @@ class MessageImagesDirective extends Directive {
   private canonicalMessageKey: string | undefined;
   private localSubmission = false;
 
-  override render(
-    images: ImageBlock[],
-    opts?: ImageRenderOptions,
-    previews: TemplateResult[] = [],
-  ) {
+  override render(images: ImageBlock[], opts?: ImageRenderOptions, previews: unknown[] = []) {
     const scope = JSON.stringify([
       opts?.connectionEpoch,
       opts?.authToken?.trim(),

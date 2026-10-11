@@ -16,6 +16,7 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { hasErrnoCode } from "../errno.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   ARTIFACT_NAME_RE,
@@ -32,6 +33,13 @@ import {
 const ARTIFACT_EXT_RE = /^\.[A-Za-z0-9]{1,10}$/;
 const PART_SUFFIX = ".part";
 const ORPHAN_GRACE_MS = 24 * 60 * 60_000;
+
+function ignoreMissingArtifact(error: unknown): null {
+  if (hasErrnoCode(error, "ENOENT")) {
+    return null;
+  }
+  throw error;
+}
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   return fileStore({
@@ -155,8 +163,7 @@ export async function stageQueuePayloadMedia(
   const stagedPayloads: ReplyPayload[] = [];
   try {
     for (const payload of params.payloads) {
-      const sources = payloadMediaSources(payload).filter(isSpoolableSource);
-      if (sources.length === 0) {
+      if (!payloadMediaSources(payload).some(isSpoolableSource)) {
         stagedPayloads.push(payload);
         continue;
       }
@@ -228,12 +235,7 @@ export async function pruneOrphanedDeliveryQueueMedia(
       .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
       .map((entry) => path.resolve(entry)),
   );
-  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  });
+  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch(ignoreMissingArtifact);
   if (!entries) {
     return;
   }
@@ -247,12 +249,7 @@ export async function pruneOrphanedDeliveryQueueMedia(
     if (retainPaths.has(artifactPath)) {
       continue;
     }
-    const stats = await fs.stat(artifactPath).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    });
+    const stats = await fs.stat(artifactPath).catch(ignoreMissingArtifact);
     if (!stats || stats.mtimeMs > cutoffMs) {
       continue;
     }

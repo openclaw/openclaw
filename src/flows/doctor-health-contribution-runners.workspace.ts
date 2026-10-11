@@ -100,48 +100,43 @@ export async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Prom
   await noteBootstrapFileSize(ctx.cfg);
 }
 
-export async function runHeartbeatCadenceMigrationHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
+function workspaceMigration(
+  load: () => Promise<
+    (params: {
+      cfg: OpenClawConfig;
+      shouldRepair: boolean;
+      env?: NodeJS.ProcessEnv;
+    }) => Promise<unknown>
+  >,
+): (ctx: DoctorHealthFlowContext) => Promise<void> {
+  return async (ctx) => {
+    const migrate = await load();
+    await migrate({ cfg: ctx.cfg, shouldRepair: ctx.prompter.shouldRepair, env: ctx.env });
+  };
+}
+
+export const runHeartbeatCadenceMigrationHealth = workspaceMigration(async () => {
   const { maybeMigrateHeartbeatCadenceToCron } =
     await import("../commands/doctor-heartbeat-cadence-migration.js");
-  await maybeMigrateHeartbeatCadenceToCron({
-    cfg: ctx.cfg,
-    shouldRepair: ctx.prompter.shouldRepair,
-    env: ctx.env,
-  });
-}
+  return maybeMigrateHeartbeatCadenceToCron;
+});
 
-export async function runHeartbeatScratchMigrationHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
+export const runHeartbeatScratchMigrationHealth = workspaceMigration(async () => {
   const { maybeMigrateHeartbeatFilesToScratch } =
     await import("../commands/doctor-heartbeat-scratch-migration.js");
-  await maybeMigrateHeartbeatFilesToScratch({
-    cfg: ctx.cfg,
-    shouldRepair: ctx.prompter.shouldRepair,
-    env: ctx.env,
-  });
-}
+  return maybeMigrateHeartbeatFilesToScratch;
+});
 
-export async function runToolsMdMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export const runToolsMdMigrationHealth = workspaceMigration(async () => {
   const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
-  await maybeMigrateToolsMd({
-    cfg: ctx.cfg,
-    shouldRepair: ctx.prompter.shouldRepair,
-    env: ctx.env,
-  });
-}
+  return maybeMigrateToolsMd;
+});
 
-export async function runHeartbeatTaskMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export const runHeartbeatTaskMigrationHealth = workspaceMigration(async () => {
   const { maybeMigrateHeartbeatTasksToCron } =
     await import("../commands/doctor-heartbeat-task-migration.js");
-  await maybeMigrateHeartbeatTasksToCron({
-    cfg: ctx.cfg,
-    shouldRepair: ctx.prompter.shouldRepair,
-    env: ctx.env,
-  });
-}
+  return maybeMigrateHeartbeatTasksToCron;
+});
 
 export async function runMemorySearchHealthContribution(
   ctx: DoctorHealthFlowContext,

@@ -13,7 +13,6 @@ import {
 } from "./native-hook-relay-client.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import {
-  clearNativeHookRelayBridgeRecordsForTests,
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
   readNativeHookRelayBridgeRecord as readNativeHookRelayBridgeRecordFromStore,
@@ -285,20 +284,19 @@ export async function handleNativeHookRelayBridgeRequest(
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
   const requestAbort = createHttpRequestAbortSignal(req, res);
+  const fail = (statusCode: number, error: string) =>
+    writeNativeHookRelayBridgeJson(res, statusCode, { ok: false, error });
   try {
     if (req.method !== "POST" || (!auth.remote && req.url !== "/invoke")) {
-      writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
+      fail(404, "not found");
       return;
     }
     if (!safeEqualSecret(req.headers.authorization, `Bearer ${auth.token}`)) {
-      writeNativeHookRelayBridgeJson(res, 403, { ok: false, error: "forbidden" });
+      fail(403, "forbidden");
       return;
     }
     if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
+      fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
     }
     const body = auth.remote
@@ -309,25 +307,15 @@ export async function handleNativeHookRelayBridgeRequest(
       : await readNativeHookRelayBridgeBody(req);
     const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
     if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
-      writeNativeHookRelayBridgeJson(res, 403, {
-        ok: false,
-        error: "native hook relay bridge target mismatch",
-      });
-      return;
-    }
-    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
+      fail(403, "native hook relay bridge target mismatch");
       return;
     }
     // Remote credentials never use the local canonical-fork generation grace.
-    if (auth.remote && payload.generation !== auth.registration.generation) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
+    if (
+      !isCurrentNativeHookRelayBridgeRequest(auth) ||
+      (auth.remote && payload.generation !== auth.registration.generation)
+    ) {
+      fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
     }
     const result = await auth.invokeRelay(
@@ -339,17 +327,13 @@ export async function handleNativeHookRelayBridgeRequest(
     if (requestAbort.signal.aborted) {
       return;
     }
-    writeNativeHookRelayBridgeJson(
-      res,
+    fail(
       isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
-      {
-        ok: false,
-        error: auth.remote
-          ? "Native hook callback failed"
-          : error instanceof Error
-            ? error.message
-            : String(error),
-      },
+      auth.remote
+        ? "Native hook callback failed"
+        : error instanceof Error
+          ? error.message
+          : String(error),
     );
   } finally {
     requestAbort.cleanup();
@@ -423,5 +407,4 @@ export async function clearNativeHookRelayBridgesForTests(): Promise<void> {
   while (pendingOperations.size > 0) {
     await Promise.allSettled(pendingOperations);
   }
-  await clearNativeHookRelayBridgeRecordsForTests();
 }

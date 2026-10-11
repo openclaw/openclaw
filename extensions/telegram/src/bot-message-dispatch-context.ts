@@ -89,11 +89,7 @@ function buildRecoveredTelegramChatActionSender(params: {
 export async function resolveDispatchTelegramContext(params: {
   context: TelegramMessageContext;
 }): Promise<TelegramMessageContext> {
-  const threadSpec = resolveDispatchTelegramThreadSpec({
-    chatId: params.context.chatId,
-    ctxPayload: params.context.ctxPayload,
-    threadSpec: params.context.threadSpec,
-  });
+  const threadSpec = resolveDispatchTelegramThreadSpec(params.context);
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
     if (threadSpec.scope !== "forum" || threadSpec.id == null) {
       return params.context;

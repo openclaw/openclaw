@@ -58,14 +58,7 @@ export async function buildDiscordNativeCommandContext(
     ? (params.user.globalName ?? params.user.username)
     : params.channelId;
   const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
-    buildDiscordInboundAccessContext({
-      channelConfig: params.channelConfig,
-      guildInfo: params.guildInfo,
-      sender: params.sender,
-      allowNameMatching: params.allowNameMatching,
-      isGuild: params.isGuild,
-      channelTopic: params.channelTopic,
-    });
+    buildDiscordInboundAccessContext(params);
 
   const conversation = {
     kind: params.isDirectMessage

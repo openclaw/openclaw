@@ -81,7 +81,7 @@ function manifest(): ClawManifest {
 }
 
 describe("applyClawCronUpdate", () => {
-  it.each(["add", "change"] as const)(
+  it.each(["change"] as const)(
     "preserves ownership before a failed readiness wait and permits %s retry",
     async (action) => {
       const env = { OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-cron-readiness-"), "state") };

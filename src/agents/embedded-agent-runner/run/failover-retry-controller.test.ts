@@ -449,7 +449,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile);
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(true);
     await expect(controller.maybeRetryTransient({ reason: "rate_limit" })).resolves.toBe(true);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -521,15 +521,17 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile, true);
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
+    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(true);
+    await expect(
+      controller.advanceAuthProfile("rate_limit", rateLimitContext),
+    ).rejects.toMatchObject({
       name: "FailoverError",
       reason: "rate_limit",
       status: 429,
     } satisfies Partial<FailoverError>);
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toBeInstanceOf(
-      FailoverError,
-    );
+    await expect(
+      controller.advanceAuthProfile("rate_limit", rateLimitContext),
+    ).rejects.toBeInstanceOf(FailoverError);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
     expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledTimes(2);

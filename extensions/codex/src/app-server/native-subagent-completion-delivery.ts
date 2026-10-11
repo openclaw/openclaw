@@ -40,7 +40,8 @@ export class CodexNativeSubagentCompletionDelivery {
     if (existing) {
       return existing;
     }
-    const attempt = this.deliverAttempt(state, childState);
+    // Publish the shared attempt before releasing a client can synchronously close it.
+    const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
     this.attempts.set(childState, attempt);
     const release = () => {
       if (this.attempts.get(childState) === attempt) {
@@ -56,10 +57,9 @@ export class CodexNativeSubagentCompletionDelivery {
     if (!completion || !this.isCurrent(state, childState)) {
       return;
     }
-    if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
+    if (childState.completionDeliveryTimer) {
       return;
     }
-    childState.deliveringCompletion = true;
     let deferredToForeground = false;
     try {
       if (!this.prepareDelivery(state, childState)) {
@@ -140,15 +140,12 @@ export class CodexNativeSubagentCompletionDelivery {
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
       }
-      childState.deliveringCompletion = false;
     }
   }
 
   finish(state: ParentState, child: ChildState): void {
-    if (child.completionDeliveryTimer) {
-      clearTimeout(child.completionDeliveryTimer);
-      child.completionDeliveryTimer = undefined;
-    }
+    clearTimeout(child.completionDeliveryTimer);
+    child.completionDeliveryTimer = undefined;
     void this.deliverPending(state, child);
   }
 
@@ -189,7 +186,7 @@ export class CodexNativeSubagentCompletionDelivery {
         }
       }
       child.nativeCompletionDelivered = true;
-      if (child.pendingCompletion && !child.deliveringCompletion) {
+      if (child.pendingCompletion && !this.attempts.has(child)) {
         this.finish(deliveryParent, child);
       }
     }

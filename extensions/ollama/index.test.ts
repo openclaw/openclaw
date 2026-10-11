@@ -392,6 +392,15 @@ describe("ollama plugin", () => {
     expect(pullMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an ollama.com base URL before destructive reset", async () => {
+    modelsMock.mockResolvedValue({ reachable: true, models: [{ name: "kimi-k3" }] });
+    const ctx = resetContext({ customBaseUrl: "https://ollama.com", customModelId: "kimi-k3" });
+    const validate = registerProvider().auth[0].validateNonInteractive;
+
+    await expect(validate(ctx)).rejects.toThrow("--auth-choice ollama-cloud");
+    expect(modelsMock).not.toHaveBeenCalled();
+  });
+
   it("classifies incomplete ollama streams as provider failures", () => {
     const provider = registerProvider();
     expect(
@@ -1260,7 +1269,7 @@ describe("ollama plugin", () => {
     if (!wrapped) {
       throw new Error("expected Ollama OpenAI-compatible stream wrapper");
     }
-    await wrapped({} as never, {} as never, { onPayload });
+    await wrapped({} as never, { messages: [] }, { onPayload });
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(onPayload).toHaveBeenCalledOnce();
   });

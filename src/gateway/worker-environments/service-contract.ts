@@ -9,6 +9,7 @@ import type {
   WorkerDesktopObserveResult as ProtocolWorkerDesktopObserveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
+import type { RequiredSessionPlacementAdmission } from "../../agents/session-placement-admission.types.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
@@ -21,7 +22,7 @@ import type { WorkerPlacementAuthorization } from "./placement-authorization.js"
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
@@ -192,6 +193,8 @@ export type WorkerEnvironmentServiceContract = {
 export type WorkerPlacementDispatchRequest = WorkerSessionPlacementDispatchIdentity & {
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  /** Initial mandatory admission cannot cancel the input it is preparing. Never exposed over RPC. */
+  requiredProfile?: string;
   /** Current dispatch caller's setup authority; never inherited by a new caller. */
   runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;
@@ -211,6 +214,11 @@ export type WorkerPlacementDispatchAdmission = <T>(
   authorize?: () => void,
   signal?: AbortSignal,
 ) => Promise<T>;
+
+export type WorkerPlacementRedispatch = (
+  placement: Extract<WorkerSessionPlacementRecord, { state: "reclaimed" | "failed" }>,
+  options: { assertCurrent: () => void; signal?: AbortSignal },
+) => Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
 
 /** Canonical admission rejected the session owner, not a caller or process cancellation. */
 export class WorkerPlacementAdmissionTargetError extends Error {
@@ -252,6 +260,8 @@ export type WorkerPlacementReclaimSourceCheck = ((
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
+  /** Server-owned placement under existing session creation/run authority, not manual dispatch. */
+  withRequiredSession?: RequiredSessionPlacementAdmission;
   getPendingDeviceDispatchCount?(deviceId: string, excludeSessionId?: string): number;
   /** @deprecated Await getAdmittedDeviceSessionCountsAsync; retained through the next Plugin SDK major. */
   getAdmittedDeviceSessionCounts?(excludeSessionId?: string): ReadonlyMap<string, number>;

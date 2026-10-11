@@ -153,6 +153,18 @@ suite.define(() => {
         });
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar
+          .locator(".sidebar-rail")
+          .getByRole("button", { name: "Sessions", exact: true })
+          .click();
+        await expect
+          .poll(() =>
+            sidebar.getByRole("button", { name: "Mine", exact: true }).getAttribute("aria-pressed"),
+          )
+          .toBe("true");
+        // This flow intentionally opens another person's session from the all-owner roster.
+        await sidebar.getByRole("button", { name: "All", exact: true }).click();
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         const card = page.locator(".session-progress-hovercard");
         await row.waitFor({ state: "visible" });
@@ -217,6 +229,11 @@ suite.define(() => {
         await captureProof(page, "hovercard-identity-activity.png");
 
         await page.goBack();
+        await expect
+          .poll(() =>
+            sidebar.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
+          )
+          .toBe("true");
         await row.waitFor({ state: "visible" });
         await row.hover();
         await card.waitFor({ state: "visible" });

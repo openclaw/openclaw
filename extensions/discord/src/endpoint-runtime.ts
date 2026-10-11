@@ -53,29 +53,6 @@ function normalizeRestApiBaseUrl(value: string): URL {
   return url;
 }
 
-function normalizeGatewayOrigin(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("Discord endpoint Gateway origin must be a valid URL");
-  }
-  if (url.protocol !== "wss:" && !(url.protocol === "ws:" && isLoopbackHost(url.hostname))) {
-    throw new Error("Discord endpoint Gateway origin must use WSS or loopback WS");
-  }
-  if (url.protocol === "wss:" && isBlockedHostnameOrIp(url.hostname)) {
-    throw new Error(
-      "Discord endpoint Gateway origin must not target a private/internal/special-use hostname or IP address",
-    );
-  }
-  if (url.username || url.password || url.hash || url.pathname !== "/" || url.search) {
-    throw new Error(
-      "Discord endpoint Gateway origin must be an origin without credentials, path, query, or fragment",
-    );
-  }
-  return url.origin;
-}
-
 function resolveDescriptor(apiUrl: string): DiscordEndpointDescriptor {
   const restApiBaseUrl = normalizeRestApiBaseUrl(apiUrl);
   const gatewayBotUrl = new URL(
@@ -84,10 +61,16 @@ function resolveDescriptor(apiUrl: string): DiscordEndpointDescriptor {
   );
   const gatewayOriginUrl = new URL(restApiBaseUrl.origin);
   gatewayOriginUrl.protocol = gatewayOriginUrl.protocol === "https:" ? "wss:" : "ws:";
+  // Scheme and origin shape come from the validated REST anchor; TLS still forbids private hosts.
+  if (gatewayOriginUrl.protocol === "wss:" && isBlockedHostnameOrIp(gatewayOriginUrl.hostname)) {
+    throw new Error(
+      "Discord endpoint Gateway origin must not target a private/internal/special-use hostname or IP address",
+    );
+  }
   return Object.freeze({
     restApiBaseUrl: restApiBaseUrl.toString().replace(/\/$/u, ""),
     gatewayBotUrl: gatewayBotUrl.toString(),
-    gatewayOrigin: normalizeGatewayOrigin(gatewayOriginUrl.origin),
+    gatewayOrigin: gatewayOriginUrl.origin,
   });
 }
 

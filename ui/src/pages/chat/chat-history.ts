@@ -7,6 +7,7 @@ import {
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
@@ -54,6 +55,11 @@ export async function loadChatHistory(
   const client = state.client;
   const sessions = state.sessions;
   const connectionEpoch = state.connectionEpoch;
+  const ownsConnection = captureChatConnectionOwner(state);
+  const connectionIsCurrent = () => ownsConnection() && state.sessions === sessions;
+  const agentIsCurrent = () =>
+    !isUiSelectedGlobalSessionKey(state, sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId;
   const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
   if (hydration) {
     const version = requests.historyVersion;
@@ -62,13 +68,9 @@ export async function loadChatHistory(
     const current = await hydration;
     if (
       !current ||
-      !state.connected ||
-      state.client !== client ||
-      state.sessions !== sessions ||
-      state.connectionEpoch !== connectionEpoch ||
+      !connectionIsCurrent() ||
       !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-      (isUiSelectedGlobalSessionKey(state, sessionKey) &&
-        resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+      !agentIsCurrent()
     ) {
       return undefined;
     }
@@ -132,13 +134,9 @@ export async function loadChatHistory(
     refresh.promise = inFlight.promise.then(() => {
       if (
         requests.historyVersion !== version ||
-        !state.connected ||
-        state.client !== client ||
-        state.sessions !== sessions ||
-        state.connectionEpoch !== connectionEpoch ||
+        !connectionIsCurrent() ||
         state.sessionKey !== sessionKey ||
-        (isUiSelectedGlobalSessionKey(state, sessionKey) &&
-          resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+        !agentIsCurrent()
       ) {
         return undefined;
       }
@@ -184,8 +182,7 @@ export async function loadChatHistory(
         });
       } else if (
         state.sessionKey === sessionKey &&
-        (!isUiSelectedGlobalSessionKey(state, sessionKey) ||
-          resolveUiSelectedSessionAgentId(state) === requestAgentId) &&
+        agentIsCurrent() &&
         (!state.connected ||
           current.client !== state.client ||
           current.sessions !== state.sessions ||
@@ -263,8 +260,6 @@ export type ChatEventPayload = {
   retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
-  itemId?: string;
-  itemStartOffset?: number;
   replace?: boolean;
   errorMessage?: string;
   errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];

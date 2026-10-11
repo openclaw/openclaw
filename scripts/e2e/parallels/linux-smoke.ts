@@ -22,7 +22,6 @@ import {
   shouldSkipSnapshotRestore,
   shellQuote,
   validateSnapshotRestoreMode,
-  warn,
   withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
@@ -45,8 +44,12 @@ import {
   printSmokeTargetSummary,
   posixAgentTurnScript,
   posixStopGatewayScript,
+  posixRefOnboardArgs,
   parseSmokeCliArgs,
   SmokeRunController,
+  smokeDefaultOptions,
+  smokeDefaultStatus,
+  verifyPosixGateway,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
@@ -60,21 +63,11 @@ interface LinuxOptions extends SmokeCliOptions {
 }
 
 const defaultOptions = (): LinuxOptions => ({
+  ...smokeDefaultOptions,
   apiKeyEnv: undefined,
-  hostIp: undefined,
   hostPort: 18427,
-  hostPortExplicit: false,
   installUrl: "https://openclaw.ai/install.sh",
-  installVersion: "",
-  json: false,
-  keepServer: false,
-  latestVersion: "",
-  mode: "both",
-  modelId: undefined,
-  npmRegistry: undefined,
-  provider: "openai",
   snapshotHint: "fresh",
-  targetPackageSpec: "",
   vmName: "Ubuntu 26.04",
   vmNameExplicit: false,
 });
@@ -134,16 +127,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private guestEnv: Record<string, string> = {};
 
   protected status = {
+    ...smokeDefaultStatus,
     daemon: "systemd-user-unavailable",
-    freshAgent: "skip",
-    freshGateway: "skip",
-    freshMain: "skip",
-    freshVersion: "skip",
-    latestInstalledVersion: "skip",
-    upgrade: "skip",
-    upgradeAgent: "skip",
-    upgradeGateway: "skip",
-    upgradeVersion: "skip",
   };
 
   constructor(options: LinuxOptions) {
@@ -194,76 +179,66 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     return this.options.targetPackageSpec ? "target package tgz" : "current main tgz";
   }
 
-  protected async runFreshLane(): Promise<void> {
-    await this.phases.phase("fresh.restore-snapshot", 180, () => this.restoreSnapshot());
-    await this.phases.phase("fresh.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
-      this.bootstrapGuest(),
-    );
-    await this.phases.phase("fresh.reset-state", 180, () => this.resetState());
-    await this.phases.phase("fresh.preflight", 90, () => this.logGuestPreflight());
-    await this.phases.phase("fresh.ensure-runtime", 420, () =>
-      ensureSmokeGuestRuntime({
-        runShell: (script) => this.guest.bash(script),
-        bootstrap: () => this.installLatestRelease(),
-      }),
-    );
-    await this.phases.phase("fresh.install-main", 420, () =>
-      this.installMainTgz("openclaw-main-fresh.tgz"),
-    );
-    this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
-    await this.phases.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phases.phase("fresh.install-companions", 600, () =>
-      installSmokeRuntimeCompanions({
-        provider: this.options.provider,
-        readCli: (args) => this.guest.exec(["openclaw", ...args]),
-        installCli: (args) => {
-          this.guest.exec(["openclaw", ...args]);
-        },
-      }),
-    );
-    await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("fresh.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
-    await this.phases.phase("fresh.gateway-start", 240, () => this.startGatewayBackground());
-    await this.phases.phase("fresh.bad-plugin-diagnostic", 90, () =>
-      this.verifyBadPluginDiagnostic("fresh"),
-    );
-    await this.phases.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
-    this.status.freshGateway = "pass";
-    await this.phases.phase("fresh.first-local-agent-turn", this.agentTimeoutSeconds, () =>
-      this.verifyLocalTurn(),
-    );
-    this.status.freshAgent = "pass";
+  protected runFreshLane(): Promise<void> {
+    return this.runInstallLane("fresh");
   }
 
-  protected async runUpgradeLane(): Promise<void> {
-    await this.phases.phase("upgrade.restore-snapshot", 180, () => this.restoreSnapshot());
-    await this.phases.phase("upgrade.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
+  protected runUpgradeLane(): Promise<void> {
+    return this.runInstallLane("upgrade");
+  }
+
+  private async runInstallLane(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.restore-snapshot`, 180, () => this.restoreSnapshot());
+    await this.phases.phase(`${lane}.bootstrap-guest`, BOOTSTRAP_TIMEOUT_SECONDS, () =>
       this.bootstrapGuest(),
     );
-    await this.phases.phase("upgrade.reset-state", 180, () => this.resetState());
-    await this.phases.phase("upgrade.preflight", 90, () => this.logGuestPreflight());
-    await this.phases.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
-    this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
-    await this.phases.phase("upgrade.verify-latest-version", 90, () =>
-      this.verifyVersionContains(this.latestVersion),
+    await this.phases.phase(`${lane}.reset-state`, 180, () => this.resetState());
+    await this.phases.phase(`${lane}.preflight`, 90, () => this.logGuestPreflight());
+    if (lane === "fresh") {
+      await this.phases.phase("fresh.ensure-runtime", 420, () =>
+        ensureSmokeGuestRuntime({
+          runShell: (script) => this.guest.bash(script),
+          bootstrap: () => this.installLatestRelease(),
+        }),
+      );
+    } else {
+      await this.phases.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
+      this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
+      await this.phases.phase("upgrade.verify-latest-version", 90, () =>
+        this.verifyVersionContains(this.latestVersion),
+      );
+    }
+    await this.phases.phase(`${lane}.install-main`, 420, () =>
+      this.installMainTgz(`openclaw-main-${lane}.tgz`),
     );
-    await this.phases.phase("upgrade.install-main", 420, () =>
-      this.installMainTgz("openclaw-main-upgrade.tgz"),
+    this.status[`${lane}Version`] = await this.extractLastVersion(`${lane}.install-main`);
+    await this.phases.phase(`${lane}.verify-main-version`, 90, () => this.verifyTargetVersion());
+    if (lane === "fresh") {
+      await this.phases.phase("fresh.install-companions", 600, () =>
+        installSmokeRuntimeCompanions({
+          provider: this.options.provider,
+          readCli: (args) => this.guest.exec(["openclaw", ...args]),
+          installCli: (args) => {
+            this.guest.exec(["openclaw", ...args]);
+          },
+        }),
+      );
+      await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
+    }
+    await this.phases.phase(`${lane}.inject-bad-plugin`, 90, () => this.injectBadPluginFixture());
+    if (lane === "upgrade") {
+      await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
+    }
+    await this.phases.phase(`${lane}.gateway-start`, 240, () => this.startGatewayBackground());
+    await this.phases.phase(`${lane}.bad-plugin-diagnostic`, 90, () =>
+      this.verifyBadPluginDiagnostic(lane),
     );
-    this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
-    await this.phases.phase("upgrade.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phases.phase("upgrade.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
-    await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
-    await this.phases.phase("upgrade.bad-plugin-diagnostic", 90, () =>
-      this.verifyBadPluginDiagnostic("upgrade"),
-    );
-    await this.phases.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
-    this.status.upgradeGateway = "pass";
-    await this.phases.phase("upgrade.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+    await this.phases.phase(`${lane}.gateway-status`, 240, () => this.verifyGatewayStatus());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.first-local-agent-turn`, this.agentTimeoutSeconds, () =>
       this.verifyLocalTurn(),
     );
-    this.status.upgradeAgent = "pass";
+    this.status[`${lane}Agent`] = "pass";
   }
 
   private logGuestPreflight(): void {
@@ -417,28 +392,7 @@ fi`);
   }
 
   private runRefOnboard(): void {
-    this.guest.exec([
-      "/usr/bin/env",
-      `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
-      "openclaw",
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      this.auth.authChoice,
-      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "18789",
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--skip-health",
-      "--accept-risk",
-      "--json",
-    ]);
+    this.guest.exec(posixRefOnboardArgs(this.auth));
   }
 
   private injectBadPluginFixture(): void {
@@ -516,20 +470,7 @@ setsid sh -lc ` +
   }
 
   private verifyGatewayStatus(): void {
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      const result = this.guest.run(
-        ["openclaw", "gateway", "status", "--deep", "--require-rpc", "--timeout", "15000"],
-        { check: false },
-      );
-      if (result.status === 0) {
-        return;
-      }
-      if (attempt < 8) {
-        warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"]);
-      }
-    }
-    throw new Error("gateway status did not become RPC-ready");
+    verifyPosixGateway(this.guest);
   }
 
   private async verifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {

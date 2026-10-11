@@ -1,6 +1,6 @@
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import type { ChatQuestionCard } from "./chat-question-card.ts";
-import type { ChatQuestionPanel } from "./chat-question-panel.ts";
+import type { ChatQuestionPanel } from "./chat-question-panel.tsx";
 
 /** Await the registration owner, then the card and its interactive child. */
 export async function questionPanelIn(container: ParentNode): Promise<ChatQuestionPanel> {

@@ -5,13 +5,12 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   listCandidateAuthProfileStores,
-  loadCandidateAuthProfileStore,
+  loadCandidateAuthProfileStoreAsync,
 } from "./candidate-stores.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
@@ -27,6 +26,7 @@ import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
+import { logDroppedAuthProfileBookkeeping } from "./state-observation.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -53,7 +53,6 @@ export {
 } from "./profile-list.js";
 export { upsertAuthProfileWithLock, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
-const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 const OAUTH_REMOVAL_MAX_ATTEMPTS = 3;
 
 function listProviderAuthStateEntries<T>(
@@ -94,21 +93,18 @@ export async function setAuthProfileOrder(params: {
   const sanitized =
     params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
+  const order = deduped.length > 0 ? deduped : undefined;
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     sharedStoreWrite: params.sharedStoreWrite,
     // Keep inherited IDs in local order; pruning them silently undoes the requested switch.
-    ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
+    ...(order ? { saveOptions: { preserveOrderProfileIds: order } } : {}),
     updater: (store) => {
-      if (deduped.length === 0) {
-        if (listProviderAuthStateEntries(store.order, providerKey).length === 0) {
-          return false;
-        }
-        store.order = replaceProviderAuthState(store.order, providerKey);
-        return true;
+      if (!order && listProviderAuthStateEntries(store.order, providerKey).length === 0) {
+        return false;
       }
-      store.order = replaceProviderAuthState(store.order, providerKey, deduped);
+      store.order = replaceProviderAuthState(store.order, providerKey, order);
       return true;
     },
   });
@@ -250,16 +246,20 @@ type AuthProfileRemovalTarget = {
   expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
 };
 
+function loadRemovalStore(agentDir?: string): AuthProfileStore {
+  return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: false,
+    inheritedAuthDir: agentDir,
+  });
+}
+
 function createAuthProfileRemovalTarget(params: {
   agentDir?: string;
   profileIds?: ReadonlySet<string>;
   provider?: string;
 }): AuthProfileRemovalTarget {
   // Removal compares the physical write target, without inherited credentials.
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-    allowKeychainPrompt: false,
-    inheritedAuthDir: params.agentDir,
-  });
+  const store = loadRemovalStore(params.agentDir);
   const profileIds =
     params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
   return {
@@ -338,11 +338,14 @@ async function prepareAuthProfileRemovalPeers(
   return [...peers.values()];
 }
 
-function readRemovalProfileState(
+async function readRemovalProfileState(
   targets: readonly AuthProfileRemovalTarget[],
   peers: readonly OAuthRefreshGenerationPeer[],
   current = false,
-): { profiles: ReadonlyMap<string, AuthProfileCredential>; scopes: AuthProfileRemovalScope[] } {
+): Promise<{
+  profiles: ReadonlyMap<string, AuthProfileCredential>;
+  scopes: AuthProfileRemovalScope[];
+}> {
   const profiles = new Map<string, AuthProfileCredential>();
   const scopes = new Map<
     string,
@@ -367,12 +370,7 @@ function readRemovalProfileState(
     }
   };
   for (const target of targets) {
-    const store = current
-      ? loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-          allowKeychainPrompt: false,
-          inheritedAuthDir: target.agentDir,
-        })
-      : undefined;
+    const store = current ? loadRemovalStore(target.agentDir) : undefined;
     for (const profileId of target.profileIds) {
       add(
         target,
@@ -383,7 +381,7 @@ function readRemovalProfileState(
   }
   for (const peer of peers) {
     const credential = current
-      ? loadCandidateAuthProfileStore(peer.candidate)?.profiles[peer.profileId]
+      ? (await loadCandidateAuthProfileStoreAsync(peer.candidate))?.profiles[peer.profileId]
       : peer.credential;
     add(peer.candidate, peer.profileId, credential);
   }
@@ -421,10 +419,7 @@ async function removeAuthProfileTargetsWithLocks(
   const catalogStores = credentials.size > 0 ? await listCandidateAuthProfileStores({ cfg }) : [];
   return await withOAuthProfileLocks(lockKeys, async () => {
     for (const target of targets) {
-      const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-        allowKeychainPrompt: false,
-        inheritedAuthDir: target.agentDir,
-      });
+      const current = loadRemovalStore(target.agentDir);
       if (!authProfileRemovalTargetMatches(target, current)) {
         return { kind: "retry" };
       }
@@ -434,7 +429,7 @@ async function removeAuthProfileTargetsWithLocks(
     let result: AuthProfileRemovalResult = { kind: "updated", stores };
     let removalFailure: { error: unknown } | undefined;
     try {
-      removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
+      await removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
 
       for (const target of targets) {
         let stale = false;
@@ -501,13 +496,7 @@ async function removeAuthProfileTargetsWithLocks(
         }
       }
       const restored = targets.every((target) =>
-        authProfileRemovalTargetMatches(
-          target,
-          loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-            allowKeychainPrompt: false,
-            inheritedAuthDir: target.agentDir,
-          }),
-        ),
+        authProfileRemovalTargetMatches(target, loadRemovalStore(target.agentDir)),
       );
       throw new AggregateError(
         failures,
@@ -585,7 +574,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       if (!params.onIncomplete) {
         return;
       }
-      const surviving = readRemovalProfileState(targets, peers, true);
+      const surviving = await readRemovalProfileState(targets, peers, true);
       if (!onlyIfPresent || surviving.profiles.size > 0) {
         await params.onIncomplete(surviving.profiles, surviving.scopes);
       }
@@ -595,7 +584,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
     try {
       await params.beforeRemove?.(
         [...new Set(targets.flatMap((target) => [...target.profileIds]))],
-        readRemovalProfileState(targets, peers).scopes,
+        (await readRemovalProfileState(targets, peers)).scopes,
       );
       result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
     } catch (error) {
@@ -663,14 +652,6 @@ export async function markAuthProfileSuccess(params: {
     );
   });
   if (updated === null) {
-    authProfileProfilesLog.warn(
-      "dropped auth profile bookkeeping after locked store update failed",
-      {
-        event: "auth_profile_bookkeeping_dropped",
-        kind: "success",
-        profileId,
-        tags: ["auth_profiles", "persistence"],
-      },
-    );
+    logDroppedAuthProfileBookkeeping("success", profileId);
   }
 }

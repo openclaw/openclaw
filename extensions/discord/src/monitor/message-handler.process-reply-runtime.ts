@@ -196,10 +196,12 @@ export function createDiscordMessageReplyRuntime(params: {
 
   const draftPreview = createDiscordDraftPreviewController({
     groupThread: Boolean(ctxPayload.GroupThread),
+    isRoomEvent: params.isRoomEvent,
     cfg,
     discordConfig,
     accountId,
     abortSignal: ctx.abortSignal,
+    isPolicyCurrent: ctx.isPolicyCurrent,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,

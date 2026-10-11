@@ -3,6 +3,25 @@ import OpenClawKit
 import os
 
 extension GatewayConnectionController {
+    func manualGatewayRoute(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        stableID: String,
+        contextPath: String? = nil) -> (url: URL, tls: GatewayTLSParams?)?
+    {
+        let tls = self.resolveManualTLSParams(
+            stableID: stableID,
+            tlsEnabled: self.resolveManualUseTLS(host: host, useTLS: useTLS))
+        guard let url = self.buildGatewayURL(
+            host: host,
+            port: port,
+            useTLS: tls?.required == true,
+            contextPath: contextPath)
+        else { return nil }
+        return (url, tls)
+    }
+
     static func resolvedManualPort(host: String, port: Int) -> Int? {
         if port > 0 {
             return port <= 65535 ? port : nil

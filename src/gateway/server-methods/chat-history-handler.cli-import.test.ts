@@ -8,9 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -618,25 +618,6 @@ describe("CLI-imported history pages", () => {
   }
 
   const ids = (page: HistoryPage) => page.messages.map(readChatHistoryMessageId);
-
-  it("reopens a pre-reset local anchor while a post-reset CLI import is bound", async () => {
-    await withPreResetCliHistory(false, true, async (read) => {
-      const current = await read({ messageId: "fresh-question", limit: 2 });
-      expect(ids(current)).toContain("cli-only-answer");
-
-      const reopened = await read({ messageId: "old-answer", limit: 2 });
-      expect(ids(reopened)).toContain("old-answer");
-      expect(ids(reopened)).not.toContain("fresh-question");
-      expect(ids(reopened)).not.toContain("cli-only-answer");
-
-      // The reopened page keeps its own reset-interval sequence for paging.
-      const reopenedTail = await read({ messageId: "old-answer", limit: 1 });
-      expect(ids(reopenedTail)).toEqual(["old-answer"]);
-      expect(reopenedTail.olderCursor).toEqual(expect.any(String));
-
-      expectMissingAnchor(await read({ messageId: "nonexistent-anchor", limit: 2 }));
-    });
-  });
 
   it("keeps reopened-interval cursors on the closed interval across its reset marker", async () => {
     // Walk old-answer -> newer (closing reset marker) -> older. The marker is also

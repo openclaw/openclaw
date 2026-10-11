@@ -52,7 +52,7 @@ vi.mock("../../plugins/provider-public-artifacts.js", () => ({
 vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
 // mock-isolation: Keep catalog initialization outside this prepared-auth boundary test.
 vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  createModelCatalogDecisions: () => ({
+  prepareModelCatalogDecisions: async () => ({
     evaluateEntry: () => ({}),
     evaluateNative: () => ({}),
   }),

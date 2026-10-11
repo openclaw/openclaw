@@ -1,5 +1,6 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubPackageChannel, ClawHubPackageFamily } from "../infra/clawhub-packages.js";
+import { omitUndefinedManifestFields } from "./manifest-capability-normalizers.js";
 
 /** Install record fields captured for ClawHub plugin installs. */
 export type ClawHubPluginInstallRecordFields = {
@@ -40,45 +41,29 @@ export function buildClawHubPluginInstallRecordFields(
     clawhubUrl: fields.clawhubUrl,
     clawhubPackage: fields.clawhubPackage,
     clawhubFamily: fields.clawhubFamily,
-    ...(fields.clawhubChannel ? { clawhubChannel: fields.clawhubChannel } : {}),
-    ...(fields.clawhubTrustDisposition
-      ? { clawhubTrustDisposition: fields.clawhubTrustDisposition }
-      : {}),
-    ...(fields.clawhubTrustScanStatus
-      ? { clawhubTrustScanStatus: fields.clawhubTrustScanStatus }
-      : {}),
-    ...(fields.clawhubTrustModerationState
-      ? { clawhubTrustModerationState: fields.clawhubTrustModerationState }
-      : {}),
-    ...(fields.clawhubTrustReasons ? { clawhubTrustReasons: fields.clawhubTrustReasons } : {}),
-    ...(fields.clawhubTrustPending !== undefined
-      ? { clawhubTrustPending: fields.clawhubTrustPending }
-      : {}),
-    ...(fields.clawhubTrustStale !== undefined
-      ? { clawhubTrustStale: fields.clawhubTrustStale }
-      : {}),
-    ...(fields.clawhubTrustCheckedAt
-      ? { clawhubTrustCheckedAt: fields.clawhubTrustCheckedAt }
-      : {}),
-    ...(fields.clawhubTrustAcknowledgedAt
-      ? { clawhubTrustAcknowledgedAt: fields.clawhubTrustAcknowledgedAt }
-      : {}),
-    ...(fields.version ? { version: fields.version } : {}),
-    ...(fields.integrity ? { integrity: fields.integrity } : {}),
-    ...(fields.resolvedAt ? { resolvedAt: fields.resolvedAt } : {}),
-    ...(fields.installedAt ? { installedAt: fields.installedAt } : {}),
-    ...(fields.artifactKind ? { artifactKind: fields.artifactKind } : {}),
-    ...(fields.artifactFormat ? { artifactFormat: fields.artifactFormat } : {}),
-    ...(fields.npmIntegrity ? { npmIntegrity: fields.npmIntegrity } : {}),
-    ...(fields.npmShasum ? { npmShasum: fields.npmShasum } : {}),
-    ...(fields.npmTarballName ? { npmTarballName: fields.npmTarballName } : {}),
-    ...(fields.clawpackSha256 ? { clawpackSha256: fields.clawpackSha256 } : {}),
-    ...(fields.clawpackSpecVersion !== undefined
-      ? { clawpackSpecVersion: fields.clawpackSpecVersion }
-      : {}),
-    ...(fields.clawpackManifestSha256
-      ? { clawpackManifestSha256: fields.clawpackManifestSha256 }
-      : {}),
-    ...(fields.clawpackSize !== undefined ? { clawpackSize: fields.clawpackSize } : {}),
+    ...omitUndefinedManifestFields({
+      clawhubChannel: fields.clawhubChannel || undefined,
+      clawhubTrustDisposition: fields.clawhubTrustDisposition || undefined,
+      clawhubTrustScanStatus: fields.clawhubTrustScanStatus || undefined,
+      clawhubTrustModerationState: fields.clawhubTrustModerationState || undefined,
+      clawhubTrustReasons: fields.clawhubTrustReasons || undefined,
+      clawhubTrustPending: fields.clawhubTrustPending,
+      clawhubTrustStale: fields.clawhubTrustStale,
+      clawhubTrustCheckedAt: fields.clawhubTrustCheckedAt || undefined,
+      clawhubTrustAcknowledgedAt: fields.clawhubTrustAcknowledgedAt || undefined,
+      version: fields.version || undefined,
+      integrity: fields.integrity || undefined,
+      resolvedAt: fields.resolvedAt || undefined,
+      installedAt: fields.installedAt || undefined,
+      artifactKind: fields.artifactKind || undefined,
+      artifactFormat: fields.artifactFormat || undefined,
+      npmIntegrity: fields.npmIntegrity || undefined,
+      npmShasum: fields.npmShasum || undefined,
+      npmTarballName: fields.npmTarballName || undefined,
+      clawpackSha256: fields.clawpackSha256 || undefined,
+      clawpackSpecVersion: fields.clawpackSpecVersion,
+      clawpackManifestSha256: fields.clawpackManifestSha256 || undefined,
+      clawpackSize: fields.clawpackSize,
+    }),
   };
 }

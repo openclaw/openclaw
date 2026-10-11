@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
@@ -32,6 +31,7 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
+import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
@@ -39,7 +39,6 @@ import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import { applyJobPatch } from "../cron/service/jobs.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import { skillCollectionReviewMonitorAgentId } from "../cron/skill-collection-review-monitor.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
@@ -68,6 +67,7 @@ import type {
   PluginHookGatewayContext,
 } from "../plugins/hook-gateway.types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getGatewaySuspendAdmissionPhase,
   runWithGatewayIndependentRootWorkAdmission,
@@ -82,9 +82,6 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
-import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
@@ -107,7 +104,6 @@ import {
   fireStreamJob,
   formatOnExitRunSummary,
 } from "./server-cron-event-dispatch.js";
-import { reconcileGatewayMonitorJobs } from "./server-cron-monitor-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -161,15 +157,17 @@ export function buildGatewayCronService(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   env?: NodeJS.ProcessEnv;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
+  resolvePluginRegistry?: () => PluginRegistry | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const cronServiceLogger = toPinoLikeLogger(cronLogger, getResolvedLoggerSettings().level);
-  // Fence the raw context reference behind its Gateway instance lifecycle so a
-  // long-running scheduled turn cannot resolve a retired context after shutdown.
   const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
     params.resolveGatewayContext,
   );
-  const runSchedulerOwned = createScheduledGatewayRunner(scheduledGatewayContextResolver);
+  const runSchedulerOwned = createScheduledGatewayRunner(
+    scheduledGatewayContextResolver,
+    params.resolvePluginRegistry,
+  );
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled =
@@ -580,34 +578,14 @@ export function buildGatewayCronService(params: {
       const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
-      if (reviewAgentId && resolveSkillWorkshopConfig(runtimeConfig).autonomous.mode !== "auto") {
-        return { status: "skipped", summary: "Skill collection review disabled." };
-      }
-      const executionRoot = reviewAgentId
-        ? resolveWorkshopSkillsDir(runtimeConfig, agentId)
-        : undefined;
-      if (executionRoot) {
-        await fs.mkdir(executionRoot, { recursive: true });
-      }
-      try {
-        return await runCronIsolatedAgentTurn({
-          ...request,
-          cfg: runtimeConfig,
-          deps: params.deps,
-          agentId,
-          sessionKey,
-          lane: "cron",
-          executionRoot,
-          skillsSnapshot: executionRoot ? { prompt: "", skills: [] } : undefined,
-        });
-      } finally {
-        // Normal file tools can finish edits before cancellation. Refresh future
-        // sessions without rewriting files or invalidating the running session.
-        if (executionRoot) {
-          bumpSkillsSnapshotVersion({ reason: "workshop" });
-        }
-      }
+      return await runCronIsolatedAgentTurn({
+        ...request,
+        cfg: runtimeConfig,
+        deps: params.deps,
+        agentId,
+        sessionKey,
+        lane: "cron",
+      });
     },
     runCommandJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
       const result = await runCronCommandJob({
@@ -1252,7 +1230,7 @@ export function buildGatewayCronService(params: {
         }
       };
       try {
-        const { ok: converged } = await reconcileGatewayMonitorJobs({
+        const { ok: converged } = await reconcileHeartbeatMonitorJobs({
           cron,
           cfg,
           logger: cronServiceLogger,

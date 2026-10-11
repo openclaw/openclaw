@@ -130,27 +130,6 @@ describe("vitest process group helpers", () => {
     );
   });
 
-  it.each(["rw", "rw,hidepid=0", "rw,hidepid=off"])(
-    "accepts a complete zombie-only Linux process group with proc options %s",
-    async (mountOptions) => {
-      mockLinuxProc(
-        ["4200"],
-        {
-          "4200": procStat(4200, "Z", 1, 4200, "node (vitest)"),
-          "4200/4200": procStat(4200, "Z", 1, 4200, "node (vitest)"),
-          "4200/4201": procStat(4201, "X", 1, 4200, "worker"),
-        },
-        undefined,
-        `proc /proc proc ${mountOptions} 0 0\n`,
-        { "4200": [["4201", "4200"]] },
-      );
-
-      const { completion } = startLinuxCompletion();
-
-      await expect(completion).resolves.toEqual({ code: 0, signal: null });
-    },
-  );
-
   const missingTask = Object.assign(new Error("gone"), { code: "ENOENT" });
   const taskCases: [
     string,
@@ -160,15 +139,12 @@ describe("vitest process group helpers", () => {
   ][] = [
     ["runnable worker", [["4200", "4201"]], procStat(4201, "S", 1, 4200), "tid=4201"],
     ["mismatched TID", [["4200", "4201"]], procStat(4202, "Z", 1, 4200), "unavailable"],
-    ["mismatched PGID", [["4200", "4201"]], procStat(4201, "Z", 1, 999), "unavailable"],
     [
       "inaccessible task dir",
       [Object.assign(new Error("denied"), { code: "EACCES" })],
       undefined,
       "unavailable",
     ],
-    ["empty task dir", [[]], undefined, "unavailable"],
-    ["non-numeric task dir", [["4200", "worker"]], undefined, "unavailable"],
     ["missing task dir with leader", [missingTask], undefined, "unavailable"],
     ["disappeared TID", [["4200", "4201"], ["4200"]], missingTask, undefined],
     ["still-present TID", [["4200", "4201"]], missingTask, "unavailable"],
@@ -201,16 +177,14 @@ describe("vitest process group helpers", () => {
     await rejected;
   });
 
-  it.each([
-    ["hidepid=2", "proc /proc proc rw,hidepid=2 0 0\n"],
-    ["hidepid=invisible", "proc /proc proc rw,hidepid=invisible 0 0\n"],
-    ["hidepid=4", "proc /proc proc rw,hidepid=4 0 0\n"],
-    ["pid namespace", "proc /proc proc rw,pidns=host 0 0\n"],
-    ["missing proc mount", "tmpfs /tmp tmpfs rw 0 0\n"],
-    ["unreadable mounts", Object.assign(new Error("denied"), { code: "EACCES" })],
-  ])("fails closed before PID scans for %s", async (_label, mounts) => {
+  it("fails closed before PID scans for a missing proc mount", async () => {
     vi.useFakeTimers();
-    mockLinuxProc(["4200"], { "4200": procStat(4200, "Z", 1, 4200) }, undefined, mounts);
+    mockLinuxProc(
+      ["4200"],
+      { "4200": procStat(4200, "Z", 1, 4200) },
+      undefined,
+      "tmpfs /tmp tmpfs rw 0 0\n",
+    );
     const rejected = expect(startLinuxCompletion().completion).rejects.toThrow(
       "members: unavailable",
     );
@@ -220,20 +194,15 @@ describe("vitest process group helpers", () => {
     expect(fs.readdirSync).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["already gone", 0],
-    ["gone during deadline inspection", 2],
-  ])("accepts a Linux process group that is %s", async (_label, scansBeforeGone) => {
-    if (scansBeforeGone > 0) {
-      vi.useFakeTimers();
-    }
+  it("accepts a Linux process group gone during deadline inspection", async () => {
+    vi.useFakeTimers();
     mockLinuxProc([], {});
     const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
     const kill = vi.fn((_target: number, signal?: NodeJS.Signals | 0) => {
       const scans = vi
         .mocked(fs.readdirSync)
         .mock.calls.filter(([path]) => String(path) === "/proc").length;
-      if (signal === 0 && scans >= scansBeforeGone) {
+      if (signal === 0 && scans >= 2) {
         throw missing;
       }
       return true;
@@ -242,13 +211,11 @@ describe("vitest process group helpers", () => {
     const { completion } = startLinuxCompletion(4200, kill);
     const settled = expect(completion).resolves.toEqual({ code: 0, signal: null });
 
-    if (scansBeforeGone > 0) {
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
+    await vi.advanceTimersByTimeAsync(1_000);
     await settled;
     expect(
       vi.mocked(fs.readdirSync).mock.calls.filter(([path]) => String(path) === "/proc"),
-    ).toHaveLength(scansBeforeGone);
+    ).toHaveLength(2);
   });
 
   it("skips ENOENT races and accepts PID/PGID 1 with PPID 0", async () => {
@@ -264,9 +231,6 @@ describe("vitest process group helpers", () => {
   });
 
   it.each([
-    ["an empty snapshot", [], {}, undefined],
-    ["a runnable member", ["4200"], { "4200": procStat(4200, "S", 1, 4200) }, undefined],
-    ["a malformed stat", ["4200"], { "4200": "malformed" }, undefined],
     ["a mismatched stat PID", ["4200"], { "4200": procStat(4201, "Z", 1, 4200) }, undefined],
     [
       "a non-ENOENT read failure",

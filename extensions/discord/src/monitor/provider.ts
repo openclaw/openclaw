@@ -221,21 +221,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   });
 
   if (discordProviderRuntime.shouldLogVerbose()) {
-    const allowFromSummary = summarizeStringEntries({
-      entries: allowFrom,
-      limit: 4,
-      emptyText: "any",
-    });
-    const groupDmChannelSummary = summarizeStringEntries({
-      entries: groupDmChannels ?? [],
-      limit: 4,
-      emptyText: "any",
-    });
-    const guildSummary = summarizeStringEntries({
-      entries: Object.keys(guildEntries ?? {}),
-      limit: 4,
-      emptyText: "any",
-    });
+    const summarize = (entries: readonly string[] | undefined) =>
+      summarizeStringEntries({ entries, limit: 4, emptyText: "any" });
+    const allowFromSummary = summarize(allowFrom);
+    const groupDmChannelSummary = summarize(groupDmChannels);
+    const guildSummary = summarize(Object.keys(guildEntries ?? {}));
     logVerbose(
       `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=on threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
@@ -275,7 +265,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     nativeEnabled,
     nativeSkillsEnabled,
     voiceEnabled,
-    listSkillCommandsForAgents: discordProviderRuntime.listSkillCommandsForAgents,
+    prepareSkillCommandsForAgents: discordProviderRuntime.prepareSkillCommandsForAgents,
     listNativeCommandSpecsForConfig: discordProviderRuntime.listNativeCommandSpecsForConfig,
   });
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
@@ -330,7 +320,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       }
       if (uncertainProbeKeys.size > 0) {
         logVerbose(
-          `discord: ACP thread-binding health probe uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
+          `discord: ACP thread-binding health check uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
         );
       }
     }

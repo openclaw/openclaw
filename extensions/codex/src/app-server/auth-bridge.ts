@@ -96,7 +96,7 @@ const CODEX_APP_SERVER_HOME_ENV_VARS = new Set([CODEX_HOME_ENV_VAR, HOME_ENV_VAR
 const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
 const activeComputerUseArtifactReconciliations = new Map<
   string,
-  { latestEpoch?: number; appliedCacheBinding?: string; active: number; tail: Promise<void> }
+  { appliedCacheBinding?: string; active: number; tail: Promise<void> }
 >();
 type AuthProfileOrderConfig = Parameters<typeof resolveCodexAppServerAuthProfileId>[0]["config"];
 const scopedOAuthRefreshQueues = new WeakMap<
@@ -444,52 +444,28 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
   let owner = activeComputerUseArtifactReconciliations.get(key);
   if (!owner) {
     owner = { active: 0, tail: Promise.resolve() };
-    activeComputerUseArtifactReconciliations.set(key, owner);
   } else {
     activeComputerUseArtifactReconciliations.delete(key);
-    activeComputerUseArtifactReconciliations.set(key, owner);
   }
+  activeComputerUseArtifactReconciliations.set(key, owner);
   owner.active += 1;
-  const epoch = params.desktopGeneration?.epoch;
-  if (epoch !== undefined && (owner.latestEpoch === undefined || epoch > owner.latestEpoch)) {
-    owner.latestEpoch = epoch;
-  }
-  const assertCurrent = () => {
-    params.assertCurrent?.();
-    if (epoch !== undefined && owner.latestEpoch !== epoch) {
-      throw new Error("Codex Computer Use artifact reconciliation was superseded.");
-    }
-  };
-  const operation = owner.tail
-    .catch(() => undefined)
-    .then(async () => {
-      assertCurrent();
-      const appliedCacheBinding = await reconcileCodexComputerUseStartArtifactsOnce({
-        ...params,
-        codexHome,
-        assertCurrent,
-        previousCacheBinding: owner.appliedCacheBinding,
-      });
-      assertCurrent();
-      owner.appliedCacheBinding = appliedCacheBinding;
+  const assertCurrent = () => params.assertCurrent?.();
+  const operation = owner.tail.then(async () => {
+    assertCurrent();
+    const appliedCacheBinding = await reconcileCodexComputerUseStartArtifactsOnce({
+      ...params,
+      codexHome,
+      assertCurrent,
+      previousCacheBinding: owner.appliedCacheBinding,
     });
-  const settled = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  owner.tail = settled;
+    assertCurrent();
+    owner.appliedCacheBinding = appliedCacheBinding;
+  });
+  owner.tail = operation.catch(() => undefined);
   try {
     await operation;
   } finally {
-    owner.active = Math.max(0, owner.active - 1);
-    if (
-      owner.active === 0 &&
-      owner.latestEpoch === undefined &&
-      activeComputerUseArtifactReconciliations.get(key) === owner &&
-      owner.tail === settled
-    ) {
-      activeComputerUseArtifactReconciliations.delete(key);
-    }
+    owner.active -= 1;
     pruneComputerUseArtifactOwners();
   }
 }
@@ -772,9 +748,7 @@ export async function refreshCodexAppServerAuthTokens(
   const previousAccountId = params.previousAccountId?.trim();
   const handoffAccountId = params.authHandoff?.chatgptAccountId.trim();
   if (previousAccountId && handoffAccountId && previousAccountId !== handoffAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed before Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("before");
   }
   if (previousAccountId) {
     const store = resolveCodexAppServerAuthProfileStore(params);
@@ -787,9 +761,7 @@ export async function refreshCodexAppServerAuthTokens(
           : undefined))
       : undefined;
     if (selectedAccountId && selectedAccountId !== previousAccountId) {
-      throw new Error(
-        "ChatGPT workspace changed before Codex token refresh. Retry to start a client for the selected workspace.",
-      );
+      throw codexWorkspaceChangedError("before");
     }
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -805,9 +777,7 @@ export async function refreshCodexAppServerAuthTokens(
     (previousAccountId && loginParams.chatgptAccountId !== previousAccountId) ||
     (params.authHandoff && loginParams.chatgptAccountId !== params.authHandoff.chatgptAccountId)
   ) {
-    throw new Error(
-      "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("during");
   }
   return {
     accessToken: loginParams.accessToken,
@@ -977,9 +947,7 @@ async function resolveOAuthCredentialForCodexAppServer(
   const callbackAccountId =
     params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim() ?? undefined;
   if (callbackAccountId && selectedAccountId && callbackAccountId !== selectedAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed before Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("before");
   }
   const expectedAccountId = callbackAccountId ?? selectedAccountId;
   if (useScopedCredential && overlaidOAuthCredential) {
@@ -1129,6 +1097,12 @@ async function resolveScopedOAuthCredential(params: {
   }
 }
 
+function codexWorkspaceChangedError(phase: "before" | "during"): Error {
+  return new Error(
+    `ChatGPT workspace changed ${phase} Codex token refresh. Retry to start a client for the selected workspace.`,
+  );
+}
+
 function assertCodexOAuthRefreshWorkspace(
   profileId: string,
   credential: OAuthCredential,
@@ -1139,9 +1113,7 @@ function assertCodexOAuthRefreshWorkspace(
   }
   const loginParams = buildChatgptAuthTokensParams(profileId, credential, credential.access.trim());
   if (loginParams.chatgptAccountId !== expectedAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("during");
   }
 }
 

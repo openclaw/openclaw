@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -13,6 +18,20 @@ import {
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+
+beforeEach(() => {
+  // WhatsApp has no buildToolContext adapter; preserve its default threading path.
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "whatsapp",
+        plugin: createChannelTestPluginBase({ id: "whatsapp" }),
+        source: "test",
+      },
+    ]),
+  );
+});
+afterEach(resetPluginRuntimeStateForTest);
 
 function resolveMockedCliGrantCapability() {
   const run = requireMockCall(state.runCliAgentMock, 0, "CLI run params")[0] as RunCliAgentParams;

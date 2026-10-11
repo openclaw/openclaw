@@ -190,3 +190,40 @@ function Invoke-OpenClaw {
     $PSNativeCommandUseErrorActionPreference = $previousNativeErrorActionPreference
   }
 }`;
+
+export function windowsAgentTurnScript(input: {
+  command: string;
+  sessionId: string;
+  retryOnCommandFailure: boolean;
+}): string {
+  return `$agentOk = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  $sessionId = if ($attempt -eq 1) { ${psSingleQuote(input.sessionId)} } else { "${input.sessionId}-retry-$attempt" }
+  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
+  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
+  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
+${input.command}
+  $agentExitCode = $LASTEXITCODE
+  if ($null -ne $output) { $output | ForEach-Object { $_ } }
+  if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+    $agentOk = $true
+    break
+  }
+  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
+    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+    continue
+  }
+  if ($attempt -lt 2) {
+    Write-Host "agent turn attempt $attempt ${input.retryOnCommandFailure ? "failed or " : ""}finished without OK response; retrying"
+    Start-Sleep -Seconds 3${input.retryOnCommandFailure ? "\n    continue" : ""}
+  }
+${
+  input.retryOnCommandFailure
+    ? `  if ($agentExitCode -ne 0) {
+    throw "agent failed with exit code $agentExitCode"
+  }`
+    : `  if ($agentExitCode -ne 0) { throw "agent failed with exit code $agentExitCode" }`
+}
+}
+if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
+}

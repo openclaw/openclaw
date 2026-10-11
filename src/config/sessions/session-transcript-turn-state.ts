@@ -43,6 +43,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
   expected: {
     expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
+    expectedOwner?: Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">;
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
   },
@@ -55,6 +56,9 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       selected.entry.lifecycleRevision === (expected.expectedLifecycleRevision ?? undefined)) &&
     (expected.expectedWriterRunId === undefined ||
       selected.entry.activeWriterRunId === expected.expectedWriterRunId) &&
+    (expected.expectedOwner === undefined ||
+      (selected.entry.lifecycleRevision === expected.expectedOwner.lifecycleRevision &&
+        selected.entry.activeWriterRunId === expected.expectedOwner.activeWriterRunId)) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
         selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&

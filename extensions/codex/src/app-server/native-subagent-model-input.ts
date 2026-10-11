@@ -52,9 +52,9 @@ type InputDependencies = {
   knownChildren: ReadonlyMap<string, KnownChild>;
   children: ReadonlyMap<string, ChildState>;
   isCurrent: (state: ParentState) => boolean;
-  retainTargetRevision: (threadId: string) => { isCurrent: () => boolean; release: () => void };
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>;
+  canPrepareReceiver: (state: ParentState, threadId: string) => boolean;
   prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
   registerChildThread: AdmissionDrainDependencies["registerChildThread"];
   admit: (
@@ -77,6 +77,7 @@ function nativeAgentPath(known: KnownChild | undefined): string | undefined {
 function nativeRootThreadId(
   threadId: string,
   knownChildren: ReadonlyMap<string, KnownChild>,
+  parent?: ParentState,
 ): string | undefined {
   const visited = new Set<string>();
   let current = threadId;
@@ -85,7 +86,12 @@ function nativeRootThreadId(
     visited.add(current);
     const known = knownChildren.get(current);
     const path = nativeAgentPath(known);
-    if (!known || !path || (expectedPath && path !== expectedPath)) {
+    if (
+      !known ||
+      (parent && known.parent !== parent) ||
+      !path ||
+      (expectedPath && path !== expectedPath)
+    ) {
       return undefined;
     }
     if (path === "/root") {
@@ -180,7 +186,6 @@ export async function prepareNativeModelToolInput(
   }
   let preparedSource: NativeModelSourceOwner | undefined;
   let pendingBinding: NativeModelBinding | undefined;
-  let targetRevision: ReturnType<InputDependencies["retainTargetRevision"]> | undefined;
   let assertTargetCurrent: (() => void) | undefined;
   const assertCurrent = () => {
     request.signal?.throwIfAborted();
@@ -199,16 +204,34 @@ export async function prepareNativeModelToolInput(
   try {
     assertCurrent();
     const targetThreadId = resolveInputTarget(request, dependencies);
-    targetRevision = dependencies.retainTargetRevision(targetThreadId);
     const targetParent = dependencies.parents.get(targetThreadId);
     const targetChild = dependencies.knownChildren.get(targetThreadId);
+    const targetLoad = (targetParent ?? targetChild)?.nativeLoad;
     const targetConfiguration = targetChild?.configurationQualification;
     const targetRouting = request.readQualification(targetThreadId);
+    let metadataRead = false;
     assertTargetCurrent = () => {
+      const nativeRoot = nativeRootThreadId(request.threadId, dependencies.knownChildren, state);
+      // A settled child's monitor entry may have been collected. Only native
+      // metadata linking it to a currently admitted parent can restore it; an
+      // arbitrary UUID or compatible provider is never sufficient.
+      const inScope = targetParent
+        ? (targetParent === state || nativeRoot === targetThreadId) &&
+          dependencies.canPrepareReceiver(state, targetThreadId)
+        : targetChild
+          ? dependencies.canPrepareReceiver(state, targetThreadId)
+          : !metadataRead ||
+            nativeRoot === targetThreadId ||
+            nativeParentThreadId === state.parentThreadId ||
+            (nativeParentThreadId !== undefined &&
+              dependencies.knownChildren.get(nativeParentThreadId)?.parent === state);
+      if (!inScope) {
+        throw new Error("Codex native input target is outside the sender's admitted tree");
+      }
       if (
-        !targetRevision?.isCurrent() ||
         dependencies.parents.get(targetThreadId) !== targetParent ||
         dependencies.knownChildren.get(targetThreadId) !== targetChild ||
+        (targetParent ?? targetChild)?.nativeLoad !== targetLoad ||
         targetChild?.configurationQualification !== targetConfiguration ||
         request.readQualification(targetThreadId) !== targetRouting
       ) {
@@ -232,6 +255,8 @@ export async function prepareNativeModelToolInput(
         assertCurrent,
       },
     );
+    const nativeParentThreadId = readThreadParentThreadId(thread);
+    metadataRead = true;
     assertCurrent();
     if (
       thread.id !== targetThreadId ||
@@ -314,7 +339,9 @@ export async function prepareNativeModelToolInput(
       preparedOwner.modelSource = preparedSource;
     }
     assertCurrent();
-    const nativeParentThreadId = readThreadParentThreadId(thread);
+    if (targetChild && nativeParentThreadId !== targetChild.nativeParentThreadId) {
+      throw new Error("Codex native input receiver lineage changed during preparation");
+    }
     if (!dependencies.prepareReceiver(state, thread.id, nativeParentThreadId)) {
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");
     }
@@ -349,7 +376,6 @@ export async function prepareNativeModelToolInput(
       preparedOwner,
     );
   } finally {
-    targetRevision?.release();
     preparedSource?.release();
     if (!preparedSource) {
       capture.release();
@@ -369,11 +395,7 @@ type AdmissionDrainDependencies = {
     threadId: string,
     options: { agentPath?: string; directOwner?: ParentOwner; nativeParentThreadId?: string },
   ) => ChildState | undefined;
-  admitFollowupChild: (
-    known: KnownChild,
-    threadId: string,
-    owner?: ParentOwner,
-  ) => ChildState | undefined;
+  admitFollowupChild: (known: KnownChild, owner?: ParentOwner) => ChildState | undefined;
   observeActivity: (child: ChildState) => void;
 };
 
@@ -488,11 +510,7 @@ export function drainNativeChildModelAdmissions(
       continue;
     }
     const previous = dependencies.currentChild(threadId);
-    const child = dependencies.admitFollowupChild(
-      known,
-      threadId,
-      ownerIsCurrent ? owner : undefined,
-    );
+    const child = dependencies.admitFollowupChild(known, ownerIsCurrent ? owner : undefined);
     if (observeActivity && child && child !== previous && child.nativeTurnState === "active") {
       dependencies.observeActivity(child);
     }

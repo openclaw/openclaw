@@ -55,6 +55,9 @@ export function createSessionRowModelFactsReader(params: {
     if (records.ready(row) && !params.dirty.has(records.identity(row))) {
       return row.materialized.source;
     }
+    if (row.preparedRuntimeOwnership === undefined) {
+      throw new Error("Native session ownership must be prepared before reading search facts");
+    }
     const state = params.state();
     return readSessionRowModelFacts({
       ...state,
@@ -133,7 +136,6 @@ export function createSessionRowMaterializer(owner: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
   prepare: () => records.Inputs["cfg"];
-  revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
   materialize: (
     row: records.Row,
@@ -159,12 +161,14 @@ export function createSessionRowMaterializer(owner: {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
         }
-        const current = owner.rows.get(id),
-          revision = owner.revision();
+        const current = owner.rows.get(id);
         const databaseFacts = accepted
           ? current?.pendingDatabaseFacts
           : current?.retainedDatabaseFacts;
         if (!records.isPreparedSessionRowDatabaseFacts(databaseFacts)) {
+          continue;
+        }
+        if (!accepted && !records.canRetainSessionRowRuntimeOwnership(databaseFacts)) {
           continue;
         }
         if (!accepted && current?.unresolvedDatabaseFacts === "category") {
@@ -177,11 +181,7 @@ export function createSessionRowMaterializer(owner: {
           owner.forgetBackfill(id);
           continue;
         }
-        if (
-          row &&
-          owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
-          owner.revision() === revision
-        ) {
+        if (row && owner.materialize(row, configuredAgentIds, readRow, databaseFacts)) {
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
@@ -190,9 +190,6 @@ export function createSessionRowMaterializer(owner: {
           if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
             owner.retainArchived(row);
           }
-        }
-        if (owner.revision() !== revision) {
-          break;
         }
       }
     });
@@ -216,7 +213,6 @@ export function createSessionRowMaterializer(owner: {
         return;
       }
       const cfg = owner.prepare();
-      const revision = owner.revision();
       withAgentRosterFactsBatch(cfg, () => {
         for (const id of ids) {
           const current = owner.rows.get(id);
@@ -233,11 +229,10 @@ export function createSessionRowMaterializer(owner: {
                 : current,
               databaseFacts?.entry,
             );
-          if (owner.revision() !== revision) {
-            break;
-          }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
+            row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
+            row.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
           }
           if (row && isColdArchivedSessionRow(row) && !options.archived) {
             owner.dirty.delete(id);
@@ -280,6 +275,9 @@ export function readResidentSessionRow(
     throw new Error("Incognito session descriptions require awaited row preparation");
   }
   const databaseFacts = params.databaseFacts ?? prepared?.databaseFacts;
+  if (!databaseFacts && !isIncognitoSessionKey(row.key)) {
+    throw new Error("Durable session rows require prepared database facts");
+  }
   const source =
     isIncognitoSessionKey(row.key) && !prepared
       ? resolveGatewaySessionStoreTargetWithStore({
@@ -295,6 +293,9 @@ export function readResidentSessionRow(
     ...row,
     cfg,
     preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedRuntimeOwnership: databaseFacts
+      ? databaseFacts.runtimeOwnership
+      : row.preparedRuntimeOwnership,
     preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
     preparedRepositoryWorkspace: databaseFacts
       ? databaseFacts.repositoryWorkspace
@@ -417,7 +418,7 @@ function readIncognitoSessionRow(params: {
   agentId: string;
   storePath?: string;
 }) {
-  const { cfg, key, agentId, storePath } = params;
+  const { key, agentId, storePath } = params;
   const binding = captureIncognitoSessionBinding({ agentId, sessionKey: key, storePath });
   if (binding) {
     const { actor } = binding;
@@ -427,9 +428,7 @@ function readIncognitoSessionRow(params: {
     }
     const snapshot = actor.sessions.captureSnapshot(key);
     return records.createIncognitoSessionRow({
-      cfg,
-      key,
-      agentId,
+      ...params,
       storePath: actor.path,
       entry,
       source: {
@@ -452,9 +451,7 @@ function readIncognitoSessionRow(params: {
     return undefined;
   }
   return records.createIncognitoSessionRow({
-    cfg,
-    key,
-    agentId,
+    ...params,
     storePath: ephemeralPath,
     entry: storedEntry,
     source: row.privateSource,
@@ -501,18 +498,16 @@ export function findSessionRowById(
   }
   // Select each key's physical winner before matching its ID. A shadowed row
   // must not resurrect an old run mapping that the combined store would hide.
-  const selected = candidates.length
-    ? [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
-        const paths = owner.scope.select(query).paths;
-        const row = records.first(
-          owner
-            .matching({ ...query, key })
-            .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
-          paths.keys(),
-        );
-        return row?.entry?.sessionId === query.sessionId ? [row] : [];
-      })
-    : [];
+  const selected = [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
+    const paths = owner.scope.select(query).paths;
+    const row = records.first(
+      owner
+        .matching({ ...query, key })
+        .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
+      paths.keys(),
+    );
+    return row?.entry?.sessionId === query.sessionId ? [row] : [];
+  });
   // Process-held private stores keep their existing exact native reader;
   // private rows never enter the resident index or a new cache.
   const binding = captureIncognitoSessionBinding();

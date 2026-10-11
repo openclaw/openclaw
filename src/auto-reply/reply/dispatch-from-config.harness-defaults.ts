@@ -24,7 +24,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyRunVerbosity } from "./get-reply.types.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
@@ -70,9 +70,9 @@ export function createShouldEmitVerboseProgress(params: {
     }
     return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
   };
-  const resolveLevel = () =>
+  const resolveLevel = (explicit: () => VerboseLevel | undefined) =>
     runVerbosity?.verboseLevelOverride ??
-    resolveCurrentExplicitLevel() ??
+    explicit() ??
     runVerbosity?.resolvedVerboseLevel ??
     normalizeVerboseLevel(params.fallbackLevel) ??
     "off";
@@ -88,41 +88,31 @@ export function createShouldEmitVerboseProgress(params: {
       }
     }
     params.assertCurrent?.();
-    return (
-      runVerbosity?.verboseLevelOverride ??
-      explicit ??
-      runVerbosity?.resolvedVerboseLevel ??
-      normalizeVerboseLevel(params.fallbackLevel) ??
-      "off"
-    );
+    return resolveLevel(() => explicit);
+  };
+  const shouldEmitAsync = async (full: boolean) => {
+    const level = await resolveLevelAsync();
+    params.assertCurrent?.();
+    return full ? level === "full" : level !== "off";
   };
   return {
     noteRunVerbosity: (settings: ReplyRunVerbosity) => {
       // A reused queued dispatcher must clear the previous turn's explicit choice.
       runVerbosity = settings;
     },
-    shouldEmit: () => resolveLevel() !== "off",
-    shouldEmitFull: () => resolveLevel() === "full",
-    shouldEmitAsync: async () => {
-      const level = await resolveLevelAsync();
-      params.assertCurrent?.();
-      return level !== "off";
-    },
-    shouldEmitFullAsync: async () => {
-      const level = await resolveLevelAsync();
-      params.assertCurrent?.();
-      return level === "full";
-    },
+    shouldEmit: () => resolveLevel(resolveCurrentExplicitLevel) !== "off",
+    shouldEmitFull: () => resolveLevel(resolveCurrentExplicitLevel) === "full",
+    shouldEmitAsync: () => shouldEmitAsync(false),
+    shouldEmitFullAsync: () => shouldEmitAsync(true),
   };
 }
 
 export function resolveTurnModelOverride(
   replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
 ): string | undefined {
-  if (replyOptions?.isHeartbeat !== true) {
-    return undefined;
-  }
-  return normalizeOptionalString(replyOptions.heartbeatModelOverride);
+  return replyOptions?.isHeartbeat === true
+    ? normalizeOptionalString(replyOptions.heartbeatModelOverride)
+    : undefined;
 }
 
 /**
@@ -144,14 +134,12 @@ export function resolveVisibleRepliesPolicy(params: {
   configuredVisibleReplies?: "automatic" | "message_tool";
   harnessDefaultVisibleReplies?: "automatic" | "message_tool";
 } {
-  const configuredVisibleReplies =
-    params.chatType === "group" || params.chatType === "channel"
-      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
-      : params.cfg.messages?.visibleReplies;
+  const isGroup = params.chatType === "group" || params.chatType === "channel";
+  const configuredVisibleReplies = isGroup
+    ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+    : params.cfg.messages?.visibleReplies;
   const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined &&
-    params.chatType !== "group" &&
-    params.chatType !== "channel"
+    configuredVisibleReplies === undefined && !isGroup
       ? resolveHarnessSourceVisibleRepliesDefault(params)
       : undefined;
   return { configuredVisibleReplies, harnessDefaultVisibleReplies };
@@ -171,26 +159,16 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
   }
   try {
     const allowPluginNormalization = params.cfg.plugins?.enabled !== false;
-    const defaultModelRef = resolveDefaultModelForAgent({
+    const modelContext = {
       cfg: params.cfg,
       agentId: params.sessionAgentId,
       allowPluginNormalization,
-    });
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
-      defaultProvider: defaultModelRef.provider,
-      allowPluginNormalization,
-    });
+    };
+    const defaultModelRef = resolveDefaultModelForAgent(modelContext);
+    const selectionContext = { ...modelContext, defaultProvider: defaultModelRef.provider };
+    const aliasIndex = buildModelAliasIndex(selectionContext);
     const resolveModelCandidate = (raw: string) =>
-      resolveModelRefFromString({
-        raw,
-        cfg: params.cfg,
-        agentId: params.sessionAgentId,
-        defaultProvider: defaultModelRef.provider,
-        allowPluginNormalization,
-        aliasIndex,
-      })?.ref;
+      resolveModelRefFromString({ ...selectionContext, raw, aliasIndex })?.ref;
     const parentSessionKey =
       params.entry?.parentSessionKey ??
       params.ctx.ModelParentSessionKey ??

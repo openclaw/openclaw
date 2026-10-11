@@ -27,6 +27,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { captureIncognitoProjectionBinding } from "./session-incognito-projection.js";
+import {
+  publishUnchangedSessionTranscriptAuthority,
+  publishUnchangedSessionTranscriptReceipts,
+} from "./session-transcript-authority.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
@@ -94,6 +98,7 @@ export async function runProjectionWrite<T>(
   operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
   operation: (database: OpenClawAgentDatabase) => T,
   memorySource?: MemoryTranscriptProjectionSource,
+  signal?: AbortSignal,
 ): Promise<T> {
   return await runExclusiveSqliteSessionWrite(
     databaseOptions,
@@ -103,16 +108,7 @@ export async function runProjectionWrite<T>(
         // can materialize a successor database for a late worker result.
         memorySource?.assertCurrentOwner();
         databaseOptions.assertCurrent?.();
-        return runOpenClawAgentWriteTransaction(
-          (database) => {
-            databaseOptions.assertCurrent?.();
-            const result = operation(database);
-            databaseOptions.assertCurrent?.();
-            return result;
-          },
-          databaseOptions,
-          { operationLabel },
-        );
+        return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
       };
       return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
         !getOpenClawAgentDatabaseIfOpen(databaseOptions)
@@ -120,6 +116,9 @@ export async function runProjectionWrite<T>(
         : write();
     },
     operationLabel,
+    undefined,
+    "foreground",
+    signal,
   );
 }
 
@@ -215,6 +214,7 @@ export async function finalizePreparedProjection(
 ): Promise<boolean> {
   if (publication) {
     const result = await publication.execute({ type: "finalize", input: active });
+    publishUnchangedSessionTranscriptReceipts(result.transcriptPublication);
     if (result.sessionKey !== undefined) {
       sessionChanges.emit({
         storePath: databaseOptions.path,
@@ -246,6 +246,7 @@ export async function finalizePreparedProjection(
             .where("session_id", "=", active.plan.sessionId),
         );
       if (session) {
+        publishUnchangedSessionTranscriptAuthority(database, session.session_key);
         sessionChanges.emit(
           {
             storePath: database.path,
@@ -266,7 +267,9 @@ export async function finalizePreparedProjection(
 export async function readSessionTranscriptIndexStatus(
   params: OpenClawAgentDatabaseOptions,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  signal?.throwIfAborted();
   assertCurrent?.();
   const options: ReconcileDatabaseOptions = {
     ...params,
@@ -285,6 +288,7 @@ export async function readSessionTranscriptIndexStatus(
         );
         return status.hasMore || status.sessionIds.length > 0;
       },
+      signal,
     );
     incognito.actor.assertReadable();
     incognito.authority.assertCurrent();
@@ -317,6 +321,7 @@ export async function readSessionTranscriptIndexStatus(
               assertCurrent?.();
               execution!.assertCurrent();
             },
+            { signal },
           );
           return receipt?.value ?? { sessionIds: [], hasMore: false, traversalComplete: true };
         })
@@ -331,6 +336,7 @@ export async function readSessionTranscriptIndexStatus(
             };
           },
           memorySource,
+          signal,
         );
     assertCurrent?.();
     return status.hasMore || status.sessionIds.length > 0;

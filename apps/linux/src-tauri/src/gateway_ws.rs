@@ -430,17 +430,22 @@ pub(crate) struct CanvasSurfaceState {
 }
 
 #[derive(Default)]
+struct GatewayConfigState {
+    config: Option<GatewayWsConfig>,
+    native_control_session: Option<NativeControlSession>,
+    canvas_surface: Option<String>,
+    user_accent: Option<String>,
+}
+
+#[derive(Default)]
 struct GatewayClientInner {
     route_publication: Mutex<()>,
-    config: Mutex<Option<GatewayWsConfig>>,
+    config: Mutex<GatewayConfigState>,
     config_generation: AtomicU64,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
-    native_control_session: Mutex<Option<NativeControlSession>>,
     connection_changed: tokio::sync::Notify,
-    canvas_surface: Mutex<Option<String>>,
-    user_accent: Mutex<Option<String>>,
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
@@ -470,7 +475,15 @@ impl GatewayClient {
         generation: GatewayGeneration,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        let _config = self
+        self.with_config_state(generation, |_| action())
+    }
+
+    fn with_config_state<T>(
+        &self,
+        generation: GatewayGeneration,
+        action: impl FnOnce(&mut GatewayConfigState) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut config = self
             .inner
             .config
             .lock()
@@ -478,7 +491,7 @@ impl GatewayClient {
         if self.generation() != generation {
             return Err("Gateway changed during the Quick Chat request.".to_string());
         }
-        action()
+        action(&mut config)
     }
 
     #[cfg(target_os = "linux")]
@@ -521,7 +534,7 @@ impl GatewayClient {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation {
                 return Err("Desktop Gateway changed; refresh before trying again.".into());
             }
-            config.as_ref().map(|config| config.ws_url.clone())
+            config.config.as_ref().map(|config| config.ws_url.clone())
         };
         action(url.as_deref())
     }
@@ -561,13 +574,8 @@ impl GatewayClient {
         surface_url: &str,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        self.with_generation(generation, || {
-            let surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
-            if !self.is_connected() || surface.as_deref() != Some(surface_url) {
+        self.with_config_state(generation, |state| {
+            if !self.is_connected() || state.canvas_surface.as_deref() != Some(surface_url) {
                 return Err("Gateway Canvas owner or capability changed.".to_string());
             }
             action()
@@ -608,12 +616,8 @@ impl GatewayClient {
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        *current = config;
-        *self
-            .inner
-            .native_control_session
-            .lock()
-            .expect("native control session mutex poisoned") = None;
+        current.config = config;
+        current.native_control_session = None;
         self.inner.connection_changed.notify_waiters();
         let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self
@@ -621,11 +625,7 @@ impl GatewayClient {
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        *self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned") = None;
+        current.canvas_surface = None;
         self.inner
             .connection_state
             .store(GatewayConnectionState::Down as u64, Ordering::SeqCst);
@@ -673,25 +673,22 @@ impl GatewayClient {
         generation: GatewayGeneration,
         action: impl FnOnce(Url, String) -> Result<T, String>,
     ) -> Result<T, String> {
-        let config = self
+        let state = self
             .inner
             .config
             .lock()
             .map_err(|_| "Gateway configuration unavailable.")?;
-        let config = config
+        let config = state
+            .config
             .as_ref()
             .ok_or("Gateway configuration unavailable.")?;
         if self.generation() != generation || config.ownership != GatewayOwnership::Remote {
             return Err("Native Gateway connection changed.".into());
         }
-        let session = self
-            .inner
-            .native_control_session
-            .lock()
-            .map_err(|_| "Native authentication unavailable.")?;
         // A retired/not-ready session still owns a secret-free native marker.
         // Publishing that projection retires installed shared credentials too.
-        let legacy_auth = session
+        let legacy_auth = state
+            .native_control_session
             .as_ref()
             .filter(|_| self.is_connected())
             .map(NativeControlSession::legacy_auth)
@@ -713,12 +710,13 @@ impl GatewayClient {
         challenge: &Challenge,
     ) -> Result<Value, String> {
         challenge.validate()?;
-        let config = self
+        let state = self
             .inner
             .config
             .lock()
             .map_err(|_| "Gateway configuration unavailable.")?;
-        let config = config
+        let config = state
+            .config
             .as_ref()
             .ok_or("Connect the native app to this Gateway first.")?;
         let expected = crate::remote_gateway::dashboard_url(
@@ -731,12 +729,7 @@ impl GatewayClient {
         {
             return Err("The native Gateway connection changed. Reconnect the dashboard.".into());
         }
-        let session = self
-            .inner
-            .native_control_session
-            .lock()
-            .map_err(|_| "Native authentication unavailable.")?;
-        let session = session.as_ref().ok_or(
+        let session = state.native_control_session.as_ref().ok_or(
             "The native Gateway has not accepted dashboard authentication. Reconnect the app.",
         )?;
         let store = self
@@ -886,19 +879,14 @@ impl GatewayClient {
         let Some(refreshed) = refreshed else {
             return Err("Gateway did not return a refreshed Canvas surface.".to_string());
         };
-        self.with_generation(generation, || {
-            let mut current = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
-            if *current != observed.url {
+        self.with_config_state(generation, |state| {
+            if state.canvas_surface != observed.url {
                 return Err("Gateway Canvas surface changed during refresh.".to_string());
             }
-            *current = Some(refreshed);
+            state.canvas_surface = Some(refreshed);
             Ok(CanvasSurfaceState {
                 generation: generation.0,
-                url: current.clone(),
+                url: state.canvas_surface.clone(),
             })
         })
     }
@@ -954,6 +942,7 @@ impl GatewayClient {
             .lock()
             .expect("gateway config mutex poisoned");
         current
+            .config
             .as_ref()
             .filter(|config| {
                 config.ownership == GatewayOwnership::Local && is_loopback_ws_url(&config.ws_url)
@@ -1068,7 +1057,7 @@ impl GatewayClient {
                     .lock()
                     .expect("gateway config mutex poisoned");
                 (
-                    current.clone(),
+                    current.config.clone(),
                     self.inner.config_generation.load(Ordering::SeqCst),
                 )
             };
@@ -1147,6 +1136,7 @@ impl GatewayClient {
                     .config
                     .lock()
                     .expect("gateway config mutex poisoned")
+                    .config
                     .as_ref()
                     .is_some_and(|config| config.ownership == GatewayOwnership::Remote),
             self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
@@ -1237,18 +1227,13 @@ impl GatewayClient {
         self.cache_agents(GatewayGeneration(generation), agents)
             .map_err(|message| RequestFailure::method_with_details(message, None))?;
         self.set_user_accent(generation, accent);
-        self.with_generation(GatewayGeneration(generation), || {
-            *self
-                .inner
-                .native_control_session
-                .lock()
-                .map_err(|_| "Native authentication unavailable.")? =
-                NativeControlSession::from_hello(
-                    auth,
-                    hello.auth_method.as_deref(),
-                    hello.operator_scopes,
-                    hello.device_token.as_deref(),
-                );
+        self.with_config_state(GatewayGeneration(generation), |state| {
+            state.native_control_session = NativeControlSession::from_hello(
+                auth,
+                hello.auth_method.as_deref(),
+                hello.operator_scopes,
+                hello.device_token.as_deref(),
+            );
             Ok(())
         })
         .map_err(RequestFailure::transport)?;
@@ -1399,56 +1384,33 @@ impl GatewayClient {
     }
 
     fn set_canvas_surface_url(&self, generation: u64, url: Option<String>) {
-        let _ = self.with_generation(GatewayGeneration(generation), || {
-            let mut surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
-            *surface = url;
+        let _ = self.with_config_state(GatewayGeneration(generation), |state| {
+            state.canvas_surface = url;
             Ok(())
         });
     }
 
     fn canvas_surface_state(&self) -> CanvasSurfaceState {
-        let _config = self
+        let state = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
         CanvasSurfaceState {
             generation: self.generation().0,
-            url: self
-                .inner
-                .canvas_surface
-                .lock()
-                .expect("gateway canvas surface mutex poisoned")
-                .clone(),
+            url: state.canvas_surface.clone(),
         }
     }
 
     fn set_user_accent(&self, generation: u64, accent: Option<String>) -> bool {
-        self.with_generation(GatewayGeneration(generation), || {
-            let mut current = self
-                .inner
-                .user_accent
-                .lock()
-                .expect("gateway user accent mutex poisoned");
-            if *current == accent {
+        self.with_config_state(GatewayGeneration(generation), |state| {
+            if state.user_accent == accent {
                 return Ok(false);
             }
-            *current = accent;
+            state.user_accent = accent;
             Ok(true)
         })
         .unwrap_or(false)
-    }
-
-    fn user_accent(&self) -> Option<String> {
-        self.inner
-            .user_accent
-            .lock()
-            .expect("gateway user accent mutex poisoned")
-            .clone()
     }
 
     fn is_connected(&self) -> bool {
@@ -1475,28 +1437,16 @@ impl GatewayClient {
         notice: Option<String>,
         generation: GatewayGeneration,
     ) {
-        let event = self.with_generation(generation, || {
+        let event = self.with_config_state(generation, |config| {
             if state != GatewayConnectionState::Up {
-                *self
-                    .inner
-                    .native_control_session
-                    .lock()
-                    .expect("native control session mutex poisoned") = None;
+                config.native_control_session = None;
                 *self
                     .inner
                     .agents_cache
                     .lock()
                     .expect("gateway agents cache mutex poisoned") = None;
-                *self
-                    .inner
-                    .canvas_surface
-                    .lock()
-                    .expect("gateway canvas surface mutex poisoned") = None;
-                *self
-                    .inner
-                    .user_accent
-                    .lock()
-                    .expect("gateway accent mutex poisoned") = None;
+                config.canvas_surface = None;
+                config.user_accent = None;
             }
             let notice_changed = {
                 let mut current = self
@@ -1519,16 +1469,11 @@ impl GatewayClient {
             if !state_changed && !notice_changed {
                 return Ok(None);
             }
-            let surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .expect("gateway canvas surface mutex poisoned");
             Ok(Some(GatewayStateEvent::new(
                 state,
                 notice,
-                surface.clone(),
-                self.user_accent(),
+                config.canvas_surface.clone(),
+                config.user_accent.clone(),
                 generation,
             )))
         });
@@ -1553,16 +1498,11 @@ impl GatewayClient {
     }
 
     fn state_event(&self) -> GatewayStateEvent {
-        let _config = self
+        let config = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        let surface = self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned");
         let notice = self
             .inner
             .connection_notice
@@ -1572,8 +1512,8 @@ impl GatewayClient {
         GatewayStateEvent::new(
             self.connection_state(),
             notice,
-            surface.clone(),
-            self.user_accent(),
+            config.canvas_surface.clone(),
+            config.user_accent.clone(),
             self.generation(),
         )
     }
@@ -1768,7 +1708,7 @@ fn validate_request_dispatch(
         .config
         .lock()
         .map_err(|_| DispatchRejection::new("Gateway route is unavailable."))?;
-    if current.is_none() {
+    if current.config.is_none() {
         return Err(DispatchRejection::new(
             "Gateway route changed before dispatch; refresh before trying again.",
         ));
@@ -1777,7 +1717,7 @@ fn validate_request_dispatch(
         || authority.connection_generation != authority.generation.0;
     #[cfg(target_os = "linux")]
     if let Some(route) = authority.sleep_route.as_ref() {
-        let owned = current.as_ref().is_some_and(|config| {
+        let owned = current.config.as_ref().is_some_and(|config| {
             config.ownership == GatewayOwnership::Local
                 && config.ws_url == route.ws_url
                 && is_loopback_ws_url(&config.ws_url)
@@ -2430,6 +2370,7 @@ pub(crate) mod tests {
                 .config
                 .lock()
                 .unwrap()
+                .config
                 .as_ref()
                 .unwrap()
                 .ws_url
@@ -2493,7 +2434,7 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn replace_route(&self) {
-            let config = self.client.inner.config.lock().unwrap().clone();
+            let config = self.client.inner.config.lock().unwrap().config.clone();
             self.client.replace_configuration(config);
         }
 
@@ -3599,6 +3540,7 @@ esac
                     .config
                     .lock()
                     .unwrap()
+                    .config
                     .as_ref()
                     .unwrap()
                     .ws_url

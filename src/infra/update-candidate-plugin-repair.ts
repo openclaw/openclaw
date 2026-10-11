@@ -8,7 +8,8 @@ import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
@@ -25,12 +26,7 @@ import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 async function readOptionalFile(file: string): Promise<Buffer | undefined> {
-  return fs.readFile(file).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  return fs.readFile(file).catch(ignoreMissingUpdateCandidateFile);
 }
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
@@ -140,7 +136,6 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         assertPrivate(reference.target);
       }
     }
-    copiedGraph.assertSourceCurrent();
     const unresolvedPrivate = copiedGraph.unresolved.filter(
       ({ source, specifier }) => isPathInside(privateRoot, source) && isPrivateLookup(specifier),
     );
@@ -165,12 +160,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         return original ? [JSON.stringify([original, specifier])] : [];
       }),
     );
-    const canonicalSource = await fs.realpath(entryFile).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const canonicalSource = await fs.realpath(entryFile).catch(ignoreMissingUpdateCandidateFile);
     if (!canonicalSource) {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
@@ -204,14 +194,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       await assertMatchingFile(source, copied);
       comparedFiles.set(source, copied);
     }
-    available.assertSourceCurrent();
     originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
   const files = new Set(originals.flatMap((graph) => graph.files));
-  const assertSourcesCurrent = () => originals.forEach((graph) => graph.assertSourceCurrent());
   for (const source of files) {
     const copied = project(source);
     assertPrivate(copied);
@@ -226,11 +214,9 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ) {
       throw new Error("Update authority changed during plugin dependency preparation");
     }
-    assertSourcesCurrent();
     for (const [source, copied] of comparedFiles) {
       await assertMatchingFile(source, copied);
     }
-    assertSourcesCurrent();
   };
   await assertCurrent();
   const plan = await prepareUpdateCandidatePluginTrees({
@@ -247,12 +233,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of plan.entries) {
     const destination = project(entry.path);
     assertPrivate(destination);
-    const existing = await fs.lstat(destination).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const existing = await fs.lstat(destination).catch(ignoreMissingUpdateCandidateFile);
     if (!existing) {
       missing.push(entry);
     } else if (

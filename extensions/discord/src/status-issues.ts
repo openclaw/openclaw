@@ -110,10 +110,7 @@ export function collectDiscordStatusIssues(
       issues.push({
         ...scope,
         kind: "permissions",
-        message: appendMatchMetadata(baseMessage, {
-          matchKey: channel.matchKey,
-          matchSource: channel.matchSource,
-        }),
+        message: appendMatchMetadata(baseMessage, channel),
         fix: "Ensure the bot role can view + send in this channel (and that channel overrides don't deny it).",
       });
     }

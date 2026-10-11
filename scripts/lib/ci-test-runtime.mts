@@ -4,6 +4,14 @@ import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
+  gatewayMethodsTestExclude,
+  gatewayMethodsTestInclude,
+} from "../../test/vitest/vitest.gateway-server-paths.mjs";
+import {
+  filterFilesByPatterns,
+  isPlainRepoRelativePath,
+} from "../../test/vitest/vitest.include-patterns.ts";
+import {
   matchesVitestCliSelection,
   matchesVitestGlob,
   relativizeScopedPatterns,
@@ -65,6 +73,7 @@ export const BUN_UI_TEST_ENV = {
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
 const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
@@ -77,6 +86,16 @@ const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
+]);
+const bunCompatibleWholeOwners = new Map<
+  string,
+  { dir: string; include: readonly string[]; exclude: readonly string[] }
+>([
+  [agentVitestProjectOwners.support.config, agentVitestProjectOwners.support],
+  [
+    gatewayMethodsConfig,
+    { dir: ".", include: gatewayMethodsTestInclude, exclude: gatewayMethodsTestExclude },
+  ],
 ]);
 const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-hash-memo.test.ts"];
 // Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
@@ -109,13 +128,6 @@ const bunCompatibleScopedOwners = new Map([
         "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
         "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
       ],
-    },
-  ],
-  [
-    agentVitestProjectOwners.support.config,
-    {
-      dir: agentVitestProjectOwners.support.dir,
-      files: ["src/agents/worktrees/service.removal-recovery.test.ts"],
     },
   ],
   [
@@ -177,6 +189,7 @@ const bunCompatibleScopedOwners = new Map([
       dir: "",
       files: [
         "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/cli/admin-state-owner.process.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
         "src/infra/worker-cpu.test.ts",
       ],
@@ -293,6 +306,8 @@ const runtimePartitions = new Map<
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
         "src/cli/cli-process-diagnostics.test.ts",
+        // This contract requires Node's async_hooks Promise callback boundaries.
+        "src/infra/main-thread-stall.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
@@ -514,6 +529,32 @@ export function resolveCiTestRuntimePolicy(
   return policy;
 }
 
+function includesStayWithinWholeOwner(
+  config: string,
+  includePatterns: readonly string[] | null | undefined,
+): boolean {
+  if (!includePatterns?.length) {
+    return true;
+  }
+  const owner = bunCompatibleWholeOwners.get(config)!;
+  const canonical = relativizeScopedPatterns(owner.include, owner.dir);
+  return relativizeScopedPatterns(includePatterns, owner.dir).every((value) => {
+    const pattern = value.replace(/^\.\//u, "");
+    // Include files replace scoped config globs; uncertain patterns must keep Node's envelope.
+    if (!isPlainRepoRelativePath(pattern) || !exactTestFilePattern.test(pattern)) {
+      return canonical.includes(pattern);
+    }
+    const target = path.posix.join(owner.dir, pattern);
+    // Scoped configs also exclude the unit-fast families and shared fixture paths.
+    const exclude = [
+      ...sharedVitestExcludePatterns,
+      ...getUnitFastTestFiles([target]),
+      ...owner.exclude,
+    ];
+    return filterFilesByPatterns([target], owner.include, exclude, matchesVitestGlob).length === 1;
+  });
+}
+
 export function resolveCiTestRuntimeSelections(
   selection: TestSelection,
   policy: CiTestRuntimePolicy,
@@ -549,7 +590,12 @@ export function resolveCiTestRuntimeSelections(
     if (!plans.length) {
       return node;
     }
-    if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
+    if (
+      plans.every(
+        (plan) =>
+          bunCompatibleConfigs.has(plan.config) || bunCompatibleWholeOwners.has(plan.config),
+      )
+    ) {
       return completeBun();
     }
     const config = plans[0]!.config;
@@ -621,6 +667,9 @@ export function resolveCiTestRuntimeSelections(
     return node;
   }
   const config = selection.configs[0]!;
+  if (bunCompatibleWholeOwners.has(config)) {
+    return includesStayWithinWholeOwner(config, selection.includePatterns) ? completeBun() : node;
+  }
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
   }

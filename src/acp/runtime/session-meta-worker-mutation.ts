@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import {
@@ -60,45 +59,38 @@ export async function prepareAcpSessionMutation(
         let phase: "transaction" | "commit" | "settled" = "transaction";
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           const facts = request.facts;
-          const port =
-            isRecord(facts) && facts.preparationPort instanceof MessagePort
-              ? facts.preparationPort
-              : undefined;
-          try {
+          assertCurrent();
+          if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
+            throw new Error("ACP callback differs from its retained transaction");
+          }
+          authorize?.(request.stage === "transaction" ? "transaction" : "commit");
+          if (request.stage === "transaction") {
+            if (decision) {
+              throw new Error("ACP callback has no unique decision");
+            }
+            // SAFETY: this private worker supplies this operation's authoritative row snapshot.
+            const prepared = facts.preparation as AcpSessionMutationPreparation;
+            const next = mutate(
+              prepared.current,
+              prepared.current
+                ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
+                : prepared.entry,
+            );
+            decision =
+              next === undefined
+                ? { kind: "keep" }
+                : next === null
+                  ? { kind: "clear" }
+                  : { kind: "set", meta: next };
             assertCurrent();
-            if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
-              throw new Error("ACP callback differs from its retained transaction");
-            }
-            authorize?.(request.stage === "transaction" ? "transaction" : "commit");
-            if (request.stage === "transaction") {
-              if (!port || decision) {
-                throw new Error("ACP callback has no unique decision port");
-              }
-              // SAFETY: this private worker supplies this operation's authoritative row snapshot.
-              const prepared = facts.preparation as AcpSessionMutationPreparation;
-              const next = mutate(
-                prepared.current,
-                prepared.current
-                  ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
-                  : prepared.entry,
-              );
-              decision =
-                next === undefined
-                  ? { kind: "keep" }
-                  : next === null
-                    ? { kind: "clear" }
-                    : { kind: "set", meta: next };
-              assertCurrent();
-              port.postMessage(decision, []);
-              phase = "commit";
-            } else {
-              phase = "settled";
-            }
-            if (!grant()) {
-              throw new Error("ACP callback admission expired");
-            }
-          } finally {
-            port?.close();
+            // Reject uncloneable metadata before any canonical entry mutation.
+            structuredClone(decision);
+            phase = "commit";
+          } else {
+            phase = "settled";
+          }
+          if (!grant()) {
+            throw new Error("ACP callback admission expired");
           }
         });
         return {
@@ -125,6 +117,9 @@ export async function commitAcpSessionMutation(
   assertCurrent: () => void,
   authorize?: (stage: "transaction" | "commit") => void,
 ) {
+  if ("kind" in input.source && input.source.kind === "reset" && !authorize) {
+    throw new Error("ACP reset publication requires its retained lifecycle guard");
+  }
   const nonce = randomUUID();
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
@@ -210,7 +205,9 @@ export async function commitAcpSessionMutation(
           return {
             nativeLocations: [
               context.admission.databasePath,
-              ...("kind" in input.source ? [] : [input.source.path]),
+              ...("kind" in input.source && input.source.kind === "ephemeral"
+                ? []
+                : [input.source.path]),
             ],
             admission,
           };
@@ -262,16 +259,21 @@ export async function readIncognitoAcpSessionEntry(
   return (await prepareIncognitoAcpSessionEntry(params)).entry;
 }
 
-function prepareIncognitoAcpSessionEntry(params: Target) {
+function prepareIncognitoAcpSessionEntry(params: Target, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
   return actor.sessions.withSharedState(async () => {
-    const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey });
-    const [acp] = await readAcpSessionMetaForEntries({
-      entries: [{ sessionKey, agentId: actor.agentId, entry }],
-      cfg: params.cfg,
-      env: context.environment,
-      databasePath: context.admission.databasePath,
-    });
+    const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey }, signal);
+    const [acp] = await readAcpSessionMetaForEntries(
+      {
+        entries: [{ sessionKey, agentId: actor.agentId, entry }],
+        cfg: params.cfg,
+        env: context.environment,
+        databasePath: context.admission.databasePath,
+      },
+      { signal },
+    );
+    signal?.throwIfAborted();
     const assertPreparedCurrent = () => {
       assertCurrent();
       snapshot.assertCurrent();
@@ -290,9 +292,10 @@ function prepareIncognitoAcpSessionEntry(params: Target) {
 
 /** Inactive cleanup composition; both source fences remain owned until release. */
 export function prepareIncognitoAcpSessionEntryRead(
-  params: Target & { storePath: string },
+  params: Target & { storePath: string; signal?: AbortSignal },
 ): Promise<PreparedAcpSessionEntryRead> {
   const { actor, sessionKey } = captureTarget(params);
+  const signal = params.signal;
   const cfg = params.cfg;
   const storePath = params.storePath;
   const logicalSessionKey = params.sessionKey.trim();
@@ -315,7 +318,8 @@ export function prepareIncognitoAcpSessionEntryRead(
       released.resolve();
     };
     try {
-      const prepared = await prepareIncognitoAcpSessionEntry(params);
+      const prepared = await prepareIncognitoAcpSessionEntry(params, signal);
+      signal?.throwIfAborted();
       const assertCurrent = () => {
         // Shared ACP publication can follow its actor-entry commit; retain both fences.
         prepared.assertCurrent();

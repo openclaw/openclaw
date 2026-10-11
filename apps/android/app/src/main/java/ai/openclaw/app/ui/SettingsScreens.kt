@@ -192,7 +192,6 @@ internal fun SettingsDetailScreen(
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -2931,26 +2930,20 @@ internal fun execApprovalMetadata(
   nowMs: Long = System.currentTimeMillis(),
 ): String {
   val target =
-    when {
-      approval.host == "node" && approval.nodeId != null -> {
-        val nodeId = approval.nodeId.take(8)
-        nativeString("Node \${nodeId}", nodeId)
+    when (approval.host) {
+      "node" -> {
+        approval.nodeId?.let {
+          val nodeId = it.take(8)
+          nativeString("Node \${nodeId}", nodeId)
+        } ?: nativeString("Node")
       }
 
-      approval.host == "node" -> {
-        nativeString("Node")
-      }
-
-      approval.host == "gateway" -> {
+      "gateway", null -> {
         nativeString("Gateway")
-      }
-
-      approval.host != null -> {
-        approval.host
       }
 
       else -> {
-        nativeString("Gateway")
+        approval.host
       }
     }
   val agent =
@@ -3056,23 +3049,12 @@ internal fun formatUsageUpdated(
   val deltaMs = (nowMs - updated).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
   val hours = minutes / 60L
+  val days = hours / 24L
   return when {
-    minutes < 1 -> {
-      nativeString("Now")
-    }
-
-    hours < 1 -> {
-      nativeString("\${minutes}m", minutes)
-    }
-
-    hours < 24 -> {
-      nativeString("\${hours}h", hours)
-    }
-
-    else -> {
-      val days = hours / 24L
-      nativeString("\${days}d", days)
-    }
+    minutes < 1 -> nativeString("Now")
+    hours < 1 -> nativeString("\${minutes}m", minutes)
+    hours < 24 -> nativeString("\${hours}h", hours)
+    else -> nativeString("\${days}d", days)
   }
 }
 
@@ -3179,10 +3161,8 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 
 @Composable
 internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      SettingsToggleListRow(row)
-    }
+  ClawListPanel(items = rows, contentPadding = PaddingValues(0.dp)) { row ->
+    SettingsToggleListRow(row)
   }
 }
 

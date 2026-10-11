@@ -22,10 +22,7 @@ export function createDoctorPrompter(params: {
 }) {
   const repairMode = resolveDoctorRepairMode(params.options);
   const confirmPrompt = async (p: DoctorConfirmParams) => {
-    if (params.signal?.aborted) {
-      return false;
-    }
-    if (repairMode.nonInteractive) {
+    if (params.signal?.aborted || repairMode.nonInteractive) {
       return false;
     }
     if (!repairMode.canPrompt) {

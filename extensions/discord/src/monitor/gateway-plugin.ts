@@ -131,18 +131,6 @@ function formatDiscordGatewayTransportCloseLog(params: {
   return `discord: gateway websocket closed ${details.join(" ")}`;
 }
 
-function shouldLogDiscordGatewayTransportClose(params: {
-  code: number;
-  reason: Buffer;
-  lastError?: DiscordGatewayTransportErrorDetails;
-}): boolean {
-  return (
-    (params.code !== 1000 && params.code !== 1001) ||
-    params.reason.length > 0 ||
-    params.lastError !== undefined
-  );
-}
-
 type ResolveDiscordGatewayIntentsParams = {
   intentsConfig?: import("openclaw/plugin-sdk/config-contracts").DiscordIntentsConfig;
   voiceEnabled?: boolean;
@@ -293,11 +281,9 @@ function createGatewayPlugin(params: {
           payload: closeReason,
         }));
         if (
-          shouldLogDiscordGatewayTransportClose({
-            code,
-            reason: closeReason,
-            lastError: lastTransportError,
-          })
+          (code !== 1000 && code !== 1001) ||
+          closeReason.length > 0 ||
+          lastTransportError !== undefined
         ) {
           params.runtime?.log?.(
             warn(

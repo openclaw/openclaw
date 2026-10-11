@@ -25,10 +25,6 @@ import {
 
 const log = createSubsystemLogger("discord/thread-bindings");
 
-function buildThreadTarget(threadId: string): string {
-  return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
-}
-
 export function isThreadArchived(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") {
     return false;
@@ -61,10 +57,8 @@ export function summarizeDiscordError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
-  if (typeof err === "string") {
-    return err;
-  }
   if (
+    typeof err === "string" ||
     typeof err === "number" ||
     typeof err === "boolean" ||
     typeof err === "bigint" ||
@@ -146,7 +140,9 @@ export async function maybeSendBindingMessage(params: {
   try {
     await withDiscordRequestAuthority(assertCurrent, () => {
       assertCurrent?.();
-      return sendMessageDiscord(buildThreadTarget(record.threadId), text, {
+      const threadId = record.threadId;
+      const target = /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
+      return sendMessageDiscord(target, text, {
         cfg: params.cfg,
         accountId: record.accountId,
       });

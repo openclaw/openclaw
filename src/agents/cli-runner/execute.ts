@@ -118,18 +118,17 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
-  // Fresh recovery retains its exact account/read authority across every await
-  // and through the process/plugin execution callbacks, not just preparation.
-  const context =
-    !cliSessionIdToUse && inputContext.openClawHistoryPrompt && inputContext.cliHistoryWriter
-      ? {
-          ...inputContext,
-          params: {
-            ...inputContext.params,
-            assertCurrent: inputContext.cliHistoryWriter.assertReadable,
-          },
-        }
-      : inputContext;
+  // Resumed turns also carry durable reference context. Retain its account/read
+  // authority across awaits and process/plugin callbacks, not just fresh recovery.
+  const context = inputContext.cliHistoryWriter
+    ? {
+        ...inputContext,
+        params: {
+          ...inputContext.params,
+          assertCurrent: inputContext.cliHistoryWriter.assertReadable,
+        },
+      }
+    : inputContext;
   const params = context.params as PreparedCliRunInternalParams;
   const assertCurrent = createCliRunCurrentAssertion(params);
   assertCurrent();
@@ -233,9 +232,7 @@ export async function executePreparedCliRun(
       : resolvedArgs;
 
   const cliLiveOwnerKey = buildCliLiveOwnerKey({
-    agentAccountId: params.agentAccountId,
     agentId: params.agentId,
-    authProfileId: context.effectiveAuthProfileId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });

@@ -1,4 +1,8 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerDispatch,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
@@ -47,7 +51,6 @@ import type {
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 type WorkerLocalDispatchBarrier = (params: {
@@ -56,6 +59,7 @@ type WorkerLocalDispatchBarrier = (params: {
   agentId: string;
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
+  requiredProfile?: string;
   signal?: AbortSignal;
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
@@ -79,7 +83,10 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
       identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
       target: WorkerPlacementMoveRequest["target"],
     ) => Promise<WorkerPlacementMoveDestination | undefined>;
-    onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+    onActivated?: (
+      request: WorkerPlacementDispatchRequest,
+      placement: WorkerActiveDispatchPlacement,
+    ) => void;
     resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
     resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
     isCurrentNodePlacement?: WorkerNodePlacementAuthority;
@@ -113,7 +120,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
+      assertRequiredWorkerDispatch(getRuntimeConfig(), request);
     });
+    assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();
@@ -123,6 +132,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         agentId: request.agentId,
         executionMode: request.executionMode,
         authorize: assertCurrent,
+        requiredProfile: request.requiredProfile,
         signal,
         startDispatch: async () => {
           placement = await placements.startDispatch(
@@ -162,8 +172,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
       }
-      await startup.validateDevicePlacement(request);
-      signal?.throwIfAborted();
       const workspace = await options.resolveWorkspace(request);
       if (
         workspace.kind === "repository" &&
@@ -343,97 +351,86 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (current?.state === "local" && matchesWorkerPlacementTarget(current, completedOperation)) {
       return current;
     }
-    try {
-      // The preparation/placement wait can span another completed failed cleanup.
-      // Its old generation classifies an idempotent result, never authorizes new teardown.
-      const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
-      if (owned?.state === "failed" || owned?.state === "provisioning") {
-        return await options.runFailedReclaimBarrier({
-          ...request,
-          authorize,
-          reclaim: async (reauthorize) => {
-            let failedPlacement = await placements.getAsync(request.sessionId);
-            reauthorize?.();
-            if (request.recoverToGateway) {
-              beforeDrain?.();
-            }
-            if (owned.state === "provisioning") {
-              failedPlacement = await failure.cancelProvisioning(
-                failedPlacement,
-                initial,
-                reauthorize,
-              );
-              reportPlacementTransition(onTransition, failedPlacement);
-            }
-            // A preceding cleanup can finish while this request waits for the lifecycle fence.
-            if (
-              failedPlacement?.state === "local" &&
-              owned.state === "failed" &&
-              failedPlacement.generation === owned.generation + 1 &&
-              failedPlacement.sessionKey === request.sessionKey &&
-              failedPlacement.agentId === request.agentId
-            ) {
-              return failedPlacement;
-            }
-            if (failedPlacement?.state !== "failed") {
-              throw new Error("Failed cloud worker placement changed during reclaim");
-            }
-            const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
-            const failed = await placements.getAsync(request.sessionId);
-            if (failed?.state !== "failed") {
-              throw new Error("Failed cloud worker placement changed during reclaim");
-            }
-            if (
-              !isFailedWorkerPlacementEnvironmentGone({
-                environmentService: environments,
-                placement: failed,
-              })
-            ) {
-              throw new Error(
-                cleanupError ?? "Failed cloud worker environment cleanup is still pending",
-              );
-            }
-            if (request.recoverToGateway) {
-              const assertCurrent = () => {
-                reauthorize?.();
-                beforeDrain?.();
-              };
-              assertCurrent();
-              if (options.prepareGatewayMove) {
-                await options.prepareGatewayMove({ ...request, assertCurrent });
-              } else if ((await options.resolveWorkspace(request)).kind === "repository") {
-                throw new Error("Repository workspace Gateway materialization is unavailable");
-              }
-              // Keep local admission closed until the accepted checkpoint is bound locally.
-              assertCurrent();
-            }
-            const local = await placements.transition(
-              {
-                sessionId: request.sessionId,
-                from: "failed",
-                to: "local",
-                expectedGeneration: failed.generation,
-              },
-              request.recoverToGateway ? reauthorize : undefined,
+    // The preparation/placement wait can span another completed failed cleanup.
+    // Its old generation classifies an idempotent result, never authorizes new teardown.
+    const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
+    if (owned?.state === "failed" || owned?.state === "provisioning") {
+      return await options.runFailedReclaimBarrier({
+        ...request,
+        authorize,
+        reclaim: async (reauthorize) => {
+          let failedPlacement = await placements.getAsync(request.sessionId);
+          reauthorize?.();
+          if (request.recoverToGateway) {
+            beforeDrain?.();
+          }
+          if (owned.state === "provisioning") {
+            failedPlacement = await failure.cancelProvisioning(
+              failedPlacement,
+              initial,
+              reauthorize,
             );
-            if (local.state !== "local") {
-              throw new Error("Failed cloud worker reclaim did not produce a local placement");
+            reportPlacementTransition(onTransition, failedPlacement);
+          }
+          // A preceding cleanup can finish while this request waits for the lifecycle fence.
+          if (
+            failedPlacement?.state === "local" &&
+            owned.state === "failed" &&
+            failedPlacement.generation === owned.generation + 1 &&
+            failedPlacement.sessionKey === request.sessionKey &&
+            failedPlacement.agentId === request.agentId
+          ) {
+            return failedPlacement;
+          }
+          if (failedPlacement?.state !== "failed") {
+            throw new Error("Failed cloud worker placement changed during reclaim");
+          }
+          const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
+          const failed = await placements.getAsync(request.sessionId);
+          if (failed?.state !== "failed") {
+            throw new Error("Failed cloud worker placement changed during reclaim");
+          }
+          if (
+            !isFailedWorkerPlacementEnvironmentGone({
+              environmentService: environments,
+              placement: failed,
+            })
+          ) {
+            throw new Error(
+              cleanupError ?? "Failed cloud worker environment cleanup is still pending",
+            );
+          }
+          const assertCurrent = request.recoverToGateway
+            ? composePlacementAuthorization(reauthorize, () => beforeDrain?.())
+            : undefined;
+          if (assertCurrent) {
+            assertCurrent();
+            if (options.prepareGatewayMove) {
+              await options.prepareGatewayMove({ ...request, assertCurrent });
+            } else if ((await options.resolveWorkspace(request)).kind === "repository") {
+              throw new Error("Repository workspace Gateway materialization is unavailable");
             }
-            reportPlacementTransition(onTransition, local);
-            return local;
-          },
-        });
-      }
-      return await reclaimOnce(request, undefined, authorize, beforeDrain, onTransition);
-    } catch (error) {
-      // Another teardown path can win after this call has crossed its durable completion fence.
-      // Report the committed terminal state instead of leaking a stale tunnel error to callers.
-      const completed = await placements.getAsync(request.sessionId);
-      if (error instanceof WorkerTunnelOwnerDisconnectedError && completed?.state === "reclaimed") {
-        return completed;
-      }
-      throw error;
+            // Keep local admission closed until the accepted checkpoint is bound locally.
+            assertCurrent();
+          }
+          const local = await placements.transition(
+            {
+              sessionId: request.sessionId,
+              from: "failed",
+              to: "local",
+              expectedGeneration: failed.generation,
+            },
+            assertCurrent,
+          );
+          if (local.state !== "local") {
+            throw new Error("Failed cloud worker reclaim did not produce a local placement");
+          }
+          reportPlacementTransition(onTransition, local);
+          return local;
+        },
+      });
     }
+    return await reclaimOnce(request, undefined, authorize, beforeDrain, onTransition);
   };
 
   const reclaim = async (
@@ -447,6 +444,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
     const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
+      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+        throw new RequiredWorkerProfileError(
+          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+        );
+      }
       if (!request.recoverToGateway) {
         return;
       }

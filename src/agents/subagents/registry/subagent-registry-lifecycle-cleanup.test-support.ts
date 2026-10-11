@@ -8,7 +8,6 @@ import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-i
 import { createContext as createGatewayContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
-  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -20,6 +19,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-cleanup.js";
 import {
   readLifecycleRun,
@@ -31,6 +31,7 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerDetachedCleanupAuthorityTest({
@@ -358,6 +359,84 @@ export function registerDeliveryRetryOwnerTests({
     }
   });
 
+  it("retains a child result and retries parent restart admission without a sweep", async () => {
+    await useRetryTimers();
+    vi.setSystemTime(10_000);
+    const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
+      "./subagent-registry-cleanup.js",
+    );
+    const decision = vi
+      .spyOn(cleanupPolicy, "resolveDeferredCleanupDecision")
+      .mockImplementation(actualPolicy.resolveDeferredCleanupDecision);
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const terminalReply = { disposition: "visible", text: "A=alpha" } as const;
+    const admissionError =
+      'Session "agent:main:main" changed while starting work. Retry. | SESSION_WORK_START_CHANGED';
+    const runSubagentAnnounceFlow = vi
+      .fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>()
+      .mockImplementationOnce(async (params) => {
+        await params.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          disposition: "retryable",
+          error: admissionError,
+        });
+        return "retryable";
+      })
+      .mockResolvedValue("delivered");
+    const resumeSubagentRun = vi.fn(() =>
+      controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry)),
+    );
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+      resumeSubagentRun,
+    });
+    const join = observeRootWork();
+    try {
+      await controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        terminalReply,
+        triggerCleanup: true,
+      });
+      await join(true);
+      const pending = readLifecycleRun(entry);
+      expect(pending.completion?.terminalReply).toEqual(terminalReply);
+      expect(pending.delivery).toMatchObject({
+        status: "pending",
+        payload: { childRunId: entry.runId, terminalReply },
+        nextAttemptAt: 11_000,
+      });
+      expect(pending.cleanupCompletedAt).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await join(true);
+      expect(resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(entry.runId);
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+      for (const [params] of runSubagentAnnounceFlow.mock.calls) {
+        expect(params.terminalReply).toEqual(terminalReply);
+        expect(params.roundOneReply).toBe("A=alpha");
+      }
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+      expect(readLifecycleRun(entry).completion?.resultText).toBe("A=alpha");
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    } finally {
+      await join();
+      controller.clearScheduledResumeTimers();
+      decision.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the current retry when a stale cleanup continuation schedules late", async () => {
     await useRetryTimers();
     const entry = createRunEntry({ endedAt: Date.now(), expectsCompletionMessage: true });
@@ -379,7 +458,7 @@ export function registerDeliveryRetryOwnerTests({
     }
   });
 
-  it.each(["current", "completed cleanup", "replaced", "cancelled", "restart"] as const)(
+  it.each(["current", "completed cleanup", "replaced", "cancelled"] as const)(
     "resumes one scheduled delivery only for its current owner (%s)",
     async (state) => {
       await useRetryTimers();
@@ -405,16 +484,10 @@ export function registerDeliveryRetryOwnerTests({
           runs.set(entry.runId, createRunEntry({ ...entry, generation: 2 }));
         } else if (state === "cancelled") {
           controller.clearScheduledResumeTimers();
-        } else if (state === "restart") {
-          markGatewayRestartDraining();
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(resumeSubagentRun).not.toHaveBeenCalled();
-          expect(vi.getTimerCount()).toBe(1);
-          resetGatewayWorkAdmission();
         }
         await vi.advanceTimersByTimeAsync(1_000);
         expect(resumeSubagentRun).toHaveBeenCalledTimes(
-          state === "current" || state === "completed cleanup" || state === "restart" ? 1 : 0,
+          state === "current" || state === "completed cleanup" ? 1 : 0,
         );
         expect(vi.getTimerCount()).toBe(0);
       } finally {

@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { hasRevokedOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawDatabaseVerifyTarget } from "./openclaw-database-verify.worker.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -10,7 +11,10 @@ const log = createSubsystemLogger("state/database-verify");
 type IntegrityCheck = OpenClawDatabaseVerifyTarget["check"];
 type IntegrityCheckRequest = {
   check: IntegrityCheck;
-  proof?: { identity: string; complete: (assertCurrent: () => void) => Promise<boolean> };
+  proof?: {
+    identity: string;
+    complete: (assertCurrent: () => void, signal: AbortSignal) => Promise<boolean>;
+  };
   release?: () => Promise<void>;
 };
 type IntegrityCheckQueue = {
@@ -32,6 +36,27 @@ function integrityCheckQueue(env: NodeJS.ProcessEnv): IntegrityCheckQueue {
     integrityCheckQueues.set(key, queue);
   }
   return queue;
+}
+
+/** Deferral belongs to a running verifier, never a queue without a consumer. */
+export function captureOpenClawDatabaseIntegrityVerifier(database: {
+  databasePath: string;
+  environment: NodeJS.ProcessEnv;
+}): (() => void) | undefined {
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.databasePath)) {
+    return undefined;
+  }
+  const queue = integrityCheckQueues.get(
+    path.resolve(resolveOpenClawStateSqlitePath(database.environment)),
+  );
+  const owner = queue?.subscribers.values().next().value;
+  return owner && queue
+    ? () => {
+        if (!queue.subscribers.has(owner)) {
+          throw new Error("Agent admission lost its background integrity verifier");
+        }
+      }
+    : undefined;
 }
 
 function wakeSubscribers(queue: IntegrityCheckQueue): void {
@@ -98,6 +123,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
   let claimedChecks = new Map<string, IntegrityCheckRequest>();
   let stopPromise: Promise<void> | undefined;
   let stopped = false;
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const workerLifetime = {
     onWorker: (worker: ChildProcess | undefined) => {
@@ -158,7 +184,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
           onVerified: async (pathname) => {
             const request = checks.get(pathname);
             if (request?.check === "full") {
-              return request.proof?.complete(workerLifetime.assertCurrent);
+              return request.proof?.complete(workerLifetime.assertCurrent, controller.signal);
             }
             return undefined;
           },
@@ -190,6 +216,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         return stopPromise;
       }
       stopped = true;
+      controller.abort(new Error("database integrity verifier stopped"));
       queue.subscribers.delete(wake);
       if (queue.subscribers.size === 0) {
         for (const check of queue.paths.values()) {

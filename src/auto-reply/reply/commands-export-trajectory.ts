@@ -5,8 +5,8 @@ import { formatCommandExecResult, formatCommandExecText } from "./command-exec-r
 import { parseExportCommandOutputPath } from "./commands-export-common.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
+  buildCommandExecApprovalDefaults,
   deliverPrivateCommandReply,
-  resolveCommandExecApprovalRoute,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -92,29 +92,14 @@ async function requestTrajectoryExportApproval(
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   try {
     const execTool = createExecTool({
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
+      ...buildCommandExecApprovalDefaults(params, privateApprovalTarget),
       trigger: "export-trajectory",
       scopeKey: EXPORT_TRAJECTORY_EXEC_SCOPE_KEY,
-      allowBackground: true,
       approvalFollowupMode: "agent",
       timeoutSec,
-      cwd: params.workspaceDir,
       agentId: params.agentId,
-      sessionKey: params.sessionKey,
       sessionId: params.sessionEntry?.sessionId,
       sessionStore: params.cfg.session?.store,
-      eventRouting: {
-        mainKey: params.cfg.session?.mainKey,
-        sessionScope: params.cfg.session?.scope,
-      },
-      ...resolveCommandExecApprovalRoute({
-        commandParams: params,
-        privateApprovalTarget,
-      }),
-      notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
-      notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
