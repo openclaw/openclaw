@@ -24,6 +24,7 @@ import * as contextWorker from "../../config/sessions/session-transcript-read-wo
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
+  readOwnedSessionTranscriptEntry,
   runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
@@ -180,6 +181,8 @@ it.each(["bounded", "anchors"] as const)(
           expect((await read())?.contextAuthority?.entry?.activeWriterRunId).toBe("current-run");
 
           await upsertSessionEntryCore(target, { sessionId: "replacement", updatedAt: 2 });
+          expect(actor.snapshot(authority)).toBeUndefined();
+          expect(readOwnedSessionTranscriptEntry(target)?.sessionId).toBe("replacement");
           const replaced = await read();
           expect(replaced?.contextAuthority?.entry?.sessionId).toBe("replacement");
           expect(replaced?.anchors).toEqual([]);

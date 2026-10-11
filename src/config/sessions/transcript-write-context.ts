@@ -14,6 +14,7 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionActor } from "./session-actor-contract.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import {
   assertSessionEntryCohortScope,
   matchSessionEntryCohortScope,
@@ -221,7 +222,11 @@ export function readOwnedSessionTranscriptEntry(
     return undefined;
   }
   const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
-  const entry = binding.actor.snapshot({ assertCurrent, authorize: assertCurrent })?.entry;
+  const target = binding.actor.target;
+  const entry =
+    target.database.kind === "file"
+      ? readSessionActorEntryFacts({ ...target, database: target.database })?.entry
+      : binding.actor.snapshot({ assertCurrent, authorize: assertCurrent })?.entry;
   return (
     entry && {
       sessionId: entry.sessionId,
