@@ -121,18 +121,6 @@ function findConfiguredOwnerCandidates(
       : identityCandidates;
 }
 
-export function resolveConfiguredOwnerPublication(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  rawInput: PreparedModelRuntimeInput,
-): { matches: boolean; pending?: Promise<PreparedModelRuntimeSnapshot> } {
-  const input = normalizePreparedModelRuntimeInput(rawInput);
-  const candidates = findConfiguredOwnerCandidates(owners, input);
-  return {
-    matches: candidates.length > 0,
-    pending: candidates.length === 1 ? candidates[0]?.pending : undefined,
-  };
-}
-
 export function resolveConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
@@ -501,8 +489,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
   });
   const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
-  const needsBuild = (candidate: (typeof candidates)[number]) =>
-    candidate.isEligible() && !results.has(candidate.owner);
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {
       return;
@@ -541,82 +527,62 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     },
   };
   try {
-    while (true) {
-      const attempt = candidates.filter(needsBuild);
-      if (attempt.length === 0) {
-        break;
+    // Auth events can touch live and static owners together. Build mode groups in sequence
+    // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
+    for (const [catalogMode, group] of groups) {
+      const currentGroup = group.filter(
+        (candidate) => candidate.isEligible() && !results.has(candidate.owner),
+      );
+      if (currentGroup.length === 0) {
+        continue;
       }
-      try {
-        // Auth events can touch live and static owners together. Build mode groups in sequence
-        // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
-        for (const [catalogMode, group] of groups) {
-          const currentGroup = group.filter(needsBuild);
-          if (currentGroup.length === 0) {
-            continue;
-          }
-          const build = startSerializedSnapshotBuildBatch(
-            currentGroup,
-            params.agentBuildCompletions,
-            params.buildTimeoutMs,
-            catalogMode,
-            params.onBuildStats,
-            params.pluginMetadataSnapshot,
-            params.includeCredentialProviders,
-            params.progress
-              ? {
-                  onStage: params.progress.onStage,
-                  onPrepared: (input, result) => {
-                    const candidate = currentGroup.find((entry) => entry.input === input)!;
-                    results.set(candidate.owner, result);
-                    publishCandidate(candidate);
-                    params.progress!.onPublished();
-                  },
-                }
-              : undefined,
-            params.acquisitionSignal,
-            params.providerDiscoveryTimeoutMs,
-          );
-          for (const candidate of currentGroup) {
-            if (params.registerEntriesAfterBuildStart === true) {
-              // Pending owners become visible before awaited preparation; auth replay follows
-              // the explicit credential-capture boundary rather than promise scheduling.
-              const previous = params.owners.get(candidate.key);
-              params.owners.set(candidate.key, candidate.owner);
-              if (previous && previous !== candidate.owner) {
-                retirePreparedModelRuntimeGeneration(previous);
-                releasePreparedPluginPublication(previous);
-              }
-              candidate.markRegistered();
+      const build = startSerializedSnapshotBuildBatch(
+        currentGroup,
+        params.agentBuildCompletions,
+        params.buildTimeoutMs,
+        catalogMode,
+        params.onBuildStats,
+        params.pluginMetadataSnapshot,
+        params.includeCredentialProviders,
+        params.progress
+          ? {
+              onStage: params.progress.onStage,
+              onPrepared: (input, result) => {
+                const candidate = currentGroup.find((entry) => entry.input === input)!;
+                results.set(candidate.owner, result);
+                publishCandidate(candidate);
+                params.progress!.onPublished();
+              },
             }
-            const completion = params.agentBuildCompletions.get(candidate.input.agentDir)!;
-            candidate.owner.buildCompletion = completion;
-            void completion.then(() => {
-              if (candidate.owner.buildCompletion === completion) {
-                candidate.owner.buildCompletion = undefined;
-              }
-            });
+          : undefined,
+        params.acquisitionSignal,
+        params.providerDiscoveryTimeoutMs,
+      );
+      for (const candidate of currentGroup) {
+        if (params.registerEntriesAfterBuildStart === true) {
+          // Pending owners become visible before awaited preparation; auth replay follows
+          // the explicit credential-capture boundary rather than promise scheduling.
+          const previous = params.owners.get(candidate.key);
+          params.owners.set(candidate.key, candidate.owner);
+          if (previous && previous !== candidate.owner) {
+            retirePreparedModelRuntimeGeneration(previous);
+            releasePreparedPluginPublication(previous);
           }
-          const built = await build.pending;
-          for (const [index, candidate] of currentGroup.entries()) {
-            if (!results.has(candidate.owner)) {
-              results.set(candidate.owner, built[index]!);
-            }
+          candidate.markRegistered();
+        }
+        const completion = params.agentBuildCompletions.get(candidate.input.agentDir)!;
+        candidate.owner.buildCompletion = completion;
+        void completion.then(() => {
+          if (candidate.owner.buildCompletion === completion) {
+            candidate.owner.buildCompletion = undefined;
           }
+        });
+      }
+      const built = await build.pending;
+      for (const [index, candidate] of currentGroup.entries()) {
+        if (!results.has(candidate.owner)) {
+          results.set(candidate.owner, built[index]!);
         }
-        break;
-      } catch (error) {
-        const refreshError = toStringifiedError(error);
-        const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
-        if (
-          settleSingleOwner ||
-          !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
-          !(params.isPublicationCurrent?.() ?? true) ||
-          !lostCandidate
-        ) {
-          throw refreshError;
-        }
-        // Supersession belongs to one owner generation. Retry only still-current siblings so
-        // an agent-local mutation cannot discard an inherited-auth refresh built for others.
       }
     }
     for (const candidate of candidates) {
