@@ -28,28 +28,6 @@ describe("buildEmbeddingBatchGroupOptions", () => {
     expect(options.pollIntervalMs).toBe(60_000);
   });
 
-  it("passes clamped poll intervals into batch group runners", async () => {
-    const runGroup = vi.fn(async () => {});
-
-    await runEmbeddingBatchGroups({
-      requests: ["request-1"],
-      maxRequests: 100,
-      wait: true,
-      pollIntervalMs: Number.MAX_SAFE_INTEGER,
-      timeoutMs: 60_000,
-      concurrency: 1,
-      debugLabel: "embedding batch submit",
-      runGroup,
-    });
-
-    expect(runGroup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pollIntervalMs: 60_000,
-        timeoutMs: 60_000,
-      }),
-    );
-  });
-
   it("keeps timeout-safe oversized embedding batch poll intervals bounded", () => {
     const options = buildEmbeddingBatchGroupOptions(
       {

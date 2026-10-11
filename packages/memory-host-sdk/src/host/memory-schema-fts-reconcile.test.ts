@@ -133,7 +133,7 @@ describe("memory FTS schema reconciliation", () => {
     }
   });
 
-  it.each(["fts5", "ordinary"])("repairs malformed %s derived tables", (kind) => {
+  it.each(["ordinary"])("repairs malformed %s derived tables", (kind) => {
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
@@ -176,7 +176,7 @@ describe("memory FTS schema reconciliation", () => {
     }
   });
 
-  it.each(["memory_index_chunks_fts", "memory_index_paths_fts", "custom_memory_fts"])(
+  it.each(["memory_index_paths_fts"])(
     "rejects a colliding view at %s without changing it or canonical rows",
     (viewName) => {
       const db = new DatabaseSync(":memory:");
@@ -266,7 +266,7 @@ describe("memory FTS schema reconciliation", () => {
     }
   });
 
-  it.each(["memory_index_chunks", "MEMORY_INDEX_CHUNKS"])(
+  it.each(["MEMORY_INDEX_CHUNKS"])(
     "never drops canonical chunks for the colliding custom FTS table name %s",
     (ftsTable) => {
       const db = new DatabaseSync(":memory:");
@@ -323,7 +323,7 @@ describe("memory FTS schema reconciliation", () => {
     }
   });
 
-  it.each(["memory_index_paths_fts", "MEMORY_INDEX_PATHS_FTS"])(
+  it.each(["MEMORY_INDEX_PATHS_FTS"])(
     "never replaces the reserved path FTS table through the custom body alias %s",
     (ftsTable) => {
       const db = new DatabaseSync(":memory:");

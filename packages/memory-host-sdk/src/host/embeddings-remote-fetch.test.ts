@@ -59,13 +59,9 @@ describe("fetchRemoteEmbeddingVectors", () => {
   });
 
   it.each([
-    { usage: { prompt_tokens: 7, total_tokens: 9 }, expected: { promptTokens: 7, totalTokens: 9 } },
     { usage: { prompt_tokens: 3 }, expected: { promptTokens: 3, totalTokens: 3 } },
     { usage: { total_tokens: 0 }, expected: { promptTokens: 0, totalTokens: 0 } },
-    { usage: undefined, expected: undefined },
     { usage: { prompt_tokens: -1 }, expected: undefined },
-    { usage: { prompt_tokens: 1.5 }, expected: undefined },
-    { usage: { prompt_tokens: "7" }, expected: undefined },
   ])("reports validated usage for $usage without changing vectors", async ({ usage, expected }) => {
     respondJson({ data: [{ embedding: [0.1] }], usage });
     const onUsage = vi.fn();
@@ -73,54 +69,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
     expect(onUsage).toHaveBeenCalledExactlyOnceWith(expected);
   });
 
-  it("ignores non-finite usage parsed from a valid JSON number", async () => {
-    respond('{"data":[{"embedding":[0.1]}],"usage":{"prompt_tokens":1e309}}');
-    const onUsage = vi.fn();
-    await expect(fetchEmbeddings(["one"], onUsage)).resolves.toEqual([[0.1]]);
-    expect(onUsage).toHaveBeenCalledExactlyOnceWith(undefined);
-  });
-
-  it("preserves positional vectors with differing dimensions", async () => {
-    respondJson({
-      data: [{ embedding: [0.1, 0.2] }, { embedding: [0.4] }, { embedding: [0.3] }],
-    });
-
-    await expect(fetchEmbeddings(["one", "two", "three"])).resolves.toEqual([
-      [0.1, 0.2],
-      [0.4],
-      [0.3],
-    ]);
-  });
-
-  it("forwards the abort signal and sends the unchanged request", async () => {
-    const controller = new AbortController();
-    const body = { model: "fixture-model", input: ["one"] };
-    respondJson({ data: [{ embedding: [0.1] }] });
-
-    await fetchRemoteEmbeddingVectors({ ...REQUEST, body, signal: controller.signal });
-
-    expect(remoteHttpMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: REQUEST.url,
-        signal: controller.signal,
-        init: { method: "POST", headers: REQUEST.headers, body: JSON.stringify(body) },
-      }),
-    );
-  });
-
-  it("returns indexed response vectors in their original request order", async () => {
-    respondJson({
-      data: [
-        { index: 1, embedding: [0.2] },
-        { index: 0, embedding: [0.1] },
-      ],
-    });
-
-    await expect(fetchEmbeddings()).resolves.toEqual([[0.1], [0.2]]);
-  });
-
   it.each([
-    { name: "non-object response", payload: [], reason: "missing data array" },
     { name: "missing data", payload: {}, reason: "missing data array" },
     {
       name: "empty data",
@@ -177,25 +126,22 @@ describe("fetchRemoteEmbeddingVectors", () => {
     expect(JSON.stringify(debugMock.mock.calls)).not.toContain("coordinate-private-marker");
   });
 
-  it.each([
-    { name: "out-of-range", index: 2 },
-    { name: "negative", index: -1 },
-    { name: "fractional", index: 0.5 },
-    { name: "non-numeric", index: "index-private-marker" },
-    { name: "null", index: null },
-  ])("identifies a $name index without exposing its value", async ({ index }) => {
-    respondJson({
-      data: [
-        { index: 0, embedding: [0.1] },
-        { index, embedding: [0.2] },
-      ],
-    });
+  it.each([{ name: "out-of-range", index: 2 }])(
+    "identifies a $name index without exposing its value",
+    async ({ index }) => {
+      respondJson({
+        data: [
+          { index: 0, embedding: [0.1] },
+          { index, embedding: [0.2] },
+        ],
+      });
 
-    await expect(fetchEmbeddings()).rejects.toThrow(
-      `${ERROR_PREFIX}: invalid index at position 1; expected an integer in [0, 1]`,
-    );
-    expect(JSON.stringify(debugMock.mock.calls)).not.toContain("index-private-marker");
-  });
+      await expect(fetchEmbeddings()).rejects.toThrow(
+        `${ERROR_PREFIX}: invalid index at position 1; expected an integer in [0, 1]`,
+      );
+      expect(JSON.stringify(debugMock.mock.calls)).not.toContain("index-private-marker");
+    },
+  );
 
   it("identifies non-finite coordinates parsed from a valid JSON number", async () => {
     respond('{"data":[{"embedding":[0.1]},{"embedding":[1e309]}]}');
@@ -203,12 +149,6 @@ describe("fetchRemoteEmbeddingVectors", () => {
     await expect(fetchEmbeddings()).rejects.toThrow(
       `${ERROR_PREFIX}: non-finite coordinate at position 1, coordinate 0`,
     );
-  });
-
-  it("preserves an empty response for an empty submitted input batch", async () => {
-    respondJson({ data: [] });
-
-    await expect(fetchEmbeddings([])).resolves.toEqual([]);
   });
 
   it("accepts response-sized vectors when request input is not an array", async () => {

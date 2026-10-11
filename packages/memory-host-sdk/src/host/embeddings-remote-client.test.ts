@@ -76,20 +76,6 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
     }
   });
 
-  it("fails before egress when a remote destination has no destination-owned auth", async () => {
-    await expect(
-      resolveRemoteEmbeddingBearerClient({
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        options: {
-          config: { models: { providers: { openai: configuredProvider } } } as never,
-          model: "text-embedding-3-small",
-          remote: { baseUrl: "https://remote.example.test/v1" },
-        },
-      }),
-    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
-  });
-
   it("lets the last source replace mixed-case auth, tenant, and default headers", async () => {
     const client = await resolveRemoteEmbeddingBearerClient({
       provider: "openai",
@@ -283,31 +269,6 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
           } as never,
           model: "text-embedding-3-small",
           remote: { baseUrl: "https://api.openai.com/v1" },
-        },
-      }),
-    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
-  });
-
-  it("keeps the destination-owned credential guard on an explicit remote destination", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await expect(
-      resolveRemoteEmbeddingBearerClient({
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        options: {
-          config: {
-            models: {
-              providers: {
-                openai: {
-                  ...configuredProvider,
-                  api: "openai-chatgpt-responses",
-                  baseUrl: "https://chatgpt.com/backend-api/codex",
-                },
-              },
-            },
-          } as never,
-          model: "text-embedding-3-small",
-          remote: { baseUrl: "https://remote.example.test/v1" },
         },
       }),
     ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);

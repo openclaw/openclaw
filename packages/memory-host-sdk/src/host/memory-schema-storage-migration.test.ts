@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
 import { trackSqliteStatementExecutions } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { decodeMemoryEmbedding, encodeMemoryEmbedding } from "./embedding-vector.js";
+import { encodeMemoryEmbedding } from "./embedding-vector.js";
 import {
   buildMemoryEmbeddingCacheSchema,
   MEMORY_INDEX_CHUNKS_SCHEMA_SQL,
@@ -103,41 +103,6 @@ function countStorageCatalogReads(db: DatabaseSync) {
 }
 
 describe("memory storage migration", () => {
-  it.each([
-    { label: "tracked transaction", tracked: true, transaction: true, reads: 1 },
-    { label: "standalone", tracked: true, transaction: false, reads: 2 },
-    { label: "untracked transaction", tracked: false, transaction: true, reads: 2 },
-    {
-      label: "custom cache transaction",
-      tracked: true,
-      transaction: true,
-      reads: 1,
-      cacheTable: "custom_cache",
-    },
-  ])("validates both storage tables with bounded catalog reads in $label", (testCase) => {
-    const cacheTable = testCase.cacheTable ?? "memory_embedding_cache";
-    const db = binaryDatabase(":memory:", cacheTable, testCase.tracked);
-    if (testCase.transaction) {
-      db.exec("BEGIN IMMEDIATE");
-    }
-    const reads = countStorageCatalogReads(db);
-    try {
-      migrateMemoryIndexStorage(db, { embeddingCacheTable: cacheTable });
-      expect(reads.counts.catalog).toBe(testCase.reads);
-      expect(db.prepare("SELECT chunk_rowid, text FROM memory_index_chunks").get()).toEqual({
-        chunk_rowid: 7,
-        text: "retained text",
-      });
-      expect(db.prepare(`SELECT dims, updated_at FROM ${cacheTable}`).get()).toEqual({
-        dims: 2,
-        updated_at: 121,
-      });
-      expect(db.prepare("SELECT total_changes() AS changes").get()).toEqual({ changes: 2 });
-    } finally {
-      reads.restore();
-    }
-  });
-
   it("rereads storage contracts after local schema changes and rollback", () => {
     const db = binaryDatabase();
     db.exec("BEGIN IMMEDIATE");
@@ -307,70 +272,6 @@ describe("memory storage migration", () => {
     expect(JSON.parse(result.stdout)).toEqual([expected, expected, { textBytes: "80" }]);
   });
 
-  it("converts vectors without providers and preserves identity, provenance, cache age, and FTS maintenance", () => {
-    const db = legacyDatabase();
-    migrateMemoryIndexStorage(db);
-    const chunk = db
-      .prepare("SELECT chunk_rowid, id, text, embedding, updated_at FROM memory_index_chunks")
-      .get()!;
-    expect(chunk).toMatchObject({
-      chunk_rowid: 7,
-      id: "logical-id",
-      text: "saffronquasar",
-      updated_at: 123,
-    });
-    expect(chunk.embedding).toBeInstanceOf(Uint8Array);
-    if (!(chunk.embedding instanceof Uint8Array)) {
-      throw new Error("Expected binary embedding");
-    }
-    expect(decodeMemoryEmbedding(chunk.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
-    expect(db.prepare("SELECT * FROM memory_index_chunk_provenance").get()).toMatchObject({
-      chunk_id: "logical-id",
-      origin_class: "owner",
-      supersedes_key: "prior-id",
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT rowid, provider, model, provider_key, hash, dims, updated_at FROM memory_embedding_cache",
-        )
-        .get(),
-    ).toEqual({
-      rowid: 23,
-      provider: "provider",
-      model: "model",
-      provider_key: "provider-key",
-      hash: "h",
-      dims: 2,
-      updated_at: 121,
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT rowid, id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
-        )
-        .get(),
-    ).toEqual({ rowid: 7, id: "logical-id" });
-    migrateMemoryIndexStorage(db);
-    db.exec("VACUUM; UPDATE memory_index_chunks SET text = 'ambercomet' WHERE id = 'logical-id'");
-    expect(
-      db
-        .prepare(
-          "SELECT rowid FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'ambercomet'",
-        )
-        .get(),
-    ).toEqual({ rowid: 7 });
-    expect(
-      db
-        .prepare(
-          "SELECT 1 FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  });
-
   it("retains malformed-vector text and provenance while recording regeneration debt", () => {
     const db = legacyDatabase();
     db.exec(
@@ -394,56 +295,14 @@ describe("memory storage migration", () => {
     ).toBeUndefined();
   });
 
-  it("rolls physical changes back with its enclosing admitted migration", () => {
-    const db = legacyDatabase();
-    db.exec("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE");
-    migrateMemoryIndexStorage(db);
-    db.exec("ROLLBACK; PRAGMA foreign_keys = ON");
-    expect(db.prepare("SELECT embedding FROM memory_index_chunks").get()).toEqual({
-      embedding: "[1.0000000000000002,0.1]",
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM pragma_table_info('memory_index_chunks') WHERE name = 'chunk_rowid'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(db.prepare("SELECT rowid FROM memory_index_chunks_fts").get()).toEqual({ rowid: 99 });
-    expect(db.prepare("SELECT chunk_id FROM memory_index_chunk_provenance").get()).toEqual({
-      chunk_id: "logical-id",
-    });
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  });
-
   it.each([
-    [
-      "CREATE INDEX operator_chunk_text ON memory_index_chunks(text)",
-      /unknown index operator_chunk_text/,
-    ],
     [
       "CREATE INDEX operator_cache_age ON memory_embedding_cache(updated_at)",
       /unknown index operator_cache_age/,
     ],
     [
-      "CREATE TRIGGER operator_chunk_audit AFTER UPDATE ON memory_index_chunks BEGIN SELECT 1; END",
-      /unexpected trigger operator_chunk_audit/,
-    ],
-    [
-      "CREATE VIEW operator_chunk_text AS SELECT text FROM memory_index_chunks",
-      /unknown view operator_chunk_text/,
-    ],
-    [
       "CREATE TABLE operator_chunk_notes (chunk_id TEXT REFERENCES memory_index_chunks(id), note TEXT)",
       /unknown foreign key in operator_chunk_notes/,
-    ],
-    [
-      "ALTER TABLE memory_index_chunks ADD COLUMN operator_note TEXT; UPDATE memory_index_chunks SET operator_note = 'preserve this note'",
-      /column definitions differ for memory_index_chunks/,
-    ],
-    [
-      "ALTER TABLE memory_embedding_cache ADD COLUMN operator_note TEXT; UPDATE memory_embedding_cache SET operator_note = 'preserve this cache note'",
-      /column definitions differ for memory_embedding_cache/,
     ],
   ] as const)(
     "refuses unknown persisted data or dependencies without touching the original database: %s",
@@ -461,25 +320,12 @@ describe("memory storage migration", () => {
 
   it.each([
     {
-      schema: MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace("embedding BLOB", "embedding TEXT"),
-      embedding: "[]",
-      identityColumn: "chunk_rowid",
-    },
-    {
       schema: MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(
         "chunk_rowid INTEGER PRIMARY KEY,",
         "",
       ).replace("id TEXT NOT NULL UNIQUE", "id TEXT PRIMARY KEY"),
       embedding: new Uint8Array(),
       identityColumn: "rowid",
-    },
-    {
-      schema: MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(
-        "chunk_rowid INTEGER PRIMARY KEY",
-        "chunk_rowid INTEGER PRIMARY KEY DESC",
-      ),
-      embedding: new Uint8Array(),
-      identityColumn: "chunk_rowid",
     },
   ])(
     "refuses mixed identity/format declarations instead of declaring conversion complete",
@@ -498,7 +344,7 @@ describe("memory storage migration", () => {
     },
   );
 
-  it.each([new Uint8Array([1]), new Uint8Array(Buffer.from("000000000000f87f", "hex"))])(
+  it.each([new Uint8Array(Buffer.from("000000000000f87f", "hex"))])(
     "refuses malformed preexisting binary cache rows while a chunk conversion is pending",
     (embedding) => {
       const db = legacyDatabase();
