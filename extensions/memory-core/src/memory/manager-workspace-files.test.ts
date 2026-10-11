@@ -19,6 +19,7 @@ import {
   readWorkspaceText,
 } from "../memory-workspace-files.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -248,18 +249,12 @@ describe("Gateway index over Harness workspace files", () => {
       const manager = await fixture.getPersistentManager(createConfig());
       await manager.sync({ reason: "initial", force: true });
       if (outcome === "newer-index") {
-        const db = new DatabaseSync(manager.status().dbPath!);
-        try {
-          const row = db
-            .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-            .get();
-          const meta = JSON.parse(String(row?.value)) as { chunkingVersion: number };
-          db.prepare(
-            "UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'",
-          ).run(JSON.stringify({ ...meta, chunkingVersion: meta.chunkingVersion + 1 }));
-        } finally {
-          db.close();
+        const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
+        const meta = database.facts.meta;
+        if (!meta || meta.chunkingVersion === undefined) {
+          throw new Error("Expected the published index chunking version");
         }
+        await database.writeMetadata({ ...meta, chunkingVersion: meta.chunkingVersion + 1 });
       } else {
         vi.spyOn(files, "listFiles").mockRejectedValueOnce(new Error("discovery unavailable"));
       }

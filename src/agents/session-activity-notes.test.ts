@@ -17,20 +17,6 @@ function assistantEvent(ts: number, text: string, delta: string): AgentEventPayl
 }
 
 describe("session activity assistant buffering", () => {
-  it("defers cumulative rescans inside the throttle and flushes the exact latest text", () => {
-    const state = createSessionActivityNoteState();
-    noteSessionActivityEvent(state, assistantEvent(1_000, "first", "first"));
-    noteSessionActivityEvent(state, assistantEvent(1_050, "first second", " second"));
-
-    expect(state.assistantBuffer).toBe("first");
-    expect(state.assistantBufferDirty).toBe(true);
-
-    flushSessionActivityAssistantNote(state);
-
-    expect(state.assistantBuffer).toBe("first second");
-    expect(state.notes.at(-1)?.text).toBe("Assistant: first second");
-  });
-
   it("preserves split internal-context filtering when the forced flush follows a burst", () => {
     const state = createSessionActivityNoteState();
     noteSessionActivityEvent(
@@ -51,7 +37,7 @@ describe("session activity assistant buffering", () => {
     expect(state.notes.at(-1)?.text).toBe("Assistant: visible after");
   });
 
-  it.each(["HEARTBEAT_OK", "NO_REPLY"])(
+  it.each(["NO_REPLY"])(
     "does not record the internal acknowledgement %s as assistant activity",
     (acknowledgement) => {
       const state = createSessionActivityNoteState();

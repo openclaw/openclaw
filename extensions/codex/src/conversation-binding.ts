@@ -36,7 +36,7 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./app-server/shared-client.js";
@@ -163,7 +163,7 @@ async function runBoundTurn(params: {
         authProfileId: binding.authProfileId,
         ...agentLookup,
       } satisfies CodexAppServerClientOptions;
-      let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+      const client = await getLeasedSharedCodexAppServerClient(clientOptions);
       const clientLease: CodexAppServerClientLease = { client };
       let activeTurnId: string | undefined;
       let activeTurnCleanup: () => void = () => undefined;
@@ -207,7 +207,7 @@ async function runBoundTurn(params: {
           if (!networkProxyBindingChanged && binding.clientId === client.getInstanceId()) {
             await assertResumeInputAllowed();
           }
-          const result = await withLeasedCodexAppServerClientStartSelectionRetry({
+          const result = await withCodexAppServerClientRequestScope({
             lease: clientLease,
             options: clientOptions,
             run: async (requestClient, connectionRequestOptions) => {
@@ -251,9 +251,6 @@ async function runBoundTurn(params: {
                 requestResume: (request) =>
                   requestClient.request("thread/resume", request, requestOptions()),
               });
-            },
-            onClientChange: (nextClient) => {
-              client = nextClient;
             },
           });
           const response = networkProxyBindingChanged

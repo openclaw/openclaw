@@ -1,10 +1,20 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { normalizeBoardWidgetPutParams } from "../boards/board-store.js";
+import {
+  ensureBoardSchema,
+  putBoardWidgetInDatabase,
+} from "../boards/sqlite-board-store.kernel.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -22,6 +32,132 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("projects dashboard cards without sending session execution details", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const benchmark = process.env.OPENCLAW_DASHBOARD_BENCH === "1";
+    const count = benchmark ? 200 : 2;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "gallery-reader");
+    ensureBoardSchema(openOpenClawAgentDatabase({ agentId: "main" }));
+    for (let index = 0; index < count; index++) {
+      const sessionKey = `agent:main:dashboard-${index}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `dashboard-${index}`,
+          updatedAt: 1_800_000_000_000 + index,
+          label: `Dashboard ${index}`,
+          visibility: "shared",
+          boardFace: "dashboard",
+          modelProvider: "test-provider",
+          model: "test-model",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          inputTokens: 1000,
+          outputTokens: 500,
+          totalTokens: 1500,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          permissionMode: "full",
+          createdActor: { type: "system", label: "Synthetic author" },
+        },
+      );
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          putBoardWidgetInDatabase(
+            database,
+            sessionKey,
+            normalizeBoardWidgetPutParams({
+              sessionKey,
+              name: "status",
+              content: { kind: "html", html: "<p>Ready</p>" },
+            }),
+            "synthetic-view",
+          );
+        },
+        { agentId: "main" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "compact" | "dashboard") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: {
+          source: "dashboard",
+          rowMode,
+          limit: count,
+          hasBoard: true,
+          archived: "all",
+          excludeDock: true,
+          agentId: "main",
+        },
+      });
+    const wire = (payload: unknown) =>
+      serializeGatewayFrame({ type: "res", id: "gallery", ok: true, payload }).toString();
+    try {
+      const compact = await read("compact");
+      const dashboard = await read("dashboard");
+      expect(dashboard.sessions).toHaveLength(count);
+      expect(dashboard.sessions[0]).toMatchObject({
+        key: `agent:main:dashboard-${count - 1}`,
+        sessionId: `dashboard-${count - 1}`,
+        rowMode: "dashboard",
+        label: `Dashboard ${count - 1}`,
+        createdActor: { type: "system" },
+        boardFace: "dashboard",
+        hasBoard: true,
+      });
+      for (const field of [
+        "model",
+        "modelProvider",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "permissionMode",
+        "participants",
+      ]) {
+        expect(dashboard.sessions[0]).not.toHaveProperty(field);
+      }
+      expect(compact.sessions[0]).toMatchObject({
+        model: "test-model",
+        totalTokens: 1500,
+        permissionMode: "full",
+      });
+      expect((await read("compact")).sessions).toEqual(compact.sessions);
+      expect(Buffer.byteLength(wire(dashboard))).toBeLessThan(
+        Buffer.byteLength(wire(compact)) * 0.75,
+      );
+      if (benchmark) {
+        for (const rowMode of ["compact", "dashboard"] as const) {
+          const samples = [];
+          for (let round = 0; round < 5; round++) {
+            const cpu = process.threadCpuUsage();
+            const start = performance.now();
+            let bytes = 0;
+            for (let request = 0; request < 25; request++) {
+              bytes = Buffer.byteLength(wire(await read(rowMode)));
+            }
+            const elapsed = process.threadCpuUsage(cpu);
+            samples.push({
+              cpuMs: (elapsed.user + elapsed.system) / 25_000,
+              wallMs: (performance.now() - start) / 25,
+              bytes,
+            });
+          }
+          console.log(
+            JSON.stringify({ benchmark: "dashboard-sessions-list", rowMode, count, samples }),
+          );
+        }
+      }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
 
 it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
