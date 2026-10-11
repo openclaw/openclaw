@@ -1,4 +1,4 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { render, spread } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
@@ -8,11 +8,13 @@ import {
   flush,
   onCleanup,
   runWithOwner,
+  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+import type { JSX } from "../types/solid-elements.d.ts";
 
 type Property<T> = {
   default: T;
@@ -315,9 +317,21 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 }
 
 /** Unported stateless templates exclusively own this adapter's descendants. */
-export function LitContent(props: { render: () => unknown }) {
-  const host = document.createElement("span");
-  host.style.display = "contents";
+export function LitContent(props: {
+  render: () => unknown;
+  tag?: "span" | "div" | "code";
+  class?: string;
+}) {
+  // Host shape stays fixed while the template updates.
+  const tag = untrack(() => props.tag ?? "span");
+  const host = document.createElement(tag);
+  if (tag === "span") {
+    host.style.display = "contents";
+  }
+  const className = untrack(() => props.class);
+  if (className) {
+    host.className = className;
+  }
   let part: ReturnType<typeof renderLit> | undefined;
   createEffect(
     () => props.render(),

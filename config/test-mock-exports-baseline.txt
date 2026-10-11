@@ -7359,7 +7359,6 @@
 ["src/gateway/server-methods/environments.session-exec.test.ts","./sessions-shared.js","4c23a026747460f261a3016d9098a804a5fc1ce55906b2808b6eb4213e011493",1]
 ["src/gateway/server-methods/exec-approval.agent-runtime.test.ts","../../infra/command-analysis/explain.js","101db6a18de6916b079dd0ff31caeaaccee4ea564edf050e726d4fa4eedadcc4",1]
 ["src/gateway/server-methods/github-personal-authorization.test.ts","../../agents/tools/gateway-caller-context.js","d8d1c95394d50102379e9e24c3f3fc55c5ed0d7b16297e70f8eb8e9fae543c0b",1]
-["src/gateway/server-methods/github-personal-authorization.test.ts","../../state/user-github-connections.js","d9083dd51594969f54a26ac9138eed622edd715d979e789dd422e59cde9c8318",1]
 ["src/gateway/server-methods/github-personal-authorization.test.ts","../operator-role-policy.js","cda82cd545ebd3cf28a5df3c3fe15fb79394dfbd18c1fd1f7c5ca1b5002eb20c",1]
 ["src/gateway/server-methods/github-personal-authorization.test.ts","../session-sharing.js","a38cceb7a51a2ae1e8b38fa28416a134b2a03d0573befaa83ae83d99173f09ba",1]
 ["src/gateway/server-methods/github-personal-authorization.test.ts","../session-utils.js","de6ab66ce2b2e3971ca22ae17c9529b0d6bc19c5302202a931ff2b7533605b52",1]

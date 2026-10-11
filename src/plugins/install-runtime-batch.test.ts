@@ -93,7 +93,6 @@ function expectNoMainThreadCleanupReads(reads: ReturnType<typeof observeMainThre
 
 const handoffFailures = [
   "runtime",
-  "source",
   "record",
   "closed",
   "closed-during-read",
@@ -134,9 +133,7 @@ it.each(handoffFailures)(
         if (failure === "runtime") {
           throw new Error("runtime reply lost");
         }
-        if (failure === "source") {
-          await fs.writeFile(path.join(source, "index.ts"), "export const value = 2;");
-        } else if (failure === "record" || failure === "adopted") {
+        if (failure === "record" || failure === "adopted") {
           await withPluginLifecycleLease({ env }, () =>
             commitPluginInstallRecordsWithConfig({
               previousInstallRecords: records,
@@ -174,15 +171,12 @@ it.each(handoffFailures)(
           nextConfig: {},
           writeOptions: { afterWrite: { mode: "none", reason: "batch fixture" } },
         });
-        deferred.record(
-          {
-            operation: "install",
-            pluginId: "fixture",
-            sourceDigests: captured.sourceDigests,
-            write,
-          },
-          captured.assertSourceCurrent,
-        );
+        deferred.record({
+          operation: "install",
+          pluginId: "fixture",
+          sourceDigests: captured.sourceDigests,
+          write,
+        });
         deferred.deferCleanup(cleanup, previousSource);
         await batch.prepare(lease);
       });
@@ -449,15 +443,12 @@ it.each(["index", "deferred obligation"] as const)(
           nextConfig: {},
           writeOptions: { afterWrite: { mode: "none", reason: "cleanup custody fixture" } },
         });
-        deferred.record(
-          {
-            operation: "install",
-            pluginId: "fixture",
-            sourceDigests: captured.sourceDigests,
-            write,
-          },
-          captured.assertSourceCurrent,
-        );
+        deferred.record({
+          operation: "install",
+          pluginId: "fixture",
+          sourceDigests: captured.sourceDigests,
+          write,
+        });
         deferred.deferCleanup(async (assertOwned) => {
           const reads = observeMainThreadReads();
           try {

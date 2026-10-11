@@ -9,6 +9,7 @@ import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.
 import {
   SqliteDatabaseGenerationSlot,
   SqliteDatabaseAdmissionRegistry,
+  hasSqliteDatabaseSchemaAdmission,
   type SqliteDatabaseAdmissionCursor,
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionIdentity as identity,
@@ -32,7 +33,10 @@ import {
   hasSqliteNativeAdmissionOperation,
 } from "./sqlite-native-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import { isSoleDatabaseFileDescriptor } from "./sqlite-worker-identity.js";
+import {
+  isSoleDatabaseFileDescriptor,
+  type DatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -713,9 +717,14 @@ export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended
 }
 
 export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
-  const record = pathAdmission(location);
-  const fact = record?.facts.get("sqlite-schema");
-  return Boolean(record && fact && valid(record, fact));
+  return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
+}
+
+/** Consume the already captured physical identity without another filesystem lookup. */
+export function hasSqliteDatabaseSchemaAdmissionForIdentity(
+  physicalIdentity: DatabaseFileIdentity,
+): boolean {
+  return state.registry.hasSchemaAdmissionForIdentity(physicalIdentity);
 }
 
 export function captureSqliteDatabaseAdmissions(
