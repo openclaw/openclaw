@@ -257,6 +257,21 @@ describe("session message cache", () => {
     expect(layout.read("canvas:99")).toBeUndefined();
   });
 
+  it("records a widget rendered before its session snapshot was cached", () => {
+    const { host, cache } = createCacheContext();
+    const layout = createChatWidgetLayout(cache, host, { sessionKey: "home" });
+    expect(layout.read("canvas:preview")).toBeUndefined();
+    cacheHomeSnapshot(cache, host, {
+      messages: ["widget"],
+      pagination: { hasMore: false },
+      sessionId: "session-1",
+    });
+    layout.write("canvas:preview", 700);
+    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.widgetHeights).toEqual({
+      "canvas:preview": 700,
+    });
+  });
+
   it("reuses retained message weights when snapshot metadata changes", () => {
     const { host, cache } = createCacheContext();
     const toJSON = vi.fn(() => ({ role: "assistant", content: "retained" }));

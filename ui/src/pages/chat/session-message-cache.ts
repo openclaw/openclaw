@@ -90,9 +90,13 @@ export function createChatWidgetLayout(
   target: ChatMessageCacheTarget,
 ): ChatWidgetLayout {
   const cacheKey = resolveChatSnapshotKey(host, target);
-  const sessionId = cache.get(cacheKey)?.snapshot.sessionId;
+  let sessionId = cache.get(cacheKey)?.snapshot.sessionId;
   const current = () => {
     const snapshot = cache.get(cacheKey)?.snapshot;
+    // A row can mount before the history owner commits its first cache snapshot.
+    if (sessionId === undefined && snapshot) {
+      sessionId = snapshot.sessionId;
+    }
     return resolveChatSnapshotKey(host, target) === cacheKey && snapshot?.sessionId === sessionId
       ? snapshot
       : undefined;
