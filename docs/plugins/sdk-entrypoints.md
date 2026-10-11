@@ -103,6 +103,11 @@ move to this pull form.
 
 ## Native MCP App adapters
 
+For page-rendered canvases, use the provider-neutral
+[browser annotation SDK](/plugins/browser-annotations)
+(`openclaw/plugin-sdk/browser-annotations`). It also supplies compatibility with
+supported `document.oai.annotation` integrations in managed browser panels.
+
 An agent harness that owns MCP connections can implement `acquireMcpAppRuntime` alongside `loadMcpToolCatalog`. The acquisition receives the exact session identity, configured server names, session tool overrides, requester identity, and an `assertCurrent` invocation guard. Return a `SessionMcpRuntimeLease` over the existing connection; do not create a second client to launch an App.
 
 For a cold session, call the optional lazy `prepareSession` callback. Core returns a versioned session-preparation envelope (`version: 1`, `purpose: "mcp-app"`), whose `params` carry required admitted host capabilities, prepared credentials, environment and session facts. Execute the existing native session/thread lifecycle inside its `run` callback, then borrow the resulting thread-owned connection. This is a session preparation operation, not a model attempt: it has no prompt or transcript artifact and must not submit a model turn. Warm sessions do not call the preparer. Retained callbacks must honor the source and host closure; return `undefined` only when no supported preparation or existing native binding is available.

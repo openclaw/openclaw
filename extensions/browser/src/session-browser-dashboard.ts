@@ -191,6 +191,7 @@ async function createResource(
         cdpUrl: profileContext.profile.cdpUrl,
         url: definition.url,
         isolatedContext: true,
+        browserAnnotations: state.resolved.evaluateEnabled,
         assertCurrent: () => {
           authority.assertCurrent();
           assertCurrent();

@@ -1,5 +1,6 @@
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
+import { registerBrowserAnnotationRoutes } from "./agent.annotations.js";
 import { registerBrowserAgentDebugRoutes } from "./agent.debug.js";
 import { registerBrowserAgentScreencastRoutes } from "./agent.screencast.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
@@ -18,6 +19,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
   registerBrowserAgentSnapshotRoutes(app, ctx);
   registerBrowserAgentScreencastRoutes(app, ctx);
   registerBrowserAgentActRoutes(app, ctx);
+  registerBrowserAnnotationRoutes(app, ctx);
   registerBrowserAgentDebugRoutes(app, ctx);
   registerBrowserAgentStorageRoutes(app, ctx);
 }

@@ -13,6 +13,7 @@ import {
   pressBrowserKey,
   scrollBrowserBy,
 } from "./browser-client.ts";
+import type { BrowserPanelAnnotations } from "./browser-panel-annotations.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
@@ -44,6 +45,7 @@ type BrowserPanelInputState = {
 };
 
 interface BrowserPanelInputHost extends BrowserPanelInputState {
+  readonly annotations: Pick<BrowserPanelAnnotations, "refresh">;
   readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
@@ -155,9 +157,12 @@ export class BrowserPanelInputController {
       ) {
         return Promise.resolve(false);
       }
-      return this.host.runAction((actionClient) =>
-        clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y }),
-      );
+      return this.host.runAction(async (actionClient) => {
+        await clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y });
+        if (this.inputGeneration === generation && this.host.operations.isLive(epoch, client)) {
+          await this.host.annotations.refresh();
+        }
+      });
     };
     this.clickSequence += 1;
     // Preserve click order and failure: a failed click can leave the previous field focused.
@@ -356,7 +361,12 @@ export class BrowserPanelInputController {
       return;
     }
     event.preventDefault();
-    this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+    this.runAfterClick(async (client, targetId) => {
+      await pressBrowserKey(client, { targetId, key });
+      if (key === "Enter" || key === " ") {
+        await this.host.annotations.refresh();
+      }
+    });
   }
 
   handleViewportPaste(event: ClipboardEvent): void {

@@ -1036,6 +1036,10 @@
     "./plugin-sdk/browser-cdp": {
       "default": "./dist/plugin-sdk/browser-cdp.js"
     },
+    "./plugin-sdk/browser-annotations": {
+      "types": "./dist/plugin-sdk/browser-annotations.d.ts",
+      "default": "./dist/plugin-sdk/browser-annotations.js"
+    },
     "./plugin-sdk/browser-config": {
       "default": "./dist/plugin-sdk/browser-config.js"
     },

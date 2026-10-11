@@ -231,6 +231,80 @@ function renderAnnotateBar(controller: BrowserPanelController) {
   `;
 }
 
+function renderSurfaceAnnotations(controller: BrowserPanelController) {
+  const annotations = controller.annotations;
+  const state = annotations.state;
+  if (!state?.active) {
+    return nothing;
+  }
+  return html`
+    <div class="bp-annotatebar bp-surfacebar" role="group" aria-label=${t("browser.annotate")}>
+      <span class="bp-annotatebar__hint"
+        >${state.controlsHeading || state.selection?.name || t("browser.surfaceHint")}</span
+      >
+      ${state.controls.map(
+        (control) => html`
+          <div class="bp-surfacebar__control">
+            <label>
+              ${control.label || t("browser.surfaceColor")}
+              <input
+                type="color"
+                .value=${control.currentValue}
+                ?disabled=${annotations.busy}
+                @change=${(event: Event) => {
+                  if (event.currentTarget instanceof HTMLInputElement) {
+                    annotations.control("preview", control.callback, event.currentTarget.value);
+                  }
+                }}
+              />
+            </label>
+            <button
+              class="bp-btn"
+              type="button"
+              ?disabled=${annotations.busy}
+              @click=${() => annotations.control("preview-original", control.callback, control.currentValue)}
+            >
+              ${t("browser.surfaceCompare")}
+            </button>
+            <button
+              class="bp-btn"
+              type="button"
+              ?disabled=${annotations.busy}
+              @click=${() => annotations.control("preview", control.callback, control.currentValue)}
+            >
+              ${t("browser.surfacePreview")}
+            </button>
+            <button
+              class="bp-btn"
+              type="button"
+              ?disabled=${annotations.busy}
+              @click=${() => annotations.control("reset", control.callback, control.currentValue)}
+            >
+              ${t("browser.surfaceReset")}
+            </button>
+          </div>
+        `,
+      )}
+      <button
+        class="bp-btn"
+        type="button"
+        ?disabled=${annotations.busy}
+        @click=${() => void annotations.stop()}
+      >
+        ${t("browser.surfaceDone")}
+      </button>
+      <button
+        class="bp-btn bp-btn--primary"
+        type="button"
+        ?disabled=${annotations.busy || !state.selection}
+        @click=${() => void annotations.send()}
+      >
+        ${t("browser.annotateSend")}
+      </button>
+    </div>
+  `;
+}
+
 function renderInspectTooltip(controller: BrowserPanelController) {
   const node = controller.inspected;
   const pointer = controller.inspectPointer;
@@ -306,8 +380,9 @@ function renderViewportContent(controller: BrowserPanelController) {
           description: t("chat.sidePanel.browserEmpty"),
         });
   }
-  const overlayMode =
-    controller.mode === "annotate"
+  const overlayMode = controller.annotations.state?.active
+    ? "bp-overlay--inspect"
+    : controller.mode === "annotate"
       ? "bp-overlay--annotate"
       : controller.mode === "inspect"
         ? "bp-overlay--inspect"
@@ -329,7 +404,7 @@ function renderViewportContent(controller: BrowserPanelController) {
         @lostpointercapture=${(event: PointerEvent) => controller.input.handleOverlayPointerUp(event)}
       ></canvas>
       ${
-        controller.mode === "interact"
+        controller.mode === "interact" && !controller.annotations.state?.active
           ? html`<textarea
               class="bp-overlay bp-input"
               aria-label=${t("browser.inputLabel")}
@@ -417,6 +492,7 @@ export function renderBrowserPanelChrome(
           : nothing
       }
       ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
+      ${renderSurfaceAnnotations(controller)}
       ${
         controller.errorText
           ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
