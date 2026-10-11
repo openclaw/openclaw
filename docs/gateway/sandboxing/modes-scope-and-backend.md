@@ -24,7 +24,7 @@ Three independent settings control sandbox behavior:
 
 Set a named operator role's `sandbox` policy to `"required"` to sandbox that
 role's newly created sessions regardless of agent mode. The creator requirement
-is immutable for the session; unavailable backends fail closed, and elevated
+is immutable for the session; unavailable backends block execution, and elevated
 execution or Gateway/node host overrides cannot bypass it. The default
 `"inherit"` preserves existing agent-mode behavior. See
 [Named operator roles](/gateway/operator-scopes#named-operator-roles).
@@ -78,7 +78,7 @@ environments and workspaces, regardless of configured scope. Sessions created
 by the same profile reuse its existing environment and workspace, including
 when the configured scope is `session`; this reuse does not rekey those paths.
 Channel, unknown, and other non-profile creators instead receive a separate
-required sandbox per canonical session. A matching raw ID cannot reuse a
+required sandbox per resolved session. A matching raw ID cannot reuse a
 profile's resources. Required sandboxing and the read-only workspace cap remain
 in force; backend failure never falls back to host execution.
 Sessions without a role-required sandbox keep the configured scope behavior.
@@ -117,12 +117,12 @@ The first use after upgrading from an older release creates non-shared runtimes 
 
 **Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`; Crabbox lease settings live under `plugins.entries.crabbox.config.sandbox` (see [Crabbox backend](/gateway/sandboxing/crabbox-backend)).
 
-|                     | Docker or Podman backend                  | SSH                            | OpenShell                                           |
-| ------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------- |
-| **Where it runs**   | Local Docker or Podman container          | Any SSH-accessible host        | OpenShell managed sandbox                           |
-| **Setup**           | Docker and/or Podman                      | SSH key + target host          | OpenShell plugin enabled                            |
-| **Workspace model** | Bind-mount or copy                        | Remote-canonical (seed once)   | `mirror` or `remote`                                |
-| **Network control** | `docker.network` (default: none)          | Depends on remote host         | Depends on OpenShell                                |
-| **Browser sandbox** | Docker engine only                        | Not supported                  | Not supported yet                                   |
-| **Bind mounts**     | `docker.binds`                            | N/A                            | N/A                                                 |
-| **Best for**        | Local development and container isolation | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+|                     | Docker or Podman backend                  | SSH                                | OpenShell                                           |
+| ------------------- | ----------------------------------------- | ---------------------------------- | --------------------------------------------------- |
+| **Where it runs**   | Local Docker or Podman container          | Any SSH-accessible host            | OpenShell managed sandbox                           |
+| **Setup**           | Docker and/or Podman                      | SSH key + target host              | OpenShell plugin enabled                            |
+| **Workspace model** | Bind-mount or copy                        | Remote source of truth (seed once) | `mirror` or `remote`                                |
+| **Network control** | `docker.network` (default: none)          | Depends on remote host             | Depends on OpenShell                                |
+| **Browser sandbox** | Docker engine only                        | Not supported                      | Not supported yet                                   |
+| **Bind mounts**     | `docker.binds`                            | N/A                                | N/A                                                 |
+| **Best for**        | Local development and container isolation | Offloading to a remote machine     | Managed remote sandboxes with optional two-way sync |

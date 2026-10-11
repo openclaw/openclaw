@@ -204,7 +204,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     path.resolve(stateDir) !== stateDir ||
     realpathSync(stateDir) !== stateDir
   ) {
-    refuse("the rehearsal root is not a private canonical directory");
+    refuse("the rehearsal root is not a private directory at its resolved path");
   }
   // Revalidate producer bindings before plugin inventory can import copied code.
   for (const fact of params.pluginCodeLinks ?? []) {

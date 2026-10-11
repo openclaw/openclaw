@@ -482,6 +482,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     matching,
     mark,
     read: (id) => rows.get(id),
+    store: (path) => stores.get(path),
     invalidate: backfill.remove,
     refresh(id, retained) {
       const row = rows.get(id);
@@ -514,10 +515,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     rows,
     dirty,
     revisions,
-    advanceRevision: () => {
-      epoch++;
-    },
+    advanceRevision: () => epoch++,
     ensureMaterialized,
+    publishTranscript: (change) => transcriptUpdates.publish(change),
     invalidateMembership: membership.invalidate,
     mark,
     mutateGeneration: generations.mutate,
