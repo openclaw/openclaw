@@ -315,6 +315,23 @@ describe("settleEmbeddedRun compaction identity", () => {
     });
   });
 
+  it("keeps a presentation-only successor separate from a committed rotation", async () => {
+    await withSettlementFixture(async (fixture) => {
+      const sessionId = randomUUID();
+      fixture.input.compaction.durable = false;
+      fixture.session.capturePreparedCompactionTarget({
+        sessionId,
+        sessionFile: fixture.target.sessionKey,
+        sessionTarget: { ...fixture.target, sessionId },
+      });
+      await fixture.settle();
+      expect(fixture.facts).toEqual([
+        { kind: "presentation-only", count: 1, currentContextSnapshot: { tokens: 3_000 } },
+      ]);
+      expect(fixture.loadEntry()?.sessionId).toBe(fixture.target.sessionId);
+    });
+  });
+
   it("does not mark same-session compaction as a rotation", async () => {
     await withSettlementFixture(async (fixture) => {
       const before = fixture.loadEntry();

@@ -216,20 +216,38 @@ describe("node-host worker supervisor commands", () => {
     expect(failed.result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
   });
 
-  it("dispatches worker cancellation before a colliding plugin command", async () => {
+  it.each([
+    { command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND, method: "launch" as const },
+    { command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND, method: "status" as const },
+    { command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND, method: "cancel" as const },
+  ])("dispatches $command before a colliding plugin command", async ({ command, method }) => {
     const input = launchInput();
     const receipt = fullReceipt(input);
     const supervisor = supervisorWith(receipt);
-    const command = NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
     const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
-      paramsJSON: JSON.stringify(cancelInput(receipt)),
+      paramsJSON: JSON.stringify(
+        method === "launch"
+          ? input
+          : method === "cancel"
+            ? cancelInput(receipt)
+            : { launchId: input.launchId },
+      ),
       supervisor,
     });
 
-    expect(supervisor.cancel).toHaveBeenCalledExactlyOnceWith(cancelInput(receipt));
+    expect(supervisor[method].mock.calls).toHaveLength(1);
+    if (method === "launch") {
+      expect(supervisor.launch.mock.calls[0]?.[1]).toEqual({
+        kind: "websocket",
+        url: "wss://gateway.example/tenant/__openclaw__/worker",
+      });
+    }
+    if (method === "cancel") {
+      expect(supervisor.cancel.mock.calls[0]?.[0]).toEqual(cancelInput(receipt));
+    }
     expect(pluginHandle).not.toHaveBeenCalled();
     expect(result?.ok).toBe(true);
     const payload = JSON.parse(result?.payloadJSON ?? "{}") as Record<string, unknown>;
@@ -249,60 +267,87 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("errorText");
   });
 
-  it.each([NODE_WORKER_DESKTOP_STREAM_COMMAND, NODE_WORKER_PORTAL_STREAM_COMMAND])(
-    "dispatches %s before a colliding plugin command",
-    async (command) => {
-      const supervisor = supervisorWith(fullReceipt());
-      const pluginHandle = registerCollidingPlugin(command);
+  it.each([
+    NODE_WORKER_DESKTOP_STREAM_COMMAND,
+    NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+    NODE_WORKER_PORTAL_STREAM_COMMAND,
+    NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  ])("dispatches %s before a colliding plugin command", async (command) => {
+    const supervisor = supervisorWith(fullReceipt());
+    const pluginHandle = registerCollidingPlugin(command);
 
-      const { result } = await invokePrivate({
-        command,
-        paramsJSON: "{}",
-        supervisor,
-        signal: new AbortController().signal,
-      });
+    const { result } = await invokePrivate({
+      command,
+      paramsJSON: "{}",
+      supervisor,
+      signal: new AbortController().signal,
+    });
 
-      expect(pluginHandle).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
+
+  it.each([
+    {
+      name: "relative executable",
+      descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
     },
-  );
-
-  it("rejects a worker desktop launch with a relative executable", async () => {
+    {
+      name: "NUL argument",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["bad\0"] },
+    },
+    {
+      name: "terminal CDP port",
+      descriptor: { id: "terminal", executablePath: process.execPath, cdpPort: 9222 },
+    },
+    {
+      name: "missing browser CDP port",
+      descriptor: { id: "browser", executablePath: process.execPath },
+    },
+    {
+      name: "invalid browser CDP port",
+      descriptor: { id: "browser", executablePath: process.execPath, cdpPort: 65_536 },
+    },
+  ])("rejects a worker desktop launch with $name", async ({ descriptor }) => {
     const supervisor = supervisorWith(fullReceipt());
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
-      paramsJSON: JSON.stringify({ id: "terminal", executablePath: "openclaw-worker-terminal" }),
+      paramsJSON: JSON.stringify(descriptor),
       supervisor,
     });
 
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   });
 
-  it("runs provider-attested terminal arguments literally without replay after failure", async () => {
-    const root = tempDirs.make("node-worker-desktop-launch-");
-    const markerPath = path.join(root, "marker");
-    const args = ["spaces stay together", "literal;$(text)"];
-    const supervisor = supervisorWith(fullReceipt());
+  it.each(["browser", "terminal"] as const)(
+    "runs provider-attested %s arguments literally without replay after failure",
+    async (appId) => {
+      const root = tempDirs.make("node-worker-desktop-launch-");
+      const markerPath = path.join(root, "marker");
+      const args = ["spaces stay together", "literal;$(text)"];
+      const supervisor = supervisorWith(fullReceipt());
 
-    const { result } = await invokePrivate({
-      command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
-      paramsJSON: JSON.stringify({
-        id: "terminal",
-        executablePath: process.execPath,
-        args: [
-          "-e",
-          "require('node:fs').appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + '\\n');process.exit(7)",
-          markerPath,
-          ...args,
-        ],
-      }),
-      supervisor,
-    });
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+        paramsJSON: JSON.stringify({
+          id: appId,
+          executablePath: process.execPath,
+          args: [
+            "-e",
+            "require('node:fs').appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + '\\n');process.exit(7)",
+            markerPath,
+            ...args,
+          ],
+          ...(appId === "browser" ? { cdpPort: 9222 } : {}),
+        }),
+        supervisor,
+      });
 
-    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-    expect(fs.readFileSync(markerPath, "utf8")).toBe(`${JSON.stringify(args)}\n`);
-  });
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      expect(fs.readFileSync(markerPath, "utf8")).toBe(`${JSON.stringify(args)}\n`);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "kills an in-flight desktop launcher when its invoke owner closes",
@@ -670,6 +715,45 @@ setInterval(() => {}, 1000);
     expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({ stdout: "captured" });
   });
 
+  it("returns completed worker output without internal process fields", async () => {
+    const input = launchInput();
+    const resultJson = JSON.stringify({
+      status: "completed",
+      transcriptLeafId: "leaf-1",
+      transcriptNextSeq: 2,
+    });
+    const receipt: NodeWorkerLaunchReceipt = {
+      ...fullReceipt(input),
+      state: "completed",
+      resultJson,
+      completedAtMs: 12,
+    };
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: input.launchId }),
+      supervisor: supervisorWith(receipt),
+    });
+
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      launchId: input.launchId,
+      planHash: receipt.planHash,
+      environmentId: input.descriptor.admission.environmentId,
+      sessionId: input.descriptor.admission.sessionId,
+      ownerEpoch: input.descriptor.admission.ownerEpoch,
+      placementGeneration: input.placementGeneration,
+      runId: input.descriptor.assignment.runId,
+      state: "completed",
+      resultJson,
+    });
+    const payload = JSON.parse(result?.payloadJSON ?? "{}") as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("supervisor");
+    expect(payload).not.toHaveProperty("worker");
+    expect(payload).not.toHaveProperty("gatewayNamespace");
+    expect(payload).not.toHaveProperty("descriptor");
+    expect(payload).not.toHaveProperty("errorText");
+  });
+
   it("returns failed worker diagnostics without completed output", async () => {
     const input = launchInput();
     const receipt: NodeWorkerLaunchReceipt = {
@@ -699,14 +783,37 @@ setInterval(() => {}, 1000);
     });
   });
 
-  it("rejects mismatched launch and turn ids without reaching the supervisor", async () => {
+  it.each([
+    { name: "malformed JSON", command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND, raw: "{" },
+    {
+      name: "extra status field",
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      raw: JSON.stringify({ launchId: "launch-1", extra: true }),
+    },
+    {
+      name: "incomplete cancel identity",
+      command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+      raw: JSON.stringify({ launchId: "x".repeat(257) }),
+    },
+    {
+      name: "extra cancel identity field",
+      command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+      raw: JSON.stringify({ ...cancelInput(fullReceipt()), extra: true }),
+    },
+    {
+      name: "mismatched launch and turn ids",
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      raw: JSON.stringify(mismatchedLaunchInput()),
+    },
+    {
+      name: "extra launch field",
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      raw: JSON.stringify({ ...launchInput(), extra: true }),
+    },
+  ])("rejects $name without reaching the supervisor", async ({ command, raw }) => {
     const supervisor = supervisorWith(fullReceipt());
 
-    const { result } = await invokePrivate({
-      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-      paramsJSON: JSON.stringify(mismatchedLaunchInput()),
-      supervisor,
-    });
+    const { result } = await invokePrivate({ command, paramsJSON: raw, supervisor });
 
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     expect(supervisor.launch.mock.calls).toHaveLength(0);
@@ -733,6 +840,23 @@ setInterval(() => {}, 1000);
       ok: false,
       error: { code: "UNAVAILABLE", message: "node worker supervisor command failed" },
     });
+  });
+
+  it("returns a bounded generic error without leaking supervisor details", async () => {
+    const leaked = `/private/path/${"secret".repeat(2_000)}`;
+    const supervisor = supervisorWith(fullReceipt());
+    supervisor.status.mockRejectedValueOnce(new Error(leaked));
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1" }),
+      supervisor,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+    const message = result?.error?.message ?? "";
+    expect(message).not.toContain("private/path");
+    expect(message.length).toBeLessThan(256);
   });
 
   it("preserves a terminal capacity result across node invoke", async () => {
@@ -796,6 +920,42 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("preserves a typed workspace transfer failure across node invoke", async () => {
+    const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const workspace = {
+      exec: vi.fn(async () => {
+        throw Object.assign(
+          new NodeWorkerWorkspaceTransferError(
+            "workspace-transfer-failed: transfer did not complete",
+            { cause },
+          ),
+          { operation: "upload", stage: "reconcile" },
+        );
+      }),
+    } as unknown as NodeWorkerWorkspaceRuntime;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: ["openclaw-internal-workspace-transfer"],
+      }),
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+        message:
+          "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
+      },
+    });
+  });
+
   it("bounds and redacts serialized workspace transfer diagnostics", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";
     const cause = Object.assign(
@@ -825,18 +985,15 @@ setInterval(() => {}, 1000);
 
     const message = result?.error?.message ?? "";
     expect(message).toContain("operation=upload stage=reconcile");
-    expect(result).toMatchObject({
-      ok: false,
-      error: { code: NODE_WORKSPACE_TRANSFER_ERROR_CODE },
-    });
     expect(message).toContain("ECONNRESET");
     expect(message).not.toContain(secret);
     expect(message.length).toBeLessThanOrEqual(1_024);
   });
 });
 
-it("leaves worker.desktop.computer.v1 outside supervisor dispatch", async () => {
-  expect(
-    await invokeNodeWorkerSupervisorCommand({ command: "worker.desktop.computer.v1" }),
-  ).toEqual({ handled: false });
-});
+it.each(["worker.desktop.computer.v1", " worker.status.v1", "system.run"])(
+  "leaves %s outside supervisor dispatch",
+  async (command) => {
+    expect(await invokeNodeWorkerSupervisorCommand({ command })).toEqual({ handled: false });
+  },
+);

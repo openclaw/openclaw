@@ -8,6 +8,7 @@ import {
   buildQaOccurrenceEvidenceSummary,
   buildQaSuiteEvidenceSummary,
   buildScriptEvidenceSummary,
+  buildVitestEvidenceSummary,
   getEffectiveQaEvidenceEntries,
   mergeQaEvidenceSummaries,
   projectQaEvidenceScenarioOutcomes,
@@ -27,6 +28,14 @@ const providerIdentityCases: {
   expectedName: string | null;
 }[] = [
   {
+    name: "known live provider with unknown model",
+    primaryModel: "",
+    providerMode: "live-frontier",
+    providerId: "openai",
+    expectedId: "openai",
+    expectedName: null,
+  },
+  {
     name: "trimmed live fallback",
     primaryModel: "",
     providerMode: "live-frontier",
@@ -43,6 +52,13 @@ const providerIdentityCases: {
     expectedName: "model",
   },
   {
+    name: "omitted fallback",
+    primaryModel: "",
+    providerMode: "live-frontier",
+    expectedId: "live-frontier",
+    expectedName: null,
+  },
+  {
     name: "blank fallback",
     primaryModel: "",
     providerMode: "live-frontier",
@@ -50,14 +66,24 @@ const providerIdentityCases: {
     expectedId: "live-frontier",
     expectedName: null,
   },
-  {
-    name: "aimock ignores fallback with unknown model",
-    primaryModel: "",
-    providerMode: "aimock",
-    providerId: "custom",
-    expectedId: "aimock",
-    expectedName: null,
-  },
+  ...(["mock-openai", "aimock"] as const).flatMap((providerMode) => [
+    {
+      name: `${providerMode} ignores fallback with unknown model`,
+      primaryModel: "",
+      providerMode,
+      providerId: "custom",
+      expectedId: providerMode === "mock-openai" ? "openai" : "aimock",
+      expectedName: null,
+    },
+    {
+      name: `${providerMode} preserves model identity`,
+      primaryModel: "custom/model",
+      providerMode,
+      providerId: "openai",
+      expectedId: "custom",
+      expectedName: "model",
+    },
+  ]),
 ];
 
 describe("evidence summary", () => {
@@ -91,6 +117,26 @@ describe("evidence summary", () => {
       });
     });
   }
+
+  it("provider identity fallback: slim evidence still omits execution", () => {
+    const evidence = buildScriptEvidenceSummary({
+      artifactPaths: [],
+      evidenceMode: "slim",
+      generatedAt: "2026-09-10T00:00:00.000Z",
+      primaryModel: "",
+      providerMode: "live-frontier",
+      providerId: "openai",
+      targets: [{ id: "provider-identity", title: "Provider identity", sourcePath: "probe.ts" }],
+      results: [
+        { id: "provider-identity", status: "blocked", failureMessage: "missing candidate" },
+      ],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.evidenceMode).toBe("slim");
+    expect(evidence.entries[0]).not.toHaveProperty("execution");
+    expect(evidence.entries[0]?.result.status).toBe("blocked");
+  });
 
   it("builds QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
@@ -204,7 +250,41 @@ describe("evidence summary", () => {
     });
   });
 
+  it("records complete structured RTT provenance and gives it canonical timing precedence", () => {
+    const rttMeasurement = {
+      finalMatchedReplyRttMs: 1750,
+      requestStartedAt: "2026-09-03T00:00:00.000Z",
+      responseObservedAt: "2026-09-03T00:00:01.750Z",
+      source: "request-to-observed-message",
+    };
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "slack",
+      generatedAt: "2026-09-03T00:00:02.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      scenarioDefinitions: [{ id: "slack-canary", title: "Slack canary" }],
+      scenarioResults: [
+        {
+          name: "Slack canary",
+          status: "pass",
+          timing: { rttMs: 999 },
+          rttMeasurement,
+        },
+      ],
+    });
+
+    expect(evidence.schemaVersion).toBe(2);
+    expect(evidence.entries[0]?.result).toMatchObject({
+      status: "pass",
+      timing: { rttMs: 1750 },
+      rttMeasurement,
+    });
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+  });
+
   it.each([
+    ["timing only", { timing: { rttMs: 1750 } }],
     [
       "incomplete measurement",
       { rttMeasurement: { finalMatchedReplyRttMs: 1750, source: "summary-rtt" } },
@@ -236,7 +316,6 @@ describe("evidence summary", () => {
         {
           name: "Slack canary",
           status: "pass",
-          timing: { rttMs: 999 },
           rttMeasurement: {
             finalMatchedReplyRttMs: 1750,
             requestStartedAt: "2026-09-03T00:00:00.000Z",
@@ -246,7 +325,6 @@ describe("evidence summary", () => {
         },
       ],
     });
-    expect(evidence.entries[0]?.result.timing).toEqual({ rttMs: 1750 });
     const invalidEvidence = structuredClone(evidence) as unknown as {
       entries: Array<{ result: { rttMeasurement?: Record<string, unknown> } }>;
     };
@@ -260,11 +338,27 @@ describe("evidence summary", () => {
   it.each([
     ["live Discord transport", "discord", "live", undefined, "live", true],
     [
+      "live transport without a bundled channel identity",
+      "custom-live-transport",
+      "live",
+      undefined,
+      "live",
+      true,
+    ],
+    [
       "explicit synthetic driver ignores requested environment metadata",
       "telegram",
       "qa-channel",
       { OPENCLAW_QA_CHANNEL_DRIVER: "live" },
       "qa-channel",
+      false,
+    ],
+    [
+      "transport without a resolved driver",
+      "custom-live-transport",
+      undefined,
+      undefined,
+      undefined,
       false,
     ],
   ] as const)(
@@ -313,6 +407,87 @@ describe("evidence summary", () => {
     });
 
     expect(evidence.entries[0]?.execution?.environment.ref).toBe(checkedOutRef);
+  });
+
+  it("builds Vitest runner evidence entries", () => {
+    const evidence = buildVitestEvidenceSummary({
+      artifactPaths: [
+        { kind: "runner-result", path: "vitest-results/runtime-boundary.vitest.json" },
+      ],
+      env: {
+        OPENCLAW_QA_REF: "abc123",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-07T12:06:00.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      targets: [
+        {
+          id: "runtime.agent-runner-boundary",
+          title: "Agent runner boundary integration tests",
+          sourcePath: "src/agents/agent-runner.e2e.test.ts",
+          primaryCoverageIds: ["runtime.agent-runner", "runtime.delivery"],
+          codeRefs: ["src/agents/agent-runner.ts"],
+        },
+      ],
+      results: [
+        {
+          id: "runtime.agent-runner-boundary",
+          status: "pass",
+          durationMs: 1234,
+        },
+      ],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBeUndefined();
+    expect(evidence.entries).toEqual([
+      expect.objectContaining({
+        test: {
+          kind: "vitest-test",
+          id: "runtime.agent-runner-boundary",
+          title: "Agent runner boundary integration tests",
+          source: {
+            path: "src/agents/agent-runner.e2e.test.ts",
+          },
+        },
+        coverage: [
+          {
+            id: "runtime.agent-runner",
+            role: "primary",
+          },
+          {
+            id: "runtime.delivery",
+            role: "primary",
+          },
+        ],
+        refs: [
+          {
+            kind: "code",
+            path: "src/agents/agent-runner.ts",
+          },
+        ],
+        execution: expect.objectContaining({
+          runner: "vitest",
+          provider: expect.objectContaining({
+            live: false,
+            fixture: "mock-openai",
+          }),
+          artifacts: [
+            {
+              kind: "runner-result",
+              path: "vitest-results/runtime-boundary.vitest.json",
+              source: "vitest",
+            },
+          ],
+        }),
+        result: {
+          status: "pass",
+          timing: {
+            wallMs: 1234,
+          },
+        },
+      }),
+    ]);
   });
 
   it("builds Playwright runner evidence entries", () => {
@@ -427,7 +602,10 @@ describe("evidence summary", () => {
     expect(evidence.profile).toBe("experimental-profile");
   });
 
-  it.each([{ evidenceMode: undefined, expectedMode: "slim", hasExecution: false }])(
+  it.each([
+    { evidenceMode: undefined, expectedMode: "slim", hasExecution: false },
+    { evidenceMode: "full" as const, expectedMode: "full", hasExecution: true },
+  ])(
     "resolves profile evidence mode $expectedMode",
     ({ evidenceMode, expectedMode, hasExecution }) => {
       const evidence = buildQaSuiteEvidenceSummary({
@@ -591,15 +769,104 @@ describe("occurrence evidence", () => {
     });
   });
 
-  it("keeps the selected pointer with unknown status for missing terminal", () => {
-    const { anchor, observation, entry } = occurrenceFixture();
-    observation.terminalStatus = null;
-    const summary = occurrenceSummary([anchor, observation], [entry]);
-    expect(projectQaEvidenceScenarioOutcomes(summary)[0]).toMatchObject({
-      occurrenceId: observation.id,
-      status: null,
-    });
+  it("preserves an unresolved first instance and independent duplicate scenario and reporter IDs", () => {
+    const first = occurrenceFixture();
+    first.anchor.scenario = { kind: "instance", resultOccurrenceId: null };
+    const second = occurrenceFixture("scheduled-second");
+    const summary = occurrenceSummary(
+      [first.anchor, second.anchor, second.observation],
+      [second.entry, { ...second.entry, coverage: [] }],
+    );
+    expect(projectQaEvidenceScenarioOutcomes(summary)).toEqual([
+      { scenarioId: "dm", scenarioInstanceId: first.anchor.id, occurrenceId: null, status: null },
+      {
+        scenarioId: "dm",
+        scenarioInstanceId: second.anchor.id,
+        occurrenceId: second.observation.id,
+        status: "pass",
+      },
+    ]);
+    expect(getEffectiveQaEvidenceEntries(summary)).toEqual(summary.entries);
   });
+
+  it.each(["missing rows", "missing terminal"] as const)(
+    "keeps the selected pointer with unknown status for %s",
+    (missing) => {
+      const { anchor, observation, entry } = occurrenceFixture();
+      if (missing === "missing terminal") {
+        observation.terminalStatus = null;
+      }
+      const summary = occurrenceSummary(
+        [anchor, observation],
+        missing === "missing rows" ? [] : [entry],
+      );
+      expect(projectQaEvidenceScenarioOutcomes(summary)[0]).toMatchObject({
+        occurrenceId: observation.id,
+        status: null,
+      });
+    },
+  );
+
+  it("uses the parent-selected failure instead of an independently passing child", () => {
+    const { anchor, observation, entry } = occurrenceFixture();
+    const parent: QaEvidenceOccurrence = {
+      ...observation,
+      id: "parent-roundtrip",
+      terminalStatus: "fail",
+      assertions: null,
+    };
+    anchor.scenario = { kind: "instance", resultOccurrenceId: parent.id };
+    const summary = occurrenceSummary(
+      [anchor, observation, parent],
+      [
+        entry,
+        {
+          ...entry,
+          coverage: [],
+          binding: { occurrenceId: parent.id, assertionId: null, receiptId: null },
+          result: { status: "fail", failure: { reason: "roundtrip probe failed" } },
+        },
+      ],
+    );
+    expect(projectQaEvidenceScenarioOutcomes(summary)[0]?.status).toBe("fail");
+  });
+
+  it.each(["fail", "blocked", "skipped", "pass"] as const)(
+    "applies whole-attempt selection when a retry is %s",
+    (status) => {
+      const { anchor, observation, entry } = occurrenceFixture();
+      observation.terminalStatus = "fail";
+      const retry: QaEvidenceOccurrence = {
+        ...observation,
+        id: "retry-2",
+        retryOf: observation.id,
+        terminalStatus: status,
+      };
+      anchor.scenario = {
+        kind: "instance",
+        resultOccurrenceId: status === "pass" ? retry.id : observation.id,
+      };
+      const initial = {
+        ...entry,
+        result: { status: "fail" as const },
+        effective: status !== "pass",
+      };
+      const retried = {
+        ...entry,
+        binding: { ...entry.binding, occurrenceId: retry.id },
+        result: { status },
+        effective: status === "pass",
+      };
+      const summary = occurrenceSummary([anchor, observation, retry], [initial, retried]);
+      expect(getEffectiveQaEvidenceEntries(summary)).toEqual([
+        status === "pass" ? retried : initial,
+      ]);
+      expect(summary.entries).toHaveLength(2);
+      expect(projectQaEvidenceScenarioOutcomes(summary)[0]?.status).toBe(
+        status === "pass" ? "pass" : "fail",
+      );
+    },
+  );
 
   it("preserves explicit launch and target identities, digests and bindings in slim output", () => {
     const { anchor, observation, entry } = occurrenceFixture();
@@ -660,8 +927,22 @@ describe("occurrence evidence", () => {
     ).toThrow();
   });
 
+  it("keeps ownerless diagnostics separate from scheduled outcomes", () => {
+    const { observation, entry } = occurrenceFixture();
+    observation.parentCell = null;
+    observation.scenario = null;
+    observation.assertions = null;
+    entry.binding.assertionId = null;
+    entry.coverage = [];
+    const summary = occurrenceSummary([observation], [entry]);
+    expect(getEffectiveQaEvidenceEntries(summary)).toHaveLength(1);
+    expect(projectQaEvidenceScenarioOutcomes(summary)).toEqual([]);
+  });
+
   it.each([
+    "missing occurrence",
     "anchor row",
+    "missing assertion",
     "extra coverage",
     "unknown receipt",
     "mixed effectiveness",
@@ -674,8 +955,14 @@ describe("occurrence evidence", () => {
     const occurrences = [anchor, observation];
     const entries = [entry];
     switch (failure) {
+      case "missing occurrence":
+        entry.binding.occurrenceId = "absent";
+        break;
       case "anchor row":
         entry.binding.occurrenceId = anchor.id;
+        break;
+      case "missing assertion":
+        entry.binding.assertionId = "undeclared";
         break;
       case "extra coverage":
         entry.coverage = [{ id: "channels.rooms", role: "primary" }];

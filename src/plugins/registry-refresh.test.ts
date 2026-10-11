@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -105,42 +106,45 @@ describe("plugin registry refresh config ownership", () => {
     });
   });
 
-  it.each([undefined])("preserves a one-shot live authority refusal: %s", async (refusal) => {
-    await withOpenClawTestState(
-      { label: "registry-refresh-transaction-refusal" },
-      async (state) => {
-        const config = { plugins: { enabled: false } };
-        await state.writeConfig(config);
-        await seedInstalledPluginIndex({}, { config, env: state.env });
-        const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
-        const warn = vi.fn();
-        await withPluginLifecycleLease({ env: state.env }, async (lease) => {
-          const assertCurrent = vi
-            .fn(() => lease.assertCurrent())
-            .mockImplementationOnce(() => {
-              // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
-              throw refusal;
-            });
-          const result = await refreshPluginRegistryAfterConfigMutation({
-            reason: "source-changed",
-            lease: { ...lease, assertCurrent },
-            logger: { warn },
-          }).then(
-            () => ({ ok: true }),
-            (error: unknown) => ({ error }),
-          );
-          expect("error" in result).toBe(true);
-          if ("error" in result) {
-            expect(result.error).toBe(refusal);
-          }
-          expect(assertCurrent).toHaveBeenCalledOnce();
-        });
-        expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
-        expect(warn).not.toHaveBeenCalled();
-        expect(runtimeCache.clear).not.toHaveBeenCalled();
-      },
-    );
-  });
+  it.each([undefined, null, false, 0])(
+    "preserves a one-shot live authority refusal: %s",
+    async (refusal) => {
+      await withOpenClawTestState(
+        { label: "registry-refresh-transaction-refusal" },
+        async (state) => {
+          const config = { plugins: { enabled: false } };
+          await state.writeConfig(config);
+          await seedInstalledPluginIndex({}, { config, env: state.env });
+          const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+          const warn = vi.fn();
+          await withPluginLifecycleLease({ env: state.env }, async (lease) => {
+            const assertCurrent = vi
+              .fn(() => lease.assertCurrent())
+              .mockImplementationOnce(() => {
+                // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
+                throw refusal;
+              });
+            const result = await refreshPluginRegistryAfterConfigMutation({
+              reason: "source-changed",
+              lease: { ...lease, assertCurrent },
+              logger: { warn },
+            }).then(
+              () => ({ ok: true }),
+              (error: unknown) => ({ error }),
+            );
+            expect("error" in result).toBe(true);
+            if ("error" in result) {
+              expect(result.error).toBe(refusal);
+            }
+            expect(assertCurrent).toHaveBeenCalledOnce();
+          });
+          expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+          expect(warn).not.toHaveBeenCalled();
+          expect(runtimeCache.clear).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it("pins record reads and registry publication to the supplied database lease", async () => {
     await withOpenClawTestState({ label: "registry-refresh-explicit-database" }, async (state) => {
@@ -251,9 +255,12 @@ describe("plugin registry refresh config ownership", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each([{ reason: "source-changed", envSource: "process" }] as const)(
+  it.each([
+    { reason: "source-changed", envSource: "process" },
+    { reason: "policy-changed", envSource: "caller" },
+  ] as const)(
     "discovers an env-referenced plugin from $envSource env after $reason",
-    async ({ reason }) => {
+    async ({ reason, envSource }) => {
       await withOpenClawTestState(
         {
           label: "registry-refresh-env",
@@ -264,7 +271,11 @@ describe("plugin registry refresh config ownership", () => {
           const pluginDir = state.path("plugin");
           await fs.mkdir(pluginDir);
           createColdPluginFixture({ rootDir: pluginDir, pluginId: "fixture-plugin" });
-          process.env.PLUGIN_DIR = pluginDir;
+          const env =
+            envSource === "caller" ? { ...process.env, PLUGIN_DIR: pluginDir } : undefined;
+          if (envSource === "process") {
+            process.env.PLUGIN_DIR = pluginDir;
+          }
           const config = {
             plugins: {
               load: { paths: ["${PLUGIN_DIR}"] },
@@ -275,6 +286,7 @@ describe("plugin registry refresh config ownership", () => {
           const warn = vi.fn();
           await refreshPluginRegistryAfterConfigMutation({
             reason,
+            env,
             invalidateRuntimeCache: false,
             logger: { warn },
           });
@@ -287,7 +299,73 @@ describe("plugin registry refresh config ownership", () => {
             }),
           );
           expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(config);
-          expect(process.env.PLUGIN_DIR).toBe(pluginDir);
+          expect(process.env.PLUGIN_DIR).toBe(envSource === "process" ? pluginDir : undefined);
+          if (env) {
+            expect(env.PLUGIN_DIR).toBe(pluginDir);
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["copied-owned", "caller-override"] as const)(
+    "reads the owned config without stale Gateway env (%s)",
+    async (envSource) => {
+      await withOpenClawTestState(
+        {
+          label: "registry-refresh-owned",
+          layout: "split",
+          env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", PLUGIN_DIR: undefined },
+        },
+        async (state) => {
+          const pluginDir = state.path("plugin");
+          await fs.mkdir(pluginDir);
+          createColdPluginFixture({ rootDir: pluginDir, pluginId: "fixture-plugin" });
+          const callerPluginDir = state.path("caller-plugin");
+          await fs.mkdir(callerPluginDir);
+          createColdPluginFixture({ rootDir: callerPluginDir, pluginId: "fixture-plugin" });
+          const priorEnv = { PLUGIN_DIR: state.path("prior-plugin") };
+          process.env.PLUGIN_DIR = priorEnv.PLUGIN_DIR;
+          initializePublishedConfigRuntimeEnv({ env: { vars: priorEnv } }, { ownedEnv: priorEnv });
+          await state.writeConfig({ plugins: { enabled: false } });
+          const configPath = state.path("owned-config.json");
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              env: { vars: { PLUGIN_DIR: pluginDir } },
+              plugins: {
+                load: { paths: ["${PLUGIN_DIR}"] },
+                entries: { "fixture-plugin": { enabled: true } },
+              },
+            }),
+          );
+          const env = {
+            ...process.env,
+            OPENCLAW_CONFIG_PATH: state.path("discovery-config.json"),
+            ...(envSource === "caller-override" ? { PLUGIN_DIR: callerPluginDir } : {}),
+          };
+          const warn = vi.fn();
+          await refreshPluginRegistryAfterConfigMutation({
+            configPath,
+            env,
+            reason: "source-changed",
+            invalidateRuntimeCache: false,
+            logger: { warn },
+          });
+          expect(warn).not.toHaveBeenCalled();
+          expect(readPersistedInstalledPluginIndexSync()?.plugins).toContainEqual(
+            expect.objectContaining({
+              pluginId: "fixture-plugin",
+              rootDir: envSource === "caller-override" ? callerPluginDir : pluginDir,
+              enabled: true,
+            }),
+          );
+          expect(process.env.PLUGIN_DIR).toBe(priorEnv.PLUGIN_DIR);
+          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
+          expect(env.OPENCLAW_CONFIG_PATH).toBe(state.path("discovery-config.json"));
+          expect(env.PLUGIN_DIR).toBe(
+            envSource === "caller-override" ? callerPluginDir : priorEnv.PLUGIN_DIR,
+          );
         },
       );
     },

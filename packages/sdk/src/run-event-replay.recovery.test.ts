@@ -5,7 +5,7 @@ import { SdkRunReplay } from "./run-event-replay.js";
 import type { GatewayReconnectContext } from "./transport.js";
 
 type Mode = "unavailable" | "active" | "queued" | "invalid" | "wait-error" | "history-error";
-type Call = { method: string; runId?: string; timeoutMs?: number };
+type Call = { method: string; runId?: string; timeoutMs?: number; at: number };
 
 describe("SDK automatic recovery bounds", () => {
   const replays: SdkRunReplay[] = [];
@@ -38,7 +38,7 @@ describe("SDK automatic recovery bounds", () => {
     const request: GatewayReconnectContext["request"] = async (method, params, signal) => {
       const runId = typeof params.runId === "string" ? params.runId : undefined;
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
-      calls.push({ method, runId, timeoutMs });
+      calls.push({ method, runId, timeoutMs, at: Date.now() });
       if (method === "agent.wait") {
         if (mode === "invalid") {
           return {};
@@ -216,6 +216,22 @@ describe("SDK automatic recovery bounds", () => {
     const completedCalls = calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(calls).toHaveLength(completedCalls);
+  });
+
+  it("bounds unavailable recovery across 100 clients and spreads retries", async () => {
+    let draw = 0;
+    vi.spyOn(Math, "random").mockImplementation(() => (++draw % 101) / 101);
+    const clients = Array.from({ length: 100 }, () => fixture(1, "unavailable"));
+    const tasks = clients.map((client) => client.reconnect().task);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(clients.reduce((sum, client) => sum + client.calls.length, 0)).toBe(800);
+    const retries = clients.map(
+      (client) => client.calls.filter((call) => call.method === "agent.wait")[2]?.at,
+    );
+    expect(new Set(retries).size).toBeGreaterThan(50);
+    await Promise.all(tasks);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(clients.reduce((sum, client) => sum + client.calls.length, 0)).toBe(800);
   });
 
   it("backs off 100 queued clients instead of polling at 100 requests per second", async () => {

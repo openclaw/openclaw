@@ -206,6 +206,41 @@ describe("stageBundledPluginRuntime", () => {
     expect(wrapperModule.contract).toBe(true);
   });
 
+  it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-chunks-");
+    createDistPluginDir(repoRoot, "diffs");
+    setupRepoFiles(repoRoot, {
+      "dist/chunk-abc.js": "export const value = 1;\n",
+      [bundledDistPluginFile("diffs", "index.js")]: "export { value } from '../../chunk-abc.js';\n",
+    });
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "diffs", "index.js");
+    expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "chunk-abc.js"))).toBe(false);
+
+    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
+    expect(runtimeModule.value).toBe(1);
+  });
+
+  it("stages root runtime sidecars that bundled plugin boundaries resolve directly", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-sidecars-");
+    createDistPluginDir(repoRoot, "whatsapp");
+    setupRepoFiles(repoRoot, {
+      [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
+      [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]: "export const light = true;\n",
+      [bundledDistPluginFile("whatsapp", "runtime-api.js")]: "export const heavy = true;\n",
+    });
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeDir = path.join(repoRoot, "dist-runtime", "extensions", "whatsapp");
+    const light = await import(pathToFileURL(path.join(runtimeDir, "light-runtime-api.js")).href);
+    const heavy = await import(pathToFileURL(path.join(runtimeDir, "runtime-api.js")).href);
+    expect(light.light).toBe(true);
+    expect(heavy.heavy).toBe(true);
+  });
+
   it("keeps plugin command registration on the canonical dist graph when loaded from dist-runtime", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-commands-");
     setupRepoFiles(repoRoot, {

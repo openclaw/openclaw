@@ -162,6 +162,14 @@ describe("scripts/connect.sh", () => {
       name: "help omits --target-file",
       env: { FAKE_CONNECT_HELP: "  --service\n  --session-host" },
     },
+    {
+      name: "help omits --service",
+      env: { FAKE_CONNECT_HELP: "  --target-file <path>\n  --session-host" },
+    },
+    {
+      name: "help omits --session-host",
+      env: { FAKE_CONNECT_HELP: "  --target-file <path>\n  --service" },
+    },
   ])("rejects an installed CLI when $name", ({ env }) => {
     const fixture = createFixture();
     const prefix = join(fixture.root, "prefix");
@@ -188,6 +196,18 @@ describe("scripts/connect.sh", () => {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(target);
   });
 
+  it("respects OPENCLAW_PREFIX when --prefix is omitted", () => {
+    const fixture = createFixture();
+    const prefix = join(fixture.root, "env-prefix");
+
+    const result = runWrapper(fixture, ["--version", "2026.8.1", "setup-code"], {
+      OPENCLAW_PREFIX: prefix,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readArgs(fixture.installArgs)).toContain(prefix);
+  });
+
   it("cleans the private target after an installed CLI failure", () => {
     const fixture = createFixture();
     const prefix = join(fixture.root, "prefix");
@@ -206,4 +226,52 @@ describe("scripts/connect.sh", () => {
     expect(existsSync(privateTargetPath)).toBe(false);
     expect(existsSync(dirname(privateTargetPath))).toBe(false);
   });
+
+  it("requires an explicit version", () => {
+    const fixture = createFixture();
+
+    const result = runWrapper(fixture, ["setup-code"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--version is required");
+    expect(existsSync(fixture.installArgs)).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "default prefix",
+      args: ["--version", "2026.8.1", "setup-code"],
+      message: "Cannot resolve the default install prefix",
+    },
+    {
+      name: "tilde prefix",
+      args: ["--version", "2026.8.1", "--prefix", "~/.openclaw", "setup-code"],
+      message: "Cannot expand prefix '~/.openclaw'",
+    },
+  ])("fails cleanly without HOME for the $name", ({ args, message }) => {
+    const fixture = createFixture();
+
+    const result = runWrapper(fixture, args, {
+      HOME: undefined,
+      OPENCLAW_PREFIX: undefined,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(result.stderr.match(/ERROR:/gu)).toHaveLength(1);
+    expect(existsSync(fixture.installArgs)).toBe(false);
+  });
+
+  it.each(["latest", "v2026.8.1", "2026.8", "2026.8.x", "^2026.8.1", "2026.8.*"])(
+    "rejects non-exact version %s",
+    (version) => {
+      const fixture = createFixture();
+
+      const result = runWrapper(fixture, ["--version", version, "setup-code"]);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("leading v, moving tags, ranges, and wildcards");
+      expect(existsSync(fixture.installArgs)).toBe(false);
+    },
+  );
 });

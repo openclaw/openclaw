@@ -38,6 +38,72 @@ describe("resolveRequesterOriginForChild", () => {
   }
 
   it.each([
+    ["channel:conversation-a", "channel:conversation-a", "channel"],
+    ["dm:conversation-a", "dm:conversation-a", "direct"],
+    ["thread:conversation-a/thread-a", "thread:conversation-a/thread-a", "channel"],
+  ] as const)(
+    "keeps canonical prefixed peer id %s eligible for exact binding lookup",
+    (to, peerId, peerKind) => {
+      const cfg = {
+        bindings: [
+          routeBinding({
+            channel: "qa-channel",
+            peer: {
+              kind: peerKind,
+              id: peerId,
+            },
+            accountId: "bot-alpha-qa",
+          }),
+        ],
+      } as OpenClawConfig;
+
+      expectOrigin(
+        resolveRequesterOriginForChild({
+          cfg,
+          targetAgentId: "bot-alpha",
+          requesterAgentId: "main",
+          requesterChannel: "qa-channel",
+          requesterAccountId: "bot-beta",
+          requesterTo: to,
+        }),
+        {
+          channel: "qa-channel",
+          accountId: "bot-alpha-qa",
+          to,
+        },
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "prefers peer-specific binding over channel-only binding",
+      requesterChannel: "matrix",
+      requesterTo: "!roomA:example.org",
+      expected: "bot-alpha-room-a",
+      bindings: [
+        routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
+        }),
+      ],
+    },
+    {
+      name: "falls back to channel-only binding when peer does not match",
+      requesterChannel: "matrix",
+      requesterTo: "!roomB:example.org",
+      expected: "bot-alpha-default",
+      bindings: [
+        routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
+        }),
+      ],
+    },
     {
       name: "treats wildcard peer binding as match-any and beats channel-only",
       requesterChannel: "matrix",
@@ -49,6 +115,24 @@ describe("resolveRequesterOriginForChild", () => {
           channel: "matrix",
           peer: { kind: "channel", id: "*" },
           accountId: "bot-alpha-wildcard",
+        }),
+      ],
+    },
+    {
+      name: "prefers exact peer binding over wildcard peer binding",
+      requesterChannel: "matrix",
+      requesterTo: "!roomA:example.org",
+      expected: "bot-alpha-room-a",
+      bindings: [
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "*" },
+          accountId: "bot-alpha-wildcard",
+        }),
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!roomA:example.org" },
+          accountId: "bot-alpha-room-a",
         }),
       ],
     },
@@ -67,6 +151,19 @@ describe("resolveRequesterOriginForChild", () => {
           roles: ["admin"],
           peer: { kind: "channel", id: "channel:ops" },
           accountId: "bot-alpha-admin",
+        }),
+      ],
+    },
+    {
+      name: "strips channel-side prefixes before bound-account lookup",
+      requesterChannel: "matrix",
+      requesterTo: "room:!exampleRoomId:example.org",
+      expected: "bot-alpha",
+      bindings: [
+        routeBinding({
+          channel: "matrix",
+          peer: { kind: "channel", id: "!exampleRoomId:example.org" },
+          accountId: "bot-alpha",
         }),
       ],
     },
@@ -147,6 +244,38 @@ describe("resolveRequesterOriginForChild", () => {
     );
   });
 
+  it("keeps explicit channel prefixes ahead of ids that start with direct marker characters", () => {
+    const to = "channel:@ops";
+    const cfg = {
+      bindings: [
+        routeBinding({
+          channel: "qa-channel",
+          peer: {
+            kind: "channel",
+            id: to,
+          },
+          accountId: "bot-alpha-qa",
+        }),
+      ],
+    } as OpenClawConfig;
+
+    expectOrigin(
+      resolveRequesterOriginForChild({
+        cfg,
+        targetAgentId: "bot-alpha",
+        requesterAgentId: "main",
+        requesterChannel: "qa-channel",
+        requesterAccountId: "bot-beta",
+        requesterTo: to,
+      }),
+      {
+        channel: "qa-channel",
+        accountId: "bot-alpha-qa",
+        to,
+      },
+    );
+  });
+
   it("uses requester group space before selecting a scoped target-agent account", () => {
     const to = "channel:ops";
     const cfg = {
@@ -185,6 +314,40 @@ describe("resolveRequesterOriginForChild", () => {
       {
         channel: "discord",
         accountId: "bot-alpha-current-guild",
+        to,
+      },
+    );
+  });
+
+  it("still peels channel id plus kind wrappers before peer lookup", () => {
+    const to = "line:group:U123example";
+    const cfg = {
+      bindings: [
+        routeBinding({
+          channel: "line",
+          peer: {
+            kind: "group",
+            id: "U123example",
+          },
+          accountId: "bot-alpha-line",
+        }),
+      ],
+    } as OpenClawConfig;
+
+    // Some channel adapters prefix both channel id and peer kind; the resolver
+    // has to strip wrappers without treating canonical colon ids as wrappers.
+    expectOrigin(
+      resolveRequesterOriginForChild({
+        cfg,
+        targetAgentId: "bot-alpha",
+        requesterAgentId: "main",
+        requesterChannel: "line",
+        requesterAccountId: "bot-beta",
+        requesterTo: to,
+      }),
+      {
+        channel: "line",
+        accountId: "bot-alpha-line",
         to,
       },
     );

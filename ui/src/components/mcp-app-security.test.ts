@@ -33,6 +33,12 @@ describe("MCP App sandbox security", () => {
       "no available host display mode",
     );
   });
+  it("advertises the CSP applied to MCP Apps", () => {
+    expect(
+      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
+    ).toMatchObject({ sandbox: { csp: { connectDomains: ["https://api.example.com"] } } });
+    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
+  });
 
   it("advertises update-model-context text support only when the handler path exists", () => {
     expect(buildMcpAppHostCapabilities(undefined, true, true)).toMatchObject({

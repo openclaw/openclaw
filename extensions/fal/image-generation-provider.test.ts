@@ -107,7 +107,41 @@ describe("fal image-generation provider", () => {
     vi.restoreAllMocks();
   });
 
+  it("publishes model-specific Grok and Nano Banana 2 Lite geometry", () => {
+    const { geometry, edit } = provider.capabilities;
+    const grokRatios = geometry?.aspectRatiosByModel?.["xai/grok-imagine-image"];
+    const grokResolutions = geometry?.resolutionsByModel?.["xai/grok-imagine-image"];
+    const nanoResolutions = geometry?.resolutionsByModel?.["google/nano-banana-2-lite"];
+
+    expect(grokRatios).toContain("2:1");
+    expect(grokRatios).toContain("20:9");
+    expect(geometry?.aspectRatiosByModel?.["fal-ai/nano-banana"]).toContain("21:9");
+    expect(geometry?.aspectRatiosByModel?.["fal-ai/nano-banana"]).not.toContain("4:1");
+    expect(grokResolutions).toEqual(["1K", "2K"]);
+    expect(geometry?.aspectRatiosByModel?.["xai/grok-imagine-image/edit"]).toEqual(grokRatios);
+    expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality/edit"]).toEqual(
+      grokResolutions,
+    );
+    expect(nanoResolutions).toEqual([]);
+    expect(geometry?.resolutionsByModel?.["google/nano-banana-2-lite/edit"]).toEqual([]);
+    expect(edit.maxInputImages).toBe(1);
+    expect(edit.maxInputImagesByModel?.["fal-ai/nano-banana"]).toBe(3);
+    expect(edit.maxInputImagesByModelPrefix?.["fal-ai/nano-banana-"]).toBe(14);
+    expect(edit.maxInputImagesByModelPrefix?.["google/nano-banana-2-lite"]).toBe(14);
+    expect(edit.maxInputImagesByModelPrefix?.["xai/grok-imagine-image"]).toBe(3);
+    expect(edit.maxInputImagesByModelPrefix?.["openai/gpt-image-"]).toBe(10);
+    expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality"]).toEqual(
+      grokResolutions,
+    );
+  });
+
   it.each([
+    {
+      model: "krea/v2/medium/text-to-image",
+      requested: "21:9",
+      applied: "2.35:1",
+      mode: "generate",
+    },
     {
       model: "krea/v2/large/text-to-image",
       requested: "21:9",
@@ -119,6 +153,12 @@ describe("fal image-generation provider", () => {
       requested: "2.35:1",
       applied: "21:9",
       mode: "generate",
+    },
+    {
+      model: "fal-ai/nano-banana-2/edit",
+      requested: "2.35:1",
+      applied: "21:9",
+      mode: "edit",
     },
   ])("normalizes unsupported $model geometry before provider submission", async (testCase) => {
     const image = sourceImage("reference");
@@ -271,6 +311,29 @@ describe("fal image-generation provider", () => {
     expect(result.images.map((image) => image.buffer.toString())).toEqual(["first", "second"]);
   });
 
+  it("releases a timed-out generated image download", async () => {
+    const releaseDownload = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({ images: [{ url: "https://v3.fal.media/files/example/slow.png" }] }),
+      )
+      .mockResolvedValueOnce(
+        releasedImage(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new DOMException("timed out", "TimeoutError"));
+            },
+          }),
+          releaseDownload,
+        ),
+      );
+
+    await expect(provider.generateImage(defaultRequest)).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    expect(releaseDownload).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects generated image downloads that exceed the configured media cap", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(
@@ -330,6 +393,34 @@ describe("fal image-generation provider", () => {
     );
   });
 
+  it("routes Nano Banana 2 text generation with native resolution", async () => {
+    await expectImageRequest(
+      {
+        model: "fal-ai/nano-banana-2",
+        aspectRatio: "4:1",
+        resolution: "2K",
+      },
+      "https://fal.run/fal-ai/nano-banana-2",
+      {
+        aspect_ratio: "4:1",
+        resolution: "2K",
+      },
+    );
+  });
+
+  it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
+    await expectImageRequest(
+      {
+        model: "fal-ai/nano-banana-2",
+        resolution: "2K",
+      },
+      "https://fal.run/fal-ai/nano-banana-2",
+      {
+        resolution: "2K",
+      },
+    );
+  });
+
   it.each([
     { model: "fal-ai/nano-banana", resolution: undefined },
     { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
@@ -371,6 +462,38 @@ describe("fal image-generation provider", () => {
     );
   });
 
+  it.each([
+    {
+      label: "Nano Banana 2 Lite",
+      model: "google/nano-banana-2-lite",
+      aspectRatio: "3:2",
+      resolution: undefined,
+      expectedBody: {
+        aspect_ratio: "3:2",
+      },
+    },
+    {
+      label: "Grok Imagine",
+      model: "xai/grok-imagine-image",
+      aspectRatio: "16:9",
+      resolution: "2K" as const,
+      expectedBody: {
+        aspect_ratio: "16:9",
+        resolution: "2k",
+      },
+    },
+  ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
+    await expectImageRequest(
+      {
+        model: testCase.model,
+        aspectRatio: testCase.aspectRatio,
+        resolution: testCase.resolution,
+      },
+      `https://fal.run/${testCase.model}`,
+      testCase.expectedBody,
+    );
+  });
+
   it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
     await generateFalImage("grok-edited.png", "grok-edited-data", {
       model: "xai/grok-imagine-image",
@@ -402,6 +525,31 @@ describe("fal image-generation provider", () => {
       "https://fal.run/xai/grok-imagine-image/quality/edit",
       {
         image_urls: [`data:image/png;base64,${Buffer.from("source").toString("base64")}`],
+      },
+    );
+  });
+
+  it("preserves exact custom Fal edit endpoints", async () => {
+    await expectImageRequest(
+      {
+        model: "fal-ai/custom/edit",
+        inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
+      },
+      "https://fal.run/fal-ai/custom/edit",
+      {
+        image_url: `data:image/png;base64,${Buffer.from("source-image").toString("base64")}`,
+      },
+    );
+  });
+
+  it("maps aspect ratio for text generation without forcing a square default", async () => {
+    await expectImageRequest(
+      {
+        aspectRatio: "16:9",
+      },
+      "https://fal.run/fal-ai/flux/dev",
+      {
+        image_size: "landscape_16_9",
       },
     );
   });
@@ -474,6 +622,16 @@ describe("fal image-generation provider", () => {
       error: "fal GPT Image edit supports at most 10 reference images",
     },
     {
+      name: "Krea-only aspect ratios for Nano Banana 2",
+      request: { model: "fal-ai/nano-banana-2", aspectRatio: "2.35:1" },
+      error: "fal Nano Banana 2 supports aspectRatio values",
+    },
+    {
+      name: "Krea-only aspect ratios for Nano Banana 2 Lite",
+      request: { model: "google/nano-banana-2-lite", aspectRatio: "2.35:1" },
+      error: "fal Nano Banana 2 Lite supports aspectRatio values",
+    },
+    {
       name: "resolution overrides for Nano Banana 2 Lite",
       request: {
         model: "google/nano-banana-2-lite",
@@ -482,6 +640,14 @@ describe("fal image-generation provider", () => {
         inputImages: [sourceImage("src")],
       },
       error: "fal Nano Banana 2 Lite does not support resolution overrides",
+    },
+    {
+      name: "Nano Banana 2 Lite edits above 14 reference images",
+      request: {
+        model: "google/nano-banana-2-lite",
+        inputImages: Array.from({ length: 15 }, () => sourceImage("ref")),
+      },
+      error: "fal Nano Banana 2 Lite supports at most 14 reference images",
     },
     {
       name: "4K resolution for Grok Imagine edits",
@@ -497,6 +663,14 @@ describe("fal image-generation provider", () => {
       name: "Nano Banana ratios for Grok Imagine",
       request: { model: "xai/grok-imagine-image", aspectRatio: "21:9" },
       error: "fal Grok Imagine supports aspectRatio values",
+    },
+    {
+      name: "Grok Imagine edits above 3 reference images",
+      request: {
+        model: "xai/grok-imagine-image",
+        inputImages: Array.from({ length: 4 }, () => sourceImage("ref")),
+      },
+      error: "fal Grok Imagine supports at most 3 reference images",
     },
     {
       name: "Krea 2 resolution hints instead of dropping them",
@@ -523,9 +697,43 @@ describe("fal image-generation provider", () => {
       request: { aspectRatio: "16:9", inputImages: [sourceImage("one")] },
       error: "does not support aspectRatio overrides",
     },
+    {
+      name: "fal-ai/nano-banana edits above its reference limit",
+      request: {
+        model: "fal-ai/nano-banana",
+        inputImages: Array.from({ length: 4 }, () => sourceImage("ref")),
+      },
+      error: "fal Nano Banana supports at most 3 reference images",
+    },
+    {
+      name: "fal-ai/nano-banana-2 edits above its reference limit",
+      request: {
+        model: "fal-ai/nano-banana-2",
+        inputImages: Array.from({ length: 15 }, () => sourceImage("ref")),
+      },
+      error: "fal Nano Banana 2 supports at most 14 reference images",
+    },
   ])("rejects $name", async ({ request, error }) => {
     await expect(provider.generateImage({ ...defaultRequest, ...request })).rejects.toThrow(error);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks private-network image download URLs through the SSRF guard", async () => {
+    const blocked = new Error("Blocked: resolves to private/internal/special-use IP address");
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          images: [{ url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/" }],
+        }),
+      )
+      .mockRejectedValueOnce(blocked);
+
+    await expect(provider.generateImage(defaultRequest)).rejects.toThrow(blocked.message);
+
+    expectFalDownload({
+      call: 2,
+      url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    });
   });
 
   it("does not auto-whitelist trusted private relay hosts from a configured baseUrl", async () => {

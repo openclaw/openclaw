@@ -172,6 +172,16 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
   });
 
+  it("returns the empty array unchanged when there are no bundled tools", () => {
+    const filtered = applyFinalPolicy({
+      bundledTools: [],
+      config: { tools: { allow: ["message"] } },
+      warn: () => {},
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
   it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
     const warnings: string[] = [];
     applyFinalPolicy({
@@ -208,6 +218,19 @@ describe("applyFinalEffectiveToolPolicy", () => {
     );
   });
 
+  it("leaves groupId untouched when caller did not supply one", () => {
+    const warnings: string[] = [];
+    applyFinalPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      sessionKey: "agent:alice:main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).not.toContain(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
+  });
+
   it("does not emit unknown-entry warnings for core tool allowlists in the bundled pass", () => {
     const warnings: string[] = [];
     applyFinalPolicy({
@@ -231,6 +254,19 @@ describe("applyFinalEffectiveToolPolicy", () => {
     });
 
     expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
+  });
+
+  it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
+    const mcpTool = makeTool("bundleProbe__bundle_probe");
+    setPluginToolMeta(mcpTool, { pluginId: "bundle-mcp", optional: false });
+
+    const filtered = applyFinalPolicy({
+      bundledTools: [mcpTool],
+      config: { tools: { profile: "coding" } },
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
   });
 
   it("lets explicit deny entries override the profile bundle MCP allowlist", () => {

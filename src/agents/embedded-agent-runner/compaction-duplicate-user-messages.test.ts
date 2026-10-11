@@ -67,6 +67,22 @@ describe("compaction duplicate user message pruning", () => {
         { role: "assistant", content: [{ type: "text", text: "first reply" }], timestamp: 1_500 },
       ],
     },
+    {
+      name: "an assistant tool call and its result",
+      completedTurn: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          timestamp: 1_500,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          content: [{ type: "text", text: "read complete" }],
+          timestamp: 1_750,
+        },
+      ],
+    },
   ])("preserves the same user request after $name", ({ completedTurn }) => {
     const first = userMessage({ timestamp: 1_000 });
     const next = userMessage({ timestamp: 2_000 });
@@ -88,6 +104,16 @@ describe("compaction duplicate user message pruning", () => {
     expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
   });
 
+  it("preserves an attachment added to a previously text-only request", () => {
+    const first = userMessage({ timestamp: 1_000 });
+    const second = {
+      ...userMessage({ timestamp: 2_000 }),
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/diagram.png" }] },
+    };
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
   it("preserves prompts with distinct case-sensitive paths", () => {
     const first = userMessage({
       timestamp: 1_000,
@@ -99,6 +125,14 @@ describe("compaction duplicate user message pruning", () => {
     });
 
     expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves older requests without losing the newest retry timestamp", () => {
+    const newer = userMessage({ timestamp: 120_000 });
+    const older = userMessage({ timestamp: 1_000 });
+    const retry = userMessage({ timestamp: 121_000 });
+
+    expect(dedupeDuplicateUserMessagesForCompaction([newer, older, retry])).toEqual([newer, older]);
   });
 
   it("does not collide when sender ids and text contain the old delimiter", () => {
@@ -114,13 +148,5 @@ describe("compaction duplicate user message pruning", () => {
     });
 
     expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
-  });
-
-  it("preserves older requests without losing the newest retry timestamp", () => {
-    const newer = userMessage({ timestamp: 120_000 });
-    const older = userMessage({ timestamp: 1_000 });
-    const retry = userMessage({ timestamp: 121_000 });
-
-    expect(dedupeDuplicateUserMessagesForCompaction([newer, older, retry])).toEqual([newer, older]);
   });
 });

@@ -1,5 +1,5 @@
 // Verifies shell selection, PATH lookup, and platform-specific shell helpers.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,10 +25,22 @@ vi.mock("node:child_process", async (importOriginal) => {
 const isWin = process.platform === "win32";
 
 describe("sanitizeBinaryOutput", () => {
+  it("removes ANSI wrappers while retaining printable output", () => {
+    expect(sanitizeBinaryOutput("\u001b[31mred\u001b[0m")).toBe("red");
+    expect(sanitizeBinaryOutput("\u009b31mred\u009b0m")).toBe("red");
+  });
+
   it("preserves unterminated OSC and pending CSI text at chunk boundaries", () => {
     expect(sanitizeBinaryOutput("\u001b]unterminated")).toBe("\\x1b]unterminated");
     expect(sanitizeBinaryOutput("before\u009b31;")).toBe("before\\x9b31;");
     expect(sanitizeBinaryOutput("\u001b[") + sanitizeBinaryOutput("Ksecret")).toBe("\\x1b[Ksecret");
+  });
+
+  it("applies caller control policy while CSI remains active", () => {
+    // SOH executes independently, then "d" terminates CSI as its final byte.
+    expect(sanitizeBinaryOutput("\u009b\u0001done")).toBe("\\x01one");
+    expect(sanitizeBinaryOutput("\u009b31\u0018done")).toBe("done");
+    expect(sanitizeBinaryOutput("\u001b[31\u001adone")).toBe("done");
   });
 
   it("escapes residual C0, DEL, and C1 controls", () => {
@@ -105,11 +117,43 @@ describe("getShellConfig", () => {
     expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
+  it("falls back to sh when fish is default and bash is missing", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
+  });
+
   it("falls back to env shell when fish is default and no sh is available", () => {
     process.env.PATH = "";
     const { shell, args } = getShellConfig();
     expect(shell).toBe("/usr/bin/fish");
     expect(args).toEqual(["--no-config", "-c"]);
+  });
+
+  it("uses startup-suppressed args for zsh env shells", () => {
+    process.env.SHELL = "/bin/zsh";
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/zsh");
+    expect(args).toEqual(["-f", "-c"]);
+  });
+
+  it("uses startup-suppressed args for bash env shells", () => {
+    process.env.SHELL = "/bin/bash";
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/bash");
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
+  });
+
+  it("uses sh when SHELL is unset", () => {
+    delete process.env.SHELL;
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("sh");
+    expect(args).toEqual(["-c"]);
   });
 
   it("uses an explicit custom shell path through the same resolver", () => {
@@ -129,6 +173,15 @@ describe("getShellConfig", () => {
     );
   });
 
+  it("falls back to sh on PATH when SHELL is /usr/bin/false", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
+  });
+
   it("falls back to sh on PATH when SHELL is /sbin/nologin", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
     process.env.SHELL = "/sbin/nologin";
@@ -136,6 +189,15 @@ describe("getShellConfig", () => {
     const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "sh"));
     expect(args).toEqual(["-c"]);
+  });
+
+  it("falls back to startup-suppressed bash on PATH when SHELL is a placeholder", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("falls back to bare sh when SHELL is a placeholder and no sh is on PATH", () => {
@@ -153,6 +215,24 @@ describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it("matches which cwd discovery for empty PATH entries without spawning a resolver", () => {
+    const root = tempDirs.make("openclaw-shell-cwd-");
+    fs.writeFileSync(path.join(root, "bash"), "", { mode: 0o755 });
+    const expected = execFileSync("/usr/bin/which", ["bash"], {
+      cwd: root,
+      env: { PATH: ":" },
+      encoding: "utf8",
+    }).trim();
+    vi.stubEnv("PATH", ":");
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const spawn = vi.mocked(spawnSync);
+    spawn.mockClear();
+
+    expect(path.resolve(root, getBashShellConfig().shell)).toBe(path.resolve(root, expected));
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("falls back to sh without spawning which when bash is unavailable", () => {
@@ -230,7 +310,34 @@ describe("getBashShellConfig", () => {
     expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
   });
 
-  it.each(["System32"])(
+  it("recognizes portable Git for Windows installs", () => {
+    const gitRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-portable-git-"));
+    tempDirs.push(gitRoot);
+    const bashPath = path.join(gitRoot, "usr", "bin", "bash.exe");
+    const usrBin = path.dirname(bashPath);
+    fs.mkdirSync(usrBin, { recursive: true });
+    fs.mkdirSync(path.join(gitRoot, "cmd"), { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    fs.writeFileSync(path.join(gitRoot, "cmd", "git.exe"), "");
+
+    expect(getBashShellEnv(bashPath).PATH?.split(path.delimiter)[0]).toBe(usrBin);
+  });
+
+  it("leaves unrelated MSYS2 installs unchanged", () => {
+    const msysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-msys2-"));
+    tempDirs.push(msysRoot);
+    const bashPath = path.join(msysRoot, "usr", "bin", "bash.exe");
+    fs.mkdirSync(path.dirname(bashPath), { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    process.env.PATH = path.join(msysRoot, "ucrt64", "bin");
+
+    const env = getBashShellEnv(bashPath);
+
+    expect(env.PATH?.split(path.delimiter)[0]).not.toBe(path.dirname(bashPath));
+    expect(env.PATH).toContain(process.env.PATH);
+  });
+
+  it.each(["System32", "Sysnative"])(
     "uses stdin transport for the legacy %s WSL launcher",
     (systemDirectory) => {
       const shellPath = `C:\\Windows\\${systemDirectory}\\bash.exe`;
@@ -421,6 +528,23 @@ describe("getShellConfig on Windows", () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bin-"));
     tempDirs.push(programFiles, binDir);
     const pwshPath = path.join(binDir, "pwsh");
+    fs.writeFileSync(pwshPath, "");
+    fs.chmodSync(pwshPath, 0o755);
+
+    process.env.ProgramFiles = programFiles;
+    process.env.PATH = binDir;
+    delete process.env.ProgramW6432;
+    delete process.env.SystemRoot;
+    delete process.env.WINDIR;
+
+    expect(getShellConfig().shell).toBe(pwshPath);
+  });
+
+  it("finds pwsh.exe on PATH when PowerShell 7 is not in ProgramFiles", () => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bin-"));
+    tempDirs.push(programFiles, binDir);
+    const pwshPath = path.join(binDir, "pwsh.exe");
     fs.writeFileSync(pwshPath, "");
     fs.chmodSync(pwshPath, 0o755);
 

@@ -453,6 +453,20 @@ describe("model chat and native model ownership", () => {
     },
   );
 
+  it("resolves the concrete locked model instead of treating a runtime request as native ownership", async () => {
+    const fixture = await createFixture();
+    const setup = await fixture.resolve();
+
+    expect(setup.nativeModelOwned).toBe(false);
+    expect(setup.model).toMatchObject({
+      id: "fixture-model",
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-responses",
+      contextWindow: 8_192,
+      maxTokens: 2_048,
+    });
+  });
+
   it.each([false, true])(
     "keeps host model resolution when a harness catalog does not claim native ownership (catalog fails=%s)",
     async (catalogFails) => {
@@ -576,7 +590,7 @@ describe("model chat and native model ownership", () => {
     );
   });
 
-  it.each(["anthropic"])(
+  it.each(["openai", "anthropic"])(
     "keeps a supervised connection independent of outer %s model/auth config on both turns",
     async (provider) => {
       const config: OpenClawConfig = {
@@ -771,7 +785,13 @@ describe("model chat and native model ownership", () => {
     expect(predecessors).toEqual(Array(3).fill("new-predecessor"));
   });
 
-  it.each(["previousSessionId"] as const)(
+  it.each([
+    "sessionId",
+    "lifecycleRevision",
+    "activeWriterRunId",
+    "agentHarnessId",
+    "previousSessionId",
+  ] as const)(
     "rejects a same-frame %s publication during the synchronous native hook",
     async (field) => {
       const fixture = await createFixture({}, ({ assertCurrent }) => {

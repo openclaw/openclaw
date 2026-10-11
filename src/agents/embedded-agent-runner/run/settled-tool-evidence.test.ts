@@ -147,11 +147,79 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it("continues an exactly settled current-turn tool batch after an idle prompt timeout", () => {
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
+        timedOut: true,
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it("tells the finalizer that tools are unavailable", () => {
+    // The settled-turn finalization pass runs with disableTools: true. If the instruction
+    // does not say so, the model reaches for a tool, the denied call registers as capability
+    // activity, and projectSettledTurnFinalizationAttemptResult throws away the whole result
+    // -- including a perfectly good answer produced in the same completion.
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
+        timedOut: true,
+      }),
+    );
+
+    expect(instruction).toContain("Tools are unavailable in this step");
+    expect(instruction).toContain("do not attempt any tool call");
+  });
+
+  it("suppresses continuation for an exactly matched all-terminal current batch", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          {
+            toolName: "write",
+            toolCallId: "tool_1",
+            replaySafe: false,
+            terminate: true,
+          },
+        ],
+      }),
+    );
+
+    expect(instruction).toBeNull();
+  });
+
+  it("continues when terminal metadata belongs to a stale prior call", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          {
+            toolName: "write",
+            toolCallId: "tool_stale",
+            replaySafe: false,
+            terminate: true,
+          },
+        ],
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
   it.each([
     {
       label: "nonterminal",
       currentMeta: { toolName: "write", toolCallId: "tool_1" },
       expected: SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    },
+    {
+      label: "terminal",
+      currentMeta: { toolName: "write", toolCallId: "tool_1", terminate: true },
+      expected: null,
     },
   ])(
     "uses the $label current occurrence when a provider reuses a tool-call id",
@@ -204,6 +272,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       hasContext: true,
       expectedContinuation: true,
     },
+    {
+      label: "provider failure without finalization context",
+      hasContext: false,
+      expectedContinuation: false,
+    },
   ])(
     "$label after settled tools returns continuation=$expectedContinuation",
     ({ hasContext, expectedContinuation }) => {
@@ -230,6 +303,54 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it.each([
+    {
+      label: "external abort",
+      terminal: { kind: "timeout", phase: "prompt", source: "external" } as const,
+      aborted: true,
+      timedOut: true,
+    },
+    {
+      label: "runtime timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "runtime" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "run budget timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "compaction timeout",
+      terminal: { kind: "timeout", phase: "compaction", source: "idle" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "tool execution timeout",
+      terminal: { kind: "timeout", phase: "tool_execution", source: "idle" } as const,
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      label: "timeout observation",
+      terminal: { kind: "timeout", phase: "tool_execution", source: "observation" } as const,
+      aborted: false,
+      timedOut: false,
+    },
+  ])("does not finalize settled tools after a $label", ({ terminal, aborted, timedOut }) => {
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
+        aborted,
+        timedOut,
+      }),
+    );
+
+    expect(instruction).toBeNull();
+  });
+
   it("does not use a settled prior-turn batch to authorize idle-timeout finalization", () => {
     const instruction = resolveSettledToolTerminalContinuationInstruction(
       makeSettledContinuationParams(makeSettledIdleWriteAttempt({ stalePriorTurn: true }), {
@@ -241,6 +362,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it.each([
+    {
+      label: "a matching failure summary",
+      lastToolError: { toolName: "exec", error: "post-processing error" },
+    },
+    { label: "no remaining failure summary", lastToolError: undefined },
     {
       label: "a terminal-marked failed tool",
       lastToolError: { toolName: "exec", error: "post-processing error" },
@@ -293,10 +419,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expectedFinalization: true,
     },
     {
+      label: "final reply",
+      sourceReplyFinal: true,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: false,
+    },
+    {
       label: "legacy source-confirmed send",
       sourceReplyFinal: undefined,
       didDeliverSourceReplyViaMessageTool: true,
       expectedFinalization: false,
+    },
+    {
+      label: "legacy coarse outbound send",
+      sourceReplyFinal: undefined,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: true,
     },
   ])(
     "handles $label delivery evidence before settled finalization",
@@ -332,6 +470,71 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       );
     },
   );
+
+  it.each([
+    {
+      label: "an unrelated current-batch failure summary",
+      resultToolName: "exec",
+      lastErrorToolName: "read",
+    },
+    {
+      label: "a failed result with the wrong tool identity",
+      resultToolName: "read",
+      lastErrorToolName: "exec",
+    },
+  ])("does not finalize $label (#118274)", ({ resultToolName, lastErrorToolName }) => {
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
+    });
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        assistantTexts: [],
+        toolMetas: [{ toolName: resultToolName, isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: resultToolName,
+            isError: true,
+          },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: lastErrorToolName, error: "post-processing error" },
+      }),
+    );
+
+    expect(instruction).toBeNull();
+  });
+
+  it("does not settle same-name terminal calls from one failed result (#118274)", () => {
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "tool_1", name: "exec", arguments: {} },
+        { type: "toolCall", id: "tool_2", name: "exec", arguments: {} },
+      ],
+    });
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "post-processing error" },
+      }),
+    );
+
+    expect(instruction).toBeNull();
+  });
 
   it("keeps a successful terminating batch terminal with a stale earlier error (#132762)", () => {
     const failedAssistant = makeLastAssistant({
@@ -377,12 +580,28 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     {
+      label: "an async tool is still running",
+      attemptOverrides: { toolMetas: [{ toolName: "exec", isError: true, asyncStarted: true }] },
+    },
+    {
       label: "an accepted child session owns the response",
       attemptOverrides: {
         acceptedSessionSpawns: [
           { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
         ],
       },
+    },
+    {
+      label: "a client tool remains pending",
+      attemptOverrides: { clientToolCalls: [{ name: "pending", params: {} }] },
+    },
+    {
+      label: "the turn yielded",
+      attemptOverrides: { yieldDetected: true },
+    },
+    {
+      label: "an approval prompt was already delivered",
+      attemptOverrides: { didSendDeterministicApprovalPrompt: true },
     },
   ])("does not finalize a failed terminal tool when $label (#118274)", ({ attemptOverrides }) => {
     const toolUseAssistant = makeLastAssistant({
@@ -407,6 +626,50 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(instruction).toBeNull();
   });
+
+  it.each([
+    { label: "background trigger", allowEmptyStopContinuation: false },
+    {
+      label: "active tool",
+      allowEmptyStopContinuation: true,
+      completedCount: 0,
+      activeCount: 1,
+    },
+    {
+      label: "partially completed tool batch",
+      allowEmptyStopContinuation: true,
+      startedCount: 2,
+      completedCount: 1,
+    },
+    { label: "async tool", allowEmptyStopContinuation: true, asyncStarted: true },
+    { label: "failed tool", allowEmptyStopContinuation: true, isError: true },
+  ])(
+    "does not continue an empty stop after $label activity",
+    ({
+      allowEmptyStopContinuation,
+      startedCount = 1,
+      completedCount = 1,
+      activeCount = 0,
+      asyncStarted,
+      isError,
+    }) => {
+      const emptyStopAssistant = makeLastAssistant();
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(
+          {
+            assistantTexts: [],
+            toolMetas: [{ toolName: "write", asyncStarted, isError }],
+            itemLifecycle: { startedCount, completedCount, activeCount },
+            lastAssistant: emptyStopAssistant,
+            currentAttemptAssistant: emptyStopAssistant,
+          },
+          { allowEmptyStopContinuation },
+        ),
+      );
+
+      expect(instruction).toBeNull();
+    },
+  );
 
   it("does not use a stale prior-turn empty stop to prove a settled continuation", () => {
     const staleEmptyStopAssistant = makeLastAssistant();

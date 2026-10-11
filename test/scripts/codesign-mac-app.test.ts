@@ -80,6 +80,17 @@ async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.Pr
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
+  it.concurrent("does not generate unused entitlement plist files", ({ mac, expect }) =>
+    mac.lifetime.run(async () => {
+      const script = readFileSync(scriptPath, "utf8");
+
+      expect(script).toContain('ENT_TMP_APP="$ENT_TMP_DIR/app.plist"');
+      expect(script).not.toContain("ENT_TMP_BASE");
+      expect(script).not.toContain("ENT_TMP_RUNTIME");
+      expect(script).not.toContain("base.plist");
+      expect(script).not.toContain("runtime.plist");
+    }));
+
   it.concurrent("does not allocate entitlement temp files for help output", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
       const tempRoot = mac.createTempDir("openclaw-codesign-help-");
@@ -207,6 +218,24 @@ describe("codesign-mac-app temp file hygiene", () => {
       }),
   );
 
+  it.concurrent("defines a closed Foundation elevation-host signing profile", ({ mac, expect }) =>
+    mac.lifetime.run(async () => {
+      const script = readFileSync(scriptPath, "utf8");
+      const elevationProfile = script.slice(
+        script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
+        script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
+      );
+
+      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
+        'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
+      );
+      expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
+      expect(elevationProfile).toContain("<dict/>");
+      expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
+      expect(script).toContain("verify_elevation_signature");
+      expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
+    }));
+
   it.concurrent.for(["file", "symlink"])(
     "rejects an elevation-host CUA driver %s before signing",
     (kind, { mac, expect }) =>
@@ -256,6 +285,19 @@ describe("codesign-mac-app temp file hygiene", () => {
         expect(result.signal).toBeNull();
         expect(result.stdout).toContain(`Codesign complete for ${app}`);
         expect(result.stderr).not.toContain("Elevation host requires");
+      }),
+  );
+
+  macIt.concurrent(
+    "preserves the precise diagnostic when codesign omits Authority",
+    ({ mac, expect }) =>
+      mac.lifetime.run(async () => {
+        const { result } = await runElevationMetadataFixture(mac, {
+          CODESIGN_FAKE_NO_AUTHORITY: "1",
+        });
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("got 'not set'");
       }),
   );
 

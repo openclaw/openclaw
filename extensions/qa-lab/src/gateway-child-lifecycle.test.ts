@@ -227,48 +227,48 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(await fs.readdir(root)).toEqual(["gateway.mjs"]);
   });
 
-  it.each([{ failedWork: true, label: "failed" }])(
-    "cleans retained fixture roots after $label stopped work",
-    async ({ failedWork }) => {
-      const { params } = await fixture();
-      const owner = own({
-        ...params,
-        command: { ...params.command, usePackagedPlugins: false },
-      });
-      const gateway = await owner.start();
-      const stagedRoot = resolveQaStagedBundledPluginsRoot({
-        repoRoot: params.repoRoot,
-        tempRoot: gateway.tempRoot,
-      });
-      await expect(owner.stop({ keepTemp: true })).resolves.toEqual({
-        process: "confirmed-stopped",
-        errors: [],
-      });
-      await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
-      await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
+  it.each([
+    { failedWork: false, label: "successful" },
+    { failedWork: true, label: "failed" },
+  ])("cleans retained fixture roots after $label stopped work", async ({ failedWork }) => {
+    const { params } = await fixture();
+    const owner = own({
+      ...params,
+      command: { ...params.command, usePackagedPlugins: false },
+    });
+    const gateway = await owner.start();
+    const stagedRoot = resolveQaStagedBundledPluginsRoot({
+      repoRoot: params.repoRoot,
+      tempRoot: gateway.tempRoot,
+    });
+    await expect(owner.stop({ keepTemp: true })).resolves.toEqual({
+      process: "confirmed-stopped",
+      errors: [],
+    });
+    await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+    await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
 
-      const failure = new Error("stopped probe failed");
-      const stoppedWork = async () => {
-        try {
-          if (failedWork) {
-            throw failure;
-          }
-        } finally {
-          await expect(owner.stop({ keepTemp: false })).resolves.toEqual({
-            process: "confirmed-stopped",
-            errors: [],
-          });
+    const failure = new Error("stopped probe failed");
+    const stoppedWork = async () => {
+      try {
+        if (failedWork) {
+          throw failure;
         }
-      };
-      if (failedWork) {
-        await expect(stoppedWork()).rejects.toBe(failure);
-      } else {
-        await expect(stoppedWork()).resolves.toBeUndefined();
+      } finally {
+        await expect(owner.stop({ keepTemp: false })).resolves.toEqual({
+          process: "confirmed-stopped",
+          errors: [],
+        });
       }
-      await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.stat(stagedRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+    };
+    if (failedWork) {
+      await expect(stoppedWork()).rejects.toBe(failure);
+    } else {
+      await expect(stoppedWork()).resolves.toBeUndefined();
+    }
+    await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(stagedRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("owns an unaccepted launcher and separates boundary diagnostics from termination", async () => {
     const { params } = await fixture();
@@ -312,15 +312,30 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(groups.every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
   });
 
-  it.each(["replacement"] as const)(
+  it.each(["startup", "replacement"] as const)(
     "preserves sanitized log evidence when explicit stop follows %s failure",
-    async () => {
-      const { params, pids } = await fixture(true);
-      const owner = own(params);
-      const gateway = await owner.start();
-      await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow(
-        "exitCode=17",
-      );
+    async (phase) => {
+      const { params, pids } = await fixture(phase === "replacement");
+      const failure = new Error("fixture listening failed");
+      const owner = own({
+        ...params,
+        onListening: () => {
+          pids();
+          if (phase === "startup") {
+            throw failure;
+          }
+        },
+      });
+      if (phase === "startup") {
+        const started = owner.start();
+        await expect(started).rejects.toThrow("fixture listening failed");
+        await expect(started).rejects.toMatchObject({ cause: failure });
+      } else {
+        const gateway = await owner.start();
+        await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow(
+          "exitCode=17",
+        );
+      }
       const artifactRoot = path.join(process.cwd(), ".artifacts/qa-e2e/startup-lease-fix");
       await fs.mkdir(artifactRoot, { recursive: true });
       const preserveToDir = await fs.mkdtemp(path.join(artifactRoot, "preserved-log-"));
@@ -330,10 +345,10 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
           errors: [],
         });
         const log = await fs.readFile(path.join(preserveToDir, "gateway.stdout.log"), "utf8");
-        expect(log).toContain("QA_GATEWAY_ATTEMPT_2");
+        expect(log).toContain(`QA_GATEWAY_ATTEMPT_${phase === "startup" ? 1 : 2}`);
         expect(log).toContain("apiKey=<redacted>");
         expect(log).not.toContain("synthetic-fixture-secret");
-        expect(pids()).toHaveLength(2);
+        expect(pids()).toHaveLength(phase === "startup" ? 1 : 2);
         expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
       } finally {
         await fs.rm(preserveToDir, { recursive: true, force: true });
@@ -343,6 +358,7 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
 
   it.each([
     { failurePhase: "RPC stop", destination: "same" },
+    { failurePhase: "RPC stop", destination: "changed" },
     { failurePhase: "staging removal", destination: "same" },
   ])(
     "retains finalized artifacts when $failurePhase fails and retries with $destination destination",
@@ -407,6 +423,40 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
         expect(await fs.readdir(retryDir)).toEqual([]);
       }
       expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+    },
+  );
+
+  it.each([true, false])(
+    "only exports on retry if the first stop retained temporary logs (keepTemp=%s)",
+    async (keepTemp) => {
+      const { params, pids } = await fixture();
+      const owner = own(params);
+      const gateway = await owner.start();
+      pids();
+      const preserveToDir = await makeArtifactDir();
+      const failure = new Error("gateway RPC close failed");
+      rpcStop.mockRejectedValueOnce(failure);
+      await expect(
+        owner.stop({ keepTemp, preserveToDir: keepTemp ? preserveToDir : undefined }),
+      ).resolves.toEqual({ process: "confirmed-stopped", errors: [failure] });
+      expect(await fs.readdir(preserveToDir)).toEqual([]);
+      if (keepTemp) {
+        await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+      } else {
+        await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(owner.stop({ keepTemp: false, preserveToDir })).resolves.toEqual({
+        process: "confirmed-stopped",
+        errors: [],
+      });
+      if (keepTemp) {
+        expect((await readArtifacts(preserveToDir))[0]).toContain(
+          "QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>",
+        );
+      } else {
+        expect(await fs.readdir(preserveToDir)).toEqual([]);
+      }
+      await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 

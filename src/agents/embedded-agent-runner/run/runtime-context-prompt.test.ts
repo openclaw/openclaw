@@ -15,7 +15,7 @@ import {
 } from "./runtime-context-prompt.js";
 
 describe("runtime context prompt submission", () => {
-  it.each([`Quote ${INTERNAL_RUNTIME_CONTEXT_BEGIN} literally.`])(
+  it.each(["  keep literal whitespace  ", `Quote ${INTERNAL_RUNTIME_CONTEXT_BEGIN} literally.`])(
     "does not derive provenance from prompt text: %s",
     (prompt) => {
       expect(
@@ -24,7 +24,7 @@ describe("runtime context prompt submission", () => {
     },
   );
 
-  it.each(["System event"])(
+  it.each(["Hook summary: Hello", "Hello", "System event"])(
     "keeps repeated hook text while carrying explicit source context: %s",
     (hook) => {
       const fragments = [{ kind: "conversation-data" as const, text: "System event" }];
@@ -38,6 +38,15 @@ describe("runtime context prompt submission", () => {
       ).toEqual({ prompt: "Hello", modelPrompt, runtimeContext: "System event" });
     },
   );
+
+  it("keeps a heartbeat task active with its separate transcript marker", () => {
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "Check the deployment.",
+        transcriptPrompt: "[OpenClaw heartbeat poll]",
+      }),
+    ).toEqual({ prompt: "[OpenClaw heartbeat poll]", modelPrompt: "Check the deployment." });
+  });
 
   it("requires producer context for the runtime-only continuation prompt", () => {
     const fragments = [
@@ -53,6 +62,16 @@ describe("runtime context prompt submission", () => {
     expect(
       resolveRuntimeContextPromptParts({ effectivePrompt: "ordinary input", transcriptPrompt: "" }),
     ).toEqual({ prompt: "ordinary input" });
+  });
+
+  it("keeps suppressed-persistence prompts active", () => {
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "Room event",
+        transcriptPrompt: "",
+        allowRuntimeOnly: false,
+      }),
+    ).toEqual({ prompt: "Room event" });
   });
 
   it("joins context for plain runtimes using their requested separator and replay text", () => {
@@ -126,7 +145,7 @@ describe("runtime context prompt submission", () => {
 });
 
 describe("per-request runtime instructions", () => {
-  it.each([false])("preserves carrier position and parts (array=%s)", (arrayContent) => {
+  it.each([false, true])("preserves carrier position and parts (array=%s)", (arrayContent) => {
     const body = "Current facts";
     const carrier: RuntimeContextMessage = {
       role: "user",

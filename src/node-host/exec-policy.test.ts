@@ -65,6 +65,20 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.eventReason).toBe("approval-required");
   });
 
+  it("allows allowlist miss when explicit approval is provided", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          ask: "on-miss",
+          analysisOk: false,
+          allowlistSatisfied: false,
+          approvalDecision: "allow-once",
+        }),
+      ),
+    );
+    expect(allowed.approvedByAsk).toBe(true);
+  });
+
   it("keeps Windows-specific guidance for cmd.exe wrappers", () => {
     const denied = expectDeniedDecision(
       evaluateSystemRunPolicy(

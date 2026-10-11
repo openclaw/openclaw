@@ -1,5 +1,6 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
-import { existsSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -32,6 +33,10 @@ import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-m
 import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
+import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
+import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
+import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
@@ -95,6 +100,71 @@ describe("translation provider privacy and fallback", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
+  });
+
+  it.each([
+    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
+    {
+      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
+      error: "cannot be combined with --force",
+    },
+    {
+      args: [
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
+      ],
+      error: "at most 64 distinct keys",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
+      error: "unknown refresh key: missing.fixture.key",
+    },
+  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
+    const result = await execa(
+      process.execPath,
+      ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", ...args],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(error);
+  });
+
+  it("requires provider authentication for targeted refresh even when auth is optional", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
+    const result = await execa(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/control-ui-i18n.ts",
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        "--refresh-key",
+        "chat.parentSession",
+      ],
+      { reject: false, timeout: 120_000, stripFinalNewline: false },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
 
   it("translates native artifacts without Gateway state or Control UI catalogs", async () => {
@@ -280,6 +350,40 @@ describe("control-ui config hint source catalog", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
+  it("includes lazy page copy and shared search labels in the generator catalog", () => {
+    const result = spawnSync(
+      testNodeExecPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        [
+          'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";',
+          "const catalog = loadControlUiSourceCatalog();",
+          "console.log(JSON.stringify(catalog));",
+        ].join("\n"),
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const catalog: unknown = JSON.parse(result.stdout);
+    const source = flattenControlUiCatalog(catalog, "en");
+    for (const fragment of [
+      registerCodeBlocksEnglish.catalog,
+      registerLabsEnglish.catalog,
+      registerSettingsEnglish.catalog,
+      registerTranscriptsEnglish.catalog,
+    ]) {
+      const lazyCopy = flattenControlUiCatalog(fragment, "lazy copy");
+      for (const [key, value] of lazyCopy) {
+        expect(source.get(key), key).toBe(value);
+      }
+    }
+    expect(source.get("meetingCapture.title")).toBe("Meeting capture");
+    expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
+  });
+
   it("keeps generated locale snapshots out of source PRs", () => {
     expect(() =>
       assertControlUiGeneratedArtifactsIsolated([
@@ -507,6 +611,27 @@ describe("control-ui-i18n catalog validation", () => {
     ]);
   });
 
+  it("keeps verification keyless even when provider credentials exist", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: "redacted",
+          OPENAI_API_KEY: "redacted",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("source:");
+    expect(result.stdout).not.toContain("provider=openai");
+    expect(result.stdout).not.toContain("provider=anthropic");
+  });
+
   it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
     const items = [
       {
@@ -586,6 +711,21 @@ describe("control-ui-i18n catalog validation", () => {
     expect(buildBatchPrompt(items, validationError)).toContain(
       `failed validation. Correct that exact failure in the new response:\n${validationError}`,
     );
+  });
+
+  it("ships no recorded English fallbacks", () => {
+    const metaDir = path.resolve("ui/src/i18n/.i18n");
+    const fallbacks = readdirSync(metaDir)
+      .filter((fileName) => fileName.endsWith(".meta.json"))
+      .flatMap((fileName) => {
+        const meta = JSON.parse(readFileSync(path.join(metaDir, fileName), "utf8")) as {
+          fallbackKeys?: string[];
+          locale?: string;
+        };
+        return (meta.fallbackKeys ?? []).map((key) => `${meta.locale ?? fileName}:${key}`);
+      });
+
+    expect(fallbacks).toEqual([]);
   });
 
   it("makes the strict gate reject recorded English fallbacks", () => {

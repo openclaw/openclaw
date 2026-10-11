@@ -35,6 +35,7 @@ const { loadPluginManifestRegistryMock, loadInstalledPluginManifestRegistryMock 
     loadInstalledPluginManifestRegistryMock: vi.fn<LoadPluginManifestRegistryForInstalledIndex>(),
   }),
 );
+let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
@@ -235,6 +236,19 @@ function expectScopedWebSearchCandidates(pluginIds: readonly string[]) {
   ).toEqual([...pluginIds]);
 }
 
+function expectAutoEnabledWebSearchLoad(params: {
+  rawConfig: { plugins?: Record<string, unknown> };
+  expectedAllow: readonly string[];
+}) {
+  expect(applyPluginAutoEnableSpy).toHaveBeenCalledWith({
+    config: params.rawConfig,
+    env: createWebSearchEnv(),
+  });
+  const loaderParams = requireLastCallFirstArg(loadOpenClawPluginsMock, "loadOpenClawPlugins");
+  const plugins = requirePluginsConfig(loaderParams);
+  expect(plugins.allow).toEqual([...params.expectedAllow]);
+}
+
 vi.mock("./manifest-registry.js", async () => {
   const actual =
     await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
@@ -277,7 +291,7 @@ describe("resolvePluginWebSearchProviders", () => {
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
-    ({ resetPluginRuntimeStateForTest } = await import("./runtime.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
       await import("./web-search-providers.runtime.js"));
   });
@@ -378,6 +392,20 @@ describe("resolvePluginWebSearchProviders", () => {
     expectLoaderCallCount(0);
   });
 
+  it("loads manifest-declared web-search providers in setup mode", () => {
+    const providers = resolvePluginWebSearchProviders({
+      config: {
+        plugins: {
+          allow: ["brave"],
+        },
+      },
+      mode: "setup",
+    });
+
+    expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("preserves Moonshot region and model setup without activating the plugin", async () => {
     loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
       plugins: [createWebSearchManifestRecord({ id: "moonshot", providerId: "kimi" })],
@@ -418,6 +446,33 @@ describe("resolvePluginWebSearchProviders", () => {
     });
   });
 
+  it("loads plugin web-search providers from the auto-enabled config snapshot", () => {
+    const rawConfig = createBraveAllowConfig();
+    const autoEnabledConfig = {
+      plugins: {
+        allow: ["brave", "perplexity"],
+      },
+    };
+    applyPluginAutoEnableSpy.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+
+    resolvePluginWebSearchProviders(createSnapshotParams({ config: rawConfig }));
+
+    expectAutoEnabledWebSearchLoad({
+      rawConfig,
+      expectedAllow: ["brave", "perplexity"],
+    });
+  });
+
+  it("scopes plugin loading to manifest-declared web-search candidates", () => {
+    resolvePluginWebSearchProviders({});
+
+    expectScopedWebSearchCandidates(["brave"]);
+  });
+
   it("keeps allowlist web-search provider discovery scoped to the configured allowlist", () => {
     loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
       plugins: [
@@ -444,5 +499,31 @@ describe("resolvePluginWebSearchProviders", () => {
       allow: ["brave"],
       entries: { brave: { enabled: true } },
     });
+  });
+
+  it("uses the active registry workspace for candidate discovery and snapshot loads when workspaceDir is omitted", () => {
+    const env = createWebSearchEnv();
+    const rawConfig = createBraveAllowConfig();
+
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      undefined,
+      "default",
+      "/tmp/runtime-workspace",
+    );
+
+    resolvePluginWebSearchProviders({
+      config: rawConfig,
+      env,
+    });
+
+    const manifestParams = requireLastCallFirstArg(
+      loadInstalledPluginManifestRegistryMock,
+      "loadPluginManifestRegistryForInstalledIndex",
+    );
+    expect(manifestParams.workspaceDir).toBe("/tmp/runtime-workspace");
+    const loaderParams = requireLastCallFirstArg(loadOpenClawPluginsMock, "loadOpenClawPlugins");
+    expect(loaderParams.workspaceDir).toBe("/tmp/runtime-workspace");
+    expect(loaderParams.onlyPluginIds).toEqual(["brave"]);
   });
 });

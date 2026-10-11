@@ -1,3 +1,4 @@
+// Media Core tests cover inline image data url behavior.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeInlineImageBase64,
@@ -58,6 +59,16 @@ describe("inline image data URL sanitizer", () => {
     expect(sanitizeInlineImageDataUrlForStorage(`data:image/heic;base64,${HEIC_HEADER}`)).toBe(
       `data:image/heic;base64,${HEIC_HEADER}`,
     );
+  });
+
+  it("canonicalizes valid image base64 with sniffed MIME type", () => {
+    expect(sanitizeInlineImageBase64({ mimeType: "image/jpeg", base64: `\n${PNG_1X1}` })).toEqual({
+      mimeType: "image/png",
+      base64: PNG_1X1,
+    });
+    expect(
+      sanitizeInlineImageBase64({ mimeType: "image/png", base64: "SGVsbG8=" }),
+    ).toBeUndefined();
   });
 
   it("accepts supported non-browser image signatures", () => {

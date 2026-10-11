@@ -9,6 +9,58 @@ import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 describe("plugin runtime record source ownership", () => {
+  it.each([
+    ["root", 0],
+    ["root", 8],
+    ["root", 16],
+    ["module", 0],
+    ["module", 8],
+    ["module", 16],
+  ] as const)(
+    "resolves %s owner at position %i without unrelated source checks",
+    async (kind, index) => {
+      const cache = createPluginCache();
+      const registry = createEmptyPluginRegistry();
+      const records = Array.from({ length: 17 }, (_, offset) =>
+        createPluginRecord({
+          id: `plugin-${offset}`,
+          rootDir: path.resolve("runtime-owner-fixture", String(offset)),
+        }),
+      );
+      registry.plugins.push(...records);
+      const owner = records[index]!;
+      const modulePath = path.resolve("runtime-owner-fixture/captured/api.js");
+      const membership = records.map((record) =>
+        vi.fn((source: string) => record === owner && source === modulePath),
+      );
+      const instances = records.map((record, offset) => {
+        const instance = new PluginInstance(record.id, { record, registry });
+        instance.bindModuleLoader(() => ({}), membership[offset]);
+        return instance;
+      });
+      try {
+        withPluginCache(cache, () =>
+          withPluginRuntimeGatewayRequestScope(
+            { pluginRegistry: registry, isWebchatConnect: () => false },
+            () => {
+              const params = kind === "root" ? { pluginRoot: owner.rootDir! } : { modulePath };
+              expect(resolvePluginRuntimeRecord({ ...params, pluginId: owner.id })).toBe(owner);
+              if (kind === "root") {
+                expect([...cache.roots.keys()]).toEqual([owner.rootDir]);
+              } else {
+                membership.forEach((hasSource, offset) =>
+                  expect(hasSource).toHaveBeenCalledTimes(offset === index ? 1 : 0),
+                );
+              }
+            },
+          ),
+        );
+      } finally {
+        await Promise.all(instances.map((instance) => instance.dispose()));
+      }
+    },
+  );
+
   it.each(["owner", ""])("checks rejected sources once for plugin id %s", async (pluginId) => {
     const registry = createEmptyPluginRegistry();
     const modulePath = path.resolve("runtime-owner-fixture/missing/api.js");
@@ -177,6 +229,33 @@ describe("plugin runtime record source ownership", () => {
     } finally {
       await instance.dispose();
     }
+  });
+
+  it("resolves unrelated modules after a captured instance is disposed", async () => {
+    const registry = createEmptyPluginRegistry();
+    const retired = createPluginRecord({ id: "retired", rootDir: path.resolve("retired") });
+    const current = createPluginRecord({ id: "current", rootDir: path.resolve("current") });
+    registry.plugins.push(retired, current);
+    const instance = new PluginInstance(retired.id, { record: retired, registry });
+    instance.bindModuleLoader(
+      () => ({}),
+      (source) => source === retired.source,
+    );
+    await instance.dispose();
+    withPluginCache(createPluginCache(), () =>
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: registry, isWebchatConnect: () => false },
+        () => {
+          expect(resolvePluginRuntimeRecord({ modulePath: path.resolve("current/api.js") })).toBe(
+            current,
+          );
+          expect(
+            resolvePluginRuntimeRecord({ modulePath: path.resolve("unknown/api.js") }),
+          ).toBeUndefined();
+          expect(() => instance.loadModule(retired.source)).toThrow(/reloaded or disabled/);
+        },
+      ),
+    );
   });
 
   it.each([

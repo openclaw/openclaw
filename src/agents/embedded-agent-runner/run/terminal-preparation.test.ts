@@ -138,6 +138,13 @@ describe("prepareEmbeddedRunTerminal", () => {
       expectedMarkedMedia: ["/tmp/reply.opus"],
     },
     {
+      name: "an external harness field",
+      attestedMediaUrls: [],
+      forgePublicField: true,
+      transferToolResult: undefined,
+      expectedMarkedMedia: [],
+    },
+    {
       name: "core-attested but non-delivered media",
       attestedMediaUrls: ["/tmp/other.opus"],
       forgePublicField: false,
@@ -210,7 +217,16 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(markedMedia.every((payload) => !payload.text)).toBe(true);
   });
 
-  it.each([{ assistantTexts: ["Earlier", " \u200b "], expected: "Earlier" }])(
+  it.each([
+    { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
+    { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
+    { assistantTexts: ["Earlier", " \u200b "], expected: "Earlier" },
+    { assistantTexts: [" \u200b\u200d\u2060 "], expected: undefined },
+    { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
+    { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
+    { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
+    { assistantTexts: [], expected: undefined },
+  ])(
     "selects final fallback text without changing its source %#",
     async ({ assistantTexts, expected }) => {
       const original = [...assistantTexts];
@@ -234,7 +250,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
-  it.each(["aborted"] as const)(
+  it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
     async (stopReason) => {
       const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -511,6 +527,37 @@ describe("prepareEmbeddedRunTerminal", () => {
     ]);
   });
 
+  it("does not recover stale session text after the current prompt times out", async () => {
+    const staleAssistant = {
+      ...assistantMessage("stop"),
+      content: [{ type: "text" as const, text: "Stale answer from the prior attempt." }],
+    };
+
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+        assistantTexts: [],
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: undefined,
+      }),
+      currentAttemptCompletedAssistant: undefined,
+      terminalState: {
+        outcome: {
+          reason: "hard_timeout",
+          status: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantVisibleText).toBeUndefined();
+    expect(prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
+    expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(false);
+  });
+
   it("excludes cleanup and earlier completed assistants from clean-yield payloads", async () => {
     const completedAssistant = assistantMessage("stop");
     const yieldedAssistant = {
@@ -538,6 +585,25 @@ describe("prepareEmbeddedRunTerminal", () => {
 
     expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ lastAssistant: undefined, currentAssistant: null }),
+    );
+  });
+
+  it("carries the canonical restart reason into terminal payload rendering", async () => {
+    await prepareAttempt({
+      attempt: attemptResult({
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+        },
+      }),
+      terminalState: {
+        outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
+        signalOwnedInterruption: true,
+      },
+    });
+
+    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
     );
   });
 
@@ -659,6 +725,51 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     },
   };
 
+  it.each([
+    { name: "engaged", codeModeEngaged: true, expected: true },
+    { name: "not engaged", codeModeEngaged: false, expected: false },
+    { name: "unreported (harness route)", codeModeEngaged: undefined, expected: false },
+  ])("stamps codeModeEngaged when $name", async ({ codeModeEngaged, expected }) => {
+    const prepared = await prepareStats({ attempt: { codeModeEngaged } });
+    expect(prepared.agentMeta.codeModeEngaged).toBe(expected);
+  });
+
+  it("records whether the context window came from the harness or prepared resolution", async () => {
+    const observed = await prepareStats({
+      attempt: { contextTokens: 1_000_000, contextTokensSource: "runtime" },
+      outerContextTokenMeta: { contextTokens: 272_000 },
+    });
+    expect(observed.agentMeta).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    });
+
+    const configured = await prepareStats({
+      attempt: { contextTokens: 272_000, contextTokensSource: "runtime-configured" },
+      outerContextTokenMeta: { contextTokens: 1_000_000 },
+    });
+    expect(configured.agentMeta).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "runtime-configured",
+    });
+
+    const resolved = await prepareStats({
+      outerContextTokenMeta: { contextTokens: 272_000 },
+    });
+    expect(resolved.agentMeta).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "resolved",
+    });
+
+    const verified = await prepareStats({
+      outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
+    });
+    expect(verified.agentMeta).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    });
+  });
+
   it("keeps a prepared trusted window legacy when another model identity is reported", async () => {
     const outerContextTokenMeta: OuterContextTokenMeta = {
       contextTokens: 1_000_000,
@@ -720,15 +831,8 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
   });
 
   it("stamps assistantTurns from the run accumulator and omits zero", async () => {
-    const counted = await prepareStats({
-      assistantTurns: 3,
-      outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
-    });
+    const counted = await prepareStats({ assistantTurns: 3 });
     expect(counted.agentMeta.assistantTurns).toBe(3);
-    expect(counted.agentMeta).toMatchObject({
-      contextTokens: 1_000_000,
-      contextTokensSource: "resolved-v1",
-    });
 
     const empty = await prepareStats({ assistantTurns: 0 });
     expect(empty.agentMeta).not.toHaveProperty("assistantTurns");
@@ -759,7 +863,12 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.agentMeta.costUsd).toBeCloseTo(4, 10);
   });
 
-  it.each([{ firstCost: 0, tokens: {} }])(
+  it.each([
+    { firstCost: 0, tokens: { input: 150_000, output: 100 } },
+    { firstCost: 0.125, tokens: { input: 150_000, output: 100 } },
+    { firstCost: 0, tokens: {} },
+    { firstCost: 0.125, tokens: {} },
+  ])(
     "preserves carried per-attempt cost $firstCost with tokens $tokens instead of repricing",
     async ({ firstCost, tokens }) => {
       const prepared = await prepareStats({
@@ -772,6 +881,53 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       expect(prepared.agentMeta.costUsd).toBe(firstCost);
     },
   );
+
+  it("omits tiered aggregate cost when an observed call has no price", async () => {
+    const prepared = await prepareStats({
+      config: {
+        models: {
+          providers: {
+            "cost-test-provider": {
+              models: [
+                {
+                  id: "cost-model",
+                  cost: {
+                    input: 1,
+                    output: 2,
+                    cacheRead: 0.5,
+                    cacheWrite: 4,
+                    tieredPricing: [
+                      { range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      attempts: [
+        { input: 150_000, output: 100, cost: { total: 0.125 } },
+        { input: 150_000, output: 100 },
+      ],
+    });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  });
+
+  it("omits costUsd when the model has no cost data", async () => {
+    const prepared = await prepareStats({
+      provider: "no-cost-provider",
+      model: "uncosted-model",
+      config: COST_CONFIG,
+      usage: { input: 1_000_000, output: 500_000, total: 1_500_000 },
+    });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  });
+
+  it("omits costUsd when the run reported no usage", async () => {
+    const prepared = await prepareStats({ config: COST_CONFIG });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  });
 
   it("keeps response identity in the terminal receipt without replacing the run model", async () => {
     const prepared = await prepareStats({
@@ -815,5 +971,19 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       },
     });
     expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
+  });
+
+  it("marks a provider-only response route as rerouted", async () => {
+    const prepared = await prepareStats({ assistantProvider: "routed-provider" });
+
+    expect(prepared.agentMeta.terminalReceipt).toMatchObject({
+      requested: { provider: "cost-test-provider", model: "cost-model" },
+      effective: {
+        provider: "routed-provider",
+        model: "cost-model",
+        responseModel: "cost-model",
+      },
+      rerouted: true,
+    });
   });
 });

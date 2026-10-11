@@ -5,6 +5,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 import {
   importSessionCatalogHistory,
   readBoundedSessionCatalogHistory,
+  SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
 } from "./session-catalog-history-import.js";
 import { listSessionCatalogEntries } from "./session-catalog.js";
 
@@ -202,6 +203,35 @@ describe("importSessionCatalogHistory", () => {
     ]);
   });
 
+  it("deduplicates a recovered import by scanning item idempotency keys", async () => {
+    const items: TranscriptItem[] = [
+      { id: "u-1", type: "userMessage", text: "hello" },
+      { id: "a-1", type: "agentMessage", text: "hi" },
+    ];
+
+    await importHistory(items).result;
+    await importHistory(items).result;
+
+    expect(transcript.lockCalls).toBe(2);
+    expect(transcript.messages).toHaveLength(2);
+  });
+
+  it("keeps only the most recent 200 items and returns them oldest-first", async () => {
+    const items: TranscriptItem[] = Array.from({ length: 205 }, (_, index) => ({
+      id: `item-${String(index)}`,
+      type: "agentMessage",
+      text: `message-${String(index)}`,
+    }));
+
+    const { read, result } = importHistory(items);
+    await result;
+
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(transcript.messages).toHaveLength(200);
+    expect(messageText(transcript.messages[0]!)).toBe("message-5");
+    expect(messageText(transcript.messages.at(-1)!)).toBe("message-204");
+  });
+
   it("keeps the recent suffix within the 512 KiB serialized-item budget", async () => {
     const items: TranscriptItem[] = Array.from({ length: 10 }, (_, index) => ({
       id: `item-${String(index)}`,
@@ -287,6 +317,23 @@ describe("importSessionCatalogHistory", () => {
 });
 
 describe("readBoundedSessionCatalogHistory", () => {
+  it("retains the import ceiling independently from the continuation seed and reports older history", async () => {
+    const items: TranscriptItem[] = Array.from({ length: 50_001 }, (_, index) => ({
+      type: "agentMessage",
+      text: String(index),
+    }));
+    const history = await readBoundedSessionCatalogHistory({
+      read: catalogReader(items),
+      limits: SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
+    });
+
+    expect(history.items).toHaveLength(50_000);
+    expect(history.items[0]?.text).toBe("1");
+    expect(history.items.at(-1)?.text).toBe("50000");
+    expect(history.totalItems).toBe(50_000);
+    expect(history.complete).toBe(false);
+  });
+
   it("counts fetched items past a byte cutoff and distinguishes an exactly complete page", async () => {
     const items: TranscriptItem[] = [
       { type: "userMessage", text: "older" },
