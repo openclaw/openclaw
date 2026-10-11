@@ -9,6 +9,7 @@ export async function claimDeliveryPlatformSendAttempt(
   reconciledPlatformSendStartedAt?: number,
   reconciledPlatformSendAttemptId?: string,
   context?: DeliveryQueueStateContext,
+  allowUnknownSendReplay?: true,
 ): Promise<string | undefined> {
   return executeDeliveryQueueOperation(context, stateDir, {
     type: "deliveryQueue.claimPlatformSend",
@@ -17,6 +18,7 @@ export async function claimDeliveryPlatformSendAttempt(
       claimId: generateSecureUuid(),
       ...(reconciledPlatformSendStartedAt !== undefined ? { reconciledPlatformSendStartedAt } : {}),
       ...(reconciledPlatformSendAttemptId !== undefined ? { reconciledPlatformSendAttemptId } : {}),
+      ...(allowUnknownSendReplay ? { allowUnknownSendReplay } : {}),
     },
   });
 }

@@ -78,18 +78,37 @@ function observeHostBirthtime(mode: typeof hostBirth.mode, paths: string[]): voi
     return;
   }
   const readStat = fs.statSync;
+  const readFstat = fs.fstatSync;
+  const selectedFiles = new Set<string>();
+  for (const pathname of hostBirth.paths) {
+    const file = readStat(pathname, { bigint: true, throwIfNoEntry: false });
+    if (file) {
+      selectedFiles.add(`${file.dev}:${file.ino}`);
+    }
+  }
+  const applyBirthtime = (result: fs.Stats | fs.BigIntStats) => {
+    if (mode === "ctime" && "ctimeNs" in result) {
+      const ctimeNs = result.ctimeNs + hostBirth.ctimeAdvanceNs;
+      Object.defineProperty(result, "ctimeNs", { value: ctimeNs });
+      Object.defineProperty(result, "birthtimeNs", { value: ctimeNs });
+    } else {
+      Object.defineProperty(result, "birthtimeNs", {
+        value: mode === "zero" ? 0n : hostBirth.relocated ? 2n : 1n,
+      });
+    }
+  };
   vi.spyOn(fs, "statSync").mockImplementation((...args) => {
     const result = readStat(...args);
     if (result && args[1]?.bigint && hostBirth.paths.has(String(args[0]))) {
-      if (mode === "ctime" && "ctimeNs" in result) {
-        const ctimeNs = result.ctimeNs + hostBirth.ctimeAdvanceNs;
-        Object.defineProperty(result, "ctimeNs", { value: ctimeNs });
-        Object.defineProperty(result, "birthtimeNs", { value: ctimeNs });
-      } else {
-        Object.defineProperty(result, "birthtimeNs", {
-          value: mode === "zero" ? 0n : hostBirth.relocated ? 2n : 1n,
-        });
-      }
+      selectedFiles.add(`${result.dev}:${result.ino}`);
+      applyBirthtime(result);
+    }
+    return result;
+  });
+  vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+    const result = readFstat(...args);
+    if (args[1]?.bigint && selectedFiles.has(`${result.dev}:${result.ino}`)) {
+      applyBirthtime(result);
     }
     return result;
   });

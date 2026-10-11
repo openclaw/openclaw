@@ -227,6 +227,7 @@ const enNewSessionSetup = {
     connectMachineTeamHint:
       "Installs a background node service that pairs this machine with your team and can run agent sessions.",
     connectMachineCommandOnly: "Command access only (no agent sessions)",
+    connectMachineInstalled: "Already have OpenClaw installed? Run:",
     connectMachineSingleUse: "This link is single-use and expires soon.",
     connectMachineSingleUseExpires: "This link is single-use and expires at {time}.",
     connectMachineFreshCode: "Mint fresh code",
