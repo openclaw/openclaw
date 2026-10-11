@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -21,6 +20,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { JSX } from "../../types/solid-elements.js";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
@@ -678,7 +678,7 @@ export function renderModelProvidersPageShell(props: {
         title={t("routeTitles.modelProviders")}
         subtitle={
           <>
-            {t("modelProviders.subtitle")}
+            {t("modelProviders.subtitle")}{" "}
             <LearnMoreLink url={"https://docs.openclaw.ai/concepts/model-providers"} />
           </>
         }

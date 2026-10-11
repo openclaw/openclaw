@@ -125,7 +125,10 @@ function TextForm(props: StepProps) {
     >
       <Show when={props.step.message}>
         <div class="wizard-step__message">
+          {/* This pre-wrap message retains the original Lit label spacing. */}
+          {"\n              "}
           <label for={props.inputId}>{formatUiExternalText(props.step.message!)}</label>
+          {"\n            "}
         </div>
       </Show>
       <Show when={!props.externalAuthInput}>

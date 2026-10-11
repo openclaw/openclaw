@@ -185,9 +185,9 @@ export function ManualProviderPicker(
               data-selected={selected() ? "" : undefined}
               aria-label={accessibleLabel}
               prop:value={entry.id}
-              type="checkbox"
+              prop:type="checkbox"
               prop:checked={selected()}
-              disabled={props.actionsDisabled}
+              prop:disabled={props.actionsDisabled}
               autofocus={selected() && !props.actionsDisabled}
               ref={(element) => {
                 item = element;

@@ -8,6 +8,8 @@ import {
   runWithOwner,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 
 type Property<T> = {
@@ -231,15 +233,25 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
+        const layoutOwner = shellLayoutOwnerForHost(this);
         const view = () => content(props, this.#host);
+        const withLayout = () =>
+          layoutOwner
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layoutOwner, host: this },
+                get children() {
+                  return view();
+                },
+              })
+            : view();
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
               get children() {
-                return view();
+                return withLayout();
               },
             })
-          : view();
+          : withLayout();
       }, this);
     }
 

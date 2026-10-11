@@ -2,11 +2,18 @@
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@solidjs/web";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 export type { JSX } from "@solidjs/web";
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
+      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> & {
+        label?: string;
+        "prop:label"?: string;
+        "prop:description"?: string;
+        "onModal-cancel"?: (event: Event) => void;
+      };
       "openclaw-tooltip": HTMLAttributes<HTMLElement> & {
         "prop:content"?: string;
         "open-on-click"?: boolean;

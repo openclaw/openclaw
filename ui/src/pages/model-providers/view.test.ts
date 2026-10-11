@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { flush } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";

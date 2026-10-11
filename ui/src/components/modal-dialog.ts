@@ -462,19 +462,6 @@ if (!customElements.get("openclaw-modal-dialog")) {
   customElements.define("openclaw-modal-dialog", OpenClawModalDialog);
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> & {
-        label?: string;
-        "prop:label"?: string;
-        "prop:description"?: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
-
 declare global {
   interface Document {
     openClawModalLayers?: Set<HTMLElement>;
