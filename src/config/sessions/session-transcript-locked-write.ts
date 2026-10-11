@@ -252,6 +252,20 @@ export async function withWorkerTranscriptWriteLock<T>(
               assertCurrent();
               return operation();
             }, signal);
+          // Preparation reads must settle inside the append, not queue behind it.
+          const prepareWithReads = <R>(prepare: () => Promise<R>): Promise<R> =>
+            withTranscriptLockSettlement((queueRead) =>
+              withLockedSessionTranscriptReads(
+                {
+                  canonicalPath: identity.canonicalPath,
+                  claim,
+                  worker,
+                  assertCurrent,
+                  queue: queueRead,
+                },
+                prepare,
+              ),
+            );
           const mutate = async (
             input: SessionMessageRewriteOperations["session.transcript.lock.commit"]["input"],
           ) => {
@@ -332,8 +346,10 @@ export async function withWorkerTranscriptWriteLock<T>(
                     input,
                   })
                 : undefined;
-            const authority = await prepareSessionSourceAuthority(
-              expected?.pending || expected?.existing ? undefined : freshGuard,
+            const authority = await prepareWithReads(() =>
+              prepareSessionSourceAuthority(
+                expected?.pending || expected?.existing ? undefined : freshGuard,
+              ),
             );
             if (freshGuard?.nativeSource || authority.nativeSource || (legacyPrepare && !prepare)) {
               // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
@@ -361,18 +377,7 @@ export async function withWorkerTranscriptWriteLock<T>(
               let message: TMessage | undefined = originalMessage;
               if (prepare && expected && !expected.pending && !expected.existing) {
                 // Preparation may await a delta read; settle it before this append commits.
-                message = await withTranscriptLockSettlement((queueRead) =>
-                  withLockedSessionTranscriptReads(
-                    {
-                      canonicalPath: identity.canonicalPath,
-                      claim,
-                      worker,
-                      assertCurrent,
-                      queue: queueRead,
-                    },
-                    () => prepare(originalMessage),
-                  ),
-                );
+                message = await prepareWithReads(() => prepare(originalMessage));
               }
               assertCurrent();
               const preparedMessageJson =
