@@ -21,6 +21,11 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
 }));
 
+// These tests own send routing and payloads, not destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
   label: string,

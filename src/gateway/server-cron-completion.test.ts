@@ -54,6 +54,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
+import { sendGatewayCronFailureAlert } from "./server-cron-notifications.js";
 import * as assistantContent from "./server-methods/chat-assistant-content.js";
 
 async function createCompletionFixture(
@@ -188,7 +189,9 @@ async function createCompletionFixture(
           },
         ],
         model: "automation-result",
-        openclawAutomation: { kind: "cron", jobId: job.id, runId: `cron:${job.id}:1000` },
+        ...(scope.sessionKey === source.sessionKey
+          ? { openclawAutomation: { kind: "cron", jobId: job.id, runId: `cron:${job.id}:1000` } }
+          : {}),
       }),
     ]);
   };
@@ -336,6 +339,41 @@ async function withCompletionFixture(
 // Command execution and script evaluation belong to their respective runner suites.
 describe("completion announcement", () => {
   const kind = "script";
+
+  it("records a failure alert once in its destination, not the creating conversation", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      fixture.cfg.gateway = undefined;
+      fixture.job.sessionKey = fixture.destination.sessionKey;
+      const onDeliverySettled = vi.fn(async () => {});
+      await sendGatewayCronFailureAlert({
+        deps: {},
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: fixture.cfg }),
+        job: fixture.job,
+        routing: { defaultAgentId: "main" },
+        payload: { text: "Scheduled command failed." },
+        channel: "telegram",
+        to: "123",
+        mode: "announce",
+        onDeliverySettled,
+      });
+      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: "Scheduled command failed." }),
+      );
+      expect(await fixture.messages(fixture.destination)).toEqual([
+        expect.objectContaining({
+          content: [{ type: "text", text: "Scheduled command failed." }],
+          provider: "openclaw",
+          model: "automation-result",
+        }),
+      ]);
+      await fixture.assertNoOtherResults();
+      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+        delivered: true,
+        status: "delivered",
+      });
+    });
+  });
 
   it("commits the effective post-hook payload shown to the recipient", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {

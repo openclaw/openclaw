@@ -15,6 +15,11 @@ import {
   loadPendingDeliveries,
 } from "./delivery-queue.test-helpers.js";
 
+// Shutdown recovery exercises queue custody, not destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
 describe("outbound recovery shutdown", () => {

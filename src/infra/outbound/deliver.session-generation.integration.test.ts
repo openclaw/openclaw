@@ -17,6 +17,11 @@ import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
 
+// This suite fences dispatch against producer resets; destination storage is tested separately.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliver: typeof import("./deliver.js").deliverOutboundPayloadsInternal;
 beforeAll(async () => {
   ({ deliverOutboundPayloadsInternal: deliver } = await import("./deliver.js"));

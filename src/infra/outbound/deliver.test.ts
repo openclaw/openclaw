@@ -1,5 +1,5 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
-// checks, adapter sends, transcript mirroring, and payload outcomes.
+// checks, adapter sends, confirmed transcript commits, and payload outcomes.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
@@ -18,6 +18,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
@@ -41,9 +42,6 @@ import { registerOutboundQueueAckTests } from "./deliver.queue-ack.test-support.
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
-type AppendAssistantTranscript =
-  (typeof import("../../config/sessions/transcript.js"))["appendAssistantMessageToSessionTranscript"];
-
 type EnqueueDeliveryTestParams = Record<string, unknown> & {
   preparedBatch?: {
     entries?: Array<{
@@ -65,10 +63,8 @@ type EnqueueDeliveryTestParams = Record<string, unknown> & {
 };
 
 const mocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn<AppendAssistantTranscript>(async () => ({
+  commitConfirmedVisibleMessage: vi.fn<typeof commitConfirmedVisibleMessage>(async () => ({
     ok: true,
-    target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
-    messageId: "m",
   })),
 }));
 const hookMocks = vi.hoisted(() => ({
@@ -155,24 +151,9 @@ async function ackDeliveryMock(
   return queueMocks.ackDelivery(id, stateDir, hasOptions ? legacyOptions : undefined);
 }
 
-vi.mock("../../config/sessions/transcript.runtime.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../config/sessions/transcript.runtime.js")
-  >("../../config/sessions/transcript.runtime.js");
-  return {
-    ...actual,
-    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
-  };
-});
-vi.mock("../../config/sessions/transcript.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions/transcript.js")>(
-    "../../config/sessions/transcript.js",
-  );
-  return {
-    ...actual,
-    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
-  };
-});
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
+}));
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
 }));
@@ -2641,7 +2622,7 @@ describe("deliverOutboundPayloads", () => {
     }
   });
 
-  it("mirrors successfully delivered location-only payloads into the session transcript", async () => {
+  it("commits confirmed location-only payloads without requiring a producer session", async () => {
     const location = {
       latitude: 48.858844,
       longitude: 2.294351,
@@ -2650,13 +2631,14 @@ describe("deliverOutboundPayloads", () => {
     };
     const sendPayload = vi.fn().mockResolvedValue({ channel: "line", messageId: "location-1" });
     setTestOutbound({ sendPayload }, "line");
+    const onDeliveryIntent = vi.fn();
 
     const results = await deliverOutboundPayloads({
       cfg: {},
       channel: "line",
       to: "U123",
       payloads: [{ location }],
-      mirror: { sessionKey: "agent:main:main", text: "" },
+      onDeliveryIntent,
     });
 
     expect(results).toEqual([{ channel: "line", messageId: "location-1" }]);
@@ -2664,15 +2646,20 @@ describe("deliverOutboundPayloads", () => {
       text: "",
       location,
     });
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+    expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:main",
-        text: "📍 48.858844, 2.294351 ±12m",
+        channel: "line",
+        to: "U123",
+        producer: undefined,
+        payload: expect.objectContaining({ location }),
+        payloadIndex: 0,
+        deliveryId: onDeliveryIntent.mock.calls[0]?.[0].id,
       }),
     );
+    expect(onDeliveryIntent).toHaveBeenCalledOnce();
   });
 
-  it("does not mirror a full payload when only an internal sub-send succeeded", async () => {
+  it("does not commit a full payload when only an internal sub-send succeeded", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
     const partialResult = { channel: "line" as const, messageId: "partial-1" };
     const sendFormattedText = vi.fn(
@@ -2684,7 +2671,7 @@ describe("deliverOutboundPayloads", () => {
       },
     );
     setTestOutbound({ sendText: async () => partialResult, sendFormattedText }, "line");
-    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.commitConfirmedVisibleMessage.mockClear();
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -2693,14 +2680,10 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "first part and unsent second part" }],
       bestEffort: true,
       skipQueue: true,
-      mirror: {
-        sessionKey: "agent:main:main",
-        text: "first part and unsent second part",
-      },
     });
 
     expect(results).toEqual([partialResult]);
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2713,16 +2696,16 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it.each(["throws"] as const)(
-    "preserves the channel send when the post-delivery mirror %s",
+  it.each(["throws", "rejects"] as const)(
+    "preserves the channel send when the confirmed transcript commit %s",
     async (failure) => {
       const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
       if (failure === "throws") {
-        mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
-          new Error("transcript mirror failed after channel delivery"),
+        mocks.commitConfirmedVisibleMessage.mockRejectedValueOnce(
+          new Error("transcript commit failed after channel delivery"),
         );
       } else {
-        mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+        mocks.commitConfirmedVisibleMessage.mockResolvedValueOnce({
           ok: false,
           reason: "session locked",
         });
@@ -2730,15 +2713,13 @@ describe("deliverOutboundPayloads", () => {
       const results = await deliverMatrix({
         payloads: [{ text: "done" }],
         deps: { matrix: sendMatrix },
-        mirror: { sessionKey: "agent:main:main", text: "done", idempotencyKey: "idem-89626" },
+        deliveryIntentId: "idem-89626",
       });
       expect(sendMatrix).toHaveBeenCalledTimes(1);
       expect(results).toHaveLength(1);
       const warnCall = requireMockCall(logMocks.warn, "warn");
-      expect(warnCall[0]).toContain(
-        "failed to mirror outbound delivery into session transcript; channel send already succeeded",
-      );
-      expect(warnCall[1]).toMatchObject({ channel: "matrix", sessionKey: "agent:main:main" });
+      expect(warnCall[0]).toContain("Confirmed outbound transcript");
+      expect(warnCall[1]).toMatchObject({ channel: "matrix" });
     },
   );
 
@@ -2792,11 +2773,6 @@ describe("deliverOutboundPayloads", () => {
             delivery: { pin: { enabled: true, required: true } },
           },
         ],
-        mirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "provider exploded",
-        },
       });
 
       expect(results).toStrictEqual([]);
@@ -2805,7 +2781,7 @@ describe("deliverOutboundPayloads", () => {
       expect(pinDeliveredMessage).not.toHaveBeenCalled();
       expect(afterDeliverPayload).not.toHaveBeenCalled();
       expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
-      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
       expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith({
         index: 0,
         status: "suppressed",

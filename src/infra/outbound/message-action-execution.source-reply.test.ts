@@ -16,6 +16,11 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
 }));
 
+// Source-reply eligibility is independent of destination transcript persistence.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 const slackConfig = {
   channels: {
     slack: {

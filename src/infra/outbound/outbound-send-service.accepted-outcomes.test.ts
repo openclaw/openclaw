@@ -4,7 +4,7 @@ import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js
 import { executeSendAction } from "./outbound-send-service.js";
 
 const mocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn(),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
 }));
@@ -13,8 +13,8 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
-vi.mock("../../config/sessions.js", () => ({
-  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));
 
 vi.mock("./message.js", () => ({ sendMessage: mocks.sendMessage }));
@@ -56,7 +56,6 @@ describe("accepted plugin delivery outcomes", () => {
       executeSendAction({
         ctx: createContext({
           onSendAccepted,
-          mirror: { sessionKey: "agent:main:demo-outbound:channel:123" },
         }),
         to: "channel:123",
         message: "accepted then unsent",
@@ -64,7 +63,7 @@ describe("accepted plugin delivery outcomes", () => {
     ).rejects.toThrow("second part failed");
 
     expect(onSendAccepted).toHaveBeenCalledOnce();
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -83,7 +82,6 @@ describe("accepted plugin delivery outcomes", () => {
     const result = await executeSendAction({
       ctx: createContext({
         onSendAccepted,
-        mirror: { sessionKey: "agent:main:demo-outbound:channel:123" },
       }),
       to: "channel:123",
       message: "accepted then unsent",
@@ -94,7 +92,23 @@ describe("accepted plugin delivery outcomes", () => {
       payload: { deliveryStatus: "partial_failed", sentBeforeError: true },
     });
     expect(onSendAccepted).toHaveBeenCalledOnce();
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
+  it.each(["failed", "pending", "unknown"])(
+    "does not commit unconfirmed plugin status %s",
+    async (deliveryStatus) => {
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
+        content: [],
+        details: { deliveryStatus },
+      });
+      await executeSendAction({
+        ctx: createContext({}),
+        to: "channel:123",
+        message: "unconfirmed",
+      });
+      expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
+      expect(mocks.sendMessage).not.toHaveBeenCalled();
+    },
+  );
 });

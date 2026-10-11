@@ -1,8 +1,6 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -14,7 +12,6 @@ import {
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
 } from "../gateway/server-methods/chat-assistant-content.js";
-import { bindOutboundSessionEntry } from "../infra/outbound/outbound-session.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
@@ -23,12 +20,9 @@ import {
 import { hasReplyChannelData } from "../interactive/payload.js";
 import { logWarn } from "../logger.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { commitBackgroundResultToSession } from "../sessions/background-session-result.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
-import type { DeliveryTargetResolution } from "./isolated-agent/delivery-target.js";
 import { createCronRunDiagnosticsFromError } from "./run-diagnostics.js";
 import { createCronExecutionId } from "./run-id.js";
 import type { CronRunDiagnostics } from "./types.js";
@@ -45,112 +39,7 @@ export type CronConversationResultParams = {
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 };
 
-export type CronResultConversation = {
-  conversation?: CronConversationResultParams["conversation"];
-  diagnostics?: CronRunDiagnostics;
-};
-
-type CronResultConversationParams = {
-  config: OpenClawConfig;
-  agentId: string;
-  delivery: DeliveryTargetResolution;
-  source?: CronConversationResultParams["conversation"];
-  sourceSessionKey?: string;
-  deliveryAttemptFence: CronCompletionDeliveryFence | null;
-};
-
-/** Resolve existing context without creating a destination or changing its remembered route. */
-export async function resolveCronResultConversation(
-  params: CronResultConversationParams,
-): Promise<CronResultConversation> {
-  return resolveCronResultConversationEntry(params, false);
-}
-
-/** Bind destination context only after a confirmed external delivery. */
-export async function bindCronResultConversation(
-  params: CronResultConversationParams,
-): Promise<CronResultConversation> {
-  return resolveCronResultConversationEntry(params, true);
-}
-
-async function resolveCronResultConversationEntry(
-  params: CronResultConversationParams,
-  bindDestination: boolean,
-): Promise<CronResultConversation> {
-  if (!params.delivery.ok) {
-    return { conversation: params.source };
-  }
-  const route = params.delivery.sessionRoute;
-  if (!route) {
-    throw new Error("cron destination has no conversation route");
-  }
-  if (
-    route.recipientSessionExact === false &&
-    normalizeAgentId(
-      resolveAgentRoute({
-        cfg: params.config,
-        channel: params.delivery.channel,
-        defaultAgentId: params.agentId,
-        accountId: params.delivery.accountId,
-        peer: route.peer,
-      }).agentId,
-    ) !== normalizeAgentId(params.agentId)
-  ) {
-    return {
-      diagnostics: createCronRunDiagnosticsFromError(
-        "delivery",
-        "Conversation context skipped: the destination belongs to a different agent.",
-        { severity: "warn" },
-      ),
-    };
-  }
-  if (
-    !bindDestination &&
-    params.source &&
-    route.sessionKey ===
-      toAgentStoreSessionKey({
-        agentId: params.agentId,
-        requestKey: params.source.sessionKey,
-        mainKey: params.config.session?.mainKey,
-      })
-  ) {
-    return { conversation: { ...params.source, sessionKey: route.sessionKey } };
-  }
-  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
-    agentId: params.agentId,
-  });
-  if (bindDestination) {
-    await params.deliveryAttemptFence?.beforeAttempt();
-    await bindOutboundSessionEntry({
-      cfg: params.config,
-      channel: params.delivery.channel,
-      accountId: params.delivery.accountId,
-      route,
-      sourceSessionKey: params.sourceSessionKey,
-      assertCommitAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
-    });
-  }
-  const entry = await readSessionEntryInWorker({
-    sessionKey: route.sessionKey,
-    storePath,
-    readConsistency: "latest",
-  });
-  if (!entry) {
-    if (bindDestination) {
-      throw new Error("cron destination conversation is unavailable");
-    }
-    return {};
-  }
-  return {
-    conversation: {
-      sessionKey: route.sessionKey,
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-    },
-  };
-}
-
-/** Commit final output, not the private run transcript or an external notification mirror. */
+/** Internal-channel completion only; external deliveries are owned by outbound. */
 export async function commitCronConversationResult(
   params: CronConversationResultParams,
 ): Promise<{ ok: true; diagnostics?: CronRunDiagnostics } | { ok: false; reason: string }> {

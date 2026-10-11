@@ -28,6 +28,10 @@ import {
   runReplyAction,
 } from "./message-action-runner.test-support.js";
 
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 const channel = "accepted-results";
 const acceptedToolContext = {
   currentChannelProvider: channel,
@@ -124,7 +128,6 @@ describe("accepted results through registered message actions", () => {
         assertDirectAdapterHandoff: assertCurrent,
         onPlatformSendDispatch,
         skipQueue: true,
-        suppressTranscriptMirror: true,
       });
 
       expect(result).toMatchObject({ kind: "send", handledBy: mode, dryRun: false });
@@ -174,7 +177,6 @@ describe("accepted results through registered message actions", () => {
         sessionKey,
         defaultAccountId: "default",
         skipQueue: true,
-        suppressTranscriptMirror: true,
         assertDirectAdapterHandoff: () => {
           if (!active) {
             throw closed;
@@ -239,7 +241,6 @@ describe("accepted results through registered message actions", () => {
         messageActionAuthorization: authorization,
         sessionKey,
         defaultAccountId: "default",
-        suppressTranscriptMirror: true,
         assertDirectAdapterHandoff: () => {
           if (!active) {
             throw closed;

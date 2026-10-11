@@ -5,18 +5,12 @@ import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-r
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import {
-  beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
   markConversationDeliveryRejected,
   markConversationDeliverySent,
   markConversationDeliverySuppressed,
 } from "../../config/sessions/conversation-delivery-store.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import { buildConversationRef } from "../../routing/conversation-ref.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -24,7 +18,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import {
   OutboundDeliveryError,
@@ -44,6 +37,7 @@ import {
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
+import { createConversationRecoveryFixture as createQueuedConversationRecoveryFixture } from "./delivery-queue.conversation-test-helpers.js";
 import {
   RECOVERY_SUMMARY,
   loadPendingDeliveries,
@@ -302,61 +296,11 @@ describe("delivery-queue recovery", () => {
       markerSpy?.mockRestore();
     }
   }
-  async function createConversationRecoveryFixture(operationId: string) {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = {
-      agentId: "main",
-      storePath,
-      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
-    };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-          origin: {
-            provider: "reef",
-            accountId: "default",
-            nativeDirectUserId: "peer-agent",
-          },
-        }),
-      },
-    );
-    await beginConversationDeliveryOperation(scope, {
-      operationId,
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId,
-          storePath,
-          routeFingerprint: "route-recovery",
-        },
-      },
-      operationId,
-      tmpDir(),
-    );
-    return scope;
-  }
+  const createConversationRecoveryFixture = (
+    operationId: string,
+    delivery: Partial<Parameters<typeof enqueueDeliveryOnce>[0]> = {},
+    stateDir = tmpDir(),
+  ) => createQueuedConversationRecoveryFixture({ operationId, delivery, stateDir });
   async function createPendingFinalRecoveryFixture(
     deliveryId: string,
     options: { withWriterAuthority?: boolean } = {},

@@ -56,3 +56,15 @@ export function resolveMaxRetries(entry: QueuedDelivery): number {
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
+
+export function recoveryPlatformAttemptId(entry: QueuedDelivery, claimedAttemptId?: string) {
+  return claimedAttemptId !== undefined
+    ? claimedAttemptId
+    : typeof entry.platformSendAttemptId === "string"
+      ? entry.platformSendAttemptId
+      : entry.recoveryState === "producer_claimed" && typeof entry.producerClaimId === "string"
+        ? entry.producerClaimId
+        : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+          ? null
+          : undefined;
+}

@@ -29,6 +29,11 @@ import { runMessageAction } from "./message-action-runner.js";
 import { workspaceConfig, workspaceTestPlugin } from "./message-action-runner.test-support.js";
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
 
+// Broadcast cancellation owns delivery outcomes, not destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 const channel = "broadcast-test";
 const gateway = {
   clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,

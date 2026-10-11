@@ -70,7 +70,13 @@ announcements. It skips the write only when the send is the reply of a turn that
 runs in the same conversation, because that turn already wrote it. That skip is
 the reason delivery mirrors became transcript-only in
 [#99470](https://github.com/openclaw/openclaw/issues/99470): without it, replay
-showed every answer twice. Cron keeps no transcript code of its own.
+showed every answer twice. Cron keeps no external-delivery transcript code of its own.
+Internal-channel publications remain outside this change.
+
+Same-conversation source-reply markers remain transcript-only: the UI and restart
+recovery consume their source-turn and terminal-receipt identities. They do not
+add model-visible conversation content. Dispatch's final-reply bookkeeping also
+remains transcript-only for UI display when the runtime did not persist a final.
 
 ## Considered options
 
@@ -92,8 +98,12 @@ showed every answer twice. Cron keeps no transcript code of its own.
    results go to the destination chat once, through the canonical writer
    (`src/sessions/background-session-result.ts`), after confirmed delivery.
    Mirrors and awareness notes are removed.
-2. **Move the writer to the outbound send owner.** Cron, the `message` tool,
-   alerts, and subagent announcements use it; remove the cron-specific path.
+2. **Done.** The outbound send owner writes confirmed visible messages through
+   `src/sessions/confirmed-visible-message.ts`. Cron, the `message` tool, failure
+   alerts, external heartbeats, and subagent announcements use the same writer.
+   A producing conversation keeps its own turn instead of a second delivery row;
+   cross-conversation sends enter the destination's model history once. External
+   awareness notes and the cron-specific delivery writer are removed.
    Closes #168683 and #168684.
 3. **Two job modes.** Doctor migrates existing jobs. A `session:<key>` job that
    delivers elsewhere becomes a background job with its own session. That job

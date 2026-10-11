@@ -23,6 +23,11 @@ import {
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
+// Adapter lookup and recovery custody do not own transcript persistence.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
 type RuntimeSender = (

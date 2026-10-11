@@ -51,10 +51,7 @@ import type {
 } from "./heartbeat-runner-execution.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
-import {
-  prepareHeartbeatTargetAwareness,
-  publishHeartbeatSessionReply,
-} from "./heartbeat-session-publication.js";
+import { publishHeartbeatSessionReply } from "./heartbeat-session-publication.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CHANNEL_NOT_READY,
@@ -559,18 +556,9 @@ export async function deliverHeartbeatDispatch(
   payload: ReplyPayload,
   signal?: AbortSignal,
 ) {
-  const { cfg, agentId, startedAt } = policy.wake;
+  const { cfg, agentId } = policy.wake;
   const { delivery, runSessionKey, storePath, outboundPolicySessionKey, internalProjection } =
     policy.prepared;
-  const onDeliveredPayload = policy.projectTarget
-    ? prepareHeartbeatTargetAwareness({
-        agentId,
-        storePath,
-        runSessionKey,
-        targetSessionKey: delivery.targetSessionKey,
-        startedAt,
-      })
-    : undefined;
   let publishedIntent = false;
   let platformDispatchStarted = false;
   const hasPendingFinalOwner = Boolean(resolvePendingFinalDeliveryCompletion([payload]));
@@ -627,7 +615,6 @@ export async function deliverHeartbeatDispatch(
       deps: policy.opts.deps,
       signal,
       silent: policy.deliverySilent,
-      onDeliveredPayload,
       onDeliveryIntent: () => {
         publishedIntent = true;
       },

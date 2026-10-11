@@ -1213,10 +1213,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect.objectContaining({
         requesterSessionKey: "global",
         agentId: "research",
-        mirror: expect.objectContaining({
-          sessionKey: "global",
-          agentId: "research",
-        }),
+        session: { policyKey: "global", agentId: "research" },
       }),
     );
   });

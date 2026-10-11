@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
-  resolveCronNotificationSessionKey,
   resolveCronSessionTargetSessionKey,
 } from "./session-target.js";
 
@@ -58,11 +57,5 @@ describe("cron session target helpers", () => {
         sessionKey: " agent:main:telegram:group:ops:sender:123 ",
       }),
     ).toBe("agent:main:telegram:group:ops:sender:123");
-  });
-
-  it("uses cron failure session fallback when no delivery session exists", () => {
-    expect(resolveCronNotificationSessionKey({ jobId: "job-1", sessionKey: " " })).toBe(
-      "cron:job-1:failure",
-    );
   });
 });

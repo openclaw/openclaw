@@ -28,6 +28,11 @@ import {
   loadPendingDeliveries,
 } from "./delivery-queue.test-helpers.js";
 
+// Question finalization must not depend on destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
 let runOutboundDeliveryInternal: typeof import("./deliver-queue.js").runOutboundDeliveryInternal;

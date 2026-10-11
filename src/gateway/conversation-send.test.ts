@@ -319,7 +319,6 @@ describe("runGatewayConversationSend", () => {
         gatewayOwnedDelivery: true,
         forceCoreDelivery: true,
         requireQueuePersistence: true,
-        suppressTranscriptMirror: true,
         sessionKey: "agent:main:telegram:direct:operator",
       }),
     );

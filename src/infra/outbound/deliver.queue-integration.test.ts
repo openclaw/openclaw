@@ -30,6 +30,11 @@ import {
 } from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
+// Queue custody and receipt tests are independent of destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
 type DeliveryParams = Parameters<typeof deliverOutboundPayloads>[0];

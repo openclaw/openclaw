@@ -67,6 +67,11 @@ vi.mock("./delivery-completion.js", async (importOriginal) => {
   };
 });
 
+// These migration fixtures exercise delivery custody, not destination transcripts.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async ({ to, text, deps }) => {

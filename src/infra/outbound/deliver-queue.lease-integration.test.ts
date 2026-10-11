@@ -24,6 +24,11 @@ import {
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
+// Lease ownership is independent of destination transcript persistence.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
 function useLeaseHeartbeatTimers() {

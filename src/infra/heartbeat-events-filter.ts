@@ -8,7 +8,6 @@ import {
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
-export const HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX = "heartbeat-delivery:";
 // maybeNotifyOnExit owns this shape: a status head, then ` :: <output>`, or, when
 // nothing was captured, a blank line before producer notes (timeout retry guidance).
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
@@ -184,10 +183,6 @@ export function isConversationExecCompletion(event: {
   fromConversationTurn?: boolean;
 }): boolean {
   return event.fromConversationTurn === true && isExecCompletionSystemEvent(event);
-}
-
-export function isHeartbeatDeliveryAwarenessEvent(event: { contextKey?: string | null }): boolean {
-  return event.contextKey?.startsWith(HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX) ?? false;
 }
 
 export function isCronSystemEvent(event: { text: string; contextKey?: string | null }) {

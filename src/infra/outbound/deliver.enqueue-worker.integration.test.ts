@@ -34,6 +34,11 @@ import {
   createUnmodifiedPreparedOutboundBatch,
 } from "./prepared-batch.js";
 
+// Enqueue publication and custody are independent of destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 let deliverStructuredOutboundPayloadsInternal: typeof import("./deliver.js").deliverStructuredOutboundPayloadsInternal;
 

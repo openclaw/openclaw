@@ -104,11 +104,12 @@ describe("destination-owned completion", () => {
         expect(sendText).not.toHaveBeenCalled();
         expect(await fixture.messages()).toEqual([]);
         expect(
-          await readConversationMessages({
+          loadSessionEntryReadOnly({
             ...fixture.scope,
             sessionKey: destinationSessionKey,
+            readConsistency: "latest",
           }),
-        ).toEqual([]);
+        ).toBeUndefined();
       } finally {
         restoreActivePluginRegistrySnapshot(registry);
         await fixture.dispose();
@@ -286,7 +287,7 @@ describe("destination-owned completion", () => {
     "uncertain",
     "rejected",
     "commit-failure",
-    "tool-commit-failure",
+    "tool-delivered",
     "cross-agent",
   ] as const)("routes %s output without duplicate conversation writes or sends", async (mode) => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
@@ -302,7 +303,7 @@ describe("destination-owned completion", () => {
       const registry = captureActivePluginRegistrySnapshot();
       const clock = mode === "uncertain" ? vi.spyOn(Date, "now") : undefined;
       const commitFailure =
-        mode === "commit-failure" || mode === "tool-commit-failure"
+        mode === "commit-failure"
           ? vi
               .spyOn(backgroundResults, "commitBackgroundResultToSession")
               .mockRejectedValue(new Error("completion commit rejected"))
@@ -369,11 +370,18 @@ describe("destination-owned completion", () => {
         expect(reloaded).not.toHaveProperty("sourceConversation");
         fixture.params.job = reloaded;
       }
-      if (mode === "persistent") {
-        fixture.params.agentSessionKey = "Agent:Main:Telegram:Direct:12345";
-        fixture.params.runSessionKey = fixture.params.agentSessionKey;
-        fixture.params.sessionId = destination.sessionId;
-        fixture.job.sessionTarget = `session:${fixture.params.agentSessionKey}`;
+      if (mode === "persistent" || mode === "tool-delivered") {
+        if (mode === "persistent") {
+          fixture.params.agentSessionKey = "Agent:Main:Telegram:Direct:12345";
+          fixture.params.runSessionKey = fixture.params.agentSessionKey;
+          fixture.params.sessionId = destination.sessionId;
+          fixture.job.sessionTarget = `session:${fixture.params.agentSessionKey}`;
+        } else {
+          await replaceSessionEntry(destination, {
+            sessionId: destination.sessionId,
+            updatedAt: 1,
+          });
+        }
         await persistSessionTranscriptTurn(destination, {
           updateMode: "none",
           messages: [
@@ -488,7 +496,7 @@ describe("destination-owned completion", () => {
         );
         fixture.params.deliveryPayloads = [{ text: "Final destination report" }];
         fixture.params.synthesizedText = "Final destination report";
-        if (mode === "tool-commit-failure") {
+        if (mode === "tool-delivered") {
           fixture.params.sourceDeliveryOutcome = messageToolOutcome([
             {
               tool: "message",
@@ -507,7 +515,7 @@ describe("destination-owned completion", () => {
         if (mode !== "rejected") {
           expect(await dispatchCronDelivery(fixture.params)).toMatchObject(expected);
         }
-        expect(sendText).toHaveBeenCalledTimes(mode === "tool-commit-failure" ? 0 : 1);
+        expect(sendText).toHaveBeenCalledTimes(mode === "tool-delivered" ? 0 : 1);
         if (commitFailure) {
           expect(result.deliveryError).toBeUndefined();
         }

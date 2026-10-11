@@ -24,6 +24,11 @@ import {
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
 
+// Queue state ownership must not depend on unrelated destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 describe("delivery queue entry state", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   const target = "reef:synthetic-peer";

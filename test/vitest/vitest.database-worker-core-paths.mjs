@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/sessions/confirmed-visible-message.integration.test.ts",
   "src/acp/event-ledger.prepared.test.ts",
   "src/acp/event-ledger.test.ts",
   "src/acp/translator.cancel-scoping.test.ts",

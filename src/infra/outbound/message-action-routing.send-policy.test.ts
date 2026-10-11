@@ -15,6 +15,11 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
 }));
 
+// Keep send-policy tests independent of destination session storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
   label: string,

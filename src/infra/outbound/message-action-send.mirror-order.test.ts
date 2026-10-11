@@ -1,8 +1,9 @@
-// Regression: outbound mirror route persistence must commit only after a
+import path from "node:path";
+// Regression: outbound route persistence must commit only after a
 // successful send. A failed probe (missing channel credentials) previously
 // rewrote the folded main session's durable delivery route and minted a
 // conversation identity before the send was attempted.
-import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -28,7 +29,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 
 const MAIN_SESSION_KEY = "agent:main:main";
 
-describe("outbound mirror route ordering", () => {
+describe("confirmed outbound route and transcript ownership", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mirror-order-");
   let storePath: string;
   let cfg: OpenClawConfig;
@@ -119,7 +120,7 @@ describe("outbound mirror route ordering", () => {
     });
   });
 
-  it("persists the outbound mirror route after a successful send", async () => {
+  it("persists the outbound route after a successful send", async () => {
     handleAction.mockResolvedValue(jsonResult({ ok: true, messageId: "m1" }));
 
     const result = await runMessageAction({
@@ -135,6 +136,79 @@ describe("outbound mirror route ordering", () => {
       provider: "testchat",
       from: "testchat:12345",
     });
+  });
+
+  it("writes a cross-chat message-tool send once to the destination, not the producer", async () => {
+    cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
+    handleAction.mockResolvedValue(jsonResult({ ok: true, messageId: "m1" }));
+    const sourceScope = {
+      agentId: "main",
+      sessionKey: MAIN_SESSION_KEY,
+      sessionId: "main-session",
+      storePath,
+    };
+    const sourceBefore = loadTranscriptEventsSync(sourceScope);
+    const input = {
+      cfg,
+      action: "send" as const,
+      actionOrigin: "message-tool" as const,
+      params: {
+        channel: "testchat",
+        to: "user:12345",
+        message: "visible destination text",
+        idempotencyKey: "stable-message-tool-send",
+      },
+      sessionKey: MAIN_SESSION_KEY,
+      agentId: "main",
+      dryRun: false,
+    };
+    await runMessageAction(input);
+    await runMessageAction({ ...input, params: { ...input.params } });
+
+    const destinationKey = "agent:main:testchat:direct:12345";
+    const destination = loadExactSessionEntry({
+      agentId: "main",
+      sessionKey: destinationKey,
+      storePath,
+    });
+    expect(destination).not.toBeNull();
+    const messages = loadTranscriptEventsSync({
+      agentId: "main",
+      sessionKey: destinationKey,
+      sessionId: destination!.entry.sessionId,
+      storePath,
+    }).filter((event) => asOptionalRecord(event)?.type === "message");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "automation-result",
+        content: [{ type: "text", text: "visible destination text" }],
+      },
+    });
+    expect(loadTranscriptEventsSync(sourceScope)).toEqual(sourceBefore);
+  });
+
+  it("does not append a second assistant row for a same-chat message-tool send", async () => {
+    handleAction.mockResolvedValue(jsonResult({ ok: true, messageId: "same-chat" }));
+    const scope = {
+      agentId: "main",
+      sessionKey: MAIN_SESSION_KEY,
+      sessionId: "main-session",
+      storePath,
+    };
+    const before = loadTranscriptEventsSync(scope);
+    await runMessageAction({
+      cfg,
+      action: "send",
+      actionOrigin: "message-tool",
+      params: { channel: "testchat", to: "user:12345", message: "same chat" },
+      sessionKey: MAIN_SESSION_KEY,
+      agentId: "main",
+      dryRun: false,
+    });
+    expect(loadTranscriptEventsSync(scope)).toEqual(before);
   });
 
   it.each([

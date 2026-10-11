@@ -13,6 +13,11 @@ import {
   workspaceTestPlugin,
 } from "./message-action-runner.test-support.js";
 
+// Keep input-validation tests independent of destination session storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 const emptyConfig = {} as OpenClawConfig;
 const portableLocation = { latitude: 48.858844, longitude: 2.294351 };
 describe("runMessageAction send validation", () => {

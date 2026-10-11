@@ -35,6 +35,11 @@ vi.mock("../../agents/runtime-plan/build.js", () => ({
   }),
 }));
 
+// These assertions cover delivery custody, not destination transcript storage.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
 function installMatrixSend(

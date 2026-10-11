@@ -90,7 +90,7 @@ describe("runMessageAction plugin dispatch", () => {
               __sessionKey: sessionKey,
               __agentId: "main",
             }),
-            mirror: expect.objectContaining({ sessionKey }),
+            transcriptRoute: expect.objectContaining({ sessionKey }),
           }),
         }),
       );
@@ -746,7 +746,6 @@ describe("runMessageAction plugin dispatch", () => {
         },
         agentId: "main",
         sessionKey: sourceSessionKey,
-        suppressTranscriptMirror: true,
         dryRun: false,
       });
 
@@ -758,7 +757,6 @@ describe("runMessageAction plugin dispatch", () => {
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
       const executeContext = readRecordField(executeCall, "ctx", "execute send context");
       expectRecordFields(executeContext, { conversationType: "channel" }, "execute send context");
-      expect(executeContext.mirror).toBeUndefined();
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },
@@ -809,7 +807,6 @@ describe("runMessageAction plugin dispatch", () => {
         },
         gateway: { clientName: "cli", mode: "cli" },
         agentId: "main",
-        suppressTranscriptMirror: true,
         dryRun: false,
       });
 

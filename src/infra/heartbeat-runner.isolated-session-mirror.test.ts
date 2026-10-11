@@ -205,7 +205,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
     }, false);
   });
 
-  it("queues a successful direct alert for the next ordinary target turn", async () => {
+  it("does not queue an awareness event after a confirmed direct alert", async () => {
     await withMirror(async ({ cfg, target, targetKey, run, awareness }) => {
       const observations: Array<{
         pendingEventEntries: Awaited<
@@ -243,11 +243,10 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
         {
           pendingEventEntries: [],
           preflightContext: undefined,
-          context: expect.stringContaining("A heartbeat delivered this message to this channel:"),
+          context: undefined,
           repeatedContext: undefined,
         },
       ]);
-      expect(observations[0]?.context).toContain("Status needs attention.");
       expect(latestDeliveryRequest()).toMatchObject({ channel: "whatsapp", to: target });
     });
   });

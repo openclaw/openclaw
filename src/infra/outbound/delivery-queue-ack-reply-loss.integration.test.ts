@@ -20,6 +20,11 @@ import * as queueStorage from "./delivery-queue-storage.js";
 import { holdAcknowledgementReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
+// ACK reply-loss recovery does not own destination transcript persistence.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
 describe("outbound ACK reply loss", () => {

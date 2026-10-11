@@ -50,7 +50,7 @@ export async function commitBackgroundResultToSession(params: {
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
-  provenance: BackgroundSessionResultProvenance;
+  provenance?: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -135,10 +135,10 @@ export async function commitBackgroundResultToSession(params: {
         stopReason: "stop",
         timestamp: Date.now(),
         idempotencyKey,
-        openclawAutomation: params.provenance,
+        ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
       } satisfies SessionTranscriptAssistantMessage & {
         idempotencyKey: string;
-        openclawAutomation: BackgroundSessionResultProvenance;
+        openclawAutomation?: BackgroundSessionResultProvenance;
       };
       params.assertCurrent?.();
       const committed = await persistSessionTranscriptTurn(scope, {
@@ -152,7 +152,11 @@ export async function commitBackgroundResultToSession(params: {
         messages: [
           {
             message: priorMessage
-              ? { ...priorMessage, content: message.content, openclawAutomation: params.provenance }
+              ? {
+                  ...priorMessage,
+                  content: message.content,
+                  ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
+                }
               : message,
             idempotencyLookup: "scan",
             ...(priorId

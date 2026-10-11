@@ -54,6 +54,11 @@ import {
 } from "./delivery-queue.test-helpers.js";
 import * as messageActionRunner from "./message-action-runner.js";
 
+// This suite exercises queue/completion admission; transcript storage has its own owner tests.
+vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 describe("conversation completion through the real delivery queue", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
 

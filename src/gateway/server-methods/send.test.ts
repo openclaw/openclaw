@@ -1027,9 +1027,9 @@ describe("gateway send mirroring", () => {
         mediaUrls: undefined,
       },
     ]);
-    expect(deliveryCall()?.mirror?.text).toBe(" \tcaption");
     expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
+    expect(deliveryCall()?.session?.key).toBeUndefined();
+    expect(deliveryCall()?.session?.policyKey).toBe("agent:work:whatsapp:resolved");
   });
 
   it("hands each internally bound session result to the durable queue with its original generation", async () => {
@@ -1175,7 +1175,7 @@ describe("gateway send mirroring", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(firstRespondCall(respond)[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:main");
+    expect(deliveryCall()?.session?.policyKey).toBe("agent:main:main");
   });
 
   it("carries an authenticated creator's required sandbox into an outbound session", async () => {
@@ -1283,9 +1283,8 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
     expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:work:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(deliveryCall()?.session?.key).toBeUndefined();
+    expect(deliveryCall()?.session?.policyKey).toBe("agent:work:slack:channel:c1");
   });
 
   it("rejects an explicit agentId that conflicts with the session key owner", async () => {
