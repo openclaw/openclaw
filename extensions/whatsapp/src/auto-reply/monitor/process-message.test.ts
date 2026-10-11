@@ -47,6 +47,11 @@ vi.mock("../../inbound-policy.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./response-prefix.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./response-prefix.js")>()),
+  resolveWhatsAppResponsePrefix: () => undefined,
+}));
+
 vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
   return {

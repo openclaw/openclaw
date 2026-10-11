@@ -1,4 +1,4 @@
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
@@ -133,7 +133,7 @@ export function createStreamingDirectiveAccumulator() {
       isSilent,
     };
 
-    if (!hasReplyPayloadContent(combinedResult) && !combinedResult.audioAsVoice) {
+    if (!hasOutboundReplyContent(combinedResult) && !combinedResult.audioAsVoice) {
       return null;
     }
 

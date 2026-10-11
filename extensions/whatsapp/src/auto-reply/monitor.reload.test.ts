@@ -63,7 +63,7 @@ describe("WhatsApp monitor final reply across registry reload", () => {
           channels: {
             whatsapp: scenario.named
               ? {
-                  textChunkLimit: 4000,
+                  textChunkLimit: 100,
                   responsePrefix: "[ROOT]",
                   accounts: {
                     default: { responsePrefix: "[SHARED]", textChunkLimit: 1200 },
@@ -106,6 +106,7 @@ describe("WhatsApp monitor final reply across registry reload", () => {
             sendReaction: async () => createAcceptedWhatsAppSendResult("reaction", "ack"),
           };
         };
+        const finalText = scenario.named ? `${replyText} ${"x".repeat(150)}` : replyText;
         const resolver = vi.fn<ReplyResolver>(async () => {
           const nextCfg: OpenClawConfig = {
             ...cfg,
@@ -117,7 +118,7 @@ describe("WhatsApp monitor final reply across registry reload", () => {
           const next = createTestRegistry([...old.channels], { config: nextCfg });
           setActivePluginRegistry(next);
           owner.publish(next);
-          return { text: replyText };
+          return { text: finalText };
         });
         const run = withPluginRuntimeRegistryScope(old, () =>
           monitorWebChannel(false, listenerFactory, true, resolver, undefined, abort.signal, {
@@ -167,7 +168,7 @@ describe("WhatsApp monitor final reply across registry reload", () => {
           } else {
             expect(sendMessage).toHaveBeenCalledOnce();
             expect(sendMessage.mock.calls[0]).toEqual(
-              expect.arrayContaining([peer, scenario.named ? `[SHARED] ${replyText}` : replyText]),
+              expect.arrayContaining([peer, scenario.named ? `[SHARED] ${finalText}` : finalText]),
             );
             expect(sendMessage.mock.calls[0]?.[4]).toMatchObject({ accountId: scenario.accountId });
           }
