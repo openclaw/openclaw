@@ -31,11 +31,11 @@ export function runResolveOutboundTargetCoreTests(): void {
   describe("resolveOutboundTarget", () => {
     installResolveOutboundTargetPluginRegistryHooks();
 
-    it("rejects empty targets through the loaded channel plugin", () => {
+    it("rejects empty targets through the loaded channel plugin", async () => {
       const cfg = {
         channels: { alpha: { allowFrom: ["room-one"] } },
       };
-      const res = resolveOutboundTarget({
+      const res = await resolveOutboundTarget({
         channel: "alpha",
         to: "",
         cfg,
@@ -76,8 +76,8 @@ export function runResolveOutboundTargetCoreTests(): void {
         input: { channel: "alpha" as const, to: "invalid" },
         expectedErrorIncludes: "Alpha",
       },
-    ])("$name", ({ input, expected, expectedErrorIncludes }) => {
-      const res = resolveOutboundTarget(input);
+    ])("$name", async ({ input, expected, expectedErrorIncludes }) => {
+      const res = await resolveOutboundTarget(input);
       if (expected) {
         expect(res).toEqual(expected);
         return;
@@ -88,8 +88,8 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
-    it("rejects a target prefixed for a different channel before plugin normalization", () => {
-      const res = resolveOutboundTarget({
+    it("rejects a target prefixed for a different channel before plugin normalization", async () => {
+      const res = await resolveOutboundTarget({
         channel: "alpha",
         to: "beta:room-one",
         mode: "explicit",
@@ -102,7 +102,7 @@ export function runResolveOutboundTargetCoreTests(): void {
 
     it.each(["current", "telegram:current", "tg:self"])(
       "rejects plugin-reserved literal target %s before direct outbound fallback",
-      (to) => {
+      async (to) => {
         setActivePluginRegistry(
           createTargetsTestRegistry([
             createTestChannelPlugin({
@@ -123,7 +123,7 @@ export function runResolveOutboundTargetCoreTests(): void {
           ]),
         );
 
-        const res = resolveOutboundTarget({
+        const res = await resolveOutboundTarget({
           channel: "telegram",
           to,
           mode: "explicit",
@@ -137,7 +137,7 @@ export function runResolveOutboundTargetCoreTests(): void {
       },
     );
 
-    it("allows explicit handles that include the provider handle marker", () => {
+    it("allows explicit handles that include the provider handle marker", async () => {
       setActivePluginRegistry(
         createTargetsTestRegistry([
           createTestChannelPlugin({
@@ -158,7 +158,7 @@ export function runResolveOutboundTargetCoreTests(): void {
         ]),
       );
 
-      const res = resolveOutboundTarget({
+      const res = await resolveOutboundTarget({
         channel: "telegram",
         to: "telegram:@current",
         mode: "explicit",
@@ -167,7 +167,7 @@ export function runResolveOutboundTargetCoreTests(): void {
       expect(res).toEqual({ ok: true, to: "telegram:@current" });
     });
 
-    it("uses the plugin hint when a channel has outbound support but no target resolver", () => {
+    it("uses the plugin hint when a channel has outbound support but no target resolver", async () => {
       setActivePluginRegistry(
         createTargetsTestRegistry([
           createForumTargetTestPlugin(),
@@ -185,15 +185,15 @@ export function runResolveOutboundTargetCoreTests(): void {
         ]),
       );
 
-      const res = resolveOutboundTarget({ channel: "noresolver", to: " " });
+      const res = await resolveOutboundTarget({ channel: "noresolver", to: " " });
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error.message).toContain("NoResolver");
       }
     });
 
-    it("rejects webchat delivery", () => {
-      const res = resolveOutboundTarget({ channel: "webchat", to: "x" });
+    it("rejects webchat delivery", async () => {
+      const res = await resolveOutboundTarget({ channel: "webchat", to: "x" });
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error.message).toContain("WebChat");

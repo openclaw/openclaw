@@ -99,6 +99,16 @@ for provider and per-agent model settings.
 
 ### 3. Start a conversation and try a task
 
+In the Control UI, open **New session → Environments** and select
+**OpenAI (Agents API)** under **Hosted workspaces**. The option uses the Gateway’s
+configured model/runtime choices and API-key availability. If another runtime
+should remain your default, add `pickerRuntimes: ["agentsapi"]` to the exact
+model entry instead of changing its `agentRuntime`. See
+[model runtime choices](/concepts/models#choose-the-same-model-with-different-runtimes).
+The hosted choice does not copy your selected local folder, project, or worktree;
+send input files as chat attachments. Switching back restores your local draft
+choices and requires an available compatible host runtime.
+
 Apply the configuration through your usual Gateway workflow. In your chat
 channel, send `/new`, then try:
 
@@ -297,7 +307,7 @@ requires a reset. It does not migrate files between hosts.
 4. Finishing or interrupting a turn leaves the executor available. Gateway
    disposal also retains its saved binding and executor. A running executor
    handles native reconnection; an outstanding connection action can ask the
-   controller to ensure the same session again.
+   controller to prepare the same session again.
 5. Reset, session deletion, or confirmed terminal native-session failure attempts
    `retire(binding, context)` after native work settles. It stops only that
    binding's executor. If native work cannot be confirmed settled, reset or
@@ -316,8 +326,8 @@ codex exec-server \
   --environment-id "<binding.environmentId>"
 ```
 
-Use a separate managed process for each native session and make repeated
-`ensure` calls idempotent. Reconnection does not guarantee an interrupted command
+Use a separate managed process for each native session and make
+`ensure` calls safe to repeat. Reconnection does not guarantee an interrupted command
 survives. Check the original turn's outcome before repeating work that might
 already have changed files or called a service. Input submission has a 60-second
 HTTP deadline, including connection wait, so prepare hosts to connect promptly.

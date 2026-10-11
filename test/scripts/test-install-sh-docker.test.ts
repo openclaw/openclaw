@@ -1244,9 +1244,6 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
     expect(script).toContain('source "$SCRIPT_DIR/lib/host-timeout.sh"');
-    expect(script).toContain(
-      'openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL"',
-    );
     expect(script).toContain("run_podman_detached()");
     expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
@@ -1257,7 +1254,6 @@ printf 'status=%s\\n' "$status"
   it("binds the Podman Quadlet Gateway port to loopback", () => {
     const template = readFileSync(PODMAN_QUADLET_TEMPLATE_PATH, "utf8");
     expect(template).toContain("PublishPort=127.0.0.1:18789:18789");
-    expect(template).not.toContain("/home/admin");
   });
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");

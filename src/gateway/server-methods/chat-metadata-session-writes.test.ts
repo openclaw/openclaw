@@ -1,11 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
-  appendTranscriptEventSync,
   assignSessionOwner,
   listSessionEntriesCore,
   listSessionParticipantsReadOnly,
@@ -15,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   projectionLane,
   rotateDatabaseWorkers,
@@ -77,13 +76,13 @@ const cases = [
   { write: "overlapping selected read acknowledgment", allowed: true, entryChanged: true },
   { write: "overlapping selected account", allowed: false },
   { write: "selected lifecycle change", allowed: false },
-  { write: "external sibling update", allowed: true },
+  { write: "committed sibling update", allowed: true },
   // Identical target facts remain publishable even if the row was recreated.
-  { write: "external selected identical recreation", allowed: true },
-  { write: "external selected fully restored recreation", allowed: true },
-  { write: "external selected recreated sessionId", allowed: false },
-  { write: "external selected recreated payload", allowed: true, entryChanged: true },
-  { write: "external selected recreated lifecycle", allowed: false },
+  { write: "committed selected identical recreation", allowed: true },
+  { write: "committed selected fully restored recreation", allowed: true },
+  { write: "committed selected recreated sessionId", allowed: false },
+  { write: "committed selected recreated payload", allowed: true, entryChanged: true },
+  { write: "committed selected recreated lifecycle", allowed: false },
   { write: "runtime config replacement", allowed: false },
   { write: "profile alias change", allowed: false },
 ] as const;
@@ -331,53 +330,48 @@ it.each(
       } else if (write === "selected lifecycle change") {
         await upsertSessionEntryCore(selected, { lifecycleRevision: "selected-replaced" });
       } else {
-        const external = new DatabaseSync(database.path);
-        try {
-          if (write === "external sibling update") {
-            external
-              .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
-              .run(sibling.sessionKey);
+        runOpenClawAgentWriteTransaction((current) => {
+          if (write === "committed sibling update") {
+            writeSessionEntry(current, sibling.sessionKey, {
+              ...expectDefined(loadSessionEntry(sibling), "sibling entry"),
+              updatedAt: 2,
+            });
           } else {
-            const beforeRow = external
+            const beforeRow = current.db
               .prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?")
               .get(selected.sessionKey);
-            external.exec("CREATE TEMP TABLE saved_node AS SELECT * FROM session_nodes;");
-            external
+            current.db.exec("CREATE TEMP TABLE saved_node AS SELECT * FROM session_nodes;");
+            current.db
               .prepare("DELETE FROM session_nodes WHERE session_key = ?")
               .run(selected.sessionKey);
-            external
+            current.db
               .prepare("INSERT INTO session_nodes SELECT * FROM saved_node WHERE session_key = ?")
               .run(selected.sessionKey);
-            if (write === "external selected fully restored recreation") {
-              external
+            if (write === "committed selected fully restored recreation") {
+              current.db
                 .prepare(
                   "UPDATE session_nodes SET entry_valid = 1, rowid = ? WHERE session_key = ?",
                 )
                 .run(expectDefined(beforeRow?.rowid, "selected rowid"), selected.sessionKey);
               expect(
-                external
+                current.db
                   .prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?")
                   .get(selected.sessionKey),
               ).toEqual(beforeRow);
-            } else if (write === "external selected recreated sessionId") {
-              external
-                .prepare(
-                  "UPDATE session_nodes SET current_session_id = 'replacement', entry_json = json_set(entry_json, '$.sessionId', 'replacement') WHERE session_key = ?",
-                )
-                .run(selected.sessionKey);
-            } else if (write === "external selected recreated payload") {
-              rawSelectedWrite();
-            } else if (write === "external selected recreated lifecycle") {
-              external
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'replacement') WHERE session_key = ?",
-                )
-                .run(selected.sessionKey);
             }
+            // The owning write publishes the recreated row's committed postimage.
+            writeSessionEntry(current, selected.sessionKey, {
+              ...before,
+              ...(write === "committed selected recreated sessionId"
+                ? { sessionId: "replacement" }
+                : write === "committed selected recreated lifecycle"
+                  ? { lifecycleRevision: "replacement" }
+                  : write === "committed selected recreated payload"
+                    ? { label: "raw" }
+                    : {}),
+            });
           }
-        } finally {
-          external.close();
-        }
+        }, selected);
       }
       if (allowed) {
         expect(scope.assertCurrent).toBeDefined();
@@ -424,7 +418,7 @@ it.each(
       } else if (
         write.startsWith("raw before") ||
         write.startsWith("raw after") ||
-        write === "external selected recreated payload"
+        write === "committed selected recreated payload"
       ) {
         expect(after?.label).toBe("raw");
       } else if (write === "tracked selected update") {
@@ -509,19 +503,19 @@ it.each(
 });
 
 it.each([
-  { write: "read acknowledgment", field: "lastReadAt", external: false, allowed: true },
-  { write: "local visibility change", field: "visibility", external: false, allowed: false },
-  { write: "external visibility change", field: "visibility", external: true, allowed: false },
+  { write: "read acknowledgment", field: "lastReadAt", committed: false, allowed: true },
+  { write: "local visibility change", field: "visibility", committed: false, allowed: false },
+  { write: "committed visibility change", field: "visibility", committed: true, allowed: false },
   {
     write: "local saved-account change",
     field: "authProfileOverride",
-    external: false,
+    committed: false,
     allowed: false,
   },
   {
-    write: "external saved-account change",
+    write: "committed saved-account change",
     field: "authProfileOverride",
-    external: true,
+    committed: true,
     allowed: false,
   },
 ] as const)("revalidates $write before preparing private chat metadata", async (scenario) => {
@@ -615,23 +609,23 @@ it.each([
               // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
               assertCommitAllowed: () => {},
             });
+          } else if (changeEntry && scenario.committed) {
+            runOpenClawAgentWriteTransaction((current) => {
+              writeSessionEntry(current, selected.sessionKey, {
+                ...before,
+                [scenario.field]: scenario.field === "visibility" ? "draft" : "openai:replacement",
+              });
+            }, selected);
           } else if (changeEntry) {
-            const writer = scenario.external ? new DatabaseSync(database.path) : database.db;
-            try {
-              writer
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                )
-                .run(
-                  `$.${scenario.field}`,
-                  scenario.field === "visibility" ? "draft" : "openai:replacement",
-                  selected.sessionKey,
-                );
-            } finally {
-              if (scenario.external) {
-                writer.close();
-              }
-            }
+            database.db
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+              )
+              .run(
+                `$.${scenario.field}`,
+                scenario.field === "visibility" ? "draft" : "openai:replacement",
+                selected.sessionKey,
+              );
           }
           if (!changeEntry || scenario.allowed) {
             expect(loadSessionEntry(selected)).toEqual(

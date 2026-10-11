@@ -17,6 +17,7 @@ import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import type {
+  ChatReasoning,
   LiveToolStreamState,
   ProviderPolicyNotice,
   RunOutputUsage,
@@ -73,6 +74,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatStream: string | null;
   /** Identified assistant item at the tail of the current cumulative stream. */
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;
   chatError?: string | null;

@@ -229,9 +229,9 @@ describe("root memory repair", () => {
     expect(note).toHaveBeenCalledWith(
       [
         "Split root durable memory files detected:",
-        `- canonical: ${path.join(tmpDir, "MEMORY.md")} (12 bytes)`,
+        `- current: ${path.join(tmpDir, "MEMORY.md")} (12 bytes)`,
         `- legacy: ${path.join(tmpDir, "memory.md")} (9 bytes)`,
-        "OpenClaw uses MEMORY.md as the canonical durable memory file.",
+        "OpenClaw uses MEMORY.md as the current durable memory file.",
         "Dreaming writes durable promotions to MEMORY.md, so older facts in memory.md can be shadowed.",
         'Run "openclaw doctor --fix" to merge the legacy file into MEMORY.md with a backup.',
       ].join("\n"),
@@ -242,7 +242,8 @@ describe("root memory repair", () => {
     await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
-      message: "Merge legacy root memory.md into canonical MEMORY.md and remove the shadowed file?",
+      message:
+        "Merge legacy root memory.md into the current MEMORY.md and remove the shadowed file?",
       initialValue: true,
     });
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
@@ -254,7 +255,7 @@ describe("root memory repair", () => {
     const repairMessage = String(repairNote?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe("Workspace memory root merged:");
-    expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- current: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(
       `- merged legacy content from: ${path.join(tmpDir, "memory.md")}`,
     );
@@ -362,7 +363,7 @@ describe("root memory repair", () => {
     const repairMessage = String(repairNote?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe("Workspace memory root repair skipped (a file could not be read):");
-    expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- current: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
     await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("# Canonical\n");
@@ -385,7 +386,7 @@ describe("root memory repair", () => {
     expect(repairLines[0]).toBe(
       "Workspace memory root repair skipped (a file exceeded the safe read limit):",
     );
-    expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- current: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
     await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
@@ -445,7 +446,7 @@ describe("root memory repair", () => {
     expect(repairLines[0]).toBe(
       "Workspace memory root repair skipped (legacy memory could not be archived atomically):",
     );
-    expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- current: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
     await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
