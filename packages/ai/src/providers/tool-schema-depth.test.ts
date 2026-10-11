@@ -139,13 +139,15 @@ describe("shared tool schema depth budget", () => {
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(logWarn.mock.calls[0]?.[1]).toContain('Tool "reference_tool"');
     const parameters = normalizeToolParameterSchema(schema);
-    const tools = [{ name: "reference_tool", description: "Reference tool", parameters }];
-    for (let index = 0; index < 2; index++) {
-      expect(convertResponsesToolPayload(tools, { strict: true })[0]).toMatchObject({
-        name: "reference_tool",
-        parameters: { properties: { value: {} } },
-        strict: false,
-      });
+    for (const source of [parameters, { toJSON: () => parameters }]) {
+      const tools = [{ name: "reference_tool", description: "Reference tool", parameters: source }];
+      for (let index = 0; index < 2; index++) {
+        expect(convertResponsesToolPayload(tools, { strict: true })[0]).toMatchObject({
+          name: "reference_tool",
+          parameters: { properties: { value: {} } },
+          strict: false,
+        });
+      }
     }
   });
 

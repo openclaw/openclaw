@@ -42,7 +42,7 @@ const reportedSchemas = new WeakMap<object, Set<string>>();
 const truncatedSchemaResults = new WeakSet<object>();
 
 export function wasToolSchemaTruncated(schema: unknown): boolean {
-  return !!schema && typeof schema === "object" && truncatedSchemaResults.has(schema);
+  return schema !== null && typeof schema === "object" && truncatedSchemaResults.has(schema);
 }
 
 /** Preserve reduced-validation provenance across schema copies without repeating diagnostics. */

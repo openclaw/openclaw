@@ -6,6 +6,7 @@ import {
   inheritToolSchemaTruncation,
   reportToolSchemaTruncation,
   toolSchemaChildPosition,
+  wasToolSchemaTruncated,
   type ToolSchemaPosition,
 } from "./tool-schema-depth.js";
 import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
@@ -66,6 +67,9 @@ function projectToolInputSchema(
       const position: ToolSchemaPosition | undefined = isRoot
         ? { kind: "schema", depth: 0 }
         : toolSchemaChildPosition(ancestors[ancestors.length - 1]?.position, this, key, entry);
+      if (position?.kind === "schema" && wasToolSchemaTruncated(entry)) {
+        truncated = true;
+      }
       if (position?.kind === "schema" && position.depth > MAX_TOOL_SCHEMA_DEPTH) {
         truncated = true;
         entry = {};
