@@ -80,7 +80,7 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
           session_key: parameter((row) => row.session_key),
           current_session_id: parameter((row) => row.current_session_id),
           entry_json: parameter((row) => row.entry_json),
-          // SQLite binds legacy 64-bit integer values as bigint; ordinary reads remain numbers.
+          // kysely-allow-raw: bind exact SQLite int64 values; generated INTEGER read types are numbers.
           session_started_at: sql<number | null>`${parameter((row) => row.session_started_at)}`,
           has_optional_references: parameter((row) => row.has_optional_references),
           entry_valid: parameter((row) => row.entry_valid),

@@ -308,7 +308,6 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
-          const role = sql.ref<string | null>("message_role");
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -395,7 +394,7 @@ function withTranscriptContextSnapshot<T>(
                                 transcriptEventJsonSql(database.db),
                                 omitCheckpoint,
                                 omission,
-                                role,
+                                eb.ref("message_role"),
                               ),
                             ]),
                           )
@@ -418,13 +417,13 @@ function withTranscriptContextSnapshot<T>(
                 // Bound both IN lists while keeping payload selection inside the navigation snapshot.
                 // SQL removes obsolete replay/private fields before they enter JavaScript.
                 const query = base
-                  .select([
+                  .select((eb) => [
                     "seq",
                     projectModelContextEventSql(
                       transcriptEventJsonSql(database.db),
                       omitCheckpoint,
                       omission,
-                      role,
+                      eb.ref("message_role"),
                     ).as("event_json"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);

@@ -261,7 +261,7 @@ describe("reset boundary concurrency", () => {
       events.slice(0, 2),
     );
 
-    insert.run(sessionId, events.length, "{", events.length);
+    insert({ seq: events.length, eventJson: "{", createdAt: events.length });
     for (const projection of [undefined, "reset-boundary"] as const) {
       expect(() => loadTranscriptEventsFromDatabase(database, sessionId, { projection })).toThrow(
         SyntaxError,

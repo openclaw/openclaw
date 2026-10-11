@@ -42,6 +42,7 @@ export function withoutAgentJsonPredicateColumns(schema: string): string {
 export function migrateAgentJsonPredicatesInTransaction(database: DatabaseSync): void {
   ensureColumn(database, "session_nodes", "session_started_at INTEGER");
   ensureColumn(database, "session_nodes", "has_optional_references INTEGER NOT NULL DEFAULT 0");
+  // sqlite-allow-raw: versioned backfill preserves legacy SQLite coercion before schema publication.
   database.exec(`
     UPDATE session_nodes SET
       session_started_at = CASE WHEN json_valid(entry_json)
@@ -55,6 +56,7 @@ export function migrateAgentJsonPredicatesInTransaction(database: DatabaseSync):
   // The outbox is optional until first use; migration must not initialize unused owners.
   if (tableExists(database, "context_engine_turn_outbox")) {
     ensureColumn(database, "context_engine_turn_outbox", "payload_state TEXT");
+    // sqlite-allow-raw: one-time backfill of an existing optional table inside the schema transaction.
     database.exec(`
       UPDATE context_engine_turn_outbox SET payload_state = CASE
         WHEN json_valid(payload_json) THEN CASE
@@ -65,6 +67,7 @@ export function migrateAgentJsonPredicatesInTransaction(database: DatabaseSync):
   for (const column of AGENT_JSON_PREDICATE_COLUMNS.transcript_events) {
     ensureColumn(database, "transcript_events", `${column} ${COLUMN_DECLARATIONS[column]}`);
   }
+  // sqlite-allow-raw: classify canonical navigation in place during the versioned schema migration.
   database.exec(`
     WITH source AS (
       SELECT session_id, seq, CASE WHEN event_json IS NOT NULL THEN event_json
