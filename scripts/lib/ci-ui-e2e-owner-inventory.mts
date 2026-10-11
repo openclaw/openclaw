@@ -798,7 +798,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/components/session-diff-menus.ts",
+      "ui/src/pages/chat/components/session-diff-menus.tsx",
     ],
   ),
   pageWatch(
@@ -925,7 +925,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat", "search"],
     [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/components/session-diff-menus.ts",
+      "ui/src/pages/chat/components/session-diff-menus.tsx",
     ],
   ),
   pageWatch("ui/src/e2e/child-session-load-errors.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
@@ -1576,7 +1576,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/config-form.shared.ts",
       "ui/src/lib/plugins/index.ts",
-      "ui/src/pages/plugins/plugins-page.ts",
+      "ui/src/pages/plugins/plugins-page.tsx",
     ],
   ),
   pageWatch(
