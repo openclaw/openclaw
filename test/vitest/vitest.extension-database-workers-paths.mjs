@@ -54,6 +54,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/discord/src/monitor/ingress.test.ts",
   "extensions/discord/src/monitor/listeners.thread-delete.session-store.integration.test.ts",
+  "extensions/discord/src/monitor/message-handler.cross-owner-harness.test.ts",
   "extensions/discord/src/monitor/message-handler.ingress-recovery.test.ts",
   "extensions/discord/src/monitor/native-command.guild-guards.test.ts",
   "extensions/feishu/src/monitor.message-handler.ingress.test.ts",

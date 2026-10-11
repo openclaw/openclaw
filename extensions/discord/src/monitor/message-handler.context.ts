@@ -17,7 +17,11 @@ import {
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
-import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  buildAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -51,7 +55,7 @@ import { formatDiscordMediaText, resolveReferencedReplyMediaList } from "./messa
 import type { DiscordMediaInfo } from "./message-media.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
-import { buildDiscordRoutePeer } from "./route-resolution.js";
+import { buildDiscordRoutePeer, isDiscordRuntimeAcpThreadBinding } from "./route-resolution.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -108,6 +112,7 @@ export async function buildDiscordMessageProcessContext(params: {
     channelConfig,
     baseSessionKey,
     boundSessionKey,
+    threadBinding,
     route,
     commandAuthorized,
     hasControlCommand,
@@ -185,10 +190,18 @@ export async function buildDiscordMessageProcessContext(params: {
     (ctx.inboundEventKind === "room_event" ||
       !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   const recoversHistory = shouldIncludeChannelHistory && isGuildMessage && historyLimit > 0;
+  const historySessionKey = boundSessionKey ?? route.sessionKey;
+  // A runtime ACP target can belong to a different agent than the Discord source route.
+  // Reset and tombstone metadata live in that target's store, not the admission owner's.
+  const historyAgentId = resolveAgentIdFromSessionKey(historySessionKey, route.agentId);
+  const historyStorePath =
+    historyAgentId === route.agentId
+      ? storePath
+      : resolveStorePath(cfg.session?.store, { agentId: historyAgentId });
   const historySessionScope = {
-    agentId: route.agentId,
-    storePath,
-    sessionKey: boundSessionKey ?? route.sessionKey,
+    agentId: historyAgentId,
+    storePath: historyStorePath,
+    sessionKey: historySessionKey,
     readConsistency: "latest" as const,
   };
   const historySession = recoversHistory
@@ -415,7 +428,11 @@ export async function buildDiscordMessageProcessContext(params: {
     : undefined;
   const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
   const effectiveSessionKey =
-    boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey;
+    boundSessionKey &&
+    route.sessionKey !== boundSessionKey &&
+    isDiscordRuntimeAcpThreadBinding(threadBinding)
+      ? route.sessionKey
+      : (boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey);
   const effectivePreviousTimestamp =
     effectiveSessionKey === route.sessionKey
       ? previousTimestamp

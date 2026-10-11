@@ -882,6 +882,74 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("dispatches runtime ACP thread messages with the Discord source owner and session", async () => {
+    const sourceSessionKey = "agent:worker:discord:channel:thread-1";
+    const targetSessionKey = "agent:claude:acp:runtime:discord-thread";
+    const workspaceRoot = tempDirs.make("discord-acp-owner-workspaces-");
+    const sourceWorkspace = path.join(workspaceRoot, "workspace-worker");
+    const targetWorkspace = path.join(workspaceRoot, "workspace-claude");
+    const mediaUrl = path.join(targetWorkspace, "answer.txt");
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "ACP reply", mediaUrl });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createBaseContext({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: {},
+            worker: { workspace: sourceWorkspace },
+            claude: { workspace: targetWorkspace },
+          },
+        },
+      },
+      baseSessionKey: sourceSessionKey,
+      boundSessionKey: targetSessionKey,
+      threadBinding: {
+        bindingId: "runtime-acp-thread",
+        targetSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "thread-1",
+          parentConversationId: "channel-1",
+        },
+        status: "active",
+        boundAt: 1,
+      },
+      route: {
+        agentId: "worker",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: sourceSessionKey,
+        mainSessionKey: "agent:worker:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+      AgentId: "worker",
+      SessionKey: sourceSessionKey,
+    });
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+        target: "channel:c1",
+        replies: [expect.objectContaining({ text: "ACP reply", mediaUrl })],
+        mediaLocalRoots: expect.arrayContaining([targetWorkspace]),
+      }),
+    );
+    const delivery = deliverDiscordReply.mock.calls.find(
+      ([params]) => requireRecord(params, "delivery params").sessionKey === targetSessionKey,
+    )?.[0];
+    expect(requireRecord(delivery, "target delivery params").mediaLocalRoots).not.toContain(
+      sourceWorkspace,
+    );
+  });
+
   it("marks explicit message-tool guild replies as message-tool-only and disables source streaming", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,

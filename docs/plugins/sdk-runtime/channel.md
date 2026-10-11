@@ -190,6 +190,17 @@ admission can reject a revoked, reassigned, or unavailable owner. When activity
 must retain a captured selection, await the scoped `touchAsync` after projection
 and keep that route for admission rather than silently selecting a replacement.
 
+`projectAdmissionRouteBindingFacts(runtimeRoute, admissionRoute)` is the supported
+way to keep admission on a source route while retaining the runtime binding
+observation. It copies the runtime route's binding facts onto the admission
+route and rewrites `agentId` to the admission agent, so a later revalidation
+still matches that context. It does not choose the execution session. When the
+admitted session is not the validated ACP target, or a thread derived from that
+target, core dispatch executes the ACP target. Removal or reassignment of the
+observed binding still rejects before harness I/O. Callers that want the bound
+session itself to be the admitted session should keep the runtime route instead
+of projecting it.
+
 Adapters provide `inspectByConversationAsync` for read-only inspection and
 `resolveByConversationAsync` for ordinary lookup. The host service exposes both
 methods. Generic bindings and bundled account-scoped adapters run inspection in

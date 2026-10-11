@@ -3,15 +3,18 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 installDiscordIngressTestRuntime();
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
+  createThreadBinding,
+  runThreadBoundPreflight,
   createDiscordPreflightArgs,
   createGuildEvent,
   createGuildTextClient,
   DEFAULT_PREFLIGHT_CFG,
 } from "./message-handler.preflight.test-helpers.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
@@ -116,7 +119,7 @@ function preflightParams(
   };
 }
 
-describe("preflightDiscordMessage configured ACP bindings", () => {
+describe("preflightDiscordMessage ACP bindings", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     ensureConfiguredBindingRouteReadyMock.mockReset();
@@ -166,5 +169,55 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(result?.boundAgentId).toBe("codex");
     expect(result?.route.sessionKey).toBe(SESSION_KEY);
     expect(result?.route.agentId).toBe("codex");
+  });
+  it("keeps the Discord source route when a runtime ACP binding targets another owner", async () => {
+    const defaultThreadBindings = createNoopThreadBindingManager("default");
+    onTestFinished(async () => {
+      await defaultThreadBindings.stop();
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    });
+    const threadId = "thread-runtime-acp-owner";
+    const parentId = "channel-runtime-acp-owner";
+    const targetSessionKey = "agent:claude:acp:runtime:discord-thread";
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey,
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: threadId,
+        parentConversationId: parentId,
+      },
+      metadata: {
+        agentId: "worker",
+        boundBy: "user-1",
+      },
+    });
+
+    const result = await runThreadBoundPreflight({
+      threadBindings: defaultThreadBindings,
+      threadId,
+      parentId,
+      message: createDiscordMessage({
+        id: "m-runtime-acp-owner",
+        channelId: threadId,
+        content: "continue in ACP",
+        author: { id: "user-1", bot: false, username: "alice" },
+      }),
+      threadBinding,
+      discordConfig: {},
+      registerBindingAdapter: true,
+    });
+
+    if (!result) {
+      throw new Error("Expected Discord preflight result");
+    }
+    const preflight = result;
+    expect(preflight.boundSessionKey).toBe(targetSessionKey);
+    expect(preflight.boundAgentId).toBe("claude");
+    expect(preflight.route).toMatchObject({
+      agentId: "main",
+      sessionKey: `agent:main:discord:channel:${threadId}`,
+    });
   });
 });

@@ -19,6 +19,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   danger,
   logVerbose,
@@ -139,7 +140,6 @@ export async function processDiscordMessage(
     sourceRepliesAreToolOnly &&
     configuredTypingMode === undefined &&
     configuredTypingInterval === undefined;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const isRoomEvent = ctx.inboundEventKind === "room_event";
   const reactions = createDiscordMessageReactionRuntime({
     ctx,
@@ -155,6 +155,13 @@ export async function processDiscordMessage(
     return;
   }
   const { ctxPayload, persistedSessionKey, record, replyPlan } = processContext;
+  // Admission stays owned by the Discord source session, while bound-thread
+  // delivery still needs the ACP target to recover its label, avatar, and thread address.
+  const replyDeliverySessionKey = ctx.boundSessionKey ?? ctxPayload.SessionKey;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    resolveAgentIdFromSessionKey(replyDeliverySessionKey, route.agentId),
+  );
   let deliverTarget = replyPlan.deliverTarget;
   const activeThreadRoute = createDiscordMessageActiveThreadRoute({
     sessionKey: ctxPayload.SessionKey,
@@ -283,7 +290,7 @@ export async function processDiscordMessage(
       maxLinesPerMessage,
       tableMode,
       chunkMode,
-      sessionKey: deliverySession?.sessionKey ?? ctxPayload.SessionKey,
+      sessionKey: deliverySession?.sessionKey ?? replyDeliverySessionKey,
       threadBindings,
       mediaLocalRoots: deliverySession
         ? getAgentScopedMediaLocalRoots(cfg, deliverySession.agentId)
