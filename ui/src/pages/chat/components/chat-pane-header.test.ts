@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
@@ -415,10 +415,18 @@ describe("chat pane header", () => {
     const mounted = mountIntegratedPresenceHeader({ owners: [], presence });
     const facepile = mounted.container.querySelector("openclaw-viewer-facepile")!;
     await facepile.updateComplete;
-    const updates = vi.spyOn(facepile, "render");
+    const updates: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => updates.push(...records));
+    observer.observe(facepile, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    onTestFinished(() => observer.disconnect());
     mounted.renderHeader();
     await facepile.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
     mounted.pane.presencePayload = {
       presence: [
         ...presence,
@@ -432,7 +440,7 @@ describe("chat pane header", () => {
     };
     mounted.renderHeader();
     await facepile.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
+    expect(updates.length).toBeGreaterThan(0);
     expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
   });
 

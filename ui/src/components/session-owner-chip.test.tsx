@@ -1,39 +1,56 @@
 /* @vitest-environment jsdom */
 
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import "./session-owner-chip.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import {
+  SessionOwnerChipContent,
+  type SessionOwnerChipProps,
+} from "./solid/session-owner-chip.tsx";
+
+const disposals: Array<() => void> = [];
 
 afterEach(() => {
+  for (const dispose of disposals.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
 });
 
-async function waitForChipUpdate(chip: HTMLElementTagNameMap["openclaw-session-owner-chip"]) {
-  await chip.updateComplete;
-  // The parent's update does not include the nested avatar's render.
-  await Promise.all(
-    [...chip.querySelectorAll("openclaw-viewer-avatar")].map((avatar) => avatar.updateComplete),
+function mount(params: { participants?: SessionParticipant[]; participantCount?: number }) {
+  const chip = document.body.appendChild(document.createElement("div"));
+  const [owner, setOwner] = createSignal<NonNullable<SessionOwnerChipProps["owner"]>>({
+    type: "human",
+    id: "profile-ada",
+    label: "Ada",
+  });
+  const [size, setSize] = createSignal<SessionOwnerChipProps["size"]>("row");
+  const participants = params.participants ?? [];
+  disposals.push(
+    mountSolid(
+      () => (
+        <SessionOwnerChipContent
+          owner={owner()}
+          attribution="owned"
+          size={size()}
+          participants={participants}
+          participantCount={params.participantCount ?? participants.length}
+        />
+      ),
+      { container: chip },
+    ).unmount,
   );
-}
-
-async function mount(params: { participants?: SessionParticipant[]; participantCount?: number }) {
-  const chip = document.createElement("openclaw-session-owner-chip");
-  chip.owner = { type: "human", id: "profile-ada", label: "Ada" };
-  chip.attribution = "owned";
-  chip.size = "row";
-  chip.participants = params.participants ?? [];
-  chip.participantCount = params.participantCount ?? chip.participants.length;
-  document.body.append(chip);
-  await waitForChipUpdate(chip);
+  flush();
   expect(chip.querySelector(".session-owner-chip")).not.toBeNull();
-  return chip;
+  return { chip, setOwner, setSize };
 }
 
-it("keeps the single owner chip unchanged without participants", async () => {
-  const chip = await mount({});
+it("keeps the single owner chip unchanged without participants", () => {
+  const { chip } = mount({});
   expect(chip.querySelector(".session-owner-stack")).toBeNull();
   expect(chip.querySelectorAll(".session-owner-chip")).toHaveLength(1);
   expect(chip.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toBe(
@@ -41,8 +58,8 @@ it("keeps the single owner chip unchanged without participants", async () => {
   );
 });
 
-it("renders one participant behind the owner with combined accessibility", async () => {
-  const chip = await mount({
+it("renders one participant behind the owner with combined accessibility", () => {
+  const { chip } = mount({
     participants: [
       {
         identity: { type: "agent", id: "research" },
@@ -65,16 +82,16 @@ it("renders one participant behind the owner with combined accessibility", async
 it.each(["row", "header"] as const)(
   "renders the agent picture and generated fallback in a %s owner chip",
   async (size) => {
-    const chip = await mount({});
-    chip.owner = {
+    const { chip, setOwner, setSize } = mount({});
+    setOwner({
       type: "agent",
       id: "research",
       identity: { type: "agent", id: "research" },
       label: "Research",
       avatarUrl: "/avatar/research",
-    };
-    chip.size = size;
-    await waitForChipUpdate(chip);
+    });
+    setSize(size);
+    flush();
     expect(chip.querySelector(".session-owner-chip img")?.getAttribute("src")).toBe(
       "/avatar/research",
     );
@@ -85,8 +102,8 @@ it.each(["row", "header"] as const)(
     expect(chip.querySelector(".identity-avatar--agent")?.classList.contains("is-fallback")).toBe(
       true,
     );
-    chip.owner = { ...chip.owner, avatarUrl: undefined };
-    await waitForChipUpdate(chip);
+    setOwner((previous) => ({ ...previous, avatarUrl: undefined }));
+    flush();
     await vi.waitFor(() =>
       expect(chip.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
@@ -94,8 +111,8 @@ it.each(["row", "header"] as const)(
   },
 );
 
-it("renders the total participant count in the back slot for three identities", async () => {
-  const chip = await mount({
+it("renders the total participant count in the back slot for three identities", () => {
+  const { chip } = mount({
     participants: [
       { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
       { identity: { type: "agent", id: "research" }, label: "Research" },
