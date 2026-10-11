@@ -153,7 +153,7 @@ async function prepareChannelBoundResolver(params: {
     channelIngress: ingress,
   });
   const input = finalizeInboundContext(params.lifecycle === "unbound" ? { ...context } : context);
-  const fast = initFastReplySessionState({
+  const fast = await initFastReplySessionState({
     ctx: input,
     cfg: params.cfg,
     agentId: "main",

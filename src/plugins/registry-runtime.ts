@@ -16,6 +16,10 @@ import {
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import {
+  claimChannelGatewayContext,
+  isChannelRecordSuperseded,
+} from "./channel-gateway-root-slots.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
   capturePluginLifecycleAuthority,
@@ -29,35 +33,12 @@ import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   ExpiredPluginRegistryScopeError,
-  bindGatewayContextResolver,
-  getCanonicalGatewayContextResolver,
   getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-
-// Channel incarnations on one Gateway root supersede each other across registries;
-// distinct Gateway roots keep independent owners for the same channel id.
-const currentChannelRecordByGatewayRoot = new WeakMap<object, Map<string, PluginRecord>>();
-const supersededChannelRecords = new WeakSet<PluginRecord>();
-
-function claimGatewayRootChannelSlot(gatewayRoot: object | undefined, record: PluginRecord) {
-  if (!gatewayRoot) {
-    return;
-  }
-  let current = currentChannelRecordByGatewayRoot.get(gatewayRoot);
-  if (!current) {
-    current = new Map();
-    currentChannelRecordByGatewayRoot.set(gatewayRoot, current);
-  }
-  const previous = current.get(record.id);
-  if (previous && previous !== record) {
-    supersededChannelRecords.add(previous);
-  }
-  current.set(record.id, record);
-}
 
 // A completed reaction must retain only the emptied holder, not the caller's registry closure.
 function createRuntimeRegistryRelease(held: PluginRegistry[]) {
@@ -118,7 +99,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     if (cached && cachedOwner?.isLive() === true) {
       return cached;
     }
-    if (cachedOwner) {
+    // A superseded owner stays restorable: its successor may still roll back.
+    if (cachedOwner && !isChannelRecordSuperseded(record)) {
       cachedOwner.dispose();
       registeredAdmissionOwnerByRecord.delete(record);
     }
@@ -141,14 +123,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       (record.origin !== "bundled" && record.trustedOfficialInstall !== true) ||
       !registry.channels.some((entry) => entry.pluginId === record.id) ||
       !isPluginRecordActive(registry, record) ||
-      supersededChannelRecords.has(record)
+      isChannelRecordSuperseded(record)
     ) {
       return channel;
     }
     let closed = false;
     const ownsLiveRegistrySlot = () =>
       !closed &&
-      !supersededChannelRecords.has(record) &&
+      !isChannelRecordSuperseded(record) &&
       registeredRuntimeRecordById.get(record.id) === record &&
       isPluginRecordActive(registry, record);
     const previousRecord = registeredRuntimeRecordById.get(record.id);
@@ -158,20 +140,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       revokePluginRecord(registry, previousRecord);
     }
     registeredRuntimeRecordById.set(record.id, record);
-    const resolveGatewayContext = getGatewayContextResolver(registryParams.runtime.subagent);
-    claimGatewayRootChannelSlot(
-      resolveGatewayContext && getCanonicalGatewayContextResolver(resolveGatewayContext),
+    const scopedGatewayContext = claimChannelGatewayContext({
+      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
+      registry,
       record,
-    );
-    const scopedGatewayContext = resolveGatewayContext
-      ? () => (ownsLiveRegistrySlot() ? resolveGatewayContext() : undefined)
-      : undefined;
-    if (scopedGatewayContext && resolveGatewayContext) {
-      bindGatewayContextResolver(
-        scopedGatewayContext,
-        getCanonicalGatewayContextResolver(resolveGatewayContext),
-      );
-    }
+      ownsLiveRegistrySlot,
+    });
     const owner = Object.freeze({
       channelId: record.id,
       resolveGatewayContext: scopedGatewayContext,

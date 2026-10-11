@@ -84,7 +84,7 @@ it.each(["live", "retired", "replaced", "unbound"])(
     });
     expect(readChannelContextGatewayContextResolver(context)?.()).toBe(gatewayContext);
     const input = finalizeInboundContext(lifecycle === "unbound" ? { ...context } : context);
-    const fast = initFastReplySessionState({
+    const fast = await initFastReplySessionState({
       ctx: input,
       cfg,
       agentId: "main",
