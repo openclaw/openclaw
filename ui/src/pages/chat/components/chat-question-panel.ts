@@ -229,25 +229,34 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
     if (disabled || event.isComposing || event.keyCode === 229) {
       return;
     }
+    // Links and file pickers keep their native activation instead of submitting answers.
+    if (
+      event.target instanceof HTMLAnchorElement ||
+      (event.target instanceof HTMLInputElement && event.target.type === "file")
+    ) {
+      return;
+    }
+    if (
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      (event.target === event.currentTarget ||
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLButtonElement &&
+          ["radio", "checkbox"].includes(event.target.getAttribute("role") ?? ""))) &&
+      (question.allowEmpty || this.answerValues(model, question).length > 0)
+    ) {
+      event.preventDefault();
+      this.advanceOrSubmit(model, question);
+      return;
+    }
+    // Text editing, including Enter and numeric keys, belongs to the textarea.
     if (event.target instanceof HTMLTextAreaElement) {
-      if (
-        event.key === "Enter" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (question.allowEmpty || this.answerValues(model, question).length > 0)
-      ) {
-        event.preventDefault();
-        this.advanceOrSubmit(model, question);
-      }
-      // Text editing, including Enter and numeric keys, belongs to the textarea.
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) {
-      return;
-    }
-    // Activating an external step must never also submit the pending question.
-    if (event.target instanceof HTMLAnchorElement) {
       return;
     }
     if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) {
