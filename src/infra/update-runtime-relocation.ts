@@ -19,6 +19,23 @@ type PreparedRuntimeRelocations = {
 };
 type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
 
+async function resolvePhysicalFuturePath(value: string): Promise<string> {
+  const suffix: string[] = [];
+  let existing = value;
+  while (true) {
+    try {
+      return path.join(await fs.realpath(existing), ...suffix);
+    } catch (error) {
+      const parent = path.dirname(existing);
+      if (!(isRecord(error) && error.code === "ENOENT") || parent === existing) {
+        throw error;
+      }
+      suffix.unshift(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
 /** Prepare once for the whole tree; never cache mutable filesystem observations. */
 export function prepareRuntimeRelocations(
   relocations: RuntimeRelocations,
@@ -106,7 +123,7 @@ export async function relocateRuntimeLauncher(
     const destinationDir = path.dirname(destinationFile);
     const usesPhysicalBasedir = original.includes("$basedir_abs");
     const physicalDestinationDir = usesPhysicalBasedir
-      ? await fs.realpath(destinationDir)
+      ? await resolvePhysicalFuturePath(destinationDir)
       : destinationDir;
     content = original.replace(
       /(\$(?:basedir|basedir_abs|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,

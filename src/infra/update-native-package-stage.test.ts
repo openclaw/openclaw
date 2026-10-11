@@ -107,7 +107,26 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         if (!stage) {
           throw new Error("missing native stage");
         }
-        const candidateRoot = path.join(stage.projectRoot, path.relative(project, packageRoot));
+        const stagedOriginalRoot = path.join(
+          stage.projectRoot,
+          path.relative(project, packageRoot),
+        );
+        const candidateRoot =
+          layout === "pnpm12"
+            ? path.join(stage.projectRoot, "v11", "candidate-group", "node_modules", "openclaw")
+            : stagedOriginalRoot;
+        if (layout === "pnpm12") {
+          await fs.cp(stagedOriginalRoot, candidateRoot, { recursive: true });
+          await fs.rm(path.join(stage.projectRoot, "owned-package"));
+          await fs.symlink(
+            path.relative(stage.projectRoot, candidateRoot),
+            path.join(stage.projectRoot, "owned-package"),
+          );
+        }
+        const liveCandidateRoot = path.join(
+          project,
+          path.relative(stage.projectRoot, candidateRoot),
+        );
         const candidateEntry = path.join(candidateRoot, "openclaw.mjs");
         const candidateStore = path.join(
           stage.projectRoot,
@@ -142,6 +161,18 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           JSON.parse(await fs.readFile(path.join(candidateRoot, ".modules.yaml"), "utf8")),
         ).toEqual({ virtualStoreDir: candidateStore, storeDir: external });
         await writeStoredRuntime(candidateRoot, candidateStore, "candidate");
+        const internalLauncher = path.join(candidateRoot, "node_modules", ".bin", "candidate");
+        if (layout === "pnpm12") {
+          await fs.mkdir(path.dirname(internalLauncher), { recursive: true });
+          await fs.writeFile(
+            internalLauncher,
+            `#!/bin/sh\nbasedir=$(dirname "$0")\nbasedir_abs=$(CDPATH= cd -P -- "$basedir" && pwd -P) || exit $?\nexec node "$basedir_abs/${path.relative(path.dirname(internalLauncher), candidateEntry)}" "$@"\n`,
+            { mode: 0o755 },
+          );
+          expect((await runFile(internalLauncher, [], { timeout: 5000 })).stdout.trim()).toBe(
+            "candidate",
+          );
+        }
         const externalEntry = path.join(external, "entry.mjs");
         await fs.writeFile(externalEntry, 'console.log("external");\n');
         const externalLauncher = path.join(stage.binDir, "shared");
@@ -222,11 +253,20 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
               })
             ).stdout.trim(),
           ).toBe("candidate");
+          expect(
+            (
+              await runFile(
+                path.join(liveCandidateRoot, path.relative(candidateRoot, internalLauncher)),
+                [],
+                { timeout: 5000 },
+              )
+            ).stdout.trim(),
+          ).toBe("candidate");
         }
         expect(
           (await runFile(path.join(liveBinDir, "shared"), [], { timeout: 5000 })).stdout.trim(),
         ).toBe("external");
-        expect(await fs.realpath(path.join(project, "owned-package"))).toBe(packageRoot);
+        expect(await fs.realpath(path.join(project, "owned-package"))).toBe(liveCandidateRoot);
         expect(await fs.readFile(path.join(project, "shared-package", "dependency"), "utf8")).toBe(
           "shared dependency",
         );
