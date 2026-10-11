@@ -11,6 +11,7 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 
 vi.unmock("../version.js");
 afterEach(resetPluginLoaderTestStateForTest);
@@ -63,10 +64,13 @@ export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
     manifestFile,
     JSON.stringify({ ...manifest, contracts: { tools: ["runtime_probe"] } }),
   );
+  const config = {
+    plugins: { allow: [plugin.id], load: { paths: [plugin.dir] }, slots: { memory: "none" } },
+  };
   const registry = loadOpenClawPlugins({
-    config: {
-      plugins: { allow: [plugin.id], load: { paths: [plugin.dir] }, slots: { memory: "none" } },
-    },
+    config,
+    manifestRegistry: loadPluginManifestRegistryCore({ config, installRecords: {} }),
+    installRecords: {},
     cache: false,
     runtimeSideEffects: true,
   });

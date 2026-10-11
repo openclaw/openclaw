@@ -249,12 +249,12 @@ export function loadRuntimePluginCandidate(params: {
   const runtimePackage = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
   const hostVersion = resolveCompatibilityHostVersion(context.env);
   const hostCohort = resolveOpenClawReleaseCohortVersion(hostVersion);
-  const packageVersion = candidate.packageVersion;
+  const packageVersion = manifestRecord.packageVersion;
   if (
     enableState.enabled &&
     candidate.origin !== "bundled" &&
     runtimePackage?.versionBoundToOpenClaw &&
-    candidate.packageName === runtimePackage.npmSpec &&
+    manifestRecord.packageName === runtimePackage.npmSpec &&
     packageVersion &&
     (compareOpenClawReleaseVersions(packageVersion, hostCohort) ?? 0) < 0
   ) {
