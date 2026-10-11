@@ -56,6 +56,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/plugins/plugins-page.tsx":
+      return "plugins-page";
+    case "ui/src/pages/cron/cron-page.tsx":
+      return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
     case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
@@ -166,7 +170,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                minSize: 16 * 1024,
+                minSize: 64 * 1024,
                 maxSize: (route === "shared" ? 1344 : 1408) * 1024,
               };
             }),
@@ -176,7 +180,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               );
               return {
                 name: `control-ui-boot-${route}-styles`,
-                test: (id: string) => styles.has(controlUiBootManifestKey(id)),
+                test: (id: string) =>
+                  !/[?&]inline(?:[=&]|$)/u.test(id) && styles.has(controlUiBootManifestKey(id)),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
                 priority: 9,

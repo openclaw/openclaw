@@ -175,8 +175,9 @@ export class ModelProvidersController extends ModelPageController {
     invalidateRequests: () => this.invalidateRequests(),
     ensureInitialData: () => this.ensureInitialData(),
     onSnapshot: (change) => {
-      // Initial route data may already be applied before the Solid owner connects.
-      if (!change.initial && change.connectionChanged && !change.identityChanged) {
+      if (change.initial) {
+        this.resetConnectionState();
+      } else if (change.connectionChanged && !change.identityChanged) {
         // Keep the last snapshot visible while the canonical reconnect load replaces it.
         this.resetConnectionState({ preserveVisibleData: true });
       }
@@ -297,6 +298,10 @@ export class ModelProvidersController extends ModelPageController {
   }
 
   override beforeUpdate() {
+    // Initial Gateway synchronization must finish before adopting a cached route snapshot.
+    if (!this.isConnected) {
+      return;
+    }
     super.beforeUpdate();
     const data = this.routeData;
     const previous = this.previousRouteData;

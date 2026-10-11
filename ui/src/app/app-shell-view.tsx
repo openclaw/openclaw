@@ -35,9 +35,6 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-macos-titlebar-controls": ShellElementAttributes;
       "openclaw-app-topbar": ShellElementAttributes;
-      "resizable-divider": Omit<ShellElementAttributes, "onResize"> & {
-        onResize?: EventHandler<HTMLElement, CustomEvent<{ splitRatio: number }>>;
-      };
       "openclaw-assistant-panel": ShellElementAttributes;
       "openclaw-exec-approval": ShellElementAttributes;
       "openclaw-onboarding-memory-import": ShellElementAttributes;

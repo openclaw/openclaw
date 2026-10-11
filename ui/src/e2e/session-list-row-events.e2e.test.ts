@@ -150,6 +150,7 @@ suite.define(() => {
           const dashboardList = params.source === "dashboard" && params.hasBoard === true;
           expect(params).toMatchObject({
             rowMode: dashboardList ? "dashboard" : "compact",
+
             source: expect.any(String),
           });
         }
