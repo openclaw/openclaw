@@ -55,9 +55,10 @@ prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
 
-For a runtime-only turn with no user text, the embedded runner keeps its synthetic
-continuation marker out of the stored user transcript. Runtime context still
-reaches the model, and the next real user input persists normally even if prompt
+For a runtime-only turn with no user text, the embedded runner marks its synthetic
+continuation as hidden internal-system input. It remains in model history so cold
+replay preserves the original request prefix, but it is not human-authored text or
+visible chat history. The next real user input persists normally even if prompt
 submission fails before the runtime-only turn starts. Existing stored markers are
 not rewritten.
 

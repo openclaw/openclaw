@@ -489,8 +489,7 @@ export async function runEmbeddedAttemptPromptPhase(
           ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
           : {}),
         runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
-        setNextUserMessagePersistenceSuppression:
-          sessionManager.setNextUserMessagePersistenceSuppression,
+        setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
         systemPrompt: promptContext.systemPromptForHook,
         toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
         toolResultMaxChars: promptContext.promptToolResultMaxChars,

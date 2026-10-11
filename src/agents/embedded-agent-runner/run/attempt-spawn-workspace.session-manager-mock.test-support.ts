@@ -30,7 +30,7 @@ export type SessionManagerMocks = {
   flushPendingToolResultsAsync: UnknownMock;
   clearPendingToolResults: UnknownMock;
   reloadPersistedTranscriptAsync: UnknownMock;
-  setNextUserMessagePersistenceSuppression: UnknownMock;
+  setNextUserMessagePersistence: UnknownMock;
   removeTrailingEntriesAsync: UnknownMock;
 };
 
@@ -83,7 +83,7 @@ export function resetSessionManagerMocks(
   sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   sessionManager.branchAsync.mockReset();
   sessionManager.resetLeafAsync.mockReset();
-  sessionManager.setNextUserMessagePersistenceSuppression.mockReset();
+  sessionManager.setNextUserMessagePersistence.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();

@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase runtime-only persistence", () => {
-  it("keeps the runtime-only marker out of the transcript through the real prompt phase", async () => {
+  it("retains runtime-only input without attributing it to a human through the real prompt phase", async () => {
     const fixture = createFixture({ pendingPrompt: "", pendingImageCount: 0 });
     const markerSessionId = "phase-runtime-marker";
     // Real runtime-only derivation and real submission: the remaining fixture mocks
@@ -90,15 +90,19 @@ describe("runEmbeddedAttemptPromptPhase runtime-only persistence", () => {
     expect(requests).toHaveLength(1);
     expect(JSON.stringify(requests[0])).toContain("Continue the OpenClaw runtime event.");
     expect(JSON.stringify(requests[0])).toContain("room event payload: a runtime-only turn");
-    const persistedUserTexts = () =>
+    const persistedUsers = () =>
       guardedManager
         .getEntries()
         .flatMap((entry) =>
-          entry.type === "message" && entry.message.role === "user"
-            ? [JSON.stringify(entry.message.content)]
-            : [],
+          entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
         );
-    expect(persistedUserTexts()).toEqual([]);
+    expect(persistedUsers()).toMatchObject([
+      {
+        content: [{ type: "text", text: "Continue the OpenClaw runtime event." }],
+        display: false,
+        provenance: { kind: "internal_system" },
+      },
+    ]);
 
     // The next user-authored turn through the same real phase persists normally.
     fixture.input.attempt = {
@@ -109,8 +113,11 @@ describe("runEmbeddedAttemptPromptPhase runtime-only persistence", () => {
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
     expect(JSON.stringify(requests.at(-1))).toContain("actual user text");
-    expect(persistedUserTexts()).toEqual([
-      JSON.stringify([{ type: "text", text: "actual user text" }]),
-    ]);
+    expect(persistedUsers()).toHaveLength(2);
+    expect(persistedUsers().at(-1)).toMatchObject({
+      content: [{ type: "text", text: "actual user text" }],
+    });
+    expect(persistedUsers().at(-1)).not.toHaveProperty("display", false);
+    expect(persistedUsers().at(-1)).not.toHaveProperty("provenance");
   });
 });
