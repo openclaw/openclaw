@@ -20,6 +20,7 @@ import {
 import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
+import { repositoryIssueText } from "./submit-gates.ts";
 import { renderAgentSelect, renderRequiredSessionPlacement } from "./target-controls.ts";
 import { resolveWhereChip } from "./where-chip.ts";
 import "../../styles/palette-session-settings.css";
@@ -410,7 +411,7 @@ export class PaletteSessionSettings {
                                   role="switch"
                                   aria-checked=${String(place.worktree)}
                                   aria-label=${t("newSession.checkoutWorktree")}
-                                  title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
+                                  title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? (repositoryIssueText(place.repository) ?? t("newSession.gitCheckUnavailable")) : nothing}
                                   ?disabled=${locked || place.remotePlacement}
                                   @click=${() => {
                                     place.selectWorktree(!place.worktree);
