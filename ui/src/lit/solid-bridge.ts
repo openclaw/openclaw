@@ -212,38 +212,45 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (!this.#content) {
           this.#content = this.ownerDocument.createDocumentFragment();
           this.#start = this.ownerDocument.createComment("solid-bridge-content");
-          this.#content.append(this.#start, ...this.childNodes);
+          this.prepend(this.#start);
+        } else {
+          this.append(...this.#content.childNodes);
         }
-        source = [...this.#content.childNodes];
+        // Adopt passthrough children in place so lazy upgrade keeps focus and hover intent.
+        source = [...this.childNodes];
       }
       this.#mountedApplication = this.#application;
-      this.#dispose = render(() => {
-        const [revision, setRevision] = createSignal(0);
-        this.#notify = () => setRevision((value) => value + 1);
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
-          },
-        };
-        for (const [key] of properties) {
-          Object.defineProperty(props, key, {
-            get: () => {
-              revision();
-              return this.#values.get(key);
+      this.#dispose = render(
+        () => {
+          const [revision, setRevision] = createSignal(0);
+          this.#notify = () => setRevision((value) => value + 1);
+          const props = {
+            ...defaults,
+            get children() {
+              return children ? children() : source;
             },
-          });
-        }
-        const view = () => content(props, this.#host);
-        return this.#application
-          ? createComponent(ApplicationProvider, {
-              value: this.#application,
-              get children() {
-                return view();
+          };
+          for (const [key] of properties) {
+            Object.defineProperty(props, key, {
+              get: () => {
+                revision();
+                return this.#values.get(key);
               },
-            })
-          : view();
-      }, this);
+            });
+          }
+          const view = () => content(props, this.#host);
+          return this.#application
+            ? createComponent(ApplicationProvider, {
+                value: this.#application,
+                get children() {
+                  return view();
+                },
+              })
+            : view();
+        },
+        this,
+        source,
+      );
     }
 
     #disposeRoot() {

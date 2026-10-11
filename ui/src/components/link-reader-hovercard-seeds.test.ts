@@ -170,8 +170,11 @@ describe("GitHub hovercards with authorized session details", () => {
     anchor.href = PR_HREF;
     provider.append(anchor);
     document.body.append(provider);
+    anchor.focus();
+    expect(document.activeElement).toBe(anchor);
     customElements.define(tag, class extends LinkReaderHovercardProvider {});
     await provider.updateComplete;
+    expect(document.activeElement).toBe(anchor);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
     expect(hovercard()?.textContent).toContain(seed.title);

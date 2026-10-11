@@ -126,7 +126,7 @@ suite.define(() => {
           await page.screenshot({ path: `${dir}/expanded-first.png`, animations: "disabled" });
           expect(
             await viewer.evaluate((element) => {
-              const root = element.shadowRoot!;
+              const root = element;
               const videoBox = root.querySelector("video")!.getBoundingClientRect();
               return [...root.querySelectorAll(".actions, .navigation, .gallery-counter")].every(
                 (control) => {
