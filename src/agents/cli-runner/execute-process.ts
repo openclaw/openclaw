@@ -271,6 +271,7 @@ export async function executeCliProcess(params: {
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         consumeStdout,
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
+        onContinuationHoldChange: backendActivity?.holdUntil,
         activeToolCount: params.events.activeParsedToolCount,
         compactionActive: params.events.hasActiveCompaction,
         onCompactionActiveChange: params.events.onCompactionActiveChange,

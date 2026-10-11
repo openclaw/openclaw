@@ -77,14 +77,21 @@ export function beginDiagnosticBackendActivity(params: {
   observeOutput: (modelProgress: boolean) => boolean;
   observeAttributedAgentProgress: (parentToolCallId: string) => boolean;
   setOutstandingWork: (active: boolean) => void;
+  holdUntil: (deadlineAtMs: number | undefined) => void;
   close: () => void;
 } {
   const { owner, noOutputTimeoutMs, assertCurrent } = params;
   let quietAllowanceMs = noOutputTimeoutMs;
+  let quietDeadlineAtMs = Date.now() + noOutputTimeoutMs;
+  let holdDeadlineAtMs: number | undefined;
   const registration = resolveCurrentDiagnosticOwner(owner, assertCurrent);
   const backendActivity: DiagnosticBackendActivity = {
-    deadlineAtMs: Date.now() + noOutputTimeoutMs,
+    deadlineAtMs: quietDeadlineAtMs,
     assertCurrent,
+  };
+  // A backend-owned hold outranks the quiet clock; output during the hold cannot shorten it.
+  const publishDeadline = () => {
+    backendActivity.deadlineAtMs = Math.max(quietDeadlineAtMs, holdDeadlineAtMs ?? 0);
   };
   if (registration) {
     registration.backendActivity = backendActivity;
@@ -100,7 +107,8 @@ export function beginDiagnosticBackendActivity(params: {
         return false;
       }
       const now = Date.now();
-      backendActivity.deadlineAtMs = now + quietAllowanceMs;
+      quietDeadlineAtMs = now + quietAllowanceMs;
+      publishDeadline();
       if (!modelProgress || activity.activeTools.size > 0) {
         return false;
       }
@@ -121,7 +129,8 @@ export function beginDiagnosticBackendActivity(params: {
           return false;
         }
         const now = Date.now();
-        backendActivity.deadlineAtMs = now + quietAllowanceMs;
+        quietDeadlineAtMs = now + quietAllowanceMs;
+        publishDeadline();
         touchSessionActivity(activity, `tool:${tool.toolName}:subagent_progress`, now);
         return true;
       }
@@ -135,8 +144,16 @@ export function beginDiagnosticBackendActivity(params: {
         ? Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
         : noOutputTimeoutMs;
       // Work-state changes preserve the last output's origin, not a new progress clock.
-      backendActivity.deadlineAtMs += allowanceMs - quietAllowanceMs;
+      quietDeadlineAtMs += allowanceMs - quietAllowanceMs;
       quietAllowanceMs = allowanceMs;
+      publishDeadline();
+    },
+    holdUntil: (deadlineAtMs) => {
+      if (!currentActivity()) {
+        return;
+      }
+      holdDeadlineAtMs = deadlineAtMs;
+      publishDeadline();
     },
     close: () => {
       // Compare-release remains valid after abort and cannot retire a later attempt.

@@ -207,6 +207,37 @@ describe("owned backend silence allowances", () => {
     },
   );
 
+  it("keeps a continuation hold past quiet allowances until the backend releases it", () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const ref = { sessionId: "continuation-hold", runId: "continuation-hold-run" };
+    const owner = createDiagnosticEmbeddedRunOwner(ref);
+    markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+    const backend = beginDiagnosticBackendActivity({
+      owner,
+      noOutputTimeoutMs: 480_000,
+      assertCurrent: () => {},
+    });
+    try {
+      const holdDeadline = now + 4 * 60 * 60_000;
+      backend.holdUntil(holdDeadline);
+      now += 60_000;
+      backend.observeOutput(false);
+      backend.setOutstandingWork(true);
+      expect(getDiagnosticSessionActivitySnapshot(ref).activeBackendLivenessDeadlineAtMs).toBe(
+        holdDeadline,
+      );
+
+      backend.holdUntil(undefined);
+      expect(getDiagnosticSessionActivitySnapshot(ref).activeBackendLivenessDeadlineAtMs).toBe(
+        now + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+      );
+    } finally {
+      backend.close();
+      closeDiagnosticEmbeddedRunOwner(owner);
+    }
+  });
+
   it.each(["attempt close", "owner close", "authority expiry", "owner replacement"] as const)(
     "revokes the allowance and retained observations after %s",
     (closure) => {

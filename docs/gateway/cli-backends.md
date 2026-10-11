@@ -186,6 +186,12 @@ This also works with raw previews and block streaming disabled. Already delivere
 are not sent again at final settlement; failed deliveries remain eligible for retry. Delivering
 an answer does not end the admitted turn or grant its background work another turn's permissions.
 
+While a completed answer waits for one of these continuations, the CLI is usually silent. That
+silence is not treated as a stall: the no-output watchdog and stuck-session recovery leave the
+turn running, and only the turn's overall timeout bounds the wait. Once the continuation starts,
+the ordinary watchdog applies again. If a deadline ends the wait, OpenClaw keeps the completed
+answer and records the turn as timed out after partial output instead of discarding the reply.
+
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
