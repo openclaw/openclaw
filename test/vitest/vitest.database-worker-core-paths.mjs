@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
@@ -118,6 +119,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution-incognito.memory.test.ts",
   "src/state/openclaw-agent-execution-incognito.pending-history.test.ts",
   "src/state/openclaw-agent-execution-incognito.pending-input.test.ts",
+  "src/state/openclaw-agent-execution-incognito.session-actor.test.ts",
   "src/infra/exec-approval-session-target.incognito.test.ts",
   "src/config/sessions/session-sharing-store.incognito.test.ts",
   "src/gateway/progress-card-store.incognito.test.ts",
@@ -268,6 +270,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/mcp-http.runtime.portal-readiness.test.ts",
   "src/gateway/server-methods/chat-history-worker.test.ts",
   "src/gateway/session-history.subagent-visibility.test.ts",
+  "src/gateway/session-row-projection.runtime-ownership.test.ts",
   "src/gateway/session-row-projection.worker-read.test.ts",
   "src/gateway/session-runtime-selection-projection.test.ts",
   "src/plugins/runtime/runtime-agent.acp-binding.test.ts",
@@ -609,6 +612,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/setup-lifetime.test.ts",
   "src/auto-reply/reply/agent-runner-memory.test.ts",
   "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
+  "src/auto-reply/reply/agent-runner.direct-replies.test.ts",
   "src/agents/sessions/session-manager-target-capture.test.ts",
   "src/agents/sessions/sdk.metadata-admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts",
@@ -633,6 +637,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/sessions-send-tool.queue-authority.test.ts",
   "src/agents/sessions/agent-session-code-mode-source.test.ts",
   "src/agents/sessions/agent-session-compaction.admission.test.ts",
+  "src/agents/sessions/agent-session-compaction.degraded-reload.test.ts",
   "src/agents/sessions/agent-session-compaction.test.ts",
   "src/agents/sessions/agent-session-runtime-projection.test.ts",
   "src/agents/sessions/agent-session.reclamation-admission.test.ts",

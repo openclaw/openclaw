@@ -1,6 +1,4 @@
-import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
@@ -42,11 +40,7 @@ import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral
 import type { RuntimeEnv } from "../runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
-import { exitDoctorHealthFlow } from "./doctor-health-startup.js";
-
-// Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
-const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+import { exitDoctorHealthFlow, intro, outro } from "./doctor-health-startup.js";
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -185,6 +179,8 @@ async function runDoctorHealthFlowWithResult(
     interactiveRepair = true;
     updateAdmissionComplete = true;
   }
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => maintenance?.release());
   try {
     if (options.repair === true || options.yes === true || interactiveRepair) {
       try {
@@ -395,6 +391,7 @@ async function runDoctorHealthFlowWithResult(
           prompter,
         }),
       );
+      resources.use(configResult);
       // Relocation changes the inspected scope; unchanged fleets retain their prepared facts.
       const admissionSchemas =
         schemas.agentDatabaseMigrationDiscovery &&
@@ -673,9 +670,9 @@ async function runDoctorHealthFlowWithResult(
     throw error;
   } finally {
     try {
-      await measureGatewayBootstrapStep("doctor.maintenance.release", async () => {
-        await maintenance?.release();
-      });
+      await measureGatewayBootstrapStep("doctor.maintenance.release", () =>
+        resources.disposeAsync(),
+      );
     } finally {
       if (updateResult) {
         for (const change of updateResult.capture.configChanges) {

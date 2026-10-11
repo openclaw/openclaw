@@ -1,8 +1,10 @@
 // Covers Windows filesystem security audit behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
@@ -55,8 +57,20 @@ function windowsAclQueryResult(
 describe("security audit filesystem Windows findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-win-");
 
+  let nativeModeEnv: ReturnType<typeof captureEnv>;
+  beforeEach(() => {
+    nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
+    // The injected PowerShell fixture exercises the supported command fallback.
+    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+  });
+  afterEach(() => nativeModeEnv.restore());
+
   beforeAll(async () => {
     await tempCases.setup();
+    const nativeConfig = getFsSafeNativeConfig();
+    // Exercise the injected PowerShell responses even when a native addon is installed.
+    configureFsSafeNative({ mode: "off" });
+    return () => configureFsSafeNative(nativeConfig);
   });
 
   afterAll(async () => {

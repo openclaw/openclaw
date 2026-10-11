@@ -106,6 +106,11 @@ export const cliCleanupRetirementEntrypoints = {
     sourceWorkerName: "runtime-cleanup",
     distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup.js",
   },
+  skills: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../skills/runtime/refresh",
+    distWorkerPath: "legacy-finalizer/src/skills/runtime/refresh.js",
+  },
   database: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../state/openclaw-state-db-cache",
