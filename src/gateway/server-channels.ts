@@ -1116,7 +1116,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const currentStop = store.stops.get(id);
         if (currentStop?.status === "stopping") {
           const outcome = await currentStop.attempt;
-          return optsLocal.strict && !currentStop.settled && outcome.status === "fulfilled"
+          const unsettled = !currentStop.settled || (retainCleanupOwner && store.starting.has(id));
+          return optsLocal.strict && unsettled && outcome.status === "fulfilled"
             ? {
                 status: "rejected",
                 error: new Error(`Channel ${channelId}/${id} still owns running work.`),
