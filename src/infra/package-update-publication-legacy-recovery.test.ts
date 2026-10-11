@@ -18,8 +18,8 @@ import {
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
 // Keep real helper hashing and custody, using the shared inert helper's known digest.
-vi.mock("./package-update-integrity-legacy.js", async (original) => ({
-  ...(await original<typeof import("./package-update-integrity-legacy.js")>()),
+vi.mock("./package-update-activation-paths.js", async (original) => ({
+  ...(await original<typeof import("./package-update-activation-paths.js")>()),
   LEGACY_PACKAGE_RECOVERY_HELPER:
     "12de0cc399fbbb4d93ab30ac67817b0a48ab73682df7477e944f9186d8e22c1e",
 }));

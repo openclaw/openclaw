@@ -12,7 +12,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 const helperDigest = "e08dfc1fb3ba7962f9e01d7a6770117c6cd77406b3fa4f7ba94788a670030ba0";
 
 it.skipIf(process.platform === "win32").each(["previous", "candidate"] as const)(
-  "verifies the legacy %s seal before any fallback",
+  "uses the legacy %s verification policy",
   async (selected) => {
     const root = dirs.make("publication-legacy-");
     await writePackageRoot(root, "2026.9.8");
@@ -32,7 +32,15 @@ it.skipIf(process.platform === "win32").each(["previous", "candidate"] as const)
     );
 
     await expect(matcher.matches(root, fingerprint, root)).resolves.toBe(true);
-    expect(warning).not.toHaveBeenCalled();
+    expect(warning.mock.calls).toEqual(
+      selected === "previous"
+        ? [
+            [
+              "legacy package record settled by identity and version; content could not be re-verified",
+            ],
+          ]
+        : [],
+    );
   },
 );
 

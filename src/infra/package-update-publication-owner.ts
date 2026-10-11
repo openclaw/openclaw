@@ -238,22 +238,6 @@ export function createPublicationOwner(
     }
     assertCurrent();
   };
-  const preflight = async (action: "repair" | "retire") => {
-    assertPackageActivationActionAllowed(record, action);
-    await verifyClosure();
-    if (record.phase === "preparing") {
-      inspectPackageActivationCustody(anchor, record);
-    } else if (action === "repair" || record.phase === "publication-complete") {
-      await inspect(action === "repair" ? "all" : "selected");
-    } else {
-      const selected = selectedPackageRetirementGeneration(record);
-      if (!(await matchesSelected(selected))) {
-        throw new Error("Selected package is missing.");
-      }
-      await verifySelectedLaunchers(record, selected);
-    }
-    assertCurrent();
-  };
   const persistPackageSelection = async (selected: "displaced" | "candidate" | "previous") => {
     const rejected =
       selected === "previous" && entryIdentity(root("previous.candidate"), true) !== null;
@@ -490,21 +474,6 @@ export function createPublicationOwner(
     transition("publication-complete");
     return trees.legacyWarning ? retire() : packageActivationStatus(record);
   };
-  const persistRetirement = async () => {
-    const assertRetired = () => {
-      assertCurrent();
-      if (!isPackageActivationComplete(anchor, record)) {
-        throw new Error("Package recovery artifacts were not retired.");
-      }
-    };
-    assertRetired();
-    const outcome = await syncDirectory(path.dirname(helper()));
-    assertRetired();
-    requireDirectorySync(outcome, "Package helper retirement");
-    // Retrying a lost acknowledgement persists the same recorded absence without
-    // another journal write. Read-only receipts remain observations, not grants.
-    return packageActivationStatus(record);
-  };
   const assertSettlementSelection = (selected: "previous" | "candidate", cause?: unknown) => {
     assertion();
     assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
@@ -634,7 +603,14 @@ export function createPublicationOwner(
       throw new Error("Final helper identity changed.");
     }
     await fsp.unlink(helper());
-    return persistRetirement();
+    assertCurrent();
+    const outcome = await syncDirectory(path.dirname(helper()));
+    assertCurrent();
+    requireDirectorySync(outcome, "Package helper retirement");
+    if (!isPackageActivationComplete(anchor, record)) {
+      throw new Error("Package recovery artifacts were not retired.");
+    }
+    return packageActivationStatus(record);
   };
   // Callers have elected retirement after verified publication, restoration, or
   // untouched-preparation refusal. Raw recovery entrypoints retain strict retirement;
@@ -665,8 +641,6 @@ export function createPublicationOwner(
     publish,
     retire,
     retireVerified,
-    persistRetirement,
-    preflight,
     async disarmRollback() {
       assertCurrent();
       await discardIncompleteCopy();

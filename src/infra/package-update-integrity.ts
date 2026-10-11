@@ -7,7 +7,6 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import * as fileHashing from "./package-update-integrity-hasher.js";
-import { legacyPackageTreeDigest } from "./package-update-integrity-legacy.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 // The shared deadline bounds elapsed time. At ~200 bytes per entry, 500,000
@@ -354,7 +353,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     let fileFailed = false;
     const appendEntry = ({ relative, fields, retained, reusable }: HashedEntry) => {
       const retainedEntry = JSON.stringify([relative, retained]);
-      digest.update(retainedEntry);
+      if (!legacy) {
+        digest.update(retainedEntry);
+      }
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
     const settled = (entry: HashedEntry) => {
@@ -545,18 +546,31 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           throw new Error("Package rollback tree changed during verification");
         }
       }
-      const fingerprint = {
-        digest: legacy
-          ? legacyPackageTreeDigest(
-              observed.map(({ file }) => {
-                const relative = path.relative(root, file).split(path.sep).join("/");
-                return { relative, fields: entriesObserved.get(relative)?.fields };
-              }),
-            )
-          : digest.digest("hex"),
-        identity: rootIdentity,
-        version,
-      };
+      if (legacy) {
+        for (const { file, stat } of observed) {
+          const relative = path.relative(root, file).split(path.sep).join("/");
+          const fields = entriesObserved.get(relative)!.fields;
+          const info = Object.values(metadata(stat));
+          if (!relative) {
+            info.pop();
+          }
+          digest.update(JSON.stringify([relative, info]));
+          const contents = fields.get("sha256");
+          if (contents !== undefined) {
+            const first =
+              stat.nlink > 1n
+                ? observed.find(
+                    ({ stat: other }) => other.dev === stat.dev && other.ino === stat.ino,
+                  )
+                : undefined;
+            const owner = first ? path.relative(root, first.file).split(path.sep).join("/") : null;
+            digest.update(JSON.stringify(["file", owner, contents]));
+          } else if (fields.has("target")) {
+            digest.update(JSON.stringify(["symlink", fields.get("target")]));
+          }
+        }
+      }
+      const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
       observations.set(fingerprint, entriesObserved);
       return fingerprint;
     } finally {

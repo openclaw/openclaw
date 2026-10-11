@@ -7,14 +7,11 @@ import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { packageActivationIdentityOrAbsent as entryIdentity } from "./package-update-activation-custody.js";
 import type { PackageActivationDescriptor } from "./package-update-activation-journal.js";
+import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
   assertPackagePathIdentity,
   createPackagePathAssertion,
 } from "./package-update-filesystem.js";
-import {
-  LEGACY_PACKAGE_RECOVERY_HELPER,
-  LEGACY_PACKAGE_SETTLEMENT_WARNING,
-} from "./package-update-integrity-legacy.js";
 import {
   createPackageIntegrityReader,
   isPackageIntegrityResourceError,
@@ -139,9 +136,11 @@ export function createPackagePublicationTreeMatcher(
     if (!contents) {
       return true;
     }
+    // Legacy package code is reinstallable; accept its previous identity/version without the stale seal.
+    const legacyPrevious = legacy && expected === descriptor.previous;
     // A prepared descriptor carries its in-process observation, so settled unchanged
     // files are not re-read. A recovery process parses one without and re-reads all.
-    if ("digest" in expected) {
+    if ("digest" in expected && !legacyPrevious) {
       try {
         const observed = await createPackageIntegrityReader().tree(
           file,
@@ -160,15 +159,7 @@ export function createPackagePublicationTreeMatcher(
         verified.set(expected, observed);
         return true;
       } catch (error) {
-        // Legacy package code is reinstallable; accept identity/version instead of its stale seal.
-        const legacyPrevious =
-          legacy &&
-          expected === descriptor.previous &&
-          error instanceof PackageIntegrityMismatchError;
-        if (
-          !legacyPrevious &&
-          (expected !== descriptor.candidate || !isPackageIntegrityResourceError(error))
-        ) {
+        if (expected !== descriptor.candidate || !isPackageIntegrityResourceError(error)) {
           throw error;
         }
       }
@@ -177,9 +168,10 @@ export function createPackagePublicationTreeMatcher(
     if (observed?.identity !== expected.identity || observed.version !== expected.version) {
       throw new Error(`Package publication object changed: ${file}`);
     }
-    if (legacy && expected === descriptor.previous) {
+    if (legacyPrevious) {
       if (!legacyWarning) {
-        legacyWarning = LEGACY_PACKAGE_SETTLEMENT_WARNING;
+        legacyWarning =
+          "legacy package record settled by identity and version; content could not be re-verified";
         onWarning(legacyWarning);
       }
       return true;

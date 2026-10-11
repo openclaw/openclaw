@@ -28,6 +28,7 @@ import {
   packageActivationIdentity,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
   preparePackageActivationJournal,
   resolvePackageActivationRecoveryCommand as recoveryCommand,
@@ -39,7 +40,6 @@ import {
   readPackageActivationRecordStatus as status,
   type PackageActivationStatus,
 } from "./package-update-activation-status.js";
-import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-integrity-legacy.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
@@ -468,19 +468,6 @@ export async function runPackageActivationRecovery(
         )),
       }
     : initial.descriptor.authority;
-  if (!complete) {
-    // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
-    // Admission is still followed by the same observations under the fresh fence.
-    await createPublicationOwner(
-      anchor,
-      journal,
-      () => {
-        assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-      },
-      initial,
-      admission.assertUnchanged,
-    ).preflight(recoveryAction);
-  }
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
