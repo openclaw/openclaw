@@ -48,6 +48,8 @@ export function formatDiscordCommandComponents(
         text.push(field);
       } else if ((key === "components" || key === "options") && Array.isArray(field)) {
         field.forEach(visit);
+      } else if (key === "accessory") {
+        visit(field);
       }
     }
   };

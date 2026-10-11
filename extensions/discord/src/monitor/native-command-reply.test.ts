@@ -357,7 +357,19 @@ describe("deliverDiscordInteractionReply", () => {
   it("omits legacy content and embeds from native Components V2 replies", async () => {
     const interaction = createInteraction();
     const onDelivered = vi.fn(async () => {});
-    const components = [{ type: 17, components: [{ type: 10, content: "Choose" }] }];
+    const components = [
+      {
+        type: 17,
+        components: [
+          { type: 10, content: "Choose" },
+          {
+            type: 9,
+            components: [{ type: 10, content: "Actions" }],
+            accessory: { type: 2, style: 1, label: "Read", custom_id: "private-action-id" },
+          },
+        ],
+      },
+    ];
 
     await deliverDiscordInteractionReply({
       interaction: interaction as never,
@@ -375,7 +387,7 @@ describe("deliverDiscordInteractionReply", () => {
 
     expect(interaction.reply).toHaveBeenCalledWith({ components });
     expect(interaction.followUp).not.toHaveBeenCalled();
-    expect(onDelivered).toHaveBeenCalledExactlyOnceWith("Choose");
+    expect(onDelivered).toHaveBeenCalledExactlyOnceWith("Choose\nActions\nRead");
   });
 
   it.each([
