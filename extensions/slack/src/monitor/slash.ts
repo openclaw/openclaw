@@ -443,17 +443,13 @@ export function createSlackCommandHandler(params: {
         includePairingStore: isDirectMessage,
         eventScope,
       });
-
-      // Privileged command surface: compute CommandAuthorized, don't assume true.
-      // Keep this aligned with the Slack message path (message-handler/prepare.ts).
-      let channelConfig: SlackChannelConfigResolved | null = null;
-      if (isDirectMessage) {
-        const allowed = await authorizeSlackDirectMessage({
+      const authorizeDirectMessage = (allowFromLower: string[]) =>
+        authorizeSlackDirectMessage({
           ctx,
           accountId: ctx.accountId,
           senderId: command.user_id,
           eventScope,
-          allowFromLower: effectiveAllowFromLower,
+          allowFromLower,
           resolveSenderName: (userId) => ctx.resolveUserName(userId, eventScope),
           sendPairingReply: async (text) => {
             await respondEphemeral(text);
@@ -469,9 +465,12 @@ export function createSlackCommandHandler(params: {
           },
           log: logVerbose,
         });
-        if (!allowed) {
-          return false;
-        }
+
+      // Privileged command surface: compute CommandAuthorized, don't assume true.
+      // Keep this aligned with the Slack message path (message-handler/prepare.ts).
+      let channelConfig: SlackChannelConfigResolved | null = null;
+      if (isDirectMessage && !(await authorizeDirectMessage(effectiveAllowFromLower))) {
+        return false;
       }
 
       if (isRoom) {
@@ -513,7 +512,7 @@ export function createSlackCommandHandler(params: {
 
       // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
-      const commandAuthorized = slashIngress.commandAccess.authorized;
+      let commandAuthorized = slashIngress.commandAccess.authorized;
       if (isRoomish && ctx.useAccessGroups && !commandAuthorized) {
         await respondEphemeral("You are not authorized to use this command.");
         return false;
@@ -636,12 +635,10 @@ export function createSlackCommandHandler(params: {
         }
       }
 
-      const channelName = channelInfo?.name;
-      const roomLabel = channelName ? `#${channelName}` : `#${command.channel_id}`;
       const {
+        buildSlackSlashCommandContext,
         deliverSlackSlashReplies,
         dispatchChannelInboundTurn,
-        finalizeInboundContext,
         isChannelPartialDeliveryError,
         resolveChunkMode,
         resolveConversationLabel,
@@ -674,53 +671,41 @@ export function createSlackCommandHandler(params: {
         kind: !slashCommand.ephemeral && isRoomish ? "channel" : "user",
         id: !slashCommand.ephemeral && isRoomish ? command.channel_id : command.user_id,
       }).target;
-      const from = isDirectMessage
-        ? `slack:${routeTarget.peerId}`
-        : isRoom
-          ? `slack:channel:${routeTarget.peerId}`
-          : `slack:group:${routeTarget.peerId}`;
-      const ctxPayload = finalizeInboundContext({
-        Body: prompt,
-        BodyForAgent: prompt,
-        RawBody: prompt,
-        CommandBody: prompt,
-        CommandArgs: commandArgs,
-        From: from,
-        To: `slash:${slashUserTarget.peerId}`,
-        ChatType: chatType,
-        ConversationLabel:
-          resolveConversationLabel({
-            ChatType: chatType,
-            SenderName: senderName,
-            GroupSubject: isRoomish ? roomLabel : undefined,
-            From: from,
-          }) ?? (isDirectMessage ? senderName : roomLabel),
-        GroupSubject: isRoomish ? roomLabel : undefined,
-        GroupSpace: routingTeamId,
-        GroupSystemPrompt: groupSystemPrompt,
-        ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
-        SenderName: senderName,
-        SenderId: command.user_id,
-        Provider: "slack" as const,
-        Surface: "slack" as const,
-        WasMentioned: true,
-        MessageSid: p.eventTs ?? command.trigger_id,
-        MessageThreadId: p.threadTs,
-        Timestamp: Date.now(),
-        SessionKey: sessionKey,
-        CommandTargetSessionKey: commandTargetSessionKey,
-        AccountId: route.accountId,
-        CommandSource: "native" as const,
-        CommandAuthorized: commandAuthorized,
-        OriginatingChannel: "slack" as const,
-        OriginatingTo: p.threadTs
-          ? resolveSlackDeferredActionTarget({
-              eventScope,
-              kind: "channel",
-              id: command.channel_id,
-            }).target
-          : slashReplyTarget,
+      // Menu and route resolution can await; admit against the latest DM pairing allowlist.
+      const finalAllowFromLower = isDirectMessage
+        ? await resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true, eventScope })
+        : effectiveAllowFromLower;
+      if (isDirectMessage && !(await authorizeDirectMessage(finalAllowFromLower))) {
+        return false;
+      }
+      const slashContext = await buildSlackSlashCommandContext({
+        ctx,
+        invocation: p,
+        route,
+        routingTeamId,
+        channelType,
+        channelInfo,
+        channelConfig,
+        isRoom,
+        isRoomish,
+        isDirectMessage,
+        chatType,
+        senderName,
+        finalAllowFromLower,
+        sessionKey,
+        routePeerId: routeTarget.peerId,
+        slashUserTarget,
+        slashReplyTarget,
+        commandTargetSessionKey,
+        roomContext: { channelMetadata, groupSystemPrompt },
+        resolveConversationLabel,
       });
+      if (!slashContext) {
+        await respondEphemeral("You are not authorized to use this command.");
+        return false;
+      }
+      const { ctxPayload } = slashContext;
+      commandAuthorized = slashContext.commandAuthorized;
 
       const messageSentHookTarget = ctxPayload.OriginatingTo ?? ctxPayload.To ?? slashReplyTarget;
       const deliverSlashPayloads = async (
@@ -774,6 +759,19 @@ export function createSlackCommandHandler(params: {
           sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
         },
         ctxPayload,
+        assertAuthority: () => {
+          if (
+            !ctx.isRuntimePolicyCurrent() ||
+            !ctx.isChannelAllowed({
+              teamId: routingTeamId,
+              channelId: command.channel_id,
+              channelName: channelInfo?.name,
+              channelType,
+            })
+          ) {
+            throw new Error("Slack slash command authority changed during dispatch");
+          }
+        },
         dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
         replyPipeline: { transformReplyPayload: sanitizeSlackMonitorReplyPayload },
         dispatcherOptions: {

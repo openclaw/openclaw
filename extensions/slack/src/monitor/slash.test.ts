@@ -1,5 +1,13 @@
 import path from "node:path";
 import { WebClient } from "@slack/web-api";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  consumeChannelAdmissionEvidence,
+  createChannelAdmissionAudit,
+  createHostChannelInboundEventContextBuilder,
+  createHostChannelIngressRuntime,
+  readChannelContextAdmissionEvidence,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -9,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 import {
   createArgMenusHarness,
   createSlashCommand,
@@ -17,7 +26,7 @@ import {
 } from "./slash.commands.test-harness.js";
 import { getSlackSlashMocks } from "./slash.test-harness.js";
 
-const { dispatchMock } = getSlackSlashMocks();
+const { dispatchMock, turnPlanMock } = getSlackSlashMocks();
 
 function responseTexts(mock: ReturnType<typeof vi.fn>): unknown[] {
   return mock.mock.calls.map(([payload]) =>
@@ -337,6 +346,97 @@ describe("slack slash commands access groups", () => {
     const { respond } = await registerAndRunPolicySlash({ harness });
 
     expectUnauthorizedResponse(respond);
+  });
+});
+
+describe("slack slash command ingress handoff", () => {
+  it("builds the admitted native context through the configured inbound builder", async () => {
+    const harness = createPolicyHarness({
+      channelId: "D123",
+      channelName: "directmessage",
+      resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
+    });
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    const gateway = { channelAdmissionAudit: audit, getRuntimeConfig: () => harness.ctx.cfg };
+    const host = {
+      channelId: "slack",
+      isLive: () => true,
+      resolveGatewayContext: () => gateway,
+    } as Parameters<typeof createHostChannelIngressRuntime>[0];
+    const buildContext = vi.fn(
+      createHostChannelInboundEventContextBuilder(buildChannelInboundEventContext, host),
+    );
+    const runtime = installSlackTestRuntime({
+      channel: {
+        inbound: {
+          ingress: createHostChannelIngressRuntime(host),
+          buildContext: buildContext as typeof buildChannelInboundEventContext,
+        },
+      },
+    });
+    Object.assign(harness.ctx, {
+      accountId: "acct",
+      allowFrom: ["U1"],
+      buildContext: runtime.channel.inbound.buildContext,
+    });
+
+    try {
+      await registerAndRunPolicySlash({ harness });
+
+      expect(buildContext).toHaveBeenCalledTimes(1);
+      expect(buildContext.mock.calls[0]?.[0]).toMatchObject({
+        channel: "slack",
+        accountId: "acct",
+        channelIngress: { ingress: { admission: "dispatch" } },
+        sender: { id: "U1" },
+        conversation: { kind: "direct", id: "D123", nativeChannelId: "D123" },
+        route: { agentId: "main", routeSessionKey: "session:1" },
+        message: { inboundEventKind: "user_request" },
+        command: { kind: "native", authorized: true },
+      });
+      const ctxPayload = firstDispatchArg().ctx;
+      if (!ctxPayload) {
+        throw new Error("Missing Slack dispatch context");
+      }
+      expect(ctxPayload).toMatchObject({
+        InboundAccessAuthorized: true,
+        CommandTurn: { kind: "native", authorized: true },
+        CommandTargetSessionKey: "session:1",
+        SenderId: "U1",
+        NativeChannelId: "D123",
+      });
+      expect(
+        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(ctxPayload)),
+      ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
+
+      const denied = await registerAndRunPolicySlash({
+        harness,
+        command: { user_id: "U_DENIED" },
+      });
+      expect(denied.respond).toHaveBeenCalledWith({
+        text: "You are not authorized to use this command.",
+        response_type: "ephemeral",
+      });
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(buildContext).toHaveBeenCalledTimes(1);
+    } finally {
+      audit.close();
+    }
+  });
+
+  it("rejects a dispatched native turn after its Slack policy snapshot is revoked", async () => {
+    const harness = createPolicyHarness();
+    let current = true;
+    Object.assign(harness.ctx, { isRuntimePolicyCurrent: () => current });
+
+    await registerAndRunPolicySlash({ harness });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const plan = turnPlanMock.mock.calls[0]?.[0] as { assertAuthority?: () => void } | undefined;
+    expect(plan?.assertAuthority).toBeTypeOf("function");
+    expect(() => plan?.assertAuthority?.()).not.toThrow();
+    current = false;
+    expect(() => plan?.assertAuthority?.()).toThrow("Slack slash command authority changed");
   });
 });
 

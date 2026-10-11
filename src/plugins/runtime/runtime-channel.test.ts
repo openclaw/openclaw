@@ -1,10 +1,14 @@
 // Runtime channel tests cover channel plugin runtime send, reply, and capability behavior.
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import type { DispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { dispatchChannelInboundTurn } from "../../plugin-sdk/channel-inbound.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
-const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
+const dispatchRoutedChannelTurn = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => ({ status: "handled" })),
+);
 
 vi.mock("../../channels/turn/lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/turn/lifecycle.js")>()),
@@ -36,6 +40,7 @@ describe("inbound dispatch", () => {
       isHeartbeat: true,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
       onReplyOperationOwned: callback,
+      assertChannelAuthority: callback,
     };
     await channel.reply.dispatchReplyFromConfig({
       ctx: { Body: "test", CommandAuthorized: false },
@@ -47,6 +52,38 @@ describe("inbound dispatch", () => {
       expect.objectContaining({ replyOptions: { isHeartbeat: true } }),
     );
     expect(replyOptions.onReplyOperationOwned).toBe(callback);
+    expect(replyOptions.assertChannelAuthority).toBe(callback);
+  });
+
+  it("retains core-issued channel authority across the SDK turn and registered reply dispatcher", async () => {
+    const assertAuthority = vi.fn();
+    const dispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const channel = createRuntimeChannel({ dispatchReplyFromConfig: dispatch });
+    await dispatchChannelInboundTurn({
+      cfg: {},
+      channel: "qa-channel",
+      route: { agentId: "main", sessionKey: "agent:main:qa-channel:direct:test" },
+      ctxPayload: { Body: "test", CommandAuthorized: false },
+      delivery: { deliver: async () => undefined },
+      dispatchReplyFromConfig: channel.reply.dispatchReplyFromConfig,
+    });
+
+    const turn = dispatchRoutedChannelTurn.mock.lastCall?.[0] as
+      | { dispatchReplyFromConfig?: DispatchReplyFromConfig }
+      | undefined;
+    expect(turn?.dispatchReplyFromConfig).toBe(dispatch);
+    await turn?.dispatchReplyFromConfig?.({
+      ctx: { Body: "test", CommandAuthorized: false },
+      cfg: {},
+      dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+      replyOptions: { assertChannelAuthority: assertAuthority },
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ replyOptions: { assertChannelAuthority: assertAuthority } }),
+    );
   });
 
   it.each([

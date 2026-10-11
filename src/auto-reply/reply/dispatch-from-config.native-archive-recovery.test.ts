@@ -68,6 +68,7 @@ describe("native command archive recovery ownership", () => {
     hasPluginOwnedBinding?: boolean;
     human?: boolean;
     assertCurrent?: () => void;
+    assertChannelAuthority?: () => void;
     afterEntriesPrepared?: (entries: Map<string, SessionEntry>) => void;
     configureContext?: (ctx: ReturnType<typeof buildTestCtx>) => void;
     source?: SessionEntry;
@@ -118,6 +119,7 @@ describe("native command archive recovery ownership", () => {
       cfg: emptyConfig,
       ctx,
       assertCurrent: params.assertCurrent,
+      replyOptions: { assertChannelAuthority: params.assertChannelAuthority },
       dispatcher: createDispatcher(),
       dispatchOperationSessionKey: sourceKey,
       operationSessionStoreEntry,
@@ -169,7 +171,7 @@ describe("native command archive recovery ownership", () => {
     { command: "status", noTargetOverride: false, restored: false },
     { command: "status", noTargetOverride: true, restored: false },
   ] as const)(
-    "handles same-key native /$command with noTargetOverride=$noTargetOverride",
+    "handles same-key native /$command without provenance and with noTargetOverride=$noTargetOverride",
     async ({ command, noTargetOverride, restored }) => {
       const entry = { sessionId: "same-key-history", updatedAt: 1, archivedAt: 2 };
       const result = await admitNativeCommand({
@@ -178,6 +180,9 @@ describe("native command archive recovery ownership", () => {
         noTargetOverride,
         source: entry,
         target: entry,
+        configureContext: (ctx) => {
+          ctx.InputProvenance = undefined;
+        },
       });
       expect(result.entries.get(sourceKey)?.sessionId).toBe("same-key-history");
       expect(result.entries.get(sourceKey)?.archivedAt).toBe(restored ? undefined : 2);
@@ -259,7 +264,7 @@ describe("native command archive recovery ownership", () => {
     expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
   });
 
-  it.each(["command owner", "dispatch generation"] as const)(
+  it.each(["command owner", "channel policy", "dispatch generation"] as const)(
     "rechecks %s after placement preparation",
     async (authority) => {
       let current = true;
@@ -276,19 +281,29 @@ describe("native command archive recovery ownership", () => {
               configureContext: (ctx: ReturnType<typeof buildTestCtx>) =>
                 bindCommandOwnerAuthority(ctx, { isCurrent: () => current }),
             }
-          : {
-              assertCurrent: () => {
-                if (!current) {
-                  throw new Error("generation changed");
-                }
-              },
-            }),
+          : authority === "channel policy"
+            ? {
+                assertChannelAuthority: () => {
+                  if (!current) {
+                    throw new Error("channel policy changed");
+                  }
+                },
+              }
+            : {
+                assertCurrent: () => {
+                  if (!current) {
+                    throw new Error("generation changed");
+                  }
+                },
+              }),
       });
       expect(result.outcome).toMatchObject({
         message:
           authority === "command owner"
             ? "Channel operator authority changed; send a new request."
-            : "generation changed",
+            : authority === "channel policy"
+              ? "channel policy changed"
+              : "generation changed",
       });
       expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
     },

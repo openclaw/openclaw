@@ -3,6 +3,7 @@
  */
 import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { DispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.types.js";
 import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import { recordInboundSession } from "../channels/session.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -27,6 +28,7 @@ import {
   type PluginHookChannelSenderContext,
 } from "./channel-inbound.js";
 import * as channelIngressRuntime from "./channel-ingress-runtime.js";
+import { createPublicChannelReplyDispatch } from "./reply-options.js";
 
 declare module "./channel-inbound.js" {
   interface PluginHookChannelSenderContext {
@@ -169,6 +171,41 @@ describe("channel-inbound public helpers", () => {
 
     expect(events).toEqual(["record", "dispatch"]);
     expect(result.dispatched).toBe(true);
+  });
+
+  it("retains core authority for a run plan without optional reply options", async () => {
+    const storePath = `${tempDirs.make("openclaw-channel-run-authority-")}/sessions.json`;
+    const sessionKey = "agent:main:test:peer";
+    const assertAuthority = vi.fn();
+    const coreDispatch = vi.fn<DispatchReplyFromConfig>(async ({ replyOptions }) => {
+      expect(replyOptions?.assertChannelAuthority).toBe(assertAuthority);
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+    const result = await runChannelInboundEvent({
+      channel: "test",
+      raw: "hello",
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          cfg: { session: { store: storePath } },
+          channel: "test",
+          route: { agentId: "main", sessionKey },
+          ctxPayload: {
+            Body: "hello",
+            CommandAuthorized: false,
+            SessionKey: sessionKey,
+            Provider: "test",
+            Surface: "test",
+          },
+          delivery: { deliver: async () => undefined },
+          assertAuthority,
+          dispatchReplyFromConfig: createPublicChannelReplyDispatch(coreDispatch),
+        }),
+      },
+    });
+
+    expect(result.dispatched).toBe(true);
+    expect(coreDispatch).toHaveBeenCalledOnce();
   });
 
   it("dispatches a published inbound event before automatic session maintenance", async () => {

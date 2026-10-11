@@ -2,6 +2,10 @@ import { createHostChannelInboundEventContextBuilder } from "../channels/inbound
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  createPublicChannelReplyDispatch,
+  resolveCoreChannelReplyDispatch,
+} from "../plugin-sdk/reply-options.js";
 import { isPluginRecordActive, revokePluginRecord } from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -125,6 +129,13 @@ export function createScopedPluginChannelRuntime(
   invokeSelectedRuntime: <T>(run: () => T) => T,
   assertRuntimeCurrent: () => void,
 ): PluginRuntime["channel"] {
+  const coreReplyDispatch = resolveCoreChannelReplyDispatch(channel.reply.dispatchReplyFromConfig);
+  const scopedReplyDispatch = coreReplyDispatch
+    ? createPublicChannelReplyDispatch((params) =>
+        invokeSelectedRuntime(() => coreReplyDispatch(params)),
+      )
+    : (...args: Parameters<typeof channel.reply.dispatchReplyFromConfig>) =>
+        invokeSelectedRuntime(() => channel.reply.dispatchReplyFromConfig(...args));
   const inbound = {
     ...channel.inbound,
     run: ((...args: Parameters<typeof channel.inbound.run>) =>
@@ -192,8 +203,7 @@ export function createScopedPluginChannelRuntime(
     },
     reply: {
       ...channel.reply,
-      dispatchReplyFromConfig: (...args) =>
-        invokeSelectedRuntime(() => channel.reply.dispatchReplyFromConfig(...args)),
+      dispatchReplyFromConfig: scopedReplyDispatch,
       dispatchReplyWithBufferedBlockDispatcher: (...args) =>
         invokeSelectedRuntime(() =>
           channel.reply.dispatchReplyWithBufferedBlockDispatcher(...args),

@@ -208,15 +208,17 @@ export function createDispatchReplyOperationCoordinator(params: {
         effectiveNativeTarget === target.sessionKey &&
         (params.ctx.CommandTurn?.commandName?.toLowerCase() === "new" ||
           params.ctx.CommandTurn?.commandName?.toLowerCase() === "reset") &&
-        resolveDispatchResetAdmission({
-          agentId: target.agentId ?? params.agentId,
-          cfg: params.cfg,
-          ctx: params.ctx,
-          entry: target.entry,
-          hasPluginOwnedBinding,
-          sessionKey: target.sessionKey,
-          storePath: target.storePath,
-        }).resetTriggered;
+        (
+          await resolveDispatchResetAdmission({
+            agentId: target.agentId ?? params.agentId,
+            cfg: params.cfg,
+            ctx: params.ctx,
+            entry: target.entry,
+            hasPluginOwnedBinding,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+          })
+        ).resetTriggered;
       const detachedNativeSource =
         authorizedNativeCommand &&
         nativeTarget !== undefined &&
