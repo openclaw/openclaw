@@ -166,12 +166,36 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const { policy: preparedPolicy, consume: consumeSharing } = consuming;
   const sessionCap = (cfg: OpenClawConfig) =>
     consuming.sharing ? preparedPolicy(cfg)?.sessionCap : operatorSessionCap(params.client, cfg);
-  const authorizeTargetAccess = (
-    cfg: OpenClawConfig,
-    target: SessionSharingTarget,
+  const authorizeTargetPolicy = (
+    targetRef: SessionMutationTarget,
+    target: SessionSharingTarget | null,
+    readPolicyConfig: () => OpenClawConfig,
     projection?: SessionRowProjection,
     members?: readonly string[],
+    visibilityAuthorized?: boolean,
   ) => {
+    const error =
+      (target && authorizesAgentRun
+        ? authorizeSessionAgentRun(
+            { cfg: readPolicyConfig(), client: params.client, target },
+            consuming.sharing ? { policy: preparedPolicy(readPolicyConfig())!.policy } : undefined,
+          )
+        : null) ??
+      authorizeIncognitoSessionTarget({
+        client: params.client,
+        sessionKey: targetRef.sessionKey,
+        target,
+      });
+    if (
+      error ||
+      !target ||
+      (visibilityAuthorized ??
+        (VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+          (sessionCap(readPolicyConfig()) ?? "write") === "write"))
+    ) {
+      return error;
+    }
+    const cfg = readPolicyConfig();
     const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
     return authorizesRead
       ? createSessionListEntryFilter({ cfg, client: params.client })?.(
@@ -337,28 +361,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         target,
         expectedProfileId: ownSessionProfileId,
       }) ??
-      (target && authorizesAgentRun
-        ? authorizeSessionAgentRun(
-            {
-              cfg: getPolicyConfig(),
-              client: params.client,
-              target,
-            },
-            consuming.sharing ? { policy: preparedPolicy(getPolicyConfig())!.policy } : undefined,
-          )
-        : null) ??
-      authorizeIncognitoSessionTarget({
-        client: params.client,
-        sessionKey: targetRef.sessionKey,
-        target,
-      }) ??
-      (target &&
-      !(
-        VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
-        (sessionCap(getPolicyConfig()) ?? "write") === "write"
-      )
-        ? authorizeTargetAccess(getPolicyConfig(), target, resolved.projection)
-        : null);
+      authorizeTargetPolicy(targetRef, target, getPolicyConfig, resolved.projection);
     if (error) {
       return { error };
     }
@@ -516,30 +519,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         const visibilityAuthorized =
           VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
           (sessionCap(policyConfig) ?? "write") === "write";
-        const error =
-          (authorizesAgentRun
-            ? authorizeSessionAgentRun(
-                {
-                  cfg: policyConfig,
-                  client: params.client,
-                  target: current,
-                },
-                consuming.sharing ? { policy: preparedPolicy(policyConfig)!.policy } : undefined,
-              )
-            : null) ??
-          authorizeIncognitoSessionTarget({
-            client: params.client,
-            sessionKey: targetRef.sessionKey,
-            target: current,
-          }) ??
-          (visibilityAuthorized
-            ? null
-            : authorizeTargetAccess(
-                policyConfig,
-                current,
-                projected?.status === "ready" ? expected?.projection : undefined,
-                prepared?.members,
-              ));
+        const error = authorizeTargetPolicy(
+          targetRef,
+          current,
+          () => policyConfig,
+          projected?.status === "ready" ? expected?.projection : undefined,
+          prepared?.members,
+          visibilityAuthorized,
+        );
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }
@@ -578,8 +565,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                 params.preparedProfiles?.readCurrent();
                 const expected = authorizedTargets[0]!;
                 const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
+                const assertRoutingCurrent = captureSessionMutationRouting(
+                  cfg,
+                  () => targetChanged(expected.sessionKey),
+                  [expected],
                 );
                 return withSessionSharingTarget(
                   { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
@@ -612,8 +601,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                   targetChanged: () => targetChanged(expected.sessionKey),
                 });
                 const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
+                const assertRoutingCurrent = captureSessionMutationRouting(
+                  cfg,
+                  () => targetChanged(expected.sessionKey),
+                  [expected],
                 );
                 return consumeSharing(
                   {

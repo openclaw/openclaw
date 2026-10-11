@@ -627,7 +627,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 });
 
 describe("native model-owned harness policy", () => {
-  it("does not apply outer context guards, budgets, or authored caps", () => {
+  it("does not apply outer context guards, budgets, or authored caps to a pinned native session", () => {
     const runtimeModel = createRuntimeModel();
     const result = resolveEmbeddedRunEffectiveModel({
       runParams: {
@@ -652,6 +652,7 @@ describe("native model-owned harness policy", () => {
       modelConfigProvider: "openai",
       modelId: runtimeModel.id,
       agentHarnessId: "codex",
+      pinnedHarnessId: "codex",
       runtimeModel,
       nativeModelOwned: true,
     });

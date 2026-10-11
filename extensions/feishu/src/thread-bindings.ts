@@ -4,7 +4,6 @@ import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversat
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-  registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,
@@ -17,6 +16,7 @@ import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk
 import {
   createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
+  registerSessionBindingAdapterV2,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";

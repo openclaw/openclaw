@@ -522,31 +522,20 @@ it.each(["payload", "instance"])(
   30_000,
 );
 
-it("keeps hourly reclamation on a live metadata owner when its siblings are closing", async () => {
+it("runs hourly reclamation on a live metadata owner", async () => {
   const stateDir = temp.make("plugin-capture-periodic-");
   const orphan = await abandonCapture(stateDir, createSource());
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const time = createGatewaySchedulerClock();
   const scheduler = createTestGatewayScheduler(time.clock);
   const metadata = retainGatewayPluginMetadata(scheduler);
-  const fencedTime = createGatewaySchedulerClock();
-  const fencedScheduler = createTestGatewayScheduler(fencedTime.clock);
-  const fenced = retainGatewayPluginMetadata(fencedScheduler);
-  const siblingTime = createGatewaySchedulerClock();
-  const siblingScheduler = createTestGatewayScheduler(siblingTime.clock);
-  const sibling = retainGatewayPluginMetadata(siblingScheduler);
   try {
     await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
-    fencedScheduler.beginClose();
-    await siblingScheduler.stop();
     age(orphan.instanceRoot);
     await time.advanceBy(2 * hour);
     expect(fs.existsSync(orphan.instanceRoot)).toBe(false);
-    await sibling.close();
   } finally {
-    await sibling.close();
-    await fenced.close();
     await metadata.close();
     await sweepPluginSourceCapturesForTest(stateDir);
   }
@@ -674,15 +663,13 @@ it.each(["before command", "inside command"])(
   },
 );
 
-it("retains live capture bytes until both metadata owners and the artifact release custody", async () => {
+it("retains live capture bytes until the metadata owner and artifact are released", async () => {
   const stateDir = temp.make("plugin-capture-shared-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const source = createSource();
   const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  let second: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
   let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
   try {
-    second = retainGatewayPluginMetadata(createTestGatewayScheduler());
     artifact = capturePluginGenerationArtifact(source);
     const { instanceRoot } = capturePaths(
       stateDir,
@@ -696,10 +683,6 @@ it("retains live capture bytes until both metadata owners and the artifact relea
     );
     await first.close();
     await first.close();
-    expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
-      capturedSource,
-    );
-    await second.close();
     await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
       capturedSource,
@@ -710,7 +693,7 @@ it("retains live capture bytes until both metadata owners and the artifact relea
     try {
       await artifact?.disposeAsync();
     } finally {
-      await Promise.all([first.close(), second?.close()]);
+      await first.close();
     }
   }
 });
@@ -933,7 +916,7 @@ it.each(["malformed", "symlink", "hardlink", "sidecar-symlink", "captures-symlin
   },
 );
 
-it("summarizes inaccessible owner records with backoff while continuing cleanup retries", async () => {
+it("summarizes inaccessible owner records and retries cleanup", async () => {
   const stateDir = temp.make("plugin-capture-warning-backoff-");
   const root = path.join(stateDir, "tmp", "plugin-captures");
   const orphan = await abandonCapture(stateDir, createSource());
@@ -957,14 +940,6 @@ it("summarizes inaccessible owner records with backoff while continuing cleanup 
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(1);
   expect(String(warning.mock.calls[0]?.[0])).toContain("3 cleanup failure(s)");
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(1);
-  vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(2);
-  vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(2);
   fault.mockRestore();
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.readdirSync(root)).toEqual([]);

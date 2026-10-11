@@ -66,26 +66,60 @@ function changed(key: string) {
 
 afterEach(() => vi.useRealTimers());
 
-it("shares confirmed archive visibility after Gateway events", async () => {
-  const key = "agent:main:archive-from-agent";
-  const held = row(key, { sessionId: "archive-session" });
+it.each([false, null])(
+  "shares confirmed archive visibility after a %s restore event",
+  async (restored) => {
+    const key = "agent:main:archive-from-agent";
+    const held = row(key, { sessionId: "archive-session" });
+    const { sessions, emitEvent } = sessionHarness({
+      "sessions.list": () => sessionsResult([held], 1),
+    });
+    const reconcile = (archived: boolean | null, updatedAt: number) =>
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+      });
+    await sessions.refresh({ agentId: "main", force: true });
+    reconcile(true, 2);
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    reconcile(restored, 3);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+    sessions.dispose();
+  },
+);
+
+it("accepts a descriptor restore outside the primary list", async () => {
+  const key = "agent:main:descriptor-restore";
+  const held = row(key, { sessionId: "restored-session", archived: true, updatedAt: 2 });
+  let listed = [held];
   const { sessions, emitEvent } = sessionHarness({
-    "sessions.list": () => sessionsResult([held], 1),
+    "sessions.list": () => sessionsResult(listed, 2),
+    "sessions.describe": () => ({ session: { ...held, archived: false, updatedAt: 3 } }),
   });
-  const reconcile = (archived: boolean, updatedAt: number) =>
+  const observation = sessions.observeRow({ key, agentId: "main" }, () => {});
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+      payload: { ...held, sessionKey: key, reason: "patch" },
     });
-  await sessions.refresh({ agentId: "main", force: true });
-  reconcile(true, 2);
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  await sessions.refresh({ agentId: "main", force: true });
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  reconcile(false, 3);
-  expect(sessions.archiveVisibility(key)).toBeUndefined();
-  sessions.dispose();
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    listed = [];
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions).toEqual([]);
+    const reconcile = observation.captureReconcile();
+    const described = await sessions.describe({ key, agentId: "main" }, { refresh: true });
+    reconcile(described.session ?? undefined);
+    expect(observation.row?.archived).toBe(false);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+  } finally {
+    observation.dispose();
+    sessions.dispose();
+  }
 });
 
 it("automatically retries an explicitly retryable group catalog failure", async () => {

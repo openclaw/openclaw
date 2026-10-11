@@ -1,18 +1,49 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
   parseSessionActivityFilters,
   canonicalSessionActivityLocation,
   projectSessionActivity,
+  reconcileSessionActivityRead,
   sessionActivityLocation,
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
+
+it("orders refreshed membership by the activity timestamps actually displayed", () => {
+  const provenance = createSessionRowProvenance();
+  const older = {
+    ...active,
+    key: "agent:work:a",
+    sessionId: "a",
+    lastActivityAt: 10,
+    snapshotAt: 10,
+  };
+  const current = { ...older, lastActivityAt: 30, snapshotAt: 30 };
+  const other = {
+    ...active,
+    key: "agent:work:b",
+    sessionId: "b",
+    lastActivityAt: 20,
+    snapshotAt: 20,
+  };
+  provenance.observeReadRow(current, 1);
+  const read = reconcileSessionActivityRead(
+    listing([other, older]),
+    listing([current, other]),
+    provenance,
+    2,
+  );
+  expect(read.result.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
+    [current.key, 30],
+    [other.key, 20],
+  ]);
+});
 
 const people: NonNullable<SessionsListResult["people"]> = [
   { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },
@@ -204,198 +235,68 @@ it.each(["primary", "ancestor-omitted", "ancestor-cleared"])(
   },
 );
 
-it.each([
-  { scope: "primary", clear: false, omissions: 1_500, read: "omitted" },
-  { scope: "primary", clear: true, omissions: 1, read: "omitted" },
-  { scope: "ancestor", clear: false, omissions: 1, read: "omitted" },
-  { scope: "ancestor", clear: true, omissions: 1, read: "omitted" },
-  { scope: "primary", clear: true, omissions: 1, read: "equal" },
-  { scope: "ancestor", clear: false, omissions: 1, read: "newer-reference" },
-  { scope: "ancestor", clear: false, omissions: 1, read: "generation" },
-])(
-  "merges $scope recap field clocks across $omissions omissions and a $read read (clear: $clear)",
-  async ({ scope, clear, omissions, read }) => {
-    vi.useFakeTimers();
-    const { client, request, controller } = setup();
-    const parent = {
-      ...active,
-      key: "agent:work:parent",
-      sessionId: "parent-session",
-      childSessions: [active.key],
-      snapshotAt: 100,
-      activitySummary: { state: "current" as const, text: "Old parent recap.", updatedAt: 100 },
-    };
-    const child = {
-      ...active,
-      parentSessionKey: parent.key,
-      snapshotAt: 100,
-      activitySummary: { state: "current" as const, text: "Old child recap.", updatedAt: 100 },
-    };
-    const initial = listing([child, parent]);
-    request.mockResolvedValue(initial);
-    const query = { personId: null, time: "all" as const, query: "" };
-    await controller.load(client, query);
-    const stale = createDeferred<SessionsListResult>();
-    request.mockReturnValueOnce(stale.promise);
-    void controller.load(client, query, "refresh");
-    const { activitySummary: _childSummary, ...childSnapshot } = child;
-    const { activitySummary: _parentSummary, ...parentSnapshot } = parent;
-    const summary = clear
-      ? null
-      : { state: "current", text: "New recap from the event.", updatedAt: 300 };
-    const event = (snapshotAt: number, includeSummary: boolean) => ({
-      agentId: active.agentId,
-      reason: includeSummary && scope === "primary" ? "activity-summary" : "patch",
-      session: {
-        ...childSnapshot,
-        updatedAt: snapshotAt,
-        snapshotAt,
-        ...(includeSummary && scope === "primary" ? { activitySummary: summary } : {}),
+it("applies excluded child events to held History ancestors without refetching", async () => {
+  vi.useFakeTimers();
+  const { client, request, controller } = setup();
+  const parent = {
+    ...active,
+    key: "agent:work:parent",
+    sessionId: "parent-session",
+    label: "Old parent",
+    childSessions: ["agent:work:subagent:child"],
+    snapshotAt: 100,
+  };
+  const child = {
+    ...active,
+    key: "agent:work:subagent:child",
+    parentSessionKey: parent.key,
+    snapshotAt: 100,
+  };
+  const initial = listing([parent]);
+  request.mockResolvedValue(initial);
+  const query = { personId: null, time: "all" as const, query: "" };
+  await controller.load(client, query);
+  controller.invalidate({
+    agentId: active.agentId,
+    session: { ...child, updatedAt: 300, snapshotAt: 300 },
+    ancestorSessions: [
+      {
+        ...parent,
+        label: "Updated parent",
+        updatedAt: 300,
+        snapshotAt: 300,
+        ancestorRevision: "parent-revision",
       },
-      ancestorSessions: [
-        {
-          ...parentSnapshot,
-          updatedAt: snapshotAt,
-          snapshotAt,
-          ancestorRevision: `parent-${snapshotAt}`,
-          ...(includeSummary && scope === "ancestor" ? { activitySummary: summary } : {}),
-        },
-      ],
-    });
-    controller.invalidate(event(300, true));
-    for (let index = 0; index < omissions; index += 1) {
-      const omitted = event(400 + index, false);
-      controller.invalidate(
-        read === "newer-reference"
-          ? {
-              ...omitted,
-              ancestorSessions: [],
-              ancestorSessionRefs: [
-                {
-                  key: parent.key,
-                  sessionId: parent.sessionId,
-                  revision: "parent-300",
-                  snapshotAt: 400,
-                },
-              ],
-            }
-          : omitted,
-      );
-    }
-    const key = scope === "primary" ? child.key : parent.key;
-    const recap = () => controller.result?.sessions.find((row) => row.key === key)?.activitySummary;
-    expect(recap()).toEqual(summary ?? undefined);
-    const readAt = read === "equal" ? 300 : 350;
-    const readSummary = {
-      state: "current" as const,
-      text: "The newer read's recap.",
-      updatedAt: readAt,
-    };
-    const readWins = read === "newer-reference" || read === "generation";
-    stale.resolve({
-      ...listing(
-        [childSnapshot, parentSnapshot].map((row) =>
-          Object.assign(
-            {},
-            row,
-            {
-              updatedAt: read === "newer-reference" && row.key === parent.key ? 300 : readAt,
-              snapshotAt: readAt,
-            },
-            row.key === key && read === "generation" ? { sessionId: "replacement-session" } : {},
-            row.key === key && readWins ? { activitySummary: readSummary } : {},
-            row.key === key && read === "equal" ? { activitySummary: child.activitySummary } : {},
-          ),
-        ),
-      ),
-      ts: readAt,
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(recap()).toEqual(readWins ? readSummary : (summary ?? undefined));
-    expect(controller.result?.sessions.find((row) => row.key === key)?.sessionId).toBe(
-      read === "generation"
-        ? "replacement-session"
-        : scope === "primary"
-          ? child.sessionId
-          : parent.sessionId,
-    );
-    expect(request).toHaveBeenCalledTimes(2);
-  },
-);
-
-it.each([false, true])(
-  "applies excluded child events to held History ancestors without refetching (pending: %s)",
-  async (pending) => {
-    vi.useFakeTimers();
-    const { client, request, controller } = setup();
-    const parent = {
-      ...active,
-      key: "agent:work:parent",
-      sessionId: "parent-session",
-      label: "Old parent",
-      childSessions: ["agent:work:subagent:child"],
-      snapshotAt: 100,
-    };
-    const child = {
-      ...active,
-      key: "agent:work:subagent:child",
-      parentSessionKey: parent.key,
-      snapshotAt: 100,
-    };
-    const initial = listing([parent]);
-    request.mockResolvedValue(initial);
-    const query = { personId: null, time: "all" as const, query: "" };
-    await controller.load(client, query);
-    const stale = createDeferred<SessionsListResult>();
-    if (pending) {
-      request.mockReturnValueOnce(stale.promise);
-      void controller.load(client, query, "refresh");
-    }
-    controller.invalidate({
-      agentId: active.agentId,
-      session: { ...child, updatedAt: 300, snapshotAt: 300 },
-      ancestorSessions: [
-        {
-          ...parent,
-          label: "Updated parent",
-          updatedAt: 300,
-          snapshotAt: 300,
-          ancestorRevision: "parent-revision",
-        },
-      ],
-    });
-    expect(controller.result?.sessions.map((row) => [row.key, row.label])).toEqual([
-      [parent.key, "Updated parent"],
-    ]);
-    const reference = (snapshotAt: number) => ({
-      agentId: active.agentId,
-      session: { ...child, updatedAt: snapshotAt, snapshotAt },
-      ancestorSessions: [],
-      ancestorSessionRefs: [
-        {
-          key: parent.key,
-          sessionId: parent.sessionId,
-          revision: "parent-revision",
-          snapshotAt,
-        },
-      ],
-    });
-    controller.invalidate(reference(400));
-    if (pending) {
-      stale.resolve(initial);
-    }
-    await vi.advanceTimersByTimeAsync(0);
-    expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
-      "Updated parent",
-    );
-    controller.invalidate(reference(500));
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
-      "Updated parent",
-    );
-    expect(request).toHaveBeenCalledTimes(pending ? 2 : 1);
-  },
-);
+    ],
+  });
+  expect(controller.result?.sessions.map((row) => [row.key, row.label])).toEqual([
+    [parent.key, "Updated parent"],
+  ]);
+  const reference = (snapshotAt: number) => ({
+    agentId: active.agentId,
+    session: { ...child, updatedAt: snapshotAt, snapshotAt },
+    ancestorSessions: [],
+    ancestorSessionRefs: [
+      {
+        key: parent.key,
+        sessionId: parent.sessionId,
+        revision: "parent-revision",
+        snapshotAt,
+      },
+    ],
+  });
+  controller.invalidate(reference(400));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
+    "Updated parent",
+  );
+  controller.invalidate(reference(500));
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
+    "Updated parent",
+  );
+  expect(request).toHaveBeenCalledTimes(1);
+});
 
 it.each([
   "excluded",
@@ -459,23 +360,3 @@ it.each([
     expect(request).toHaveBeenCalledTimes(excluded ? 1 : 2);
   },
 );
-
-it("keeps returned History membership authoritative when a newer observed row is absent", async () => {
-  vi.useFakeTimers();
-  const { client, request, controller } = setup();
-  const query = { personId: null, time: "all" as const, query: "" };
-  await controller.load(client, query);
-  const stale = createDeferred<SessionsListResult>();
-  request.mockReturnValueOnce(stale.promise);
-  void controller.load(client, query, "refresh");
-  controller.invalidate({
-    agentId: active.agentId,
-    session: { ...active, updatedAt: 400, snapshotAt: 400 },
-    ancestorSessions: [],
-  });
-  stale.resolve({ ...listing([]), ts: 350 });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([]);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request).toHaveBeenCalledTimes(3);
-});

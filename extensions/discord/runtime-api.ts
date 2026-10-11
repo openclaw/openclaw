@@ -172,7 +172,6 @@ export {
   formatThreadBindingDurationLabel,
   getThreadBindingManager,
   listThreadBindingsBySessionKey,
-  listThreadBindingsBySessionKeyAsync,
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   resolveDiscordThreadBindingIdleTimeoutMs,

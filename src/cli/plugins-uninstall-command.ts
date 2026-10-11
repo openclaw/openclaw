@@ -6,6 +6,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 export type PluginUninstallOptions = {
   keepFiles?: boolean;
@@ -68,14 +69,21 @@ export async function runPluginUninstallCommand(
       runtime.log(theme.warn(warning));
     }
   };
-  const execute = async (targetPluginId: string, skipPreview: boolean) => {
+  const executeLocal = async (
+    targetPluginId: string,
+    skipPreview: boolean,
+    assertCurrent: () => void,
+  ) => {
     // Keep errors/output inside the plugin lease; the owner emits success inside any package lease.
     const result = await uninstallPluginWithPolicy({
       pluginId: targetPluginId,
       keepFiles,
       caller: "cli",
       clawManaged: opts.clawManaged,
-      beforePersistentApply: opts.beforePersistentApply,
+      beforePersistentApply: () => {
+        assertCurrent();
+        opts.beforePersistentApply?.();
+      },
       invalidateRuntimeCache: opts.invalidateRuntimeCache,
       onPreview: async (preview) => {
         if (skipPreview && preview.pluginId !== targetPluginId) {
@@ -103,12 +111,16 @@ export async function runPluginUninstallCommand(
     }
     return result.ok;
   };
+  const execute = (targetPluginId: string, skipPreview: boolean) =>
+    runWithLocalPluginState("uninstall", (assertCurrent) =>
+      withPluginLifecycleLease({}, () => executeLocal(targetPluginId, skipPreview, assertCurrent)),
+    );
   if (opts.keepConfig) {
     runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
   }
   const [onlyId] = ids;
   if (ids.length === 1 && onlyId && opts.force && !opts.dryRun && !gateway) {
-    await withPluginLifecycleLease({}, async () => await execute(onlyId, false));
+    await execute(onlyId, false);
     return;
   }
   if (!opts.dryRun) {
@@ -166,9 +178,7 @@ export async function runPluginUninstallCommand(
       runtime.log(
         `Uninstalled plugin "${result.pluginId}". Removed: ${result.removed.join(", ") || "nothing"}.`,
       );
-    } else if (
-      !(await withPluginLifecycleLease({}, async () => await execute(preview.pluginId, true)))
-    ) {
+    } else if (!(await execute(preview.pluginId, true))) {
       return;
     }
   }

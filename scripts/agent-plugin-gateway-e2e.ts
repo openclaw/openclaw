@@ -73,7 +73,6 @@ function startCaptured(
 ): CapturedChild {
   const output = { stderr: "", stdout: "" };
   const stop = new AbortController();
-  const signal = AbortSignal.any([options.signal, stop.signal]);
   let outcome: ChildOutcome | undefined;
   const completion = runManagedCommand({
     bin: command,
@@ -82,7 +81,7 @@ function startCaptured(
     env: options.env,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
-    signal,
+    signal: AbortSignal.any([options.signal, stop.signal]),
     onSignal: options.onSignal,
     timeoutMs: options.timeoutMs,
     timeoutKillGraceMs: 2_000,
@@ -100,11 +99,8 @@ function startCaptured(
     },
   }).then(
     (code) =>
-      (outcome = signal.aborted
-        ? { error: Object.assign(new Error("Managed command aborted"), { code: "ABORT_ERR" }) }
-        : code === 0
-          ? { code }
-          : { error: childFailure({ label: options.label, output }, code) }),
+      (outcome =
+        code === 0 ? { code } : { error: childFailure({ label: options.label, output }, code) }),
     (error: unknown) => (outcome = { error }),
   );
   return {

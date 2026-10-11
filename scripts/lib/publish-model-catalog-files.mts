@@ -1,29 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  readRegularFileSync,
-  sameFileIdentity,
-  writeSiblingTempFile,
-} from "@openclaw/fs-safe/advanced";
+import { readRegularFileSync, writeSiblingTempFile } from "@openclaw/fs-safe/advanced";
 
 type Output = { file: string; content: string };
-type Snapshot = { buffer: Buffer; stat: fs.BigIntStats } | undefined;
-type Recovery = {
-  dir: string;
-  identity: fs.BigIntStats;
-  files: Map<string, fs.BigIntStats>;
-};
+type Snapshot = { buffer: Buffer; mode: number } | undefined;
+type Recovery = { dir: string };
 
 function snapshot(file: string): Snapshot {
-  const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
   if (!stat) {
     return undefined;
   }
   const { buffer } = readRegularFileSync({ filePath: file });
-  if (!sameFileIdentity(stat, fs.lstatSync(file, { bigint: true }))) {
-    throw new Error(`Catalog output changed during preparation: ${file}`);
-  }
-  return { buffer, stat };
+  return { buffer, mode: stat.mode & 0o777 };
 }
 
 function resolveOutput(outputFile: string): string {
@@ -48,58 +37,15 @@ function resolveOutput(outputFile: string): string {
   }
 }
 
-function assertUnchanged(file: string, previous: Snapshot): void {
-  const current = snapshot(file);
-  if (
-    previous
-      ? !current ||
-        !sameFileIdentity(previous.stat, current.stat) ||
-        !previous.buffer.equals(current.buffer)
-      : current
-  ) {
-    throw new Error(`Catalog output changed during preparation: ${file}`);
-  }
-}
-
 function saveRecoveryFile(recovery: Recovery, name: string, content: string | Buffer): void {
   const file = path.join(recovery.dir, name);
-  // Capture ownership before writing: even a partial write remains cleanable.
   const fd = fs.openSync(file, "wx", 0o600);
   try {
-    recovery.files.set(file, fs.fstatSync(fd, { bigint: true }));
     fs.writeFileSync(fd, content);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-}
-
-function sameRecoveryIdentity(previous: fs.BigIntStats, current: fs.BigIntStats): boolean {
-  // Unknown Windows identities are tolerated for reads, never for deletion.
-  return (
-    previous.dev !== 0n &&
-    previous.ino !== 0n &&
-    previous.dev === current.dev &&
-    previous.ino === current.ino
-  );
-}
-
-function cleanupRecovery(recovery: Recovery): void {
-  if (!sameRecoveryIdentity(recovery.identity, fs.lstatSync(recovery.dir, { bigint: true }))) {
-    throw new Error("recovery directory identity is unknown or changed");
-  }
-  // No recursive removal and no exit hook: interrupted publication must retain
-  // its backups. Preserve observed substitutes and unknown children.
-  for (const [file, identity] of recovery.files) {
-    const current = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-    if (current) {
-      if (!sameRecoveryIdentity(identity, current)) {
-        throw new Error("recovery file identity is unknown or changed");
-      }
-      fs.unlinkSync(file);
-    }
-  }
-  fs.rmdirSync(recovery.dir);
 }
 
 /** Local artifact publication, not a transaction across two filesystem names. */
@@ -125,12 +71,7 @@ export async function publishModelCatalogPair(
   try {
     for (const output of plans) {
       const dir = fs.mkdtempSync(path.join(output.parent, ".catalog-pair-"));
-      recoveries.push({
-        ...output,
-        dir,
-        identity: fs.lstatSync(dir, { bigint: true }),
-        files: new Map(),
-      });
+      recoveries.push({ ...output, dir });
     }
     for (const [index, recovery] of recoveries.entries()) {
       saveRecoveryFile(recovery, "next.json", recovery.content);
@@ -146,7 +87,7 @@ export async function publishModelCatalogPair(
           ...recoveries.map((entry, i) => `output ${i + 1}: ${entry.file}; recovery: ${entry.dir}`),
           `This directory belongs to output ${index + 1}.`,
           previous
-            ? `previous.json holds original bytes; mode ${(previous.stat.mode & 0o777n).toString(8)}.`
+            ? `previous.json holds original bytes; mode ${previous.mode.toString(8)}.`
             : "The output was absent before this attempt.",
           "next.json holds the validated candidate bytes.",
           "Stop writers and inspect BOTH outputs before restoring or completing the pair.",
@@ -155,18 +96,11 @@ export async function publishModelCatalogPair(
           "",
         ].join("\n"),
       );
-      if (
-        !fs.readFileSync(path.join(recovery.dir, "next.json")).equals(Buffer.from(recovery.content))
-      ) {
-        throw new Error("prepared catalog bytes changed");
-      }
     }
-    // Finish both preparations before any final-path mutation. Recheck each
-    // destination again at publication; this is cooperative, not rename CAS.
-    recoveries.forEach((output) => assertUnchanged(output.file, output.previous));
+    // The documented single publisher owns both outputs during this operation.
     publicationStarted = true;
     for (const output of recoveries) {
-      const mode = output.previous ? Number(output.previous.stat.mode & 0o777n) : undefined;
+      const mode = output.previous?.mode;
       await writeSiblingTempFile({
         dir: output.parent,
         chmodDir: false,
@@ -179,10 +113,7 @@ export async function publishModelCatalogPair(
             mode: mode ?? 0o666,
           });
         },
-        resolveFinalPath: () => {
-          assertUnchanged(output.file, output.previous);
-          return output.file;
-        },
+        resolveFinalPath: () => output.file,
       });
     }
     published = true;
@@ -202,7 +133,7 @@ export async function publishModelCatalogPair(
     if (!publicationStarted || published) {
       for (const recovery of recoveries) {
         try {
-          cleanupRecovery(recovery);
+          fs.rmSync(recovery.dir, { recursive: true, force: true });
         } catch (error) {
           warn(
             `Catalog ${published ? "pair published; " : ""}recovery cleanup failed; retained ${recovery.dir}: ${String(error)}`,

@@ -3,17 +3,25 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { VERSION } from "../version.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
 vi.mock("../plugins/update.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/update.js")>()),
   updateNpmInstalledPlugins: vi.fn(),
 }));
+vi.mock("../plugins/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/install.js")>()),
+  installPluginFromNpmSpec: vi.fn(),
+}));
+const actualUpdate =
+  await vi.importActual<typeof import("../plugins/update.js")>("../plugins/update.js");
 // mock-isolation: This offline update owns no Gateway or network connection.
 vi.mock("./plugins-lifecycle-client.js", () => ({
   resolvePluginLifecycleGateway: async () => null,
@@ -115,6 +123,73 @@ it("publishes the replacement Doctor config when a ClawHub update reuses the ins
         codex: next,
       });
       expect(log).toHaveBeenCalledWith("Updates saved; they will load on the next Gateway start.");
+    },
+  );
+});
+
+it.each([
+  { ids: ["codex"], all: false, expected: `@openclaw/codex@${VERSION}` },
+  { ids: [], all: true, expected: `@openclaw/codex@${VERSION}` },
+  { ids: ["@openclaw/codex@2026.9.5"], all: false, expected: "@openclaw/codex@2026.9.5" },
+])("resolves standalone plugin updates against the host cohort ($ids, all=$all)", async (test) => {
+  await withOpenClawTestState(
+    { label: "plugin-update-cohort", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      const installPath = state.statePath("extensions", "codex");
+      fs.mkdirSync(installPath, { recursive: true });
+      fs.writeFileSync(
+        path.join(installPath, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/codex",
+          version: "2026.9.5",
+          type: "module",
+          openclaw: { extensions: ["./index.mjs"] },
+        }),
+      );
+      fs.writeFileSync(path.join(installPath, "index.mjs"), "export default {};\n");
+      fs.writeFileSync(
+        path.join(installPath, "openclaw.plugin.json"),
+        JSON.stringify({ id: "codex", configSchema: { type: "object" } }),
+      );
+      const config = {
+        update: { channel: "stable" as const },
+        plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+      };
+      await state.writeConfig(config);
+      await seedInstalledPluginIndex(
+        {
+          codex: {
+            source: "npm",
+            spec: "@openclaw/codex",
+            resolvedName: "@openclaw/codex",
+            resolvedSpec: "@openclaw/codex@2026.9.5",
+            version: "2026.9.5",
+            resolvedVersion: "2026.9.5",
+            installPath,
+          },
+        },
+        { config, env: state.env },
+      );
+      vi.mocked(installPluginFromNpmSpec).mockResolvedValue({
+        ok: true,
+        pluginId: "codex",
+        targetDir: installPath,
+        version: VERSION,
+        extensions: ["./index.mjs"],
+      });
+      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`Unexpected exit ${code}`);
+      });
+
+      vi.mocked(updateNpmInstalledPlugins).mockImplementation(
+        actualUpdate.updateNpmInstalledPlugins,
+      );
+      await runPluginUpdateCommand({ ids: test.ids, opts: { all: test.all, dryRun: true } });
+
+      expect(installPluginFromNpmSpec).toHaveBeenLastCalledWith(
+        expect.objectContaining({ spec: test.expected, dryRun: true }),
+      );
     },
   );
 });

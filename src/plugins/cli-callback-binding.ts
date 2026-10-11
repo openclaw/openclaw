@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Argument, Command, Option } from "commander";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -27,6 +28,27 @@ function bindCallback<T>(value: T): T {
   return bound as T;
 }
 
+function bindCommandCallback<T>(value: T, toCommandFailure: (error: unknown) => unknown): T {
+  const callback = bindCallback(value);
+  if (callback === value || typeof callback !== "function") {
+    return value;
+  }
+  const bound = function (this: unknown, ...args: unknown[]) {
+    try {
+      const result: unknown = Reflect.apply(callback, this, args);
+      return isPromiseLike(result)
+        ? Promise.resolve(result).catch((error: unknown) => {
+            throw toCommandFailure(error);
+          })
+        : result;
+    } catch (error) {
+      throw toCommandFailure(error);
+    }
+  };
+  // SAFETY: Like bindCallback, this forwards the native callback's receiver, arguments and result.
+  return bound as T;
+}
+
 function bindConfiguration<T>(value: T): T {
   if (!value || typeof value !== "object") {
     return value;
@@ -43,6 +65,7 @@ function bindConfiguration<T>(value: T): T {
 }
 
 function bindParser(parser: Option | Argument): void {
+  // Commander prints parser failures itself; keep its error classification intact.
   if (parsers.has(parser)) {
     return;
   }
@@ -102,21 +125,28 @@ function bindStoredCallbackCollection(
   Object.defineProperty(target, key, { ...descriptor, value: callbacks });
 }
 
-function bindPreparedCommandCallbacks(program: Command): void {
+function bindPreparedCommandCallbacks(
+  program: Command,
+  toCommandFailure: (error: unknown) => unknown,
+): void {
   // Commander 15 exposes setters but no getters for these retained callbacks.
   // Adopt only the named slots of a tree explicitly registered by this plugin,
   // never callbacks already present on the shared host command tree.
-  for (const key of ["_actionHandler", "_exitCallback"] as const) {
+  const bindSlot = (key: string, bind: (value: unknown) => unknown) => {
     const descriptor = Object.getOwnPropertyDescriptor(program, key);
     if (!descriptor || !("value" in descriptor)) {
       throw new Error(`Unsupported native Commander callback slot: ${key}`);
     }
     Object.defineProperty(program, key, {
       ...descriptor,
-      value: bindCallback(descriptor.value),
+      value: bind(descriptor.value),
     });
-  }
-  bindStoredCallbackCollection(program, "_lifeCycleHooks");
+  };
+  bindSlot("_actionHandler", (value) => bindCommandCallback(value, toCommandFailure));
+  bindSlot("_exitCallback", bindCallback);
+  bindStoredCallbackCollection(program, "_lifeCycleHooks", (value) =>
+    bindCommandCallback(value, toCommandFailure),
+  );
   program.configureHelp(bindConfiguration(program.configureHelp()));
   program.configureOutput(bindConfiguration(program.configureOutput()));
   for (const parser of [...program.options, ...program.registeredArguments]) {
@@ -178,14 +208,18 @@ function bindPluginCliEvents(program: EventEmitter, adoptPrepared: boolean): voi
  * callbacks remain caller-owned; newly created or explicitly added command trees
  * also transfer their preconfigured callbacks to the active adding instance.
  */
-export function bindPluginCliProgram(program: Command, adoptPrepared = false): void {
+export function bindPluginCliProgram(
+  program: Command,
+  toCommandFailure: (error: unknown) => unknown,
+  adoptPrepared = false,
+): void {
   if (commands.has(program)) {
     return;
   }
   commands.add(program);
   const adopt = adoptPrepared && pluginInstanceInvocation.getStore()?.instance !== undefined;
   if (adopt) {
-    bindPreparedCommandCallbacks(program);
+    bindPreparedCommandCallbacks(program, toCommandFailure);
   }
 
   // Commander 15 invokes these callbacks later, after the registrar has returned.
@@ -210,7 +244,9 @@ export function bindPluginCliProgram(program: Command, adoptPrepared = false): v
             callbackIndex === undefined
               ? bindConfiguration(arg)
               : index === callbackIndex
-                ? bindCallback(arg)
+                ? name === "action" || name === "hook"
+                  ? bindCommandCallback(arg, toCommandFailure)
+                  : bindCallback(arg)
                 : arg,
           ),
         );
@@ -225,14 +261,14 @@ export function bindPluginCliProgram(program: Command, adoptPrepared = false): v
   const createCommand = program.createCommand.bind(program);
   program.createCommand = function (name) {
     const command = createCommand.call(this, name);
-    bindPluginCliProgram(command, true);
+    bindPluginCliProgram(command, toCommandFailure, true);
     return command;
   };
   const addCommand = program.addCommand.bind(program);
   program.addCommand = function (command, options) {
     // Native validation can throw after attaching the child to the host tree.
     // Bind before insertion so a caught registration error cannot leave an escape.
-    bindPluginCliProgram(command, true);
+    bindPluginCliProgram(command, toCommandFailure, true);
     return addCommand.call(this, command, options);
   };
   const createOption = program.createOption.bind(program);
@@ -260,6 +296,6 @@ export function bindPluginCliProgram(program: Command, adoptPrepared = false): v
     return addArgument.call(this, argument);
   };
   for (const command of program.commands) {
-    bindPluginCliProgram(command, adopt);
+    bindPluginCliProgram(command, toCommandFailure, adopt);
   }
 }

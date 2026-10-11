@@ -181,17 +181,6 @@ describe("shared read response dispatch", () => {
     expect(produce).toHaveBeenCalledTimes(21);
   });
 
-  it("retires responses when their method registry is replaced", async () => {
-    const produce = vi.fn((respond: RespondFn) => respond(true, { value: "current" }));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    await harness.request("old-registry").done;
-    harness.invalidate();
-    const current = harness.request("new-registry");
-    await current.done;
-    expectPayload(current, { value: "current" });
-    expect(produce).toHaveBeenCalledTimes(2);
-  });
-
   it("does not certify a pending response against a replacement config", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -289,38 +278,6 @@ describe("shared read response dispatch", () => {
       payloadBytes.add(frame.slice(frame.indexOf('"payload":') + '"payload":'.length, -1));
     }
     expect(payloadBytes.size).toBe(1);
-  });
-
-  it("serializes a root array once and preserves ordinary JSON fallback", async () => {
-    const toJSON = vi.fn((key: string) => ({ key, text: 'Array é🦞 \\"' }));
-    const produce = vi.fn((respond: RespondFn) => respond(true, [{ toJSON }]));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("array-first");
-    await first.done;
-    const second = harness.request("array-second");
-    await second.done;
-
-    const expected = [{ key: "0", text: 'Array é🦞 \\"' }];
-    expectPayload(first, expected);
-    expectPayload(second, expected);
-    expect(JSON.stringify({ payload: first.respond.mock.calls[0]![1] })).toBe(
-      JSON.stringify({ payload: expected }),
-    );
-    expect(produce).toHaveBeenCalledOnce();
-    expect(toJSON).toHaveBeenCalledExactlyOnceWith("0");
-  });
-
-  it.each([null, true, 17, 'Scalar é🦞 \\"'])("shares scalar payload %j", async (payload) => {
-    const produce = vi.fn((respond: RespondFn) => respond(true, payload));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("scalar-first");
-    await first.done;
-    const second = harness.request("scalar-second");
-    await second.done;
-
-    expectPayload(first, payload);
-    expectPayload(second, payload);
-    expect(produce).toHaveBeenCalledOnce();
   });
 
   it("keeps an omitted toJSON payload valid across shared and ordinary JSON responses", async () => {

@@ -9,6 +9,7 @@ who contributed, with links to the source changes.
 
 ## Releases
 
+- [v2026.10.1](/releases/2026.10.1)
 - [v2026.9.9](/releases/2026.9.9)
 - [v2026.9.8](/releases/2026.9.8)
 - [v2026.9.7](/releases/2026.9.7) - Snappier under load, smoother long conversations, update recovery, OpenAI Agents API, and Sign in with ChatGPT (Beta).

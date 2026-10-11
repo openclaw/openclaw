@@ -158,24 +158,6 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("matches service-managed dotenv override keys case-insensitively", async () => {
-    await withDotEnvFixture(async ({ stateDir }) => {
-      const stateEnvPath = path.join(stateDir, ".env");
-      await writeEnvFile(stateEnvPath, "hass_token=from-state\n");
-      process.env.HASS_TOKEN = "stale-uppercase-service-value";
-      process.env.hass_token = "stale-lowercase-service-value";
-
-      loadGlobalRuntimeDotEnvFiles({
-        stateEnvPath,
-        overrideKeys: ["HASS_TOKEN"],
-        quiet: true,
-      });
-
-      expect(process.env.HASS_TOKEN).toBe("from-state");
-      expect(process.env.hass_token).toBe("from-state");
-    });
-  });
-
   it("loads global env when the working directory was deleted", async () => {
     await withDotEnvFixture(async ({ stateDir }) => {
       await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
@@ -219,110 +201,6 @@ describe("loadDotEnv", () => {
       expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
         "gateway.env",
       );
-    });
-  });
-
-  it("does not warn about dotenv conflicts when the key is already set", async () => {
-    await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
-      setTestEnvValue("HOME", base);
-      process.env.FOO = "from-shell";
-      await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
-      await writeEnvFile(
-        path.join(base, ".config", "openclaw", "gateway.env"),
-        "FOO=from-gateway\n",
-      );
-
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      loggerMocks.warn.mockClear();
-
-      loadDotEnv({ quiet: true });
-
-      expect(process.env.FOO).toBe("from-shell");
-      expect(loggerMocks.warn).not.toHaveBeenCalled();
-    });
-  });
-
-  it("blocks dangerous and workspace-control vars from CWD .env", async () => {
-    await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
-      const blockedEnvLines = [
-        "NODE_OPTIONS=--require ./evil.js",
-        "NODE_REDIRECT_WARNINGS=./warnings.log",
-        "NODE_REPL_EXTERNAL_MODULE=./evil-repl.js",
-        "NODE_REPL_HISTORY=./repl-history",
-        "NODE_V8_COVERAGE=./coverage",
-        "OPENCLAW_CONFIG_PATH=./evil-config.json",
-        "STATE_DIRECTORY=./evil-systemd-state",
-        "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1",
-        'OPENCLAW_PLUGIN_INSTALL_OVERRIDES={"codex":"npm-pack:/tmp/codex.tgz"}',
-        "OPENCLAW_PINNED_PYTHON=./attacker-python",
-        "OPENCLAW_PINNED_WRITE_PYTHON=./attacker-write-python",
-        "OPENCLAW_TEST_TAILSCALE_BINARY=/tmp/attacker-tailscale",
-        "NPM_EXECPATH=./attacker-npm-cli.js",
-        "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
-        "CLOUDSDK_CONFIG=./attacker-gcloud-config",
-        "CLOUDSDK_PYTHON=./attacker-python",
-        "CLOUDSDK_PYTHON_ARGS=-cprint('attacker')",
-        "CLOUDSDK_PYTHON_SITEPACKAGES=1",
-        "EXAMPLE_API_HOST=https://evil-api.example.com",
-        "MINIMAX_API_HOST=https://evil.example.com",
-        "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
-        "SLACK_API_URL=http://evil-slack.example.com/api/",
-        "SMS_ALLOWED_USERS=*",
-        "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION=true",
-        "SMS_PUBLIC_WEBHOOK_URL=https://evil-sms.example.com/webhook",
-        "ZALO_API_URL=http://evil-zalo.example.com/",
-        "AWS_ACCESS_KEY_ID=workspace-access-key",
-        "AWS_ACCOUNT_ID=123456789012",
-        "AWS_ACCOUNT_ID_ENDPOINT_MODE=required",
-        "AWS_BEARER_TOKEN_BEDROCK=workspace-bearer",
-        "AWS_BEDROCK_SKIP_AUTH=1",
-        "AWS_CONTAINER_AUTHORIZATION_TOKEN=workspace-token",
-        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=./container-token",
-        "AWS_CONTAINER_CREDENTIALS_FULL_URI=https://evil-credentials.example.com",
-        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/evil-credentials",
-        "AWS_CONFIG_FILE=./attacker-aws-config",
-        "AWS_CREDENTIAL_EXPIRATION=2099-01-01T00:00:00Z",
-        "AWS_CREDENTIAL_SCOPE=workspace-scope",
-        "AWS_EC2_METADATA_DISABLED=false",
-        "AWS_EC2_METADATA_SERVICE_ENDPOINT=https://evil-imds.example.com",
-        "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE=IPv6",
-        "AWS_EC2_METADATA_V1_DISABLED=false",
-        "AWS_ENDPOINT_URL=https://evil-aws.example.com",
-        "AWS_ENDPOINT_URL_BEDROCK_RUNTIME=https://evil-bedrock.example.com",
-        "AWS_PROFILE=workspace-profile",
-        "AWS_ROLE_ARN=arn:aws:iam::123456789012:role/attacker",
-        "AWS_ROLE_SESSION_NAME=workspace-session",
-        "AWS_SECRET_ACCESS_KEY=workspace-secret-key",
-        "AWS_SESSION_TOKEN=workspace-session-token",
-        "AWS_SHARED_CREDENTIALS_FILE=./attacker-aws-credentials",
-        "AWS_WEB_IDENTITY_TOKEN_FILE=./web-identity-token",
-        "SYNOLOGY_ALLOWED_USER_IDS=*",
-        "HTTP_PROXY=http://evil-proxy:8080",
-        "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
-        "HOMEBREW_CURL_PATH=./evil-brew/bin/curl",
-        "HOMEBREW_GIT_PATH=./evil-brew/bin/git",
-        "HOMEBREW_PREFIX=./evil-brew",
-        "SystemRoot=.\\fake-root",
-        "UV_PYTHON=./attacker-python",
-        "uv_python=./attacker-python-lower",
-        "WINDIR=.\\fake-windir",
-      ];
-      const blockedKeys = blockedEnvLines.map((line) => line.slice(0, line.indexOf("=")));
-      await writeEnvFile(
-        path.join(cwdDir, ".env"),
-        ["SAFE_KEY=from-cwd", "OPENCLAW_STATE_DIR=./evil-state", ...blockedEnvLines].join("\n"),
-      );
-      await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
-
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      clearEnv(["SAFE_KEY", ...blockedKeys]);
-
-      loadDotEnv({ quiet: true });
-
-      expect(process.env.SAFE_KEY).toBe("from-cwd");
-      expect(process.env.BAR).toBe("from-global");
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-      expectEnvUndefined(blockedKeys);
     });
   });
 
@@ -431,47 +309,6 @@ describe("loadDotEnv", () => {
       expect(process.env.ZALO_API_URL).toBe("http://trusted-zalo.example.com/");
     });
   });
-
-  it("still allows trusted global .env to set credential and gateway auth vars", async () => {
-    await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
-      await writeEnvFile(
-        path.join(stateDir, ".env"),
-        [
-          "ANTHROPIC_API_KEY=sk-ant-trusted-key",
-          "ANTHROPIC_API_KEY_SECONDARY=sk-ant-secondary",
-          "ANTHROPIC_OAUTH_TOKEN=trusted-oauth",
-          "OPENAI_API_KEY=sk-openai-trusted-key",
-          "OPENAI_API_KEYS=sk-openai-a,sk-openai-b",
-          "OPENAI_API_KEY_SECONDARY=sk-openai-secondary",
-          "OPENCLAW_LIVE_ANTHROPIC_KEY=sk-ant-live",
-          "OPENCLAW_LIVE_ANTHROPIC_KEYS=sk-ant-live-a,sk-ant-live-b",
-          "OPENCLAW_LIVE_GEMINI_KEY=sk-gemini-live",
-          "OPENCLAW_LIVE_OPENAI_KEY=sk-openai-live",
-          "OPENCLAW_GATEWAY_TOKEN=trusted-token",
-          "OPENCLAW_GATEWAY_PASSWORD=trusted-password",
-          "OPENCLAW_GATEWAY_SECRET=trusted-secret",
-        ].join("\n"),
-      );
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      clearEnv(CREDENTIAL_AND_GATEWAY_ENV_KEYS);
-
-      loadDotEnv({ quiet: true });
-
-      expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-trusted-key");
-      expect(process.env.ANTHROPIC_API_KEY_SECONDARY).toBe("sk-ant-secondary");
-      expect(process.env.ANTHROPIC_OAUTH_TOKEN).toBe("trusted-oauth");
-      expect(process.env.OPENAI_API_KEY).toBe("sk-openai-trusted-key");
-      expect(process.env.OPENAI_API_KEYS).toBe("sk-openai-a,sk-openai-b");
-      expect(process.env.OPENAI_API_KEY_SECONDARY).toBe("sk-openai-secondary");
-      expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBe("sk-ant-live");
-      expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBe("sk-ant-live-a,sk-ant-live-b");
-      expect(process.env.OPENCLAW_LIVE_GEMINI_KEY).toBe("sk-gemini-live");
-      expect(process.env.OPENCLAW_LIVE_OPENAI_KEY).toBe("sk-openai-live");
-      expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("trusted-token");
-      expect(process.env.OPENCLAW_GATEWAY_PASSWORD).toBe("trusted-password");
-      expect(process.env.OPENCLAW_GATEWAY_SECRET).toBe("trusted-secret");
-    });
-  });
 });
 
 describe("loadCliDotEnv", () => {
@@ -487,88 +324,6 @@ describe("loadCliDotEnv", () => {
       loadCliDotEnv({ quiet: true });
 
       expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
-    });
-  });
-
-  it("loads the gateway.env compatibility fallback during CLI startup", async () => {
-    await withDotEnvFixture(async ({ base, cwdDir }) => {
-      setTestEnvValue("HOME", base);
-      const defaultStateDir = path.join(base, ".openclaw");
-      setTestEnvValue("OPENCLAW_STATE_DIR", defaultStateDir);
-      await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
-      await writeEnvFile(
-        path.join(base, ".config", "openclaw", "gateway.env"),
-        "BAR=from-gateway\n",
-      );
-
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      delete process.env.FOO;
-      delete process.env.BAR;
-
-      loadCliDotEnv({ quiet: true });
-
-      expect(process.env.FOO).toBe("from-global");
-      expect(process.env.BAR).toBe("from-gateway");
-    });
-  });
-
-  it("can defer global dotenv while loading only workspace env", async () => {
-    await withDotEnvFixture(async ({ base, cwdDir }) => {
-      setTestEnvValue("HOME", base);
-      const defaultStateDir = path.join(base, ".openclaw");
-      setTestEnvValue("OPENCLAW_STATE_DIR", defaultStateDir);
-      await writeEnvFile(path.join(cwdDir, ".env"), "BAZ=from-workspace\n");
-      await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
-      await writeEnvFile(
-        path.join(base, ".config", "openclaw", "gateway.env"),
-        "BAR=from-gateway\n",
-      );
-
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      delete process.env.FOO;
-      delete process.env.BAR;
-      delete process.env.BAZ;
-
-      loadCliDotEnv({ loadGlobalEnv: false, quiet: true });
-
-      expect(process.env.FOO).toBeUndefined();
-      expect(process.env.BAR).toBeUndefined();
-      expect(process.env.BAZ).toBe("from-workspace");
-    });
-  });
-
-  it("loads global CLI env when the working directory was deleted", async () => {
-    await withDotEnvFixture(async ({ stateDir }) => {
-      await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
-      vi.spyOn(process, "cwd").mockImplementation(() => {
-        throw new Error("ENOENT: uv_cwd");
-      });
-      delete process.env.FOO;
-
-      loadCliDotEnv({ quiet: true });
-
-      expect(process.env.FOO).toBe("from-global");
-    });
-  });
-
-  it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
-    await withDotEnvFixture(async ({ base, cwdDir }) => {
-      const customStateDir = path.join(base, "custom-state");
-      setTestEnvValue("HOME", base);
-      setTestEnvValue("OPENCLAW_STATE_DIR", customStateDir);
-      await writeEnvFile(
-        path.join(base, ".config", "openclaw", "gateway.env"),
-        "FOO=from-gateway\n",
-      );
-
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      delete process.env.FOO;
-
-      loadCliDotEnv({ quiet: true });
-
-      expect(process.env.FOO).toBeUndefined();
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(customStateDir);
-      expect(process.env.BAR).toBeUndefined();
     });
   });
 

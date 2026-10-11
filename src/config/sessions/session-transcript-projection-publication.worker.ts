@@ -1,7 +1,10 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
+  runSqliteImmediateTransactionSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type {
@@ -75,20 +78,42 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   function execute(
     command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
-    if (
-      (command.type === "preflight" || command.type === "sweep") &&
-      isSessionTranscriptIndexStatusClean(db)
-    ) {
-      return { sessionIds: [], hasMore: false, traversalComplete: true };
+    if (command.type === "preflight" || command.type === "sweep") {
+      if (isSessionTranscriptIndexStatusClean(db)) {
+        return { sessionIds: [], hasMore: false, traversalComplete: true };
+      }
+      // Derived maintenance has no prepared row or publication facts. Admit the whole
+      // bounded effect, then reread rows without waiting for the host under a write lock.
+      context.admit("transaction");
+      context.admit("commit");
+      let entered = false;
+      try {
+        return runWithSqliteBusyTimeout(db, 0, () =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              entered = true;
+              return maintainSessionTranscriptIndexStatus(db);
+            },
+            {
+              operationLabel: `sessions.transcript-index.${command.type}`,
+              beginLockFailureReporting: "suppress",
+            },
+          ),
+        );
+      } catch (error) {
+        if (entered || !isSqliteLockError(error)) {
+          throw error;
+        }
+        // The existing drain yields and obtains fresh grants on its next attempt.
+        return { sessionIds: [], hasMore: true, traversalComplete: false };
+      }
     }
     return withSqlitePostCommitPublications(db, () =>
       runSqliteWorkerTransactionSync(
         context,
         () => {
           switch (command.type) {
-            case "preflight":
-            case "sweep":
-              return maintainSessionTranscriptIndexStatus(db);
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,

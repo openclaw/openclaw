@@ -194,6 +194,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "setup-runtime": 2,
   "reply-history": 6,
   "provider-auth": 15,
+  // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
+  "command-auth-native": 1,
+  "skill-commands-runtime": 2,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
@@ -221,9 +224,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
-      // +12: async command authorization and native approval contracts (#168482).
-      // +4: async conversation inspection, routing, and V2 adapter registration (#168483).
-      3672,
+      // +5: approved sync-to-async replacements: inspectConversationBinding,
+      // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
+      // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
+      // +1: approved final-delivery capture ownership predicate for channel transcript mirrors.
+      // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
+      // +3: approved async skill-command preparation pairs on two existing entrypoints.
+      // +1: preview adapters strip only normalization-owned response decoration.
+      // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
+      3674,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -240,9 +249,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
-      // +8: async command authorization and native approval helpers (#168482).
-      // +3: async conversation inspection, routing, and V2 adapter registration (#168483).
-      2133,
+      // +5: the five awaited inspection, authorization, and approval factory replacements above.
+      // +1: the same final-delivery capture ownership predicate.
+      // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
+      // +3: the same skill-command preparation replacements.
+      // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
+      // +1: the same bounded stale-read cache factory on collection-runtime.
+      2135,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -252,7 +265,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: synchronous session entry getter remains until the next Plugin SDK major.
       // +6: released session callbacks and provider replay contracts during async migration.
       // +4: released synchronous conversation binding contracts during V2 migration.
-      158,
+      // +3: released synchronous skill-command list helpers during async migration.
+      161,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

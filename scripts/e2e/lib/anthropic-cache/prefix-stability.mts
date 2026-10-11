@@ -77,30 +77,6 @@ function firstDifference(before: unknown, after: unknown, path = "$"): string {
   return `path=${path} leafPrevious=${digest(left)} leafNext=${digest(right)} leafBytes=${left === undefined ? 0 : Buffer.byteLength(left)}:${right === undefined ? 0 : Buffer.byteLength(right)}`;
 }
 
-function imageCleanupBytes(serialized: string): string {
-  let images = 0;
-  const project = (value: unknown): unknown => {
-    if (Array.isArray(value)) {
-      return value.map(project);
-    }
-    if (value === null || typeof value !== "object") {
-      return value;
-    }
-    const block = object(value);
-    if (block.type === "image" || block.type === "image_url" || block.type === "input_image") {
-      images += 1;
-      return {
-        type: block.type === "input_image" ? "input_text" : "text",
-        text: "[image data removed - already processed by model]",
-      };
-    }
-    return Object.fromEntries(Object.entries(block).map(([key, field]) => [key, project(field)]));
-  };
-  const expected = bytes(project(JSON.parse(serialized)));
-  assert(images > 0, "image cleanup boundary must contain an image");
-  return expected;
-}
-
 /** Preserve wire ordering and bytes; only movable conversation cache markers are separate. */
 export function snapshotProviderPrefix(
   api: CacheRequestApi,
@@ -153,9 +129,7 @@ export function assertStableProviderPrefix(
   options: {
     label: string;
     historyLength?: number;
-    boundary?:
-      | { kind: "image-cleanup"; historyIndexes: number[] }
-      | { kind: "history-pruning"; startIndex: number; deleteCount: number };
+    boundary?: { kind: "history-pruning"; startIndex: number; deleteCount: number };
   },
 ): void {
   const same = (segment: string, before: string | undefined, after: string | undefined) => {
@@ -174,7 +148,6 @@ export function assertStableProviderPrefix(
     "invalid stable history boundary",
   );
   const boundary = options.boundary;
-  const changedIndexes = new Set(boundary?.kind === "image-cleanup" ? boundary.historyIndexes : []);
   let history = previous.history.slice(0, length);
   let prunedCount = 0;
   if (boundary?.kind === "history-pruning") {
@@ -189,18 +162,8 @@ export function assertStableProviderPrefix(
     history = history.toSpliced(boundary.startIndex, boundary.deleteCount);
     prunedCount = boundary.deleteCount;
   }
-  for (const index of changedIndexes) {
-    assert(
-      Number.isInteger(index) && index >= 0 && index < length,
-      "invalid image cleanup boundary",
-    );
-  }
   for (let index = 0; index < history.length; index++) {
-    if (!changedIndexes.has(index)) {
-      same(`history[${index}]`, history[index], next.history[index]);
-    } else {
-      same(`history[${index}]`, imageCleanupBytes(history[index]!), next.history[index]);
-    }
+    same(`history[${index}]`, history[index], next.history[index]);
   }
   // Anthropic moves the last breakpoint as history grows; its retention policy
   // and coverage of the old marked prefix must survive that movement.

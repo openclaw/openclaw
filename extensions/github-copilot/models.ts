@@ -154,8 +154,8 @@ function compareCopilotStarterCandidates(
     return categoryDelta;
   }
   const contextDelta =
-    (right.contextWindow ?? DEFAULT_CONTEXT_WINDOW) -
-    (left.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
+    (right.contextWindow ?? Math.max(right.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW)) -
+    (left.contextWindow ?? Math.max(left.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW));
   if (contextDelta !== 0) {
     return contextDelta;
   }
@@ -256,12 +256,8 @@ function mapCopilotApiModelToDefinition(
   const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
 
   const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
-  // A missing/invalid native window is unknown, not a reported 128k ceiling. Keep the
-  // estimate for sizing but mark it replaceable; a real prompt limit remains separate.
+  // Catalogs retain provider facts; runtime construction supplies an estimate for omissions.
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
-  // The native window is never smaller than the prompt it admits, so the estimate
-  // must not clamp a real, larger prompt limit. Below 128k the historic estimate stands.
-  const contextWindow = nativeContextWindow ?? Math.max(contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const api = resolveCopilotListedApi(entry, id);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
@@ -288,8 +284,7 @@ function mapCopilotApiModelToDefinition(
     reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    ...(nativeContextWindow === undefined ? { contextWindowSource: "synthetic" as const } : {}),
+    ...(nativeContextWindow !== undefined ? { contextWindow: nativeContextWindow } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),

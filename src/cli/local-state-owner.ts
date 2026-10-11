@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import {
@@ -40,13 +39,15 @@ class LocalStateOwnerError extends Error {
 /** Select one owner before domain admission and retain offline custody through resource settlement. */
 export async function runWithLocalStateOwner<T>(params: {
   method: string;
-  params: Record<string, unknown>;
+  /** Lazy input is collected only for Gateway dispatch, never for the local path. */
+  params: Record<string, unknown> | ((signal: AbortSignal) => Promise<Record<string, unknown>>);
   target: string;
   recoveryCommand?: string;
   requiredCapabilities?: readonly string[];
   scopes?: readonly OperatorScope[];
   timeoutMs?: number;
   expectFinal?: boolean;
+  requireLocalBackendSharedAuth?: boolean;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
   onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
   assertTargetCurrent?: () => void;
@@ -56,19 +57,18 @@ export async function runWithLocalStateOwner<T>(params: {
   const selectedEnv = { ...process.env };
   const selectedStateDir = resolveStateDir(selectedEnv);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(selectedStateDir);
-  const rootIdentity = statSync(stateDir, { bigint: true, throwIfNoEntry: false });
   const env = {
     ...selectedEnv,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: resolveConfigPath(selectedEnv, selectedStateDir),
   };
-  const input = structuredClone(params.params);
+  const input =
+    typeof params.params === "function" ? params.params : structuredClone(params.params);
   const scopes: OperatorScope[] = [...(params.scopes ?? ["operator.admin"])];
   const [
     {
       acquireGatewayLock,
       isGatewayLifecycleContentionError,
-      isSameGatewayLockIdentity,
       readActiveGatewayLockIdentity,
       readLockPayloadSync,
       resolveGatewayLockPaths,
@@ -87,27 +87,14 @@ export async function runWithLocalStateOwner<T>(params: {
   const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
   const assertTargetCurrent = () => {
     controller.signal.throwIfAborted();
-    const ambientPaths = resolveGatewayLockPaths(process.env);
-    const currentRoot = rootIdentity
-      ? statSync(stateDir, { bigint: true, throwIfNoEntry: false })
-      : undefined;
-    if (
-      paths.stateDir !== stateDir ||
-      ambientPaths.ownerLockPath !== paths.ownerLockPath ||
-      ambientPaths.configPath !== paths.configPath ||
-      resolveIdentityPathViaExistingAncestorSync(selectedStateDir) !== stateDir ||
-      (rootIdentity &&
-        (currentRoot?.dev !== rootIdentity.dev || currentRoot?.ino !== rootIdentity.ino)) ||
-      resolveGatewayLockPaths(selectedEnv).ownerLockPath !== paths.ownerLockPath
-    ) {
-      throw new LocalStateOwnerError(
-        "OWNER_UNAVAILABLE",
-        "Selected state root changed; rerun the command.",
-      );
-    }
     params.assertTargetCurrent?.();
   };
-  const guidance = `Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command.`;
+  const guidance =
+    "Update the Gateway or fix authentication and retry. " +
+    (params.requireLocalBackendSharedAuth
+      ? "Provide the Gateway's shared secret through OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD in this CLI process; device pairing is not a substitute. "
+      : "") +
+    "To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command.";
   const refuse = (cause: unknown): never => {
     throw new LocalStateOwnerError(
       "OWNER_UNAVAILABLE",
@@ -179,15 +166,19 @@ export async function runWithLocalStateOwner<T>(params: {
     }
     const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
     let dispatched = false;
+    const gatewayInput =
+      typeof input === "function" ? structuredClone(await input(controller.signal)) : input;
     try {
       assertTargetCurrent();
       // The transport owns reduced connection config; full runtime loading can write state.
       return await callGateway<T>({
         method: params.method,
         configPath: paths.configPath,
-        params: { ...input, expectedOwnerId: owner.ownerId },
+        params: { ...gatewayInput, expectedOwnerId: owner.ownerId },
         localPortOverride: port,
         ignoreEnvUrlOverride: true,
+        requireLocalBackendSharedAuth: params.requireLocalBackendSharedAuth,
+        allowLocalBackendAuthNone: params.requireLocalBackendSharedAuth,
         requiredMethods: [params.method],
         requiredCapabilities: [
           GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
@@ -199,16 +190,6 @@ export async function runWithLocalStateOwner<T>(params: {
         scopes,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
-        prepareDispatchCurrent: async () => {
-          const current = await discover();
-          if (
-            !current ||
-            current.port === undefined ||
-            !isSameGatewayLockIdentity({ ...owner, port }, { ...current, port: current.port })
-          ) {
-            refuse(new Error("Gateway owner changed before dispatch"));
-          }
-        },
         assertDispatchCurrent: () => {
           assertTargetCurrent();
           const current = readLockPayloadSync(paths.ownerLockPath, true);

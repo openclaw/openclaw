@@ -257,6 +257,31 @@ describe("context cache lifecycle", () => {
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
   });
 
+  it("does not publish prewarm cancelled during cooperative projection", async () => {
+    let cancelled = false;
+    state.catalog.entries = Array.from({ length: 600 }, (_, index) => ({
+      id: `cancelled-${index}`,
+      contextWindow: 64_000,
+    }));
+    state.publishedOwner.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        cancelled = true;
+      });
+      return { config: state.config, modelCatalog: state.catalog };
+    });
+
+    await context.prewarmContextWindowCacheAfterReady({
+      config: state.config,
+      isCancelled: () => cancelled,
+    });
+
+    expect(cancelled).toBe(true);
+    expect(
+      context.lookupContextTokens("cancelled-599", { skipRuntimeConfigLoad: true }),
+    ).toBeUndefined();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
+  });
+
   it("releases status waits on timeout while warmup is pending", async () => {
     vi.useFakeTimers();
     state.loadOwner.mockImplementationOnce(() => new Promise<never>(() => {}));

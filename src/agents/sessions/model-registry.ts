@@ -650,10 +650,9 @@ export class ModelRegistry {
       thinkingLevelMap: model.thinkingLevelMap,
       input: catalog ? catalog.input : model.input,
       cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
-      contextWindow: catalog ? (model.contextWindow ?? 128000) : model.contextWindow,
-      ...(model.contextWindow !== undefined && model.contextWindowSource === "synthetic"
-        ? { contextWindowSource: "synthetic" }
-        : {}),
+      // Missing catalog windows remain unknown on disk; estimates belong to runtime models.
+      contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
+      ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
       contextTokens: model.contextTokens,
       contextWindows: model.contextWindows,
       contextWindowDefault: model.contextWindowDefault,

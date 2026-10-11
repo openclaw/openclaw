@@ -4,7 +4,7 @@ import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
-import "../pages/chat/components/browser-tab-card.ts";
+import "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption } from "./composer-menu.ts";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";
@@ -140,7 +140,7 @@ async function pauseMenuOpening(dropdown: Dropdown, trigger: HTMLElement) {
 
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
-  const dropdown = card.shadowRoot?.querySelector("wa-dropdown");
+  const dropdown = card.querySelector("wa-dropdown");
   if (!dropdown) {
     throw new Error("expected browser card menu");
   }
@@ -318,7 +318,8 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   async function hoverBackground(element: HTMLElement, expected: string) {
     const { page } = await import("vitest/browser");
     await page.elementLocator(element).hover();
-    await expect.poll(() => getComputedStyle(element).backgroundColor).toBe(expected);
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    expect(getComputedStyle(element).backgroundColor).toBe(expected);
   }
 
   it.each(["dark", "light"] as const)(
@@ -419,10 +420,8 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.body.append(card);
       const dropdown = await browserCardMenu(card);
       const { page } = await import("vitest/browser");
-      await page
-        .elementLocator(card.shadowRoot!.querySelector<HTMLElement>('[slot="trigger"]')!)
-        .click();
-      const item = card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!;
+      await page.elementLocator(card.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      const item = card.querySelector<HTMLElement>('[value="copy-url"]')!;
       const reference = document.createElement("wa-dropdown");
       reference.className = "session-menu";
       const referenceItem = document.createElement("wa-dropdown-item");

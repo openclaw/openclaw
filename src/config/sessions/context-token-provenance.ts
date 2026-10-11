@@ -1,8 +1,5 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionContextBudgetStatus, SessionEntry } from "./types.js";
 
 type SessionContextTokenOwner = Pick<
@@ -24,10 +21,10 @@ type SessionContextSelection = {
 
 function isExactProducerSelection(params: SessionContextSelection): boolean {
   const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
-  const entryModel = normalizeOptionalString(params.entry?.model) ?? "";
+  const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
   const entryHarness = normalizeLowercaseStringOrEmpty(params.entry?.agentHarnessId);
   const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
-  const currentModel = normalizeOptionalString(params.model) ?? "";
+  const currentModel = normalizeLowercaseStringOrEmpty(params.model);
   const currentHarness = normalizeLowercaseStringOrEmpty(params.agentHarnessId);
   return Boolean(
     entryProvider &&
@@ -57,20 +54,14 @@ export function resolveTrustedSessionContextTokens(
   if (contextTokens === undefined) {
     return undefined;
   }
-  // A run that budgeted against a provider unknown-model estimate observed no real
-  // limit. Only the current admitted owner's capacity may answer; if it cannot, the
-  // selection stays unknown rather than restoring the stale estimate.
-  if (params.entry?.contextTokensSource === "synthetic") {
-    return undefined;
-  }
   // Locked sessions own their native window, including rows created before
   // context-window provenance was persisted. A known selection mismatch is a
   // different owner, while missing identity remains a supported legacy state.
   if (params.entry?.modelSelectionLocked === true) {
     const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
-    const entryModel = normalizeOptionalString(params.entry?.model) ?? "";
+    const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
     const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
-    const currentModel = normalizeOptionalString(params.model) ?? "";
+    const currentModel = normalizeLowercaseStringOrEmpty(params.model);
     if (
       (entryProvider && currentProvider && entryProvider !== currentProvider) ||
       (entryModel && currentModel && entryModel !== currentModel)
@@ -85,104 +76,35 @@ export function resolveTrustedSessionContextTokens(
   return isExactProducerSelection(params) ? contextTokens : undefined;
 }
 
-export type SessionContextTokenLimits = {
-  /** Explicit configured prompt capacity may replace current model telemetry. */
-  effectiveConfiguredTokens?: number;
-  /** Native-window constraints also bound recovery and prevent permanent retention. */
-  authoredContextTokenCap?: number;
-};
-
-type SessionContextTokenProjectionParams = SessionContextSelection & {
-  resolvedContextTokens: number | null | undefined;
-  authoredContextTokens?: number | null | undefined;
-  resolvedContextTokensSource?: "resolved" | "resolved-v1" | "synthetic";
-  configuredContextTokenLimits?: SessionContextTokenLimits;
-  ownerCapacity?:
-    | {
-        state: "ready";
-        contextTokens: number;
-        synthetic: boolean;
-        contextTokensSource?: "resolved";
-      }
-    | { state: "unavailable" };
-};
-
-/** Projects the selected capacity and records the owner that supplied it. */
-function resolveProjectedSessionContextTokenBudget(
-  params: SessionContextTokenProjectionParams,
-): { contextTokens: number; contextTokensSource: SessionEntry["contextTokensSource"] } | undefined {
-  if (params.ownerCapacity && params.entry?.contextTokensSource === "synthetic") {
-    const authored = asPositiveFiniteNumber(
-      params.configuredContextTokenLimits?.authoredContextTokenCap ?? params.authoredContextTokens,
-    );
-    const owned =
-      params.ownerCapacity.state === "ready"
-        ? asPositiveFiniteNumber(params.ownerCapacity.contextTokens)
-        : undefined;
-    const contextTokens =
-      authored !== undefined &&
-      owned !== undefined &&
-      params.ownerCapacity.state === "ready" &&
-      !params.ownerCapacity.synthetic
-        ? Math.min(authored, owned)
-        : (authored ?? owned);
-    return contextTokens === undefined
-      ? undefined
-      : {
-          contextTokens,
-          contextTokensSource:
-            authored !== undefined
-              ? "resolved"
-              : params.ownerCapacity.state === "ready" && params.ownerCapacity.synthetic
-                ? "synthetic"
-                : params.ownerCapacity.state === "ready"
-                  ? (params.ownerCapacity.contextTokensSource ?? "resolved-v1")
-                  : "resolved-v1",
-        };
-  }
-  const authored = asPositiveFiniteNumber(
-    params.configuredContextTokenLimits?.effectiveConfiguredTokens ?? params.authoredContextTokens,
-  );
-  // An estimated window is a last resort, never a constraint on real authority.
-  const estimate =
-    params.resolvedContextTokensSource === "synthetic"
-      ? asPositiveFiniteNumber(params.resolvedContextTokens)
-      : undefined;
-  const resolved =
-    params.resolvedContextTokensSource === "synthetic"
-      ? undefined
-      : asPositiveFiniteNumber(params.resolvedContextTokens);
-  const trusted = resolveTrustedSessionContextTokens(params);
-  const resolvedSource = params.resolvedContextTokensSource ?? "resolved";
-  if (params.entry?.modelSelectionLocked === true && trusted !== undefined) {
-    return { contextTokens: trusted, contextTokensSource: params.entry.contextTokensSource };
-  }
-  if (authored !== undefined) {
-    return {
-      contextTokens: resolved === undefined ? authored : Math.min(authored, resolved),
-      contextTokensSource: "resolved",
-    };
-  }
-  if (trusted !== undefined && (resolved === undefined || trusted <= resolved)) {
-    return { contextTokens: trusted, contextTokensSource: params.entry?.contextTokensSource };
-  }
-  if (resolved !== undefined) {
-    return { contextTokens: resolved, contextTokensSource: resolvedSource };
-  }
-  const persisted = resolveMatchingPersistedResolution(params);
-  if (persisted !== undefined) {
-    return { contextTokens: persisted, contextTokensSource: "resolved-v1" };
-  }
-  return estimate === undefined
-    ? undefined
-    : { contextTokens: estimate, contextTokensSource: "synthetic" };
-}
-
 /** Projects the context window owned by the current session selection. */
 export function resolveProjectedSessionContextTokens(
-  params: SessionContextTokenProjectionParams,
+  params: SessionContextSelection & {
+    resolvedContextTokens: number | null | undefined;
+    authoredContextTokens?: number | null | undefined;
+  },
 ): number | undefined {
-  return resolveProjectedSessionContextTokenBudget(params)?.contextTokens;
+  const resolvedContextTokens = asPositiveFiniteNumber(params.resolvedContextTokens);
+  const authoredContextTokens = asPositiveFiniteNumber(params.authoredContextTokens);
+  const trustedContextTokens = resolveTrustedSessionContextTokens(params);
+  const persistedResolution =
+    resolvedContextTokens === undefined && authoredContextTokens === undefined
+      ? resolveMatchingPersistedResolution(params)
+      : undefined;
+  // An authored effective cap owns the current selection. Otherwise current
+  // model capacity only constrains telemetry from that exact producer tuple.
+  // When synchronous model resolution is unavailable, preserve the last
+  // matching effective resolution instead of publishing an unknown window.
+  const currentContextTokens =
+    authoredContextTokens !== undefined
+      ? resolvedContextTokens === undefined
+        ? authoredContextTokens
+        : Math.min(authoredContextTokens, resolvedContextTokens)
+      : trustedContextTokens !== undefined && resolvedContextTokens !== undefined
+        ? Math.min(trustedContextTokens, resolvedContextTokens)
+        : (trustedContextTokens ?? resolvedContextTokens ?? persistedResolution);
+  return params.entry?.modelSelectionLocked === true
+    ? (trustedContextTokens ?? currentContextTokens)
+    : currentContextTokens;
 }
 
 /** Only publish a last-run prompt budget for the current session selection and cap. */
@@ -196,7 +118,7 @@ export function resolveProjectedSessionContextBudgetStatus(params: {
 }): SessionContextBudgetStatus | undefined {
   const status = params.entry?.contextBudgetStatus;
   const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const model = normalizeOptionalString(params.model) ?? "";
+  const model = normalizeLowercaseStringOrEmpty(params.model);
   if (
     !status ||
     !provider ||
@@ -204,7 +126,7 @@ export function resolveProjectedSessionContextBudgetStatus(params: {
     asPositiveFiniteNumber(params.contextTokens) === undefined ||
     params.entry?.liveModelSwitchPending ||
     normalizeLowercaseStringOrEmpty(status.provider) !== provider ||
-    (normalizeOptionalString(status.model) ?? "") !== model ||
+    normalizeLowercaseStringOrEmpty(status.model) !== model ||
     !status.sessionId?.trim() ||
     status.sessionId !== params.entry?.sessionId ||
     status.contextTokenBudget !== params.contextTokens

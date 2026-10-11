@@ -46,7 +46,8 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
@@ -135,19 +136,18 @@ export function everySessionTranscriptUserInputFrom(
         /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
         sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
           'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')),
+          '__openclaw', json_object('runId', ${transcriptEventRunIdSql("event")}),
           'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
           "message_json",
         ),
       )
-      .where(
-        /* kysely-allow-raw: User-role filtering excludes assistant/tool payloads without materializing them. */
-        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`,
-        "=",
-        "user",
+      .select("event.navigation_valid")
+      .where((eb) =>
+        eb.or([eb("event.message_role", "=", "user"), eb("event.navigation_valid", "=", 0)]),
       );
     let seen = false;
     for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+      assertTranscriptNavigationValid(row.navigation_valid);
       seen = true;
       if (!accept(JSON.parse(row.message_json))) {
         return false;

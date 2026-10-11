@@ -118,6 +118,10 @@ The browser plugin starts its helper processes with the Bun executable that runs
 
 ## Bun-only installs
 
+The [Bun installer](/install/bun#bun-only-global-install) resolves and verifies the
+OpenClaw release’s fork pin without requiring Node. Node remains the default
+installer runtime; select `--runtime bun` explicitly.
+
 Trusted Bun-only global installs on macOS and Linux install an `openclaw` shell
 launcher in Bun's existing global bin directory (`bun pm bin -g`). It records the
 absolute Bun executable from `OPENCLAW_PACKAGE_BUN_LAUNCHER` and the installed
@@ -232,6 +236,12 @@ An early conservative broker keeps that policy even if the check later passes,
 with a one-time `SQLITE_EARLY_TOPOLOGY` warning explaining its retained layout. Workers inherit the
 decision at creation; those started before it completes remain conservative for
 their lifetime, while later workers inherit the completed result.
+
+On conservative runtimes, a successful service runtime-pin inspection can leave
+private snapshot files pending cleanup until process exit. OpenClaw records a
+cleanup warning and retains ownership of those files without failing the
+inspection. Read errors and required-cleanup failures still stop the operation;
+the original state database is unchanged.
 
 The result is never saved in config or state. Each new long-lived host checks its
 selected runtime and library again, including after an upgrade, downgrade, or rollback.

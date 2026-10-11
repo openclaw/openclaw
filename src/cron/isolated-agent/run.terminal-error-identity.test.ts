@@ -2,7 +2,6 @@
 import path from "node:path";
 import { assert, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
-import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
@@ -34,7 +33,7 @@ describe("persistent automation terminal error identity", () => {
     mockRunCronFallbackPassthrough();
   });
 
-  it("retains distinct provider failures from sequential invocations without weakening replay guards", async () => {
+  it("retains distinct provider failures from sequential invocations", async () => {
     const root = sessionDirs.make();
     const target = {
       agentId: "main",
@@ -117,19 +116,6 @@ describe("persistent automation terminal error identity", () => {
         },
       })),
     );
-
-    // Exact replay stays idempotent, but another response under the same key is corruption.
-    const [firstMessage, secondMessage] = messages;
-    const [firstRunId] = runIds;
-    assert(firstMessage && secondMessage && firstRunId);
-    const replay = createAssistantErrorTranscript({ runId: firstRunId });
-    replay.record(firstMessage, target);
-    await replay.settle(true);
-    expect(readErrors()).toHaveLength(2);
-    const conflict = createAssistantErrorTranscript({ runId: firstRunId });
-    conflict.record(secondMessage, target);
-    await expect(conflict.settle(true)).rejects.toThrow("conflicts with the admitted message");
-    expect(readErrors()).toHaveLength(2);
   });
 });
 

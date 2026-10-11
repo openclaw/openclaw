@@ -13,7 +13,6 @@ import {
   createConfiguredProviderModelResolver,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
-import type { SessionContextTokenLimits } from "../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   lookupCachedContextTokens,
@@ -43,12 +42,14 @@ export type ContextTokenResolutionParams = {
   nativeRuntime?: string;
   allowAsyncLoad?: boolean;
   allowUnscopedModelLookup?: boolean;
+  /** Reports with admitted model facts must not reuse a different cache generation. */
+  allowCacheLookup?: boolean;
 };
 
 export type ModelContextTokenProjection = {
   contextTokens: number | undefined;
   authoredContextTokens: number | undefined;
-  configuredContextTokenLimits: SessionContextTokenLimits | undefined;
+  configuredContextTokenLimits: ReturnType<typeof resolveConfiguredContextTokenLimits> | undefined;
   source: "model" | "configured" | "fallback";
   contextTokensSource?: "synthetic" | "resolved";
 };
@@ -276,7 +277,9 @@ export function resolveModelContextTokenProjectionFromCache(
   const useApiCapacity = !nativeRuntime || nativeRuntime === "openclaw";
   const ref = resolveProviderModelRef(params);
   const explicitProvider = params.provider?.trim();
-  let configuredContextTokenLimits: SessionContextTokenLimits | undefined;
+  let configuredContextTokenLimits:
+    | ReturnType<typeof resolveConfiguredContextTokenLimits>
+    | undefined;
   let authoredContextTokens: number | undefined;
 
   if (ref && explicitProvider) {
@@ -314,16 +317,18 @@ export function resolveModelContextTokenProjectionFromCache(
         source: "model",
       };
     }
-    const providerResult = useApiCapacity
-      ? lookupContextTokens(
-          providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-        )
-      : undefined;
-    const providerWindow = useApiCapacity
-      ? lookupContextWindow(
-          providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-        )
-      : undefined;
+    const providerResult =
+      useApiCapacity && params.allowCacheLookup !== false
+        ? lookupContextTokens(
+            providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
+          )
+        : undefined;
+    const providerWindow =
+      useApiCapacity && params.allowCacheLookup !== false
+        ? lookupContextWindow(
+            providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
+          )
+        : undefined;
     const discoveredCap = minPositiveContextTokens(
       providerResult,
       normalizePositiveContextTokens(params.modelContextTokens),
@@ -362,7 +367,11 @@ export function resolveModelContextTokenProjectionFromCache(
       : undefined;
   const fallbackContextTokens = syntheticWindow ?? params.fallbackContextTokens;
   const contextTokensSource = syntheticWindow === undefined ? undefined : "synthetic";
-  if (!useApiCapacity || params.allowUnscopedModelLookup === false) {
+  if (
+    !useApiCapacity ||
+    params.allowCacheLookup === false ||
+    params.allowUnscopedModelLookup === false
+  ) {
     return {
       contextTokens: fallbackContextTokens,
       authoredContextTokens,

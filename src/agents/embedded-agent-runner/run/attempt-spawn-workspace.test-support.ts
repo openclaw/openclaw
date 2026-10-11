@@ -204,7 +204,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     flushPendingToolResultsAsync: vi.fn(async () => undefined),
     clearPendingToolResults: vi.fn(),
     reloadPersistedTranscriptAsync: vi.fn(async () => undefined),
-    clearNextUserMessagePersistenceSuppression: vi.fn(),
+    setNextUserMessagePersistence: vi.fn(),
     removeTrailingEntriesAsync: vi.fn(async () => 0),
   };
   return {
@@ -527,9 +527,11 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
     (hoisted.flushPendingToolResultsAfterIdleMock as (...args: unknown[]) => unknown)(...args),
 }));
 
+// mock-isolation: Workspace tests supply synthetic media without filesystem hydration.
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: (...args: unknown[]) =>
     (hoisted.detectAndLoadPromptImagesMock as (...args: unknown[]) => unknown)(...args),
+  hydratePromptMediaMessages: async (messages: AgentMessage[]) => messages,
 }));
 
 // mock-isolation: Workspace tests supply runtime facts without host discovery.
@@ -773,11 +775,6 @@ vi.mock("./compaction-timeout.js", () => ({
     source: "current",
   }),
   shouldFlagCompactionTimeout: () => false,
-}));
-
-vi.mock("./history-image-prune.js", () => ({
-  installHistoryImagePruneContextTransform: () => () => {},
-  pruneProcessedHistoryImages: () => null,
 }));
 
 export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {

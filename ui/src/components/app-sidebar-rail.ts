@@ -8,37 +8,96 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
-import { openPersonalPinnedSession } from "./app-sidebar-personal-navigation.ts";
 import {
+  renderSidebarAgentCard,
   renderAppSidebarFooterBar,
   renderAppSidebarPluginTab,
   renderAppSidebarPageEntry,
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
-import { renderSessionLeadingState } from "./session-leading-indicator.ts";
+import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
+import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
-import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+
+type RailPinTouchPress = {
+  pointerId: number;
+  x: number;
+  y: number;
+  timer?: ReturnType<typeof setTimeout>;
+  opened: boolean;
+};
+// Pin elements survive Lit updates; gesture state must survive with them.
+const railPinTouchPresses = new WeakMap<HTMLElement, RailPinTouchPress>();
+
+function cancelRailPinTouchPress(event: Event) {
+  // SAFETY: Every binding below attaches this handler to the rail pin div.
+  const pin = event.currentTarget as HTMLElement;
+  const press = railPinTouchPresses.get(pin);
+  if (!press || (event instanceof PointerEvent && event.pointerId !== press.pointerId)) {
+    return;
+  }
+  clearTimeout(press.timer);
+  press.timer = undefined;
+  if (!press.opened) {
+    railPinTouchPresses.delete(pin);
+  }
+}
+
+const railPinClickCapture = {
+  capture: true,
+  handleEvent(event: MouseEvent) {
+    // SAFETY: Lit installs this capture listener on the rail pin div below.
+    const pin = event.currentTarget as HTMLElement;
+    const press = railPinTouchPresses.get(pin);
+    if (!press?.opened) {
+      return;
+    }
+    railPinTouchPresses.delete(pin);
+    if (event.detail === 0) {
+      return;
+    }
+    // Stop before the link navigates or the pins container collapses the list.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  },
+};
 
 export function renderSidebarRail(host: AppSidebarRenderHost) {
   const zone = host.reconciledSidebarZone();
-  const pins = (normalizeSidebarEntries(host.sidebarEntries) ?? []).map((entry) =>
-    parseSidebarEntry(entry)!,
-  );
+  const pins = (
+    normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []
+  ).map((entry) => parseSidebarEntry(entry)!);
   const views = [
     { id: "pages", label: t("nav.pages"), icon: icons.layoutGrid },
     { id: "sessions", label: titleForRoute("sessions"), icon: icons.messageCircle },
     { id: "online", label: t("presence.rosterTitle"), icon: icons.users },
   ] as const;
   return html`
-    <nav class="sidebar-rail" aria-label=${t("nav.pages")}>
+    <nav
+      class="sidebar-rail"
+      aria-label=${t("nav.pages")}
+      @mousedown=${beginNativeWindowDragFromTopInset}
+    >
+      ${renderSidebarAgentCard(host)}
       <div class="sidebar-rail__views">
         ${views.map(
-          (view) => html`<openclaw-tooltip .content=${view.label}>
+          (view) => html`<openclaw-tooltip
+            .content=${host.navigationView === view.id ? `${view.label} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})` : view.label}
+          >
             <button
               type="button"
               class="sidebar-rail__button"
@@ -46,6 +105,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost) {
               aria-label=${view.label}
               aria-pressed=${String(host.navigationView === view.id)}
               @click=${() => {
+                const active = host.navigationView === view.id;
                 host.navigationView = view.id;
                 if (view.id === "online") {
                   host.teamOnlineExpanded = true;
@@ -53,7 +113,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost) {
                     host.toggleSection("online");
                   }
                 }
-                if (host.navigationCollapsed) {
+                if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
                   host.onToggleSidebar?.();
                 }
               }}
@@ -63,9 +123,41 @@ export function renderSidebarRail(host: AppSidebarRenderHost) {
           </openclaw-tooltip>`,
         )}
       </div>
+      <openclaw-tooltip
+        .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+      >
+        <button
+          type="button"
+          class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+          aria-label=${t("chat.openCommandPalette")}
+          ?disabled=${!host.onOpenPalette}
+          @click=${() => host.onOpenPalette?.()}
+        >
+          ${icons.search}
+        </button>
+      </openclaw-tooltip>
       <div
-        class="sidebar-rail__pins"
+        class="sidebar-rail__pins ${host.sessionOrganizer.sidebarZoneDragActive ? "sidebar-rail__pins--drag-active" : ""}"
         aria-label=${t("nav.customize")}
+        @click=${(event: MouseEvent) => {
+          if (
+            !isMobileNavLayout() &&
+            !host.navigationCollapsed &&
+            event.button === 0 &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.shiftKey &&
+            !event.altKey &&
+            event
+              .composedPath()
+              .some(
+                (target) =>
+                  target instanceof Element && target.matches("a[href], button:not([disabled])"),
+              )
+          ) {
+            host.onToggleSidebar?.();
+          }
+        }}
         @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragOver(event)}
         @dragleave=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
         @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
@@ -92,7 +184,10 @@ function renderRailPin(
       : undefined;
   const online =
     entry.type === "person"
-      ? projectOnlinePresenceViewers(host.sessionData.presencePayload).find(
+      ? (
+          host.sidebarSnapshot?.onlineUsers ??
+          projectOnlinePresenceViewers(host.sessionData.presencePayload)
+        ).find(
           (person) => person.identity?.type === "profile" && person.identity.id === entry.profileId,
         )
       : undefined;
@@ -106,7 +201,10 @@ function renderRailPin(
       ? titleForRoute(entry.route)
       : entry.type === "person"
         ? owner?.label || (online ? presenceViewerLabel(online) : t("nav.owner"))
-        : session?.label || plugin?.value.label || tab?.label || t("presence.sessions.unavailable");
+        : session?.label ||
+          plugin?.value.label ||
+          tab?.label ||
+          t(entry.type === "session" ? "sessionsView.openSession" : "tabs.plugin");
   const person =
     entry.type === "person"
       ? personActivityLink(
@@ -121,6 +219,7 @@ function renderRailPin(
     entry.type === "person"
       ? html`<a
           class="sidebar-rail__button"
+          draggable="false"
           href=${person!.href}
           aria-label=${label}
           @click=${person!.open}
@@ -130,6 +229,7 @@ function renderRailPin(
       : session
         ? html`<a
             class="sidebar-rail__button"
+            draggable="false"
             href=${host.sidebarSessionHref(session)}
             aria-label=${label}
             aria-current=${session.active ? "page" : nothing}
@@ -139,7 +239,7 @@ function renderRailPin(
                 host.selectSession(session.key, undefined, session);
               }
             }}
-            >${renderSessionLeadingState(session, session.owner?.actor, "owned", undefined, undefined, false, session.icon ? undefined : html`<span class="nav-item__icon" aria-hidden="true">${session.boardFace === "dashboard" ? icons.layoutGrid : icons.messageCircle}</span>`).leadingIndicator}</a
+            >${renderRailSessionGlyph(session, label)}</a
           >`
         : entry.type === "route" && host.sidebarMenus.isRouteEnabled(entry.route)
           ? host.sidebarMenus.renderRoute(entry.route)
@@ -152,40 +252,95 @@ function renderRailPin(
                   .navigationChildren=${false}
                   .navigationMenus=${host.sidebarMenus}
                 ></openclaw-plugin-contributions>`
-              : html`<button
-                  type="button"
-                  class="sidebar-rail__button"
-                  aria-label=${label}
-                  ?disabled=${entry.type !== "session"}
-                  @click=${() => {
-                    if (entry.type === "session") {
-                      void openPersonalPinnedSession(host, entry.key);
-                    }
-                  }}
-                >
-                  ${icons.pin}
-                </button>`;
+              : nothing;
+  if (content === nothing) {
+    return nothing;
+  }
+  const openMenu = (event: MouseEvent | KeyboardEvent) =>
+    !host.sidebarSnapshot &&
+    handleContextMenuEvent(
+      event,
+      // SAFETY: Both context-menu bindings below belong to the rail pin div.
+      (event.currentTarget as HTMLElement).querySelector("a, button"),
+      (trigger, x, y) => host.sidebarMenus.openRailPinMenu(serialized, label, x, y, trigger),
+    );
   const drop = host.sessionOrganizer.sidebarZoneDropTarget;
   return html`<div
     class="sidebar-rail__pin ${drop?.entry === serialized ? `sidebar-zone-entry--drop-${drop.position}` : ""}"
     data-sidebar-entry=${serialized}
-    draggable="true"
-    @dragstart=${(event: DragEvent) => host.sessionOrganizer.startSidebarEntryDrag(event, entry)}
+    draggable=${String(!host.sidebarSnapshot)}
+    @contextmenu=${openMenu}
+    @keydown=${openMenu}
+    @pointerdown=${(event: PointerEvent) => {
+      // SAFETY: This listener is bound directly to the enclosing rail pin div.
+      const pin = event.currentTarget as HTMLElement;
+      clearTimeout(railPinTouchPresses.get(pin)?.timer);
+      railPinTouchPresses.delete(pin);
+      if (host.sidebarSnapshot || event.pointerType !== "touch" || !event.isPrimary) {
+        return;
+      }
+      const press: RailPinTouchPress = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        opened: false,
+      };
+      railPinTouchPresses.set(pin, press);
+      press.timer = setTimeout(() => {
+        press.timer = undefined;
+        const trigger = pin.querySelector<HTMLElement>("a, button");
+        if (host.sidebarSnapshot || !pin.isConnected || !trigger) {
+          railPinTouchPresses.delete(pin);
+          return;
+        }
+        press.opened = true;
+        host.sidebarMenus.openRailPinMenu(serialized, label, press.x, press.y, trigger);
+      }, 500);
+    }}
+    @pointermove=${(event: PointerEvent) => {
+      // SAFETY: This listener is bound directly to the enclosing rail pin div.
+      const press = railPinTouchPresses.get(event.currentTarget as HTMLElement);
+      if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8) {
+        cancelRailPinTouchPress(event);
+      }
+    }}
+    @pointerup=${cancelRailPinTouchPress}
+    @pointercancel=${cancelRailPinTouchPress}
+    @click=${railPinClickCapture}
+    @dragstart=${(event: DragEvent) => {
+      cancelRailPinTouchPress(event);
+      if (!host.sidebarSnapshot) {
+        host.sessionOrganizer.startSidebarEntryDrag(event, entry);
+      }
+    }}
     @dragend=${() => host.sessionOrganizer.finishSidebarEntryDrag()}
     @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
     @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
   >
     <openclaw-tooltip .content=${label}>${content}</openclaw-tooltip>
-    ${renderSidebarReorderMenu({
-      label,
-      kind: "entry",
-      onRemove: () => host.sessionOrganizer.removeSidebarEntry(serialized),
-      onMove: async (target, position) => {
-        host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
-        await host.updateComplete;
-      },
-    })}
   </div>`;
+}
+
+function renderRailSessionGlyph(session: SidebarRecentSession, label: string) {
+  const { icon } = session;
+  const graphic = icon ? resolveSessionIconGraphic(icon) : null;
+  const initials = (label.match(/[\p{L}\p{N}]+/gu) ?? [])
+    .slice(0, 2)
+    .map((word) => Array.from(word)[0])
+    .join("")
+    .toUpperCase();
+  // Rail shortcuts keep their identity even when the session needs attention.
+  const content = icon
+    ? graphic
+      ? html`<span class="session-glyph__icon" aria-hidden="true">${graphic}</span>`
+      : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`
+    : html`<span class="sidebar-rail__monogram" aria-hidden="true">${initials || "?"}</span>`;
+  return renderSessionGlyph({
+    content,
+    running: session.hasActiveRun || session.runningChildCount > 0,
+    queued: session.hasActiveRun && session.status === "queued" && session.runningChildCount === 0,
+    badge: session.unread ? renderSessionUnreadBadge() : nothing,
+  });
 }
 
 /** Pages is the accessible destination catalog, not another favorites list. */
@@ -193,8 +348,15 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
   const zone = host.reconciledSidebarZone();
   const dashboards = host.navigationCatalog.dashboards;
   const rows = new Map(zone.sessionRows);
-  for (const row of dashboards?.result?.sessions ?? []) {
-    rows.set(row.key, host.getSessionNavigationState().toSidebarSession(row));
+  const dashboardRows = host.sidebarSnapshot
+    ? host.sidebarSnapshot.pages.map((row) =>
+        restoreSnapshotSession(row, host.getRouteSessionKey()),
+      )
+    : (dashboards?.result?.sessions ?? []).map((row) =>
+        host.getSessionNavigationState().toSidebarSession(row),
+      );
+  for (const row of dashboardRows) {
+    rows.set(row.key, row);
   }
   const entries: SidebarZoneEntry[] = [
     ...SIDEBAR_NAV_ROUTES.filter((route) => host.sidebarMenus.isRouteEnabled(route)).map(
@@ -202,7 +364,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
     ),
     ...new Set([...zone.pluginTabs.keys(), ...host.pluginNavigation().map((entry) => entry.key)]),
   ].map((entry) => (typeof entry === "string" ? { type: "plugin", key: entry } : entry));
-  for (const row of dashboards?.result?.sessions ?? []) {
+  for (const row of dashboardRows) {
     entries.push({ type: "session", key: row.key });
   }
   return html`<nav
@@ -221,6 +383,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
         <button
           type="button"
           class="sidebar-pages__pin"
+          ?disabled=${Boolean(host.sidebarSnapshot)}
           aria-label=${t(host.sidebarEntries.includes(serializeSidebarEntry(entry)) ? "nav.unpin" : "nav.pin")}
           @click=${() => {
             const key = serializeSidebarEntry(entry);
@@ -238,38 +401,4 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
     ${dashboards?.error ? html`<span role="alert">${dashboards.error}</span>` : nothing}
     ${dashboards?.result?.hasMore ? html`<button type="button" class="btn btn--sm" @click=${() => host.navigationCatalog.loadMoreDashboards()}>${t("chat.selectors.loadMoreSessions")}</button>` : nothing}
   </nav>`;
-}
-
-export function renderSidebarScope(host: AppSidebarRenderHost) {
-  const allFilter = host.sessionOwnerFilter;
-  if (
-    host.sessionsStatusFilter === "active" &&
-    host.navigationCatalog.scopesEquivalent &&
-    !allFilter.involvingMe &&
-    (!allFilter.ownerId ||
-      allFilter.ownerId === host.sessionDataContext?.gateway.snapshot.selfUser?.id)
-  ) {
-    return nothing;
-  }
-  return html`<div
-    class="sidebar-navigation-scope"
-    role="group"
-    aria-label=${titleForRoute("sessions")}
-  >
-    ${(["mine", "all"] as const).map(
-      (scope) => html`<openclaw-tooltip
-        .content=${t(scope === "mine" ? "nav.scopeMine" : "nav.scopeAll")}
-      >
-        <button
-          type="button"
-          class="sidebar-rail__button"
-          aria-label=${t(scope === "mine" ? "nav.scopeMine" : "nav.scopeAll")}
-          aria-pressed=${String(host.effectiveNavigationScope === scope)}
-          @click=${() => host.setNavigationScope(scope)}
-        >
-          ${scope === "mine" ? icons.target : icons.users}
-        </button>
-      </openclaw-tooltip>`,
-    )}
-  </div>`;
 }

@@ -27,7 +27,7 @@ even when a main alias becomes `global`. If routing or access changes during
 startup, creation fails rather than switching sessions; retry the request.
 
 Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
-canonical session key, and store. Agent replies stay in the same session as voice
+resolved session key, and store. Agent replies stay in the same session as voice
 transcripts, including under global scope, while the original key continues to
 identify the voice call. Provider-attached controls and `talk.session.steer` select
 only work bound to that logical voice call. Reusing `voiceSessionId` to replace a
@@ -68,5 +68,5 @@ Keep the original `sessionKey` for client transcript, tool-call, and close reque
 `talk.client.close` requires both that exact key and the returned `voiceSessionId`;
 an equivalent storage alias is not a replacement. A `talk.client.toolCall` acknowledgement
 returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
-cancellation, history, and completion events, including when the canonical key is `global`. Transcription-only sessions
+cancellation, history, and completion events, including when the resolved key is `global`. Transcription-only sessions
 without a key remain sessionless and do not select a default chat.

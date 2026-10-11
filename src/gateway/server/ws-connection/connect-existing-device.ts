@@ -127,6 +127,7 @@ export async function authorizeExistingGatewayDevice(params: {
       : null;
   if (
     retryBootstrapHandoffProfile &&
+    retryBootstrapHandoffProfile.roles.includes("operator") &&
     isSetupCodeHandoffBootstrapClient({
       profile: retryBootstrapHandoffProfile,
       client: connectParams.client,

@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
 const rosterMatch = { includeGlobal: true, ownerFirst: true };
@@ -89,16 +90,13 @@ suite.define(() => {
       expect(mineRoster.params).not.toHaveProperty("ownerFirst");
       expect(mineRoster.params).toMatchObject({ limit: SIDEBAR_SESSION_ROSTER_LIMIT });
       await adaRow.waitFor();
-      // Mine hydrates only the current human; a foreign row requires an explicit All choice.
+      // My sessions hydrates only the current human until All owners is selected.
       expect(await bobRow.count()).toBe(0);
-      // The canonical owner-first window and Mine are distinct query owners, not duplicate hydration.
+      // The canonical owner-first window and self filter are distinct query owners.
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
       expect(await gateway.getRequests("sessions.list", mineMatch)).toHaveLength(1);
       expect(await gateway.getRequests("sessions.list", { includeGlobal: true })).toHaveLength(2);
-      await page
-        .locator(".sidebar-navigation-scope")
-        .getByRole("button", { name: "All", exact: true })
-        .click();
+      await selectAllSidebarSessions(page);
       const allRoster = await gateway.waitForRequest("sessions.list", {
         after: 1,
         match: rosterMatch,

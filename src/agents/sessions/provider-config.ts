@@ -71,7 +71,6 @@ export interface ProviderConfigInput extends ProviderConfigBase {
   models?: Array<
     ProviderModelConfig & {
       contextTokens?: number;
-      contextWindowSource?: "synthetic";
       contextWindows?: ModelCatalogContextWindowOption[];
       contextWindowDefault?: string;
       params?: Record<string, unknown>;

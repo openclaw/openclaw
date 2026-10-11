@@ -2929,29 +2929,23 @@ class TalkModeManager internal constructor(
   }
 
   private fun invalidateConfig() {
-    // Keep active capture settings, but invalidate before waiting for the loader
-    // so neither its stale response nor its waiting consumer can use the old revision.
     configCache.updateAndGet { it.copy(loaded = false) }
   }
 
   private suspend fun ensureConfigLoaded() =
     configReloadMutex.withLock {
-      while (true) {
-        currentCoroutineContext().ensureActive()
-        val owner = configCache.get()
-        if (owner.loaded) return@withLock
-        val loaded =
-          try {
-            val res = requestGateway("talk.config", "{}")
-            val root = json.parseToJsonElement(res).asObjectOrNull()
-            TalkConfigCache(TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull()), loaded = true)
-          } catch (err: Throwable) {
-            if (err is CancellationException) throw err
-            TalkConfigCache()
-          }
-        // Only invalidation requires another read; a current failure returns once.
-        if (configCache.compareAndSet(owner, loaded)) return@withLock
-      }
+      if (configCache.get().loaded) return@withLock
+      val loaded =
+        try {
+          val res = requestGateway("talk.config", "{}")
+          val root = json.parseToJsonElement(res).asObjectOrNull()
+          TalkConfigCache(TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull()), loaded = true)
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
+          TalkConfigCache()
+        }
+      // A config change during this read takes effect on the next explicit refresh or Talk restart.
+      configCache.set(loaded)
     }
 
   private fun resolvedSpeechLocaleTag(): String = speechLocale ?: Locale.getDefault().toLanguageTag()

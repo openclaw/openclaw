@@ -85,9 +85,6 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   }
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
     .then(async () => {
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-        return;
-      }
       let stagedTokenCache = new Map<string, number>();
       try {
         const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
@@ -95,16 +92,8 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
           config: cfg,
           readOnly: true,
         });
-        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-          return;
-        }
         stagedTokenCache = await prepareDiscoveredContextTokenCache({
           modelCatalog: owner.modelCatalog,
-          assertCurrent: () => {
-            if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-              throw new Error("context window cache generation was superseded");
-            }
-          },
         });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
@@ -142,9 +131,6 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   const loadPromise = (async () => {
     const { getPublishedPreparedModelCatalogOwnerSnapshot } =
       await loadPreparedModelCatalogRuntime();
-    if (shouldStop()) {
-      return;
-    }
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: params.config,
       allowGatewaySubagentBinding: true,
@@ -277,7 +263,7 @@ export function resolveModelContextTokenProjection(
   params: ContextTokenResolutionParams,
 ): ModelContextTokenProjection {
   const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
-  if (!nativeRuntime || nativeRuntime === "openclaw") {
+  if ((!nativeRuntime || nativeRuntime === "openclaw") && params.allowCacheLookup !== false) {
     prepareContextWindowCache({
       allowAsyncLoad: params.allowAsyncLoad,
       skipRuntimeConfigLoad: Boolean(params.cfg),

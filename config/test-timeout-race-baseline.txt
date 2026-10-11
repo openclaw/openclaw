@@ -34,14 +34,13 @@ src/auto-reply/reply/dispatch-from-config.active-command.test.ts	2
 src/auto-reply/reply/reply-run-registry.question-registration.test.ts	2
 src/cli/gateway-cli/run-loop-startup.test-support.ts	4
 src/cli/gateway-cli/run-loop.restart-liveness.process.test.ts	1
-src/cli/one-shot-exit.test.ts	1
 src/cli/update-cli/update-command-retained-custody.test.ts	2
 src/config/sessions/legacy-main-session-migration.race.test.ts	1
 src/config/sessions/session-accessor.sqlite-page-reclamation.binding.test.ts	1
 src/config/sessions/session-cold-storage.test.ts	1
 src/config/sessions/session-history-archive-pruning.admission.test.ts	4
 src/config/sessions/session-history-eviction.writer-fairness.test.ts	2
-src/config/sessions/session-transcript-reconcile-memory.test.ts	4
+src/config/sessions/session-transcript-reconcile-memory.test.ts	3
 src/config/sessions/session-transcript-reconcile.native-exit.test.ts	2
 src/cron/isolated-agent/model-preflight.runtime.test.ts	2
 src/cron/isolated-agent/model-preflight.runtime.transport.test.ts	4

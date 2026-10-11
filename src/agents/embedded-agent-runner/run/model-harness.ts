@@ -52,7 +52,7 @@ export function resolveEmbeddedRunEffectiveModel(
       : { contextTokenBudget: params.runParams.contextTokenBudget }),
   });
   const authoredContextTokenCap =
-    params.nativeModelOwned || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+    params.pinnedHarnessId || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
       ? undefined
       : resolveConfiguredContextTokenLimits({
           cfg: params.runParams.config,

@@ -44,8 +44,12 @@ function makeParams(
     workspaceDir: "/tmp/workspace",
     contextTokens: options?.contextTokens ?? null,
     storePath: options?.storePath,
-    provider: "openai",
-    model: "gpt-5",
+    provider: "ollama",
+    model: "qwen2.5:7b",
+    thinkingCatalog:
+      options?.contextTokens != null
+        ? [{ provider: "ollama", id: "qwen2.5:7b", contextWindow: options.contextTokens }]
+        : [],
     elevated: { allowed: false },
     resolvedThinkLevel: "off",
     resolvedReasoningLevel: "off",
@@ -149,11 +153,17 @@ async function withTranscript(
 }
 
 describe("buildContextReply", () => {
-  it.each<{ resolved?: number; authored?: number; expected: number }>([
+  it.each<{
+    resolved?: number;
+    authored?: number;
+    persistedHarness?: string;
+    expected: number | null;
+  }>([
     { expected: 32_768 },
     { resolved: 65_536, expected: 65_536 },
     { resolved: 200_000, expected: 200_000 },
     { authored: 16_384, expected: 16_384 },
+    { persistedHarness: "other-runtime", expected: null },
   ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
     const params = makeParams("/context json", false, { contextTokens: 200_000 });
     params.provider = "ollama";
@@ -164,21 +174,36 @@ describe("buildContextReply", () => {
       updatedAt: 1,
       modelProvider: params.provider,
       model: params.model,
-      agentHarnessId: "openclaw",
+      agentHarnessId: testCase.persistedHarness ?? "openclaw",
       contextTokens: 32_768,
       contextTokensSource: "resolved-v1",
     };
-    params.contextTokenProjection = {
-      contextTokens: testCase.resolved,
-      authoredContextTokens: testCase.authored,
-      configuredContextTokenLimits: undefined,
-      source:
-        testCase.authored !== undefined
-          ? "configured"
-          : testCase.resolved !== undefined
-            ? "model"
-            : "fallback",
-    };
+    params.thinkingCatalog = [
+      { provider: params.provider, id: params.model, contextWindow: testCase.resolved },
+    ];
+    if (testCase.authored !== undefined) {
+      params.cfg = {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              models: [
+                {
+                  id: params.model,
+                  name: "Qwen 2.5 7B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131_072,
+                  contextTokens: testCase.authored,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      };
+    }
 
     const result = await buildContextReply(params);
     expect(JSON.parse(result.text ?? "{}").session.contextTokens).toBe(testCase.expected);

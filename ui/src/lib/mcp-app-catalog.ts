@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type {
   McpAppDiscoverResult,
   McpAppDiscoveredServer,
@@ -16,8 +15,13 @@ const discoveryRequests = new WeakMap<
   { invalidation?: object; pending: Map<string, Promise<McpAppDiscoverResult>> }
 >();
 
+type McpAppCatalogHost = {
+  requestUpdate(): void;
+  addController?(controller: McpAppCatalogController): void;
+};
+
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
-export class McpAppCatalogController implements ReactiveController {
+export class McpAppCatalogController {
   servers: McpAppDiscoveredServer[] = [];
   onboarding: NonNullable<McpAppDiscoverResult["onboarding"]> = [];
   loading = false;
@@ -28,12 +32,12 @@ export class McpAppCatalogController implements ReactiveController {
   private cleanup: (() => void)[] = [];
   private connected = false;
   constructor(
-    private host: ReactiveControllerHost,
+    private host: McpAppCatalogHost,
     private context: () => ApplicationContext | undefined,
     private target: () => McpAppExtensionTarget,
     private prepareSession: () => boolean = () => false,
   ) {
-    host.addController(this);
+    host.addController?.(this);
   }
   get available() {
     return (

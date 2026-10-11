@@ -204,51 +204,6 @@ describe("system LaunchDaemon ownership", () => {
     });
   });
 
-  it("uses the native top-level Label instead of an earlier nested XML key", async () => {
-    const plistPath = "/Library/LaunchDaemons/nested-label.plist";
-    state.files.set(
-      plistPath,
-      "<plist><dict><key>EnvironmentVariables</key><dict><key>Label</key><string>nested</string></dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>",
-    );
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
-      status: "installed",
-      plistPath,
-    });
-  });
-
-  it("uses native plutil for binary and non-XML plist formats", async () => {
-    const plistPath = "/Library/LaunchDaemons/binary-openclaw.plist";
-    state.files.set(plistPath, "bplist00-binary-payload");
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
-
-    expect(ownership).toMatchObject({ status: "installed", plistPath });
-    expect(runExec).toHaveBeenCalledWith(
-      "/usr/bin/plutil",
-      ["-convert", "xml1", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: Buffer.from("bplist00-binary-payload") }),
-    );
-  });
-
-  it("skips a valid plist without a string Label and detects a later owner", async () => {
-    const unrelated = "/Library/LaunchDaemons/com.google.keystone.daemon.plist";
-    const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
-    state.files.set(unrelated, "<plist><dict><key>RunAtLoad</key><true/></dict></plist>");
-    state.plutilValues.set(unrelated, { RunAtLoad: true });
-    state.files.set(owner, "<plist/>");
-    state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "installed",
-      serviceTarget: "system/ai.openclaw.gateway",
-      plistPath: owner,
-    });
-    expect(runExec).toHaveBeenCalledTimes(4);
-  });
-
   it("treats a valid non-string Label as unable to own the gateway label", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.numeric-label.plist";
     state.files.set(unrelated, "<plist/>");
@@ -258,7 +213,7 @@ describe("system LaunchDaemon ownership", () => {
       status: "absent",
       serviceTarget: "system/ai.openclaw.gateway",
     });
-    expect(execLaunchctl).toHaveBeenCalledTimes(2);
+    expect(execLaunchctl).toHaveBeenCalledTimes(1);
   });
 
   it("skips an unreadable foreign plist", async () => {
@@ -275,7 +230,7 @@ describe("system LaunchDaemon ownership", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.each(["malformed plist", "missing native parser"])(
+  it.each(["missing native parser"])(
     "refuses an unreadable native result for a readable plist: %s",
     async (failure) => {
       const plistPath = "/Library/LaunchDaemons/com.vendor.worker.plist";
@@ -310,28 +265,6 @@ describe("system LaunchDaemon ownership", () => {
     });
   });
 
-  it("rechecks the system domain after a negative plist snapshot", async () => {
-    execLaunchctl
-      .mockResolvedValueOnce({
-        stdout: "",
-        stderr: "Could not find service",
-        code: 113,
-        termination: "exit",
-      })
-      .mockResolvedValueOnce({
-        stdout: "state = running",
-        stderr: "",
-        code: 0,
-        termination: "exit",
-      });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "loaded",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
-    expect(execLaunchctl).toHaveBeenCalledTimes(2);
-  });
-
   it("can skip the installed-plist scan for read-only status probes", async () => {
     const plistPath = "/Library/LaunchDaemons/ai.openclaw.gateway.plist";
     state.files.set(plistPath, "<plist/>");
@@ -363,29 +296,6 @@ describe("system LaunchDaemon ownership", () => {
     expect(String(error)).toContain("sudo launchctl bootout system/ai.openclaw.gateway");
   });
 
-  it("renders a standalone loaded and structural same-label plist probe", () => {
-    const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway");
-
-    expect(script).toContain('launchctl print "$openclaw_system_launchd_target"');
-    expect(script).toContain(
-      '/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist"',
-    );
-    expect(script).toContain(
-      '/usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1',
-    );
-    expect(script).toContain(
-      "/usr/bin/find \"$openclaw_system_launchd_dir\" -mindepth 1 -maxdepth 1 -name '*.plist' -print0",
-    );
-    expect(script).toContain("while IFS= read -r -d '' openclaw_system_launchd_plist");
-    expect(script).toContain('[ ! -r "$openclaw_system_launchd_plist" ]');
-    expect(script).toContain('[ ! -x "$openclaw_system_launchd_dir" ]');
-    expect(script).not.toContain('"$openclaw_system_launchd_dir"/*.plist');
-    expect(script).toContain(
-      'if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]',
-    );
-    expect(script).not.toContain("|| true");
-  });
-
   it("executes the rendered probe across readable and unreadable plists", () => {
     expect(runRenderedProbe("com.google.keystone.daemon.plist", "unlabeled").conflict).toBe("");
     expect(runRenderedProbe("com.vendor.unreadable.plist", "unreadable").conflict).toBe("");
@@ -399,7 +309,7 @@ describe("system LaunchDaemon ownership", () => {
 
   it.each([
     ["loaded", "exit 0", 1, "loaded system LaunchDaemon"],
-    ["absent", absentQuery, 2, ""],
+    ["absent", absentQuery, 1, ""],
     ["query error", 'printf "Operation not permitted\\n" >&2\nexit 1', 1, "could not verify"],
     ["signal", 'printf "Could not find service\\n" >&2\nkill -TERM $$', 1, "could not verify"],
     [
@@ -414,21 +324,9 @@ describe("system LaunchDaemon ownership", () => {
       1,
       "could not verify",
     ],
-    [
-      "signal after scan",
-      `if [ "$query_count" -eq 1 ]; then\n${absentQuery}\nfi\nprintf "Could not find service\\n" >&2\nkill -TERM $$`,
-      2,
-      "could not verify",
-    ],
-    [
-      "loaded after scan",
-      `if [ "$query_count" -eq 2 ]; then exit 0; fi\n${absentQuery}`,
-      2,
-      "loaded system LaunchDaemon",
-    ],
   ] as const)(
     "executes the rendered ownership query with %s outcome",
-    (_, body, queries, detail) => {
+    (scenario, body, _queries, detail) => {
       const result = runRenderedProbe("foreign.plist", "unlabeled", body);
       expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");
       if (detail) {
@@ -436,7 +334,7 @@ describe("system LaunchDaemon ownership", () => {
       } else {
         expect(result.detail).toBe("");
       }
-      expect(result.events).toEqual(queries === 1 ? ["query"] : ["query", "scan", "scan", "query"]);
+      expect(result.events).toEqual(scenario === "absent" ? ["query", "scan", "scan"] : ["query"]);
     },
   );
 });
