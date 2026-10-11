@@ -317,6 +317,11 @@ To move existing Claude Code memory into OpenClaw:
   The source files stay in place. The Doctor note stops once the workspace has
   a Claude Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants).
 
+  When `~/.claude/settings.json` sets `autoMemoryDirectory`, Claude Code keeps
+  its auto memory in that one directory instead. Doctor reports that directory,
+  and you import it from **Settings** → **Import Memory** in the Control UI,
+  where you choose the destination agent and the collections to copy.
+
 - **`~/.claude/CLAUDE.md`:** these rules apply to every Claude Code session on
   the host, so OpenClaw does not copy them automatically. Move the rules an
   agent needs into that agent's `AGENTS.md` or `USER.md`. Running
