@@ -36,7 +36,6 @@ import {
   warnLegacyAuthProfileSourcesIgnored,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import {
   shouldUseMainOwnerForLocalOAuthCredential,
   type PersistedAuthProfileStores,
@@ -775,10 +774,6 @@ export function restoreAuthProfileStorePersistenceSnapshot(
                 stateChanged: stateRestored,
                 selectionChanged: stateRestored,
                 profileIds: credentialsRestored ? changedProfileIds : [],
-                oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-                  restoredProfiles,
-                  credentialsRestored ? changedProfileIds : [],
-                ),
               },
               owner,
             );

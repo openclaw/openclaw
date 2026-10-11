@@ -157,6 +157,7 @@ vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
 }));
 
+// mock-isolation: Side-question runs use controlled auth results without host credential discovery.
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),

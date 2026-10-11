@@ -79,10 +79,16 @@ vi.mock("../agents/harness/registry.js", async (importOriginal) => ({
   ),
 }));
 
-vi.mock("../plugins/plugin-registry-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-registry-snapshot.js")>()),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: pluginRegistryState.records }) as never),
-}));
+vi.mock("../plugins/plugin-registry-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry-snapshot.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: vi.fn((params) => ({
+      ...actual.loadPluginRegistrySnapshot(params),
+      plugins: pluginRegistryState.records,
+    })),
+  };
+});
 
 const profile = {
   type: "api_key" as const,

@@ -30,6 +30,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Browser-auth routing uses fixture profile results while keeping host credential storage untouched.
 vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
   const { resolveOpenAICodexAuthIdentity } = await vi.importActual<
     typeof import("openclaw/plugin-sdk/provider-oauth-runtime")

@@ -23,6 +23,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Playback event tests use synthetic credentials; host auth storage is outside this transport fixture.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
   isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,

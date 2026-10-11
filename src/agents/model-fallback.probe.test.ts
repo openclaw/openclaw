@@ -25,6 +25,7 @@ import {
   createModelFallbackConfig,
 } from "./test-helpers/model-fallback-config-fixture.js";
 
+// mock-isolation: Cooldown probes use fixture profile state without loading or updating host stores.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreAsync: (...args: Parameters<typeof ensureAuthProfileStore>) =>

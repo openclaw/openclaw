@@ -1,5 +1,4 @@
 import { hash, randomBytes } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OAuthCredential } from "./types.js";
 
 const OAUTH_REFRESH_FENCE_PREFIX = "openclaw-oauth-refresh-fence:v1:";
@@ -56,38 +55,6 @@ function parseOAuthRefreshFence(credential: OAuthRefreshFenceCredential | undefi
     refreshDigest: refresh[3]!,
     state: access[2] ? "failed" : "pending",
   };
-}
-
-/** Secret-free claim identity from already-owned credential publication facts. */
-export function readPendingOAuthRefreshClaimId(credential: unknown): string | undefined {
-  if (
-    !isRecord(credential) ||
-    credential.type !== "oauth" ||
-    typeof credential.access !== "string" ||
-    typeof credential.refresh !== "string" ||
-    credential.expires !== 1
-  ) {
-    return undefined;
-  }
-  const marker = parseOAuthRefreshFence({
-    type: "oauth",
-    access: credential.access,
-    refresh: credential.refresh,
-    expires: credential.expires,
-  });
-  return marker?.state === "pending" ? marker.claimId : undefined;
-}
-
-export function captureOAuthRefreshClaimPublication(
-  profiles: Record<string, unknown>,
-  profileIds: Iterable<string>,
-): ReadonlyMap<string, string | undefined> {
-  return new Map(
-    [...profileIds].map((profileId) => [
-      profileId,
-      readPendingOAuthRefreshClaimId(profiles[profileId]),
-    ]),
-  );
 }
 
 /** Replace one claimed OAuth generation with an inert, schema-valid durable marker. */

@@ -28,6 +28,7 @@ const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
 const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
+// mock-isolation: Dispatch eligibility uses fixture auth modes without host credential discovery.
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync: ensureAuthProfileStore,

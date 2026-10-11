@@ -13,7 +13,6 @@ import {
 } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import type { ExternalCliOverlayOptions } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
@@ -25,25 +24,12 @@ import {
   type LegacyAuthProfileSource,
 } from "./legacy-source-files.js";
 import {
-  getRuntimeAuthProfileStoreCredentialMutationToken,
-  type RuntimeAuthProfileStoreMutationOwner,
-} from "./mutation-lineage.js";
-import { readOAuthRefreshGenerationDigest } from "./oauth-refresh-marker.js";
-import { captureOAuthRefreshSettlement } from "./oauth-refresh-observation.js";
-import {
-  captureAuthProfileOwnerScope,
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
-import {
-  createEmptyAuthProfileStore,
-  listRuntimeLocalProfileIds,
-} from "./runtime-snapshot-owner.js";
-import {
-  captureRuntimeAuthProfileLocalPin,
-  runtimeAuthProfileRowsCache,
-} from "./runtime-snapshots.js";
+import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
+import { runtimeAuthProfileRowsCache } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
@@ -241,24 +227,6 @@ export function createAuthProfileStoreRuntimeReader({
       inheritedAuthDir,
     });
     const profileId = capturedOptions.profileId;
-    const localMutationOwner: RuntimeAuthProfileStoreMutationOwner | undefined = selectedAgentPath
-      ? {
-          kind: "unresolved",
-          databasePath: selectedAgentPath,
-          scope: captureAuthProfileOwnerScope(env),
-        }
-      : undefined;
-    const readLocalToken = () =>
-      localMutationOwner && profileId
-        ? getRuntimeAuthProfileStoreCredentialMutationToken(undefined, profileId, {
-            owner: localMutationOwner,
-          })
-        : undefined;
-    const pinnedLocal =
-      reusePersistedRows && effectiveAgentDir && profileId
-        ? captureRuntimeAuthProfileLocalPin(resolveAgentAuthPath(effectiveAgentDir), profileId)
-        : undefined;
-    const pinnedLocalToken = pinnedLocal ? readLocalToken() : undefined;
     const personalProfileId =
       !scope.isolated && profileId && isUserModelAuthProfileId(profileId) ? profileId : undefined;
     const needsSharedStore = !effectiveAgentDir || !inheritedAuthDir;
@@ -294,10 +262,7 @@ export function createAuthProfileStoreRuntimeReader({
     const inCapturedScope = <Value>(run: () => Value): Value =>
       scope.run(effectiveAgentDir, env, run);
     const rowsByPath = new Map<string, AuthProfileRowRead>();
-    // These projections inform OAuth settlement only; each demand composes its own options.
     const stores = new Map<string, Result<AuthProfileStore, unknown>>();
-    let localRowsToken: ReturnType<typeof readLocalToken>;
-    let inheritedObservationPath: string | undefined;
     let active = true;
     let accepting = true;
     const assertAccepting = () => {
@@ -327,83 +292,9 @@ export function createAuthProfileStoreRuntimeReader({
         requestOptions.deferScopedMigrationRefusals,
       );
       const candidates = resolveLegacyAuthProfileSourceCandidates({ agentDir: ownerAgentDir, env });
-      if (databasePath === selectedAgentPath && !rowsByPath.has(databasePath)) {
-        localRowsToken = readLocalToken();
-      }
       const preparedReader =
         rowReaders.get(databasePath) ??
-        (reusePersistedRows
-          ? runtimeAuthProfileRowsCache.prepare(
-              databasePath,
-              reader,
-              (databasePaths, capturedRows) => {
-                const currentLocalToken = readLocalToken();
-                const localFactIsCurrent = (token: ReturnType<typeof readLocalToken>) =>
-                  token?.known === true &&
-                  currentLocalToken?.known === true &&
-                  token.revision === currentLocalToken.revision;
-                const observedStore = (sourcePath: string | undefined) => {
-                  const observed = sourcePath ? stores.get(sourcePath) : undefined;
-                  return observed?.ok
-                    ? observed.value
-                    : databasePath === sourcePath &&
-                        capturedRows &&
-                        capturedRows.store.status !== "unreadable"
-                      ? loadPersistedAuthProfileStoreFromRows(capturedRows, databasePath)
-                      : undefined;
-                };
-                const localStore = observedStore(selectedAgentPath);
-                let localOwner: string | undefined;
-                if (localFactIsCurrent(localRowsToken) && profileId && localStore) {
-                  const inheritedStore = observedStore(inheritedObservationPath);
-                  // Actual rows take precedence over warm metadata after foreign writes.
-                  if (inheritedStore && inheritedObservationPath !== selectedAgentPath) {
-                    localOwner = listRuntimeLocalProfileIds(localStore, inheritedStore).includes(
-                      profileId,
-                    )
-                      ? selectedAgentPath
-                      : undefined;
-                  } else if (
-                    localFactIsCurrent(pinnedLocalToken) &&
-                    pinnedLocal?.matchesCredential(localStore.profiles[profileId])
-                  ) {
-                    localOwner = pinnedLocal.databasePath;
-                  }
-                }
-                const localCredential = profileId ? localStore?.profiles[profileId] : undefined;
-                return captureOAuthRefreshSettlement({
-                  databasePaths,
-                  localPin: localOwner
-                    ? {
-                        databasePath: localOwner,
-                        generation:
-                          profileId && localCredential?.type === "oauth"
-                            ? readOAuthRefreshGenerationDigest({
-                                profileId,
-                                credential: localCredential,
-                              })
-                            : undefined,
-                      }
-                    : undefined,
-                  profileId,
-                  matchesProvider: (provider) =>
-                    inCapturedScope(
-                      () =>
-                        !requestOptions.migrationProvider ||
-                        resolveProviderIdForAuth(provider, {
-                          config: requestOptions.config,
-                          env,
-                          storedCredential: true,
-                        }) ===
-                          resolveProviderIdForAuth(requestOptions.migrationProvider, {
-                            config: requestOptions.config,
-                            env,
-                          }),
-                    ),
-                });
-              },
-            )
-          : reader);
+        (reusePersistedRows ? runtimeAuthProfileRowsCache.prepare(databasePath, reader) : reader);
       rowReaders.set(databasePath, preparedReader);
       const rows = rowsByPath.get(databasePath) ?? (await preparedReader.read());
       preparedReader.assertCurrent();
@@ -490,9 +381,6 @@ export function createAuthProfileStoreRuntimeReader({
         throw new Error("Auth profile read requested an uncaptured database owner");
       }
       assertAccepting();
-      if (databasePath !== selectedAgentPath) {
-        inheritedObservationPath = databasePath;
-      }
       const store = await readOwner(directory, databasePath, reader, requestedOptions);
       assertAccepting();
       assertCurrent();
@@ -533,7 +421,6 @@ export function createAuthProfileStoreRuntimeReader({
       const inheritedPath = inheritedAuthDir
         ? resolveAgentAuthPath(inheritedAuthDir)
         : selectedSharedPath!;
-      inheritedObservationPath = inheritedPath;
       const paths = [...new Set([requestedPath, ...(effectiveAgentDir ? [inheritedPath] : [])])];
       for (const databasePath of paths) {
         if (stores.has(databasePath)) {

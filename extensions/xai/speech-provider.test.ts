@@ -34,6 +34,7 @@ vi.mock("./tts.js", () => ({
   xaiTTSStream: xaiTTSStreamMock,
 }));
 
+// mock-isolation: Speech request tests supply credential availability independently of host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: () => false,
   isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,

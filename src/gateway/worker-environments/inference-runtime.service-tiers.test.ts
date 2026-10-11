@@ -100,7 +100,7 @@ describe("worker inference account service tiers", () => {
     const runtime = setup(entry, { pluginRegistry, accountCatalog, config: runtimeConfig });
     const authStorage = AuthStorage.inMemory({});
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
+    vi.spyOn(authProfileStore, "ensureAuthProfileStoreAsync").mockResolvedValue({
       version: 1,
       profiles: {},
     });

@@ -25,6 +25,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Reconnect tests control credential completion without host auth storage or refresh work.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
   isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,

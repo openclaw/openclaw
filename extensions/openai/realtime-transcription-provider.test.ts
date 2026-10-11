@@ -80,6 +80,7 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
+// mock-isolation: Transcription transport tests supply synthetic credentials without opening host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: providerAuthMocks.isProviderAuthProfileConfigured,
   isProviderAuthProfileConfiguredAsync: providerAuthMocks.isProviderAuthProfileConfiguredAsync,

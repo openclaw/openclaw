@@ -551,7 +551,11 @@ describe("createImageGenerateTool", () => {
       .spyOn(imageGenerationRuntime, "generateImage")
       .mockRejectedValue(generationError);
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }),
+      createImageGenerateTool({
+        config: {},
+        agentDir: "/tmp/agent",
+        authProfileStore: { version: 1, profiles: {} },
+      }),
     );
 
     await expect(tool.execute("call-ready-image", { prompt: "An image" })).rejects.toBe(
@@ -981,9 +985,13 @@ describe("createImageGenerateTool", () => {
       createDeferred<
         Awaited<ReturnType<typeof taskStatus.findDuplicateGuardImageGenerationTaskForSession>>
       >();
+    const lookupStarted = createDeferred<void>();
     const findDuplicate = vi
       .spyOn(taskStatus, "findDuplicateGuardImageGenerationTaskForSession")
-      .mockReturnValue(lookup.promise);
+      .mockImplementation(() => {
+        lookupStarted.resolve();
+        return lookup.promise;
+      });
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
     const scheduleBackgroundWork = vi.fn();
     const agentSessionKey = "agent:main:discord:direct:123";
@@ -1003,6 +1011,7 @@ describe("createImageGenerateTool", () => {
     const abortReason = new Error("image requester cancelled during task lookup");
 
     const pending = tool.execute("call-image-lookup", { prompt: "an image" }, controller.signal);
+    await lookupStarted.promise;
     expect(findDuplicate).toHaveBeenCalledWith(agentSessionKey, {
       prompt: "an image",
       requestKey: undefined,

@@ -53,9 +53,13 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     clearRuntimeAuthProfileStoreSnapshots,
     ensureAuthProfileStoreWithoutExternalProfiles:
       mocks.ensureAuthProfileStoreWithoutExternalProfiles,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async () =>
+      mocks.ensureAuthProfileStoreWithoutExternalProfiles(),
     listProfilesForProvider: mocks.listProfilesForProvider,
     loadAuthProfileStoreWithoutExternalProfiles:
       mocks.ensureAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync: async () =>
+      mocks.ensureAuthProfileStoreWithoutExternalProfiles(),
     removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
   };
 });

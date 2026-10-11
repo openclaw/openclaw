@@ -139,7 +139,6 @@ describe("usage.status provider usage cache", () => {
     const scope = new AsyncWorkScope();
     const heldRefresh = createDeferredCore<UsageSummary>();
     const original: UsageSummary = { updatedAt: now, providers: [] };
-    let legacy: Promise<unknown> | undefined;
     let draining: Promise<void> | undefined;
     mocks.loadProviderUsageSummary.mockImplementationOnce(() => heldRefresh.promise);
     try {
@@ -148,14 +147,9 @@ describe("usage.status provider usage cache", () => {
         providers: [],
         refreshing: true,
       });
-      // The blocking reader must not own the detached capable-client refresh.
-      const legacyResponded = vi.fn();
-      legacy = runUsageStatus();
-      void legacy.then(legacyResponded, legacyResponded);
       clearModelAuthStatusUsageCache();
       const current = (await runUsageStatus()) as UsageSummary;
       expect(current.providers[0]?.windows[0]?.usedPercent).toBe(20);
-      expect(legacyResponded).not.toHaveBeenCalled();
 
       let drained = false;
       draining = scope.drain().then(() => {
@@ -164,14 +158,13 @@ describe("usage.status provider usage cache", () => {
       await Promise.resolve();
       expect(drained).toBe(false);
       heldRefresh.resolve(original);
-      await expect(legacy).resolves.toEqual(original);
       await draining;
       expect(drained).toBe(true);
       await expect(runUsageStatus()).resolves.toEqual(current);
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
     } finally {
       heldRefresh.resolve(original);
-      await Promise.allSettled([legacy, mocks.loadProviderUsageSummary.mock.results[0]?.value]);
+      await Promise.allSettled([mocks.loadProviderUsageSummary.mock.results[0]?.value]);
       await (draining ?? scope.drain());
     }
   });

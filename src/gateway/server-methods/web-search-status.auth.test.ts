@@ -116,7 +116,8 @@ it.each([false, true])(
         credentialSource: published ? "auth-profile" : "missing",
       },
     ]);
-    expect(result.status?.route.kind).toBe(published ? "native" : "unavailable");
+    // Native search follows the selected transport; the model request admits credentials.
+    expect(result.status?.route.kind).toBe("native");
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
     expect(JSON.stringify(result.status)).not.toContain("synthetic-fixture-token");
   },

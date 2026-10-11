@@ -334,6 +334,10 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
+    version: 1,
+    profiles: {},
+  })),
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
@@ -399,6 +403,7 @@ vi.mock("../video-generation/runtime.js", () => ({
   listRuntimeVideoGenerationProviders: mocks.listRuntimeVideoGenerationProviders,
 }));
 
+// mock-isolation: TTS CLI cases use fixture preferences and synthesis without machine-state bindings.
 vi.mock("../tts/tts.js", () => ({
   getTtsPersona: vi.fn(() => undefined),
   getTtsProviderAsync: mocks.getTtsProviderAsync,
@@ -863,6 +868,7 @@ describe("capability cli", () => {
           provider,
           config: mocks.loadConfig(),
           agentDir: "/tmp/agent-beta",
+          authStore: { version: 1, profiles: {} },
         });
       } else {
         expect(firstJsonOutput()).toMatchObject({

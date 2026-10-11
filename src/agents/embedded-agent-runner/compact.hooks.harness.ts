@@ -713,12 +713,18 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  // mock-isolation: Compaction hooks use fixture auth results without host profile or key discovery.
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: async (...args: Parameters<typeof ensureAuthProfileStoreMock>) =>
+      ensureAuthProfileStoreMock(...args),
     ensureAuthProfileStoreWithoutExternalProfiles:
       ensureAuthProfileStoreWithoutExternalProfilesMock,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async (
+      ...args: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfilesMock>
+    ) => ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
     formatMissingAuthError: vi.fn(
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,

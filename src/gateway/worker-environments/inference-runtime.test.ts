@@ -80,7 +80,7 @@ describe("worker inference provider runtime", () => {
     const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1 }, { pluginRegistry });
     const authStorage = AuthStorage.inMemory({});
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
+    vi.spyOn(authProfileStore, "ensureAuthProfileStoreAsync").mockResolvedValue({
       version: 1,
       profiles: {
         "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER },

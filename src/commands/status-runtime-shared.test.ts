@@ -22,6 +22,7 @@ vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
+// mock-isolation: Usage status uses fixture auth labels without loading host profiles or CLI keys.
 vi.mock("../agents/model-auth-label.js", () => ({
   resolveModelAuthLabelAsync: mocks.resolveModelAuthLabelAsync,
 }));

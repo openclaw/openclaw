@@ -5184,7 +5184,7 @@ async function loadAuthBackedLiveModelRegistry(params: {
   providerList: string[] | undefined;
 }): Promise<{
   authProfileStore: AuthProfileStore;
-  authStorage: ReturnType<typeof discoverAuthStorageFacts>["authStorage"];
+  authStorage: Awaited<ReturnType<typeof discoverAuthStorageFacts>>["authStorage"];
   modelRegistry: ReturnType<typeof discoverModels>;
   all: Array<Model>;
 }> {

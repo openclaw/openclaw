@@ -57,6 +57,7 @@ const pluginMetadataMocks = vi.hoisted(() => ({
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
+// mock-isolation: Model browsing uses fixture auth availability without host profile or CLI key reads.
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabelAsync: () => undefined,
 }));

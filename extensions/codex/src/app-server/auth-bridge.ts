@@ -1076,7 +1076,12 @@ async function resolveScopedOAuthCredential(params: {
         `Codex app-server auth profile "${params.profileId}" could not refresh. Sign in again with OpenClaw, then retry.`,
       );
     }
-    assertCodexOAuthRefreshWorkspace(params.profileId, refreshed, params.expectedAccountId);
+    // Shared refresh ownership follows the credential; each waiter checks its requested workspace below.
+    assertCodexOAuthRefreshWorkspace(
+      params.profileId,
+      refreshed,
+      resolveOpenAICodexAuthIdentity(credential).accountId?.trim(),
+    );
     if (!isDeepStrictEqual(params.store.profiles[params.profileId], credential)) {
       throw new Error(
         `Codex app-server auth profile "${params.profileId}" changed while refreshing. Retry with the newly selected OpenAI profile.`,
@@ -1087,7 +1092,9 @@ async function resolveScopedOAuthCredential(params: {
   })();
   storeRefreshes.set(params.profileId, refresh);
   try {
-    return await refresh;
+    const refreshed = await refresh;
+    assertCodexOAuthRefreshWorkspace(params.profileId, refreshed, params.expectedAccountId);
+    return refreshed;
   } finally {
     // Scoped stores are process-local; serialize their rotating refresh token
     // and release the queue entry with the refresh that owns it.

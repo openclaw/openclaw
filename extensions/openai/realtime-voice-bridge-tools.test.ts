@@ -22,6 +22,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Tool transport tests supply synthetic credentials and do not exercise host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
   isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,

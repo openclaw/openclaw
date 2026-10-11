@@ -13,8 +13,7 @@ const owner = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (original) => {
   const actual = await original<typeof import("openclaw/plugin-sdk/agent-runtime")>();
   return {
-    isPendingOAuthRefreshFence: actual.isPendingOAuthRefreshFence,
-    isSameOAuthRefreshGeneration: actual.isSameOAuthRefreshGeneration,
+    ...actual,
     findPersistedAuthProfileCredential: owner.readCurrent,
     findPersistedAuthProfileCredentialAsync: async () => owner.credential,
     resolveApiKeyForProfile: owner.resolve,
