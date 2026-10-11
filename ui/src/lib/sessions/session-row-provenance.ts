@@ -122,7 +122,10 @@ export function createSessionRowProvenance() {
         }),
       };
     }
-    const result = isShallowEqualSessionRow(next, current) ? current : next;
+    const result =
+      next.snapshotAt === current.snapshotAt && isShallowEqualSessionRow(next, current)
+        ? current
+        : next;
     const observation = observations.get(newer);
     if (observation) {
       observations.set(result, observation);

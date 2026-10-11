@@ -127,7 +127,7 @@ export function reconcileSessionActivityRead(
   return {
     result: {
       ...incoming,
-      sessions,
+      sessions: sessions.toSorted(compareSessionActivity),
     },
     requiresRefresh: false,
   };

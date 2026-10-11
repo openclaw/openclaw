@@ -3,15 +3,47 @@ import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
   parseSessionActivityFilters,
   canonicalSessionActivityLocation,
   projectSessionActivity,
+  reconcileSessionActivityRead,
   sessionActivityLocation,
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
+
+it("orders refreshed membership by the activity timestamps actually displayed", () => {
+  const provenance = createSessionRowProvenance();
+  const older = {
+    ...active,
+    key: "agent:work:a",
+    sessionId: "a",
+    lastActivityAt: 10,
+    snapshotAt: 10,
+  };
+  const current = { ...older, lastActivityAt: 30, snapshotAt: 30 };
+  const other = {
+    ...active,
+    key: "agent:work:b",
+    sessionId: "b",
+    lastActivityAt: 20,
+    snapshotAt: 20,
+  };
+  provenance.observeReadRow(current, 1);
+  const read = reconcileSessionActivityRead(
+    listing([other, older]),
+    listing([current, other]),
+    provenance,
+    2,
+  );
+  expect(read.result.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
+    [current.key, 30],
+    [other.key, 20],
+  ]);
+});
 
 const people: NonNullable<SessionsListResult["people"]> = [
   { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },

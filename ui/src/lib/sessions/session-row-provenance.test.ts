@@ -4,6 +4,25 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
 
 describe("session row provenance", () => {
+  it("retains the sampling time of an unchanged accepted row", () => {
+    const provenance = createSessionRowProvenance();
+    const row: GatewaySessionRow = {
+      key: "agent:main:sampled",
+      sessionId: "sampled",
+      kind: "direct",
+      label: "Current",
+      snapshotAt: 100,
+    };
+    provenance.observeReadRow(row, 1);
+    const newer = { ...row, snapshotAt: 200 };
+    provenance.observeReadRow(newer, 2);
+    const accepted = provenance.mergeRow(row, newer);
+    expect(accepted.snapshotAt).toBe(200);
+    const cached = { ...row, label: "Earlier", snapshotAt: 150 };
+    provenance.observeReadRow(cached, 3);
+    expect(provenance.mergeRow(accepted, cached).label).toBe("Current");
+  });
+
   it.each([
     ["descriptor-first", "compact"],
     ["compact-first", "compact"],
