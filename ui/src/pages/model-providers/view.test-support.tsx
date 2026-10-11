@@ -1,9 +1,10 @@
-import { nothing, render } from "lit";
-import { onTestFinished } from "vitest";
+import { createSignal } from "solid-js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { renderModelProviders } from "./view.ts";
+import { ModelProviders, type ModelProvidersViewProps } from "./view.tsx";
 
-type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
+const mountedViews = new WeakMap<HTMLElement, (props: ModelProvidersViewProps) => void>();
 
 export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
   return {
@@ -62,7 +63,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
-    installedAgents: nothing,
+    installedAgents: undefined,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
     onCloseKeyEditor: () => undefined,
@@ -92,16 +93,18 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
   };
 }
 
-export function mount(
-  viewProps: ModelProvidersViewProps,
-  container = document.body.appendChild(document.createElement("div")),
-): HTMLDivElement {
-  onTestFinished(() => {
-    render(nothing, container);
-    container.remove();
-  });
-  render(renderModelProviders(viewProps), container);
-  return container;
+export function mount(viewProps: ModelProvidersViewProps, container?: HTMLElement): HTMLElement {
+  const update = container && mountedViews.get(container);
+  if (container && update) {
+    update({ ...viewProps });
+    flush();
+    return container;
+  }
+  const [current, setCurrent] = createSignal(viewProps);
+  const view = mountSolid(() => <ModelProviders {...current()} />, { container });
+  mountedViews.set(view.container, (next) => setCurrent(next));
+  flush();
+  return view.container;
 }
 
 export function text(element: Element | null): string {

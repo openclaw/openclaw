@@ -1,10 +1,10 @@
-import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
+import { createMemo } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
-import { t } from "../../i18n/index.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   loadModelCatalog,
@@ -12,7 +12,9 @@ import {
   peekModelCatalog,
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
+import type { ControllerHost } from "../model-providers/page-controller.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 
@@ -36,7 +38,7 @@ export class NativeModelSetup {
   private nativeModelsStatus: "idle" | "loading" | "ready" = "idle";
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: ControllerHost,
     private readonly options: NativeModelSetupOptions,
   ) {}
 
@@ -180,83 +182,114 @@ export class NativeModelSetup {
     }
   }
 
-  render() {
-    const models = this.nativeModels;
-    const selected = models.find((model) => `${model.provider}/${model.id}` === this.nativeModel);
-    return renderNativeModelSetupSection(html`
-      ${this.nativeModelsStatus === "loading" ? html`<p role="status">${t("modelSetup.nativeModels.loading")}</p>` : nothing}
-      ${this.nativeModelsStatus === "ready" && models.length === 0 && !this.nativeCatalogError ? html`<p role="status">${t("modelSetup.nativeModels.empty")}</p>` : nothing}
-      ${renderModelPicker({
-        label: t("modelSetup.nativeModels.choose"),
-        value: this.nativeModel,
-        options: models.map((model) => ({
-          value: `${model.provider}/${model.id}`,
-          label: model.name,
-          provider: model.provider,
-          detail:
-            model.available === true
-              ? providerDisplayLabel(model.provider)
-              : (chatModelUnavailableMessage(model.unavailableReason) ??
-                (this.nativeModelsStatus === "loading" && model.available === undefined
-                  ? t("modelSetup.nativeModels.loading")
-                  : model.available === false
-                    ? t("chat.modelControls.modelsUnavailable")
-                    : t("modelSetup.nativeModels.unconfirmed"))),
-          disabled: model.available !== true,
-        })),
-        disabled: this.options.blocked() || this.saving,
-        onChange: (value) => {
-          this.nativeModel = value;
-          this.host.requestUpdate();
-        },
-        onOpen: () => {
-          if (!this.nativeModelsAbort) {
-            void this.loadNativeModels(this.nativeModelsStatus === "idle");
+  render(revision?: () => unknown) {
+    const current = () => {
+      revision?.();
+      return this;
+    };
+    const selected = () =>
+      current().nativeModels.find(
+        (model) => `${model.provider}/${model.id}` === current().nativeModel,
+      );
+    const options = createMemo(() =>
+      current().nativeModels.map((model) => ({
+        value: `${model.provider}/${model.id}`,
+        label: model.name,
+        provider: model.provider,
+        detail:
+          model.available === true
+            ? providerDisplayLabel(model.provider)
+            : (chatModelUnavailableMessage(model.unavailableReason) ??
+              (current().nativeModelsStatus === "loading" && model.available === undefined
+                ? t("modelSetup.nativeModels.loading")
+                : model.available === false
+                  ? t("chat.modelControls.modelsUnavailable")
+                  : t("modelSetup.nativeModels.unconfirmed"))),
+        disabled: model.available !== true,
+      })),
+    );
+    return renderNativeModelSetupSection(
+      <>
+        {current().nativeModelsStatus === "loading" ? (
+          <p role="status">{t("modelSetup.nativeModels.loading")}</p>
+        ) : undefined}
+        {current().nativeModelsStatus === "ready" &&
+        current().nativeModels.length === 0 &&
+        !current().nativeCatalogError ? (
+          <p role="status">{t("modelSetup.nativeModels.empty")}</p>
+        ) : undefined}
+        <ModelPicker
+          label={t("modelSetup.nativeModels.choose")}
+          value={current().nativeModel}
+          options={options()}
+          disabled={current().options.blocked() || current().saving}
+          onChange={(value) => {
+            this.nativeModel = value;
+            this.host.requestUpdate();
+          }}
+          onOpen={() => {
+            if (!this.nativeModelsAbort) {
+              void this.loadNativeModels(this.nativeModelsStatus === "idle");
+            }
+          }}
+        />
+        <button
+          class="btn primary"
+          disabled={
+            current().options.blocked() || current().saving || selected()?.available !== true
           }
-        },
-      })}
-      <button
-        class="btn primary"
-        ?disabled=${this.options.blocked() || this.saving || selected?.available !== true}
-        @click=${() => void this.useNativeModel()}
-      >
-        ${t(this.saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
-      </button>
-      ${this.nativeModelError ? html`<div class="callout danger" role="alert">${this.nativeModelError}</div>` : nothing}
-      ${
-        this.nativeCatalogError
-          ? html`
-              <div class="callout danger" role="alert">
-                ${this.nativeCatalogError}
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  ?disabled=${this.options.blocked() || this.saving || this.nativeModelsAbort !== null}
-                  @click=${() => void this.loadNativeModels(true)}
-                >
-                  ${t("common.retry")}
-                </button>
-              </div>
-            `
-          : nothing
-      }
-    `);
+          onClick={() => void this.useNativeModel()}
+        >
+          {t(current().saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
+        </button>
+        {current().nativeModelError ? (
+          <div class="callout danger" role="alert">
+            {current().nativeModelError}
+          </div>
+        ) : undefined}
+        {current().nativeCatalogError ? (
+          <div class="callout danger" role="alert">
+            {current().nativeCatalogError}
+            <button
+              class="btn btn--sm"
+              type="button"
+              disabled={
+                current().options.blocked() ||
+                current().saving ||
+                current().nativeModelsAbort !== null
+              }
+              onClick={() => void this.loadNativeModels(true)}
+            >
+              {t("common.retry")}
+            </button>
+          </div>
+        ) : undefined}
+      </>,
+    );
   }
 }
 
-function renderNativeModelSetupSection(content: TemplateResult) {
-  return html`
-    <section class="settings-section" data-native-model-setup>
-      <div class="settings-section__header"><h2>${t("modelSetup.nativeModels.title")}</h2></div>
-      <p class="muted">${t("modelSetup.nativeModels.body")}</p>
-      ${content}
-    </section>
-  `;
+function renderNativeModelSetupSection(content: JSX.Element) {
+  return (
+    <>
+      <section class="settings-section" data-native-model-setup>
+        <div class="settings-section__header">
+          <h2>{t("modelSetup.nativeModels.title")}</h2>
+        </div>
+        <p class="muted">{t("modelSetup.nativeModels.body")}</p>
+        {content}
+      </section>
+    </>
+  );
 }
 
 export function renderNativeModelSetupLoading() {
-  return renderNativeModelSetupSection(html`
-    <div class="model-picker"><span class="picker-select__trigger skeleton"></span></div>
-    <span class="btn skeleton">${"\u00a0"}</span>
-  `);
+  return renderNativeModelSetupSection(
+    <>
+      <div class="model-picker">
+        <span class="picker-select__trigger skeleton" />
+      </div>
+      <span class="btn skeleton">{"\u00a0"}</span>
+    </>,
+  );
 }
