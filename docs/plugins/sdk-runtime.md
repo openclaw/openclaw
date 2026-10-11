@@ -326,6 +326,12 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+SQLite worker backends set connection lock-wait policy with
+`setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
+temporary changes. The connection owner retains the current timeout, skips
+unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
+connection would bypass that policy.
+
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
 issuing SQL or a worker request. Retained row caches may reuse results only when

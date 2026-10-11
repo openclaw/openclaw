@@ -121,8 +121,10 @@ export function readSessionMaintenanceFastPath(
   if (params.forceMaintenance || !ageFact || Date.now() >= ageFact.next.at) {
     return undefined;
   }
+  const entryCount = readSessionEntryCount(database, { includeArchived: false });
+  stageSessionEntryMaintenanceAgeFact(database.db, { ...ageFact, entryCount });
   return shouldRunSessionEntryMaintenance({
-    entryCount: readSessionEntryCount(database, { includeArchived: false }),
+    entryCount,
     maxEntries: params.maintenance.maxEntries,
     force: false,
   })
@@ -242,7 +244,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       onRemoved: ({ key }, reason) => removalReasons.set(key, reason),
       onArchived: ({ key }) => archivedKeys.add(key),
     });
-  const ageFact = recordSessionEntryMaintenanceAgeFact(reader, maintenance, plannedAt);
+  const ageFact = recordSessionEntryMaintenanceAgeFact(reader, maintenance, plannedAt, entryCount);
   const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
   if (selectedKeys.length === 0) {
     return {
