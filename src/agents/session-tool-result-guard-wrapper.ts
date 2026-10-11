@@ -51,7 +51,6 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResults"
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
-      | "clearNextUserMessagePersistenceSuppression"
       | "setNextUserMessagePersistenceSuppression"
     >
   > & {
@@ -305,7 +304,7 @@ export function guardSessionManager(
         Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
       ) {
         pendingPreparedUserTurnMessage = undefined;
-        guard.clearNextUserMessagePersistenceSuppression();
+        guard.setNextUserMessagePersistenceSuppression(false);
       }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
@@ -381,8 +380,6 @@ export function guardSessionManager(
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
-  guardedSessionManager.clearNextUserMessagePersistenceSuppression =
-    guard.clearNextUserMessagePersistenceSuppression;
   guardedSessionManager.setNextUserMessagePersistenceSuppression =
     guard.setNextUserMessagePersistenceSuppression;
   guardedSessionManager.setTranscriptRunContext = (

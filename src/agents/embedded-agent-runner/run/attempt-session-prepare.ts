@@ -403,7 +403,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       input.abortSignal?.throwIfAborted();
     }
     // The merged replacement prompt needs a new canonical user row.
-    sessionManager.clearNextUserMessagePersistenceSuppression?.();
+    sessionManager.setNextUserMessagePersistenceSuppression?.(false);
     attempt.onUserMessagePersistenceInvalidated?.();
   }
   if (orphanRepair) {

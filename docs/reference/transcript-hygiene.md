@@ -55,6 +55,12 @@ prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
 
+For a runtime-only turn with no user text, the embedded runner keeps its synthetic
+continuation marker out of the stored user transcript. Runtime context still
+reaches the model, and the next real user input persists normally even if prompt
+submission fails before the runtime-only turn starts. Existing stored markers are
+not rewritten.
+
 Compaction and saved CLI session notes exclude the reserved
 `openclaw.runtime-context` custom message type, including older entries without
 carrier metadata and entries that opt out of provider replay. Provider carrier

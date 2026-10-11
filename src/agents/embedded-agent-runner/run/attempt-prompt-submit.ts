@@ -100,7 +100,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
-  /** Guard setter for one-shot user-turn persistence suppression (#124244). */
   setNextUserMessagePersistenceSuppression?: (suppress: boolean) => void;
   systemPrompt: string;
   toolResultAggregateMaxChars: number;
@@ -308,10 +307,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   };
   attachPromptCompactionRequestBudget(promptOptions, input.compactionRequestBudget);
   const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
-  // Runtime-only turns submit the synthetic runtime continuation marker instead of
-  // user text; persisting it would fabricate a user turn (#124244). Reuse the guard's
-  // existing one-shot suppression: the marker's own write consumes it, and the disarm
-  // below keeps a failed submission from leaking into a later user turn.
+  // The synthetic continuation drives the model but is not a human transcript turn.
   if (input.runtimeOnly) {
     input.setNextUserMessagePersistenceSuppression?.(true);
   }
@@ -337,6 +333,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     }
   } finally {
     if (input.runtimeOnly) {
+      // Preflight can fail before consuming the one-shot suppression.
       input.setNextUserMessagePersistenceSuppression?.(false);
     }
     cleanupProviderPromptHistoryTransform();

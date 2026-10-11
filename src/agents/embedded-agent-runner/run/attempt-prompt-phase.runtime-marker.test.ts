@@ -87,8 +87,9 @@ describe("runEmbeddedAttemptPromptPhase runtime-only persistence", () => {
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
-    expect(requests[0]).toBeDefined();
+    expect(requests).toHaveLength(1);
     expect(JSON.stringify(requests[0])).toContain("Continue the OpenClaw runtime event.");
+    expect(JSON.stringify(requests[0])).toContain("room event payload: a runtime-only turn");
     const persistedUserTexts = () =>
       guardedManager
         .getEntries()
