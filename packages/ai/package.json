@@ -101,6 +101,11 @@
       "import": "./dist/internal/retry-after.mjs",
       "default": "./dist/internal/retry-after.mjs"
     },
+    "./internal/env-api-keys": {
+      "types": "./dist/internal/env-api-keys.d.mts",
+      "import": "./dist/internal/env-api-keys.mjs",
+      "default": "./dist/internal/env-api-keys.mjs"
+    },
     "./internal/runtime": {
       "types": "./dist/internal/runtime.d.mts",
       "import": "./dist/internal/runtime.mjs",

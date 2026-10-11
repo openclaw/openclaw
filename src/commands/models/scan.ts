@@ -1,5 +1,5 @@
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
-import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { getEnvApiKey } from "@openclaw/ai/internal/env-api-keys";
 import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
