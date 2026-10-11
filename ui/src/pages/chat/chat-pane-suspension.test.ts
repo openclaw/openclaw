@@ -28,7 +28,7 @@ describe("chat pane suspension", () => {
     const { pane, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     });
-    state.settings = { ...pane.context.theme.settings, chatShowTaskProgress: false };
+    state.settings = { ...pane.context.theme.settings, token: "", chatShowTaskProgress: false };
     const render = vi.fn(() => html`<p>${state.chatMessage}</p>`);
     const lifecycle = Object.assign(pane, { render, active: true });
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
