@@ -66,12 +66,42 @@ class SolidTemplateDirective extends AsyncDirective {
   private dispose?: () => void;
   private updateProps?: (props: object) => void;
   private mount?: () => void;
+  private commitQueued = false;
+
+  private commit() {
+    if (!this.isConnected) {
+      return;
+    }
+    runWithOwner(null, () => {
+      if (!this.dispose) {
+        this.mount?.();
+      }
+      this.updateProps?.(this.latestProps);
+      flush();
+    });
+  }
+
+  private requestCommit() {
+    if (this.commitQueued) {
+      return;
+    }
+    // A nested Lit commit must not flush an independent root inside a Solid render.
+    if (getOwner()) {
+      this.commitQueued = true;
+      queueMicrotask(() => {
+        this.commitQueued = false;
+        this.commit();
+      });
+    } else {
+      this.commit();
+    }
+  }
 
   render(component: unknown, props: object, mountContent: MountContent) {
     this.element ??= document.createElement("span");
     this.element.style.display = "contents";
     if (this.component !== component) {
-      this.dispose?.();
+      runWithOwner(null, () => this.dispose?.());
       this.dispose = undefined;
       this.component = component;
     }
@@ -82,24 +112,19 @@ class SolidTemplateDirective extends AsyncDirective {
       this.dispose = mountContent(read, this.element!);
     };
     if (this.isConnected) {
-      if (!this.dispose) {
-        this.mount?.();
-      }
-      this.updateProps?.(props);
-      flush();
+      this.requestCommit();
     }
     return this.element;
   }
 
   protected override disconnected() {
-    this.dispose?.();
+    runWithOwner(null, () => this.dispose?.());
     this.dispose = undefined;
     this.updateProps = undefined;
   }
 
   protected override reconnected() {
-    this.mount?.();
-    flush();
+    this.requestCommit();
   }
 }
 
