@@ -210,7 +210,7 @@ async function restoreIndexedDatabases(
         }
         const tx = db.transaction(storeSnap.name, "readwrite");
         await new Promise<void>((resolve, reject) => {
-          let enqueueError: unknown;
+          let enqueueError: Error | undefined;
           tx.addEventListener("complete", () => resolve(), { once: true });
           tx.addEventListener(
             "abort",
@@ -231,7 +231,7 @@ async function restoreIndexedDatabases(
             }
           } catch (err) {
             // A synchronous put failure must also settle earlier queued writes.
-            enqueueError = err;
+            enqueueError = toErrorObject(err, "IndexedDB restore enqueue failed");
             tx.abort();
           }
         });
