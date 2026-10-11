@@ -39,9 +39,12 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       "includeSessionPlacement" in params &&
       params.includeSessionPlacement === true
     ) {
-      return options.placementPolicy
-        ? options.placementPolicy()
-        : Promise.resolve({ sessionPlacement: {} });
+      if (options.placementPolicy) {
+        return options.placementPolicy();
+      }
+      if (!options.request) {
+        return Promise.resolve({ sessionPlacement: {} });
+      }
     }
     if (options.request) {
       return options.request(method, params);
@@ -55,6 +58,31 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   });
   const lifetime = new AbortController();
   onTestFinished(() => lifetime.abort());
+  const roster = {
+    defaultId: "main",
+    agents: options.agents ?? [
+      {
+        id: "main",
+        workspace: "/workspace",
+        workspaceGit: false,
+        model: { primary: "openai/gpt-5.6-luna" },
+      },
+    ],
+  };
+  // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
+  const agents = {
+    state: {
+      agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} },
+    },
+    refreshList: async () => {
+      // A failed refresh publishes no policy, like the roster owner.
+      const policy = await options.placementPolicy?.().catch(() => undefined);
+      if (policy) {
+        agents.state.agentsList = Object.assign({}, roster, policy);
+      }
+      return agents.state.agentsList;
+    },
+  };
   const context = {
     lifecycleAbortSignal: lifetime.signal,
     router,
@@ -82,21 +110,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       },
       setSessionKey: vi.fn(),
     },
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          agents: options.agents ?? [
-            {
-              id: "main",
-              workspace: "/workspace",
-              workspaceGit: false,
-              model: { primary: "openai/gpt-5.6-luna" },
-            },
-          ],
-        },
-      },
-    },
+    agents,
     sessions: {
       state: { result: null },
       createResult: vi.fn(),
@@ -145,6 +159,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       runtimeId: place?.devicePlacementRuntime()?.id ?? "",
     }),
     {
+      readAgents: () => context.agents,
       requestUpdate: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate: vi.fn(),
@@ -158,11 +173,6 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         place?.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true }),
     },
   );
-  // Synchronous unit fixtures that omit catalog discovery model an already-loaded
-  // Gateway with no placement policy. Catalog tests exercise the real async owner.
-  if (!options.methods?.includes("environments.list")) {
-    vi.spyOn(gateway, "placementPolicyReady", "get").mockReturnValue(true);
-  }
   const browser = new DraftPlaceBrowser(
     host,
     gateway,
