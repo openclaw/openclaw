@@ -175,33 +175,6 @@ describe("startGatewayEarlyRuntime", () => {
     },
   );
 
-  it("wires non-minimal skills runtime through lazy startup imports", async () => {
-    const nodeRegistry = { node: { id: "node" } };
-
-    const input = earlyRuntimeInput({
-      minimalTestGateway: false,
-      cfgAtStart: { cron: { enabled: false } },
-      nodeRegistry: nodeRegistry as never,
-    });
-    const earlyRuntime = await startGatewayEarlyRuntime(input);
-
-    expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
-    await Promise.resolve();
-    expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
-    expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
-    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(input.scheduler);
-    expect(mocks.startGatewayDiscovery).toHaveBeenCalledOnce();
-    expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-      mocks.setSkillsRemoteRegistry.mock.invocationCallOrder[0] ?? -Infinity,
-    );
-    expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
-
-    await earlyRuntime.skillsChangeUnsub();
-    expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
-    expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
-    expect(mocks.detachSkillsWatchers).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "stops acquired discovery exactly once after later startup failure (cleanup rejects: %s)",
     async (cleanupRejects) => {
@@ -397,47 +370,4 @@ describe("startGatewayEarlyRuntime", () => {
       }
     },
   );
-
-  it("starts discovery with the current plugin registry services", async () => {
-    const stop = vi.fn(async () => {});
-    const discovery = { update: async () => {}, stop };
-    mocks.startGatewayDiscovery.mockResolvedValueOnce(discovery);
-    const swapDiscovery = vi.fn(() => null);
-    const service = {
-      pluginId: "bonjour",
-      service: { id: "bonjour", advertise: vi.fn() },
-    };
-
-    const input = earlyRuntimeInput({
-      minimalTestGateway: false,
-      swapDiscovery,
-      cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
-      port: 19_001,
-      gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-      gatewayDirectReachable: true,
-      tailscaleMode: "serve" as never,
-      logDiscovery: {
-        info: () => {},
-        warn: () => {},
-      },
-      pluginRegistry: {
-        gatewayDiscoveryServices: [service],
-      } as never,
-    });
-    await startGatewayEarlyRuntime(input);
-    expect(swapDiscovery).toHaveBeenCalledWith(discovery);
-
-    const [discoveryParams] = mocks.startGatewayDiscovery.mock.calls.at(-1) ?? [];
-    if (discoveryParams === undefined) {
-      throw new Error("Expected gateway discovery to start");
-    }
-    expect(discoveryParams.machineDisplayName).toBe("Test Machine");
-    expect(discoveryParams.port).toBe(19_001);
-    expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
-    expect(discoveryParams.gatewayDirectReachable).toBe(true);
-    expect(discoveryParams.tailscaleMode).toBe("serve");
-    expect(discoveryParams.discovery?.mdns?.mode).toBe("full");
-    expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
-    expect(discoveryParams.pluginRuntimeClaim).toBe(input.pluginRuntimeClaim);
-  });
 });

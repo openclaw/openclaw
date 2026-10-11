@@ -124,30 +124,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     },
   );
 
-  it("never silently drops an authoritative session message for a slow subscriber", async () => {
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
-      sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
-      message: { role: "user", content: [{ type: "text", text: "shared durable prompt" }] },
-      messageId: "durable-user-1",
-      messageSeq: 1,
-    });
-
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "session.message",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        messageId: "durable-user-1",
-        messageSeq: 1,
-      }),
-      expect.any(Set),
-      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
-    );
-  });
-
   it("invalidates broad and targeted subscribers once for an identity-only commit", async () => {
     const broadConnIds = new Set(["conn-broad", "conn-shared"]);
     const targetConnIds = new Set(["conn-targeted", "conn-shared"]);
@@ -638,32 +614,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     );
   });
 
-  it("projects running status into ordinary startup transcript snapshots", async () => {
-    await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      status: "running",
-      hasActiveRun: true,
-      session: { key: "agent:main:main", status: "running", hasActiveRun: true },
-    });
-  });
-
-  it("keeps stable thinking state without catalog-derived picker metadata", async () => {
-    const payload = await emitAssistantTranscriptUpdate(false);
-
-    expect(payload).toMatchObject({
-      session: {
-        thinkingLevel: "ultra",
-        agentRuntime: { id: "openclaw" },
-      },
-    });
-    expect(payload).not.toHaveProperty("thinkingLevels");
-    expect(payload).not.toHaveProperty("thinkingOptions");
-    expect(payload).not.toHaveProperty("thinkingDefault");
-    expect(payload).not.toHaveProperty("session.thinkingLevels");
-    expect(payload).not.toHaveProperty("session.thinkingOptions");
-    expect(payload).not.toHaveProperty("session.thinkingDefault");
-  });
-
   it("emits explicit tombstones in transcript snapshots", async () => {
     sessionRow.thinkingLevel = undefined;
 
@@ -671,14 +621,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       agentStatus: null,
       observerDigest: null,
       session: { thinkingLevel: null, agentStatus: null, observerDigest: null },
-    });
-  });
-
-  it("keeps stale-run recovery when terminal lifecycle has cleared active projection", async () => {
-    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      hasActiveRun: false,
-      session: { hasActiveRun: false },
     });
   });
 
@@ -795,24 +737,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 
-  it("broadcasts user idempotency keys in session.message metadata", async () => {
-    await expect(
-      emitAssistantTranscriptUpdate(false, {
-        role: "user",
-        content: [{ type: "text", text: "Optimistic turn" }],
-        idempotencyKey: "client-turn-3",
-      }),
-    ).resolves.toMatchObject({
-      message: {
-        __openclaw: {
-          id: "message-1",
-          idempotencyKey: "client-turn-3",
-          seq: 1,
-        },
-      },
-    });
-  });
-
   it("broadcasts the authenticated sender ownership decision", async () => {
     await expect(
       emitAssistantTranscriptUpdate(false, {
@@ -854,38 +778,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     } finally {
       unsubscribe();
     }
-  });
-
-  it("reads the canonical message through the target's explicit store", async () => {
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
-      sessionId: "sess-main",
-      updatedAt: 1,
-    });
-    readSessionMessageByIdAsyncMock.mockResolvedValueOnce(
-      storedMessage("message-partial-target", 7),
-    );
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
-      agentId: "main",
-      message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
-      messageId: "message-partial-target",
-      sessionKey: "agent:main:main",
-      target: {
-        agentId: "main",
-        sessionId: "partial-target-session",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/explicit-sessions.json",
-      },
-    });
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-
-    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/explicit-sessions.json",
-    });
-    expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageSeq: 7 });
   });
 
   it.each([

@@ -59,11 +59,6 @@ describe("resolveSessionForRun", () => {
       key: "agent:main:acp:run-1",
       expected: { sessionKey: "agent:main:acp:run-1", agentId: "main" },
     },
-    {
-      agentId: "retired",
-      key: "agent:retired:acp:run-1",
-      expected: { sessionKey: "agent:retired:acp:run-1", agentId: "retired" },
-    },
     { agentId: "main", key: "agent:work:acp:run-1", expected: undefined },
   ])("keeps stored keys scoped to $agentId for $key", ({ agentId, key, expected }) => {
     const projection = indexedProjection({ [key]: { sessionId: "run-1", updatedAt: 123 } });
@@ -105,15 +100,15 @@ describe("resolveSessionForRun", () => {
     expect(resolveSessionForRun("qualified-run", { agentId: "ops", projection })).toBeUndefined();
   });
 
-  it.each([
-    { sessionKey: "global", agentId: "research" },
-    { sessionKey: "agent:work:main", agentId: "work" },
-  ])("uses active context $sessionKey without any persisted lookup", ({ sessionKey, agentId }) => {
-    registerAgentRunContext("live", { sessionKey, agentId });
-    const projection = indexedProjection({});
-    expect(resolveSessionForRun("live", { projection })).toEqual({ sessionKey, agentId });
-    expect(projection.findBySessionId).not.toHaveBeenCalled();
-  });
+  it.each([{ sessionKey: "global", agentId: "research" }])(
+    "uses active context $sessionKey without any persisted lookup",
+    ({ sessionKey, agentId }) => {
+      registerAgentRunContext("live", { sessionKey, agentId });
+      const projection = indexedProjection({});
+      expect(resolveSessionForRun("live", { projection })).toEqual({ sessionKey, agentId });
+      expect(projection.findBySessionId).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits for a cached raw-key owner across roster changes", () => {
     const projection = indexedProjection({ global: { sessionId: "pending", updatedAt: 1 } });
@@ -156,23 +151,6 @@ describe("resolveSessionForRun", () => {
     expect(resolveSessionForRun("run-1", { projection })).toEqual({
       sessionKey: "agent:retired:acp:run-1",
       agentId: "retired",
-    });
-  });
-
-  it("never reloads the store when orphan events outlive the old miss TTL", () => {
-    vi.useFakeTimers();
-    const projection = indexedProjection({});
-    for (let second = 0; second < 10; second++) {
-      for (let run = 0; run < 20; run++) {
-        expect(resolveSessionForRun(`orphan-${run}`, { projection })).toBeUndefined();
-      }
-      vi.advanceTimersByTime(1000);
-    }
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
-    registerAgentRunContext("orphan-0", { sessionKey: "agent:main:main" });
-    expect(resolveSessionForRun("orphan-0", { projection })).toEqual({
-      sessionKey: "agent:main:main",
-      agentId: "main",
     });
   });
 

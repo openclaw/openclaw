@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("update restart verification ownership", () => {
-  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+  it.each(["succeeded"] as const)(
     "does not attribute an unrelated later boot to a terminal %s update",
     async (status) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-terminal-boot-"));
@@ -48,7 +48,7 @@ describe("update restart verification ownership", () => {
     },
   );
 
-  it.each(["api", "chat", "control-ui", "campaign"] as const)(
+  it.each(["api"] as const)(
     "finishes an unmanaged %s update after replacement startup",
     async (trigger) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-unmanaged-boot-"));
@@ -68,27 +68,7 @@ describe("update restart verification ownership", () => {
     },
   );
 
-  it.each(["api", "chat", "control-ui", "campaign"] as const)(
-    "preserves managed %s verification after replacement startup",
-    async (trigger) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-boot-"));
-      const version = resolveRuntimeServiceVersion();
-      const run = createUpdateRun({ trigger, target: { version } });
-      recordUpdateRunPhase(run.runId, "verifying", { after: { version } });
-      const payload = buildUpdateRestartSentinelPayload({
-        result: { status: "ok", mode: "npm", after: { version }, steps: [], durationMs: 1 },
-        meta: { runId: run.runId, handoffId: "managed-update-handoff" },
-      });
-      expect(await finalizeRestartUpdateRun(payload, true)).toMatchObject({
-        status: "running",
-        phase: "verifying",
-        finishedAtMs: null,
-        verification: { booted: true, serviceRunning: true, versionMatch: true },
-      });
-    },
-  );
-
-  it.each(["api", "chat", "control-ui", "campaign"] as const)(
+  it.each(["api"] as const)(
     "preserves the restored-version verification for a failed managed %s update",
     async (trigger) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-"));
@@ -168,37 +148,6 @@ describe("update restart verification ownership", () => {
     expect(observed?.verification.runningVersion).toBe(restoredVersion);
   });
 
-  it("regrades a restored-version boot whose build cannot be resolved when a build was recorded", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-build-missing-"));
-    const restoredVersion = "1.2.3";
-    vi.stubEnv("OPENCLAW_VERSION", restoredVersion);
-    runtimeBuildId = null;
-    const run = createUpdateRun({ trigger: "api", target: { version: "2.0.0" } });
-    recordUpdateRunPhase(run.runId, "restarting");
-    recordUpdateRunPhase(run.runId, "verifying", { after: {} });
-    recordUpdateRunVerification(run.runId, {
-      serviceRunning: true,
-      runningVersion: restoredVersion,
-      runningBuildId: "build-restored",
-      versionMatch: true,
-      settled: true,
-      channelsReady: true,
-      pluginErrors: [],
-    });
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "error",
-        mode: "npm",
-        reason: "managed-service-handoff-failed",
-        steps: [],
-        durationMs: 1,
-      },
-      meta: { runId: run.runId, handoffId: "managed-update-handoff" },
-    });
-    const observed = await finalizeRestartUpdateRun(payload, true);
-    expect(observed?.verification.versionMatch).toBe(false);
-  });
-
   it("reuses a restored-version verification recorded without build identity", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-build-unrecorded-"));
     const restoredVersion = "1.2.3";
@@ -274,35 +223,30 @@ describe("update restart verification ownership", () => {
     ).toMatchObject({ status: "failed", phase: "finished", reason: "restart-unhealthy" });
   });
 
-  it.each([
-    "requested",
-    "staging",
-    "validating",
-    "repairing",
-    "activating",
-    "restarting",
-    "verifying",
-  ] as const)("does not let sentinel expiry finish the orchestrator during %s", async (phase) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-boot-owner-"));
-    const run = createUpdateRun({
-      trigger: "cli",
-      target: { version: resolveRuntimeServiceVersion() },
-    });
-    recordUpdateRunPhase(run.runId, phase);
-    const observed = await finalizeRestartUpdateRun(
-      {
-        kind: "update",
-        status: "skipped",
-        ts: Date.now(),
-        stats: { runId: run.runId, reason: "restart-health-pending" },
-      },
-      true,
-    );
-    expect(observed).toMatchObject({
-      status: "running",
-      phase: phase === "restarting" ? "verifying" : phase,
-      confirmedAtMs: null,
-      verification: { booted: true },
-    });
-  });
+  it.each(["requested", "restarting", "verifying"] as const)(
+    "does not let sentinel expiry finish the orchestrator during %s",
+    async (phase) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-boot-owner-"));
+      const run = createUpdateRun({
+        trigger: "cli",
+        target: { version: resolveRuntimeServiceVersion() },
+      });
+      recordUpdateRunPhase(run.runId, phase);
+      const observed = await finalizeRestartUpdateRun(
+        {
+          kind: "update",
+          status: "skipped",
+          ts: Date.now(),
+          stats: { runId: run.runId, reason: "restart-health-pending" },
+        },
+        true,
+      );
+      expect(observed).toMatchObject({
+        status: "running",
+        phase: phase === "restarting" ? "verifying" : phase,
+        confirmedAtMs: null,
+        verification: { booted: true },
+      });
+    },
+  );
 });

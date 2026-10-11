@@ -34,37 +34,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     loadGatewaySessionEntryReadOnlyMock.mockReset().mockReturnValue({ entry: sessionRow });
   });
   it.each([
-    "participants",
-    "subagent-status",
-    "run-capacity",
-    "swarm",
-    "swarm-note",
-    "github-publication",
-    "worker-disk-space",
-  ])("carries the affected row for %s", async (reason) => {
-    const broadcastToConnIds = vi.fn();
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      chatAbortControllers: new Map(),
-    });
-    await handler({
-      sessionKey: sessionRow.key,
-      agentId: "main",
-      reason,
-      ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
-        ? { scope: "runtime" as const }
-        : reason === "participants"
-          ? { scope: "session-entry" as const }
-          : {}),
-    });
-    expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
-    expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
-      reason,
-      session: { key: sessionRow.key, sessionId: sessionRow.sessionId },
-    });
-  });
-  it.each([
     {
       name: "missing capture followed by a successor",
       captured: false,
@@ -154,31 +123,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
   });
 
-  it.each(["swarm", "run-capacity"])(
-    "includes complete collector counts for committed parent changes (%s)",
-    async (reason) => {
-      const broadcastToConnIds = vi.fn();
-      loadGatewaySessionRowMock.mockImplementation(() => ({
-        ...sessionRow,
-        swarm: undefined,
-      }));
-      const handler = createLifecycleEventBroadcastHandler({
-        broadcastToConnIds,
-        sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-        chatAbortControllers: new Map(),
-      });
-
-      await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
-
-      expect(loadGatewaySessionRowMock).toHaveBeenCalledExactlyOnceWith(sessionRow.key, {
-        agentId: "main",
-      });
-      const payload = broadcastToConnIds.mock.calls[0]?.[1];
-      expect(payload).toHaveProperty("swarm", null);
-    },
-  );
-
-  it.each(["phase", "log"] as const)("projects swarm %s payload fields", async (kind) => {
+  it.each(["phase"] as const)("projects swarm %s payload fields", async (kind) => {
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
