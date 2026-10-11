@@ -15,9 +15,10 @@ const fixture = vi.hoisted(() => ({
 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
   return {
-    ...(await importOriginal<typeof import("node:worker_threads")>()),
+    ...actual,
     isMainThread: false,
     get workerData() {
       return fixture.data;
@@ -25,6 +26,11 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     parentPort: {
       on(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
         fixture.receive = listener;
+      },
+      off(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
+        if (fixture.receive === listener) {
+          fixture.receive = undefined;
+        }
       },
       postMessage: (message: unknown) => fixture.worker?.emit("message", structuredClone(message)),
       close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
@@ -60,8 +66,10 @@ vi.mock("../infra/sqlite-worker-identity.js", async () => ({
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
 }));
+// mock-isolation: The heartbeat diagnostic fixture has no native database or transaction custody.
 vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: (_db: unknown, run: () => unknown) => run(),
+  retainSqliteWriteAdmissionService: () => () => {},
 }));
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabase: () => ({}),

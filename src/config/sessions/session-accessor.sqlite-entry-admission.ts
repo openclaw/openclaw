@@ -126,7 +126,8 @@ export async function loadSessionEntryForAdmission(
       kind: "ephemeral",
       agentId: resolved.agentId,
       env,
-      authority: current,
+      // The returned claim retains the physical owner, independently of its caller's admission.
+      authority: { assertCurrent: () => actor.assertCurrent() },
       existingOnly: true,
       signal: preparation.signal,
     });
@@ -141,7 +142,6 @@ export async function loadSessionEntryForAdmission(
       if (released) {
         throw new Error("Incognito admission claim is released");
       }
-      current.assertCurrent();
       borrowed.assertCurrent();
     };
     const release = () => {

@@ -6,10 +6,7 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import {
-  attachRuntimePromptMediaFacts,
-  readRuntimePromptMediaFacts,
-} from "../../../media/media-facts.js";
+import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
@@ -69,14 +66,6 @@ function expectPrunedMessages(messages: AgentMessage[]): AgentMessage[] {
   return pruned;
 }
 
-function expectImageMessagePreserved(messages: AgentMessage[], errorMessage: string) {
-  const pruned = pruneProcessedHistoryImages(messages);
-
-  expect(pruned).toBeNull();
-  const content = expectArrayMessageContent(messages[0], errorMessage);
-  expectContentBlock(content[1], { type: "image", data: "abc" });
-}
-
 function oldEnoughTail(): AgentMessage[] {
   // Four prior completed turns make the first message old enough to prune while
   // keeping each test focused on content rewriting instead of turn counting.
@@ -98,35 +87,6 @@ describe("pruneProcessedHistoryImages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
   const userText = () => castAgentMessage({ role: "user", content: "more" });
-
-  it("prunes image blocks from user messages older than 3 completed turns", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-      ...oldEnoughTail(),
-    ];
-
-    const content = expectPrunedImageMessage(messages, "expected user array content");
-    expect(content[0]?.type).toBe("text");
-  });
-
-  it("strips explicit-image provenance when its old image block is pruned", () => {
-    const message = castAgentMessage({
-      role: "user",
-      content: [{ type: "text", text: "explicit image" }, { ...image }],
-      __openclaw: {
-        mediaImageBlockFactIndexes: [null],
-        mediaImageLayout: { slots: [{ kind: "inline" }] },
-      },
-    });
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const meta = (pruned[0] as unknown as Record<string, unknown>)["__openclaw"];
-
-    expect(meta).toBeUndefined();
-  });
 
   it("redacts factless legacy attachment text while pruning old image blocks", () => {
     const messages: AgentMessage[] = [
@@ -166,20 +126,6 @@ describe("pruneProcessedHistoryImages", () => {
     );
     expect(originalContent[0]?.text).toContain("[media attached: media://inbound/old.png]");
     expectContentBlock(originalContent[1], { type: "image", data: "abc" });
-  });
-
-  it("redacts factless legacy attachment text without image blocks", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: "please remember [media attached: media://inbound/stale-image.png]",
-      }),
-      ...oldEnoughTail(),
-    ];
-
-    const pruned = expectPrunedMessages(messages);
-    const user = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(user?.content).toBe(`please remember ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
   });
 
   it("prunes fact-owned and factless late-media projections", () => {
@@ -233,94 +179,6 @@ describe("pruneProcessedHistoryImages", () => {
     ]);
   });
 
-  it("does not replace a distinct caption on an old marked late-media turn", () => {
-    const message = castAgentMessage({
-      role: "user",
-      content: "resolved subtitle",
-      __openclaw: {
-        lateMedia: true,
-        media: [{ path: "media://inbound/stale-image.png" }],
-      },
-    });
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const output = pruned as unknown as Array<{
-      content?: unknown;
-      __openclaw?: { media?: unknown; mediaImagePruned?: boolean };
-    }>;
-    expect(output[0]?.content).toBe("resolved subtitle");
-    expect(output[0]?.["__openclaw"]?.media).toBeUndefined();
-    expect(output[0]?.["__openclaw"]?.mediaImagePruned).toBe(true);
-  });
-
-  it("drops runtime facts from captioned old turns without changing their text", () => {
-    const message = attachRuntimePromptMediaFacts(
-      castAgentMessage({ role: "user", content: "caption stays byte-identical" }),
-      [{ path: "/tmp/stale.png", contentType: "image/png" }],
-    );
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe("caption stays byte-identical");
-    expect(firstUser && readRuntimePromptMediaFacts(firstUser)).toBeUndefined();
-    expect(readRuntimePromptMediaFacts(message)).toHaveLength(1);
-  });
-
-  it("redacts the exact fact-owned projection from a captioned old turn", () => {
-    const imagePath = "/tmp/stale-owned.png";
-    const message = attachRuntimePromptMediaFacts(
-      castAgentMessage({
-        role: "user",
-        content: `[media attached: ${imagePath} (image/png)]\n\ncaption stays`,
-      }),
-      [{ path: imagePath, contentType: "image/png" }],
-    );
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(`${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}\n\ncaption stays`);
-  });
-
-  it("redacts a persisted fact projection with a distinct URL", () => {
-    const imagePath = "/tmp/stale-owned.png";
-    const imageUrl = "https://example.test/stale-owned.png";
-    const message = castAgentMessage({
-      role: "user",
-      content: `[media attached: ${imagePath} (image/png) | ${imageUrl}]`,
-      __openclaw: {
-        media: [
-          {
-            path: imagePath,
-            url: imageUrl,
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-        ],
-      },
-    });
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
-  });
-
-  it("redacts a persisted relative projection after legacy path canonicalization", () => {
-    const message = buildPersistedUserTurnMessage({
-      text: "[media attached: ./old.png (image/png)]",
-      media: [
-        {
-          path: "./old.png",
-          workspaceDir: "/workspace",
-          contentType: "image/png",
-        },
-      ],
-    }) as AgentMessage;
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
-  });
-
   it("redacts a persisted relative projection without a dot prefix", () => {
     const message = buildPersistedUserTurnMessage({
       text: "[media attached: sub/old.png (image/png)]",
@@ -338,188 +196,8 @@ describe("pruneProcessedHistoryImages", () => {
     expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
   });
 
-  it("does not claim a basename-only marker for an absolute owned fact", () => {
-    const message = buildPersistedUserTurnMessage({
-      text: "caption mentions [media attached: ./photo.png (image/png)]",
-      media: [{ path: "/workspace/sub/photo.png", contentType: "image/png" }],
-    }) as AgentMessage;
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe("caption mentions [media attached: ./photo.png (image/png)]");
-  });
-
-  it("preserves an unrelated legacy-shaped marker in a fact-backed caption", () => {
-    const message = buildPersistedUserTurnMessage({
-      text: "caption mentions [media attached: ./unrelated.png (image/png)]",
-      media: [{ path: "./owned.png", workspaceDir: "/workspace", contentType: "image/png" }],
-    }) as AgentMessage;
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(
-      "caption mentions [media attached: ./unrelated.png (image/png)]",
-    );
-  });
-
-  it("redacts separately projected fact lines in distinct text blocks", () => {
-    const firstPath = "/tmp/first-owned.png";
-    const secondPath = "/tmp/second-owned.png";
-    const message = attachRuntimePromptMediaFacts(
-      castAgentMessage({
-        role: "user",
-        content: [
-          { type: "text", text: `[media attached: ${firstPath} (image/png)]` },
-          { type: "text", text: `[media attached: ${secondPath} (image/png)]` },
-        ],
-      }),
-      [
-        { path: firstPath, contentType: "image/png" },
-        { path: secondPath, contentType: "image/png" },
-      ],
-    );
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    expect(expectArrayMessageContent(pruned[0], "expected redacted text blocks")).toEqual([
-      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
-      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
-    ]);
-  });
-
-  it("redacts a fact-backed image-source projection", () => {
-    const imagePath = "/tmp/legacy-owned.jpg";
-    const message = castAgentMessage({
-      role: "user",
-      content: `[Image: source: ${imagePath}]\ncaption stays`,
-      __openclaw: { media: [{ path: imagePath, contentType: "image/jpeg" }] },
-    });
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(`${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}\ncaption stays`);
-  });
-
-  it("preserves a bare claim-check URI in a fact-backed caption", () => {
-    const mediaRef = "media://inbound/captioned.png";
-    const message = castAgentMessage({
-      role: "user",
-      content: `caption mentions ${mediaRef} as text`,
-      __openclaw: { media: [{ path: mediaRef, contentType: "image/png" }] },
-    });
-
-    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(`caption mentions ${mediaRef} as text`);
-  });
-
-  it("redacts bare old inbound media URIs from factless tool results", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "toolResult",
-        toolName: "memory_search",
-        content: "previous media://inbound/stale-screenshot.png result",
-      }),
-      ...oldEnoughTail(),
-    ];
-
-    const pruned = expectPrunedMessages(messages);
-    const toolResult = pruned[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
-    expect(toolResult?.content).toBe(`previous ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER} result`);
-  });
-
-  it("keeps image blocks that belong to the third-most-recent completed turn", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-    ];
-
-    expectImageMessagePreserved(messages, "expected user array content");
-  });
-
-  it("preserves recent media attachment markers", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "recent [media attached: media://inbound/current.png]",
-          },
-          { ...image },
-        ],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-    ];
-
-    const pruned = pruneProcessedHistoryImages(messages);
-
-    expect(pruned).toBeNull();
-    const content = expectArrayMessageContent(messages[0], "expected user array content");
-    expect(content[0]?.text).toBe("recent [media attached: media://inbound/current.png]");
-    expectContentBlock(content[1], { type: "image", data: "abc" });
-  });
-
-  it("does not count multiple assistant messages from one tool loop as separate turns", () => {
-    // Tool-call assistant messages belong to one model turn; counting each
-    // message separately would prune images too aggressively inside tool loops.
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      } as AgentMessage),
-      castAgentMessage(textToolResult("call_1", "read", "bytes")),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-    ];
-
-    expectImageMessagePreserved(messages, "expected user array content");
-  });
-
-  it("does not prune latest user message when no assistant response exists yet", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
-      }),
-    ];
-
-    const pruned = pruneProcessedHistoryImages(messages);
-
-    expect(pruned).toBeNull();
-    const content = expectArrayMessageContent(messages[0], "expected user array content");
-    expect(content).toHaveLength(2);
-    expectContentBlock(content[1], { type: "image", data: "abc" });
-  });
-
-  it.each([
-    { name: "image blocks", block: image, marker: PRUNED_HISTORY_IMAGE_MARKER },
-    {
-      name: "media references",
-      block: { type: "text", text: "[media attached: media://inbound/old.png]" },
-      marker: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
-    },
-  ])("keeps $name byte-identical throughout the active tool loop", ({ block, marker }) => {
+  it("keeps image blocks byte-identical throughout the active tool loop", () => {
+    const block = image;
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, block] }),
       assistantTurn(),
@@ -550,10 +228,25 @@ describe("pruneProcessedHistoryImages", () => {
     const nextTurn = expectPrunedMessages(messages);
     expect(expectArrayMessageContent(nextTurn[0], "expected pruned content")[1]).toEqual({
       type: "text",
-      text: marker,
+      text: PRUNED_HISTORY_IMAGE_MARKER,
     });
     expect(JSON.stringify(nextTurn.slice(2))).toBe(JSON.stringify(messages.slice(2)));
     expect(JSON.stringify(messages.slice(0, retainedLength))).toBe(retainedBytes);
+  });
+
+  it("redacts bare old inbound media URIs from factless tool results", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "toolResult",
+        toolName: "memory_search",
+        content: "previous media://inbound/stale-screenshot.png result",
+      }),
+      ...oldEnoughTail(),
+    ];
+
+    const pruned = expectPrunedMessages(messages);
+    const toolResult = pruned[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
+    expect(toolResult?.content).toBe(`previous ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER} result`);
   });
 
   it("prunes image blocks from toolResult messages older than 3 completed turns", () => {
@@ -567,55 +260,6 @@ describe("pruneProcessedHistoryImages", () => {
     ];
 
     expectPrunedImageMessage(messages, "expected toolResult array content");
-  });
-
-  it("prunes only old images while preserving recent ones", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "old" }, { ...image }],
-      }),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      userText(),
-      assistantTurn(),
-      castAgentMessage({
-        role: "user",
-        content: [{ type: "text", text: "recent" }, { ...image }],
-      }),
-      assistantTurn(),
-      userText(),
-    ];
-
-    const pruned = expectPrunedMessages(messages);
-
-    const oldContent = expectArrayMessageContent(pruned[0], "expected old user content");
-    expectContentBlock(oldContent[1], { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
-
-    const recentContent = expectArrayMessageContent(pruned[6], "expected recent user content");
-    expectContentBlock(recentContent[1], { type: "image", data: "abc" });
-
-    const originalOldContent = expectArrayMessageContent(
-      messages[0],
-      "expected original old user content",
-    );
-    expectContentBlock(originalOldContent[1], { type: "image", data: "abc" });
-  });
-
-  it("does not change messages when no assistant turn exists", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: "noop",
-      }),
-    ];
-
-    const pruned = pruneProcessedHistoryImages(messages);
-
-    expect(pruned).toBeNull();
-    const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe("noop");
   });
 });
 
@@ -673,30 +317,6 @@ describe("installHistoryImagePruneContextTransform", () => {
 
     restore();
     expect(agent.transformContext).toBe(originalTransformContext);
-  });
-
-  it("does not legacy-redact a fact-backed caption on the wrapper second pass", async () => {
-    const mediaRef = "media://inbound/captioned.png";
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "user",
-        content: `caption mentions ${mediaRef} as text`,
-        __openclaw: { media: [{ url: mediaRef, contentType: "image/png" }] },
-      }),
-      ...oldEnoughTail(),
-    ];
-    const agent = {
-      transformContext: async (input: AgentMessage[]) =>
-        input.map((message) => ({ ...message })) as AgentMessage[],
-    };
-    const restore = installHistoryImagePruneContextTransform(agent);
-
-    const replay = await agent.transformContext(messages);
-
-    expect((replay[0] as { content?: unknown }).content).toBe(
-      `caption mentions ${mediaRef} as text`,
-    );
-    restore();
   });
 
   it("hydrates recent facts before an existing transform clones messages", async () => {

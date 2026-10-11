@@ -3,11 +3,12 @@ import path from "node:path";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { isMissingPathError } from "./errno.js";
 import {
   canShareSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
-import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
+import { inspectDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 type AdmissionTurn = {
   keys: ReadonlySet<string>;
@@ -36,14 +37,26 @@ function reserveAdmissionTurn(locations: string | readonly string[], families: r
     families.map((directory) => `family:${resolveIdentityPathViaExistingAncestorSync(directory)}`),
   );
   for (const location of typeof locations === "string" ? [locations] : locations) {
-    // A native task can request a host writer after publishing its completed schema.
-    if (hasSqliteDatabaseSchemaAdmissionForPath(location)) {
-      continue;
+    let identity: ReturnType<typeof inspectDatabasePathIdentitySync>;
+    try {
+      // A native task can request a host writer after publishing its completed schema.
+      if (hasSqliteDatabaseSchemaAdmissionForPath(location)) {
+        continue;
+      }
+      identity = inspectDatabasePathIdentitySync(location);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
     }
-    const identity = readDatabasePathIdentitySync(location);
-    keys.add(`path:${identity.canonicalPath}`);
-    keys.add(`${identity.key}:${identity.birthtime ?? ""}`);
-    keys.add(`family:${path.dirname(identity.canonicalPath)}`);
+    // Discovery owns unavailable targets; they still share pathname and family ordering.
+    const canonicalPath =
+      identity?.canonicalPath ?? resolveIdentityPathViaExistingAncestorSync(location);
+    keys.add(`path:${canonicalPath}`);
+    if (identity) {
+      keys.add(`${identity.key}:${identity.birthtime ?? ""}`);
+    }
+    keys.add(`family:${path.dirname(canonicalPath)}`);
   }
   if (keys.size === 0) {
     return undefined;

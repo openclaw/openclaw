@@ -6,7 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -41,7 +40,6 @@ import type {
   SqliteArchiveReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   logSqliteReclamationWorkerOutcome,
   logSqliteReclamationWorkerRetirement,
@@ -55,7 +53,6 @@ import type {
   SqliteReclamationWorkerRequest,
   SqliteReclamationPrepareRequest,
   SqliteReclamationExistingSource,
-  SqliteReclamationPreparedSource,
   SqliteReclamationPreparation,
   WorkerCleanup,
 } from "./session-accessor.sqlite-reclamation-worker.types.js";
@@ -77,16 +74,10 @@ import {
 } from "./session-accessor.sqlite-worker-transport.js";
 
 type DatabaseOptions = SqliteArchiveReclamationPlan["databaseOptions"];
-type SqliteMutationWorkerRequest =
-  | SqliteReclamationWorkerRequest
-  | SqliteReclamationPrepareRequest
-  | SqliteCanonicalValidationWorkerRequest;
 type MutationRunParams<Result> = {
   claim: SqliteReclamationClaim;
   validationOwner?: SqliteMutationWorkerValidationOwner;
   diagnostics?: SqliteSessionReclamationDiagnostics;
-  commitGate: SharedArrayBuffer;
-  onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
 const log = createSubsystemLogger("session-sqlite");
@@ -104,10 +95,8 @@ export class SqliteReclamationWorker {
   private cleanup?: WorkerCleanup;
   private readonly closed = createDeferredCore();
   private lease?: OpenClawAgentDatabaseWorkerLeaseReceipt;
-  private preparedSource?: SqliteReclamationPreparedSource;
   private closing?: Promise<void>;
   private active?: Promise<unknown>;
-  private commitGate?: SharedArrayBuffer;
   private revoked = false;
   private retired = false;
   private idle?: NodeJS.Timeout;
@@ -253,11 +242,6 @@ export class SqliteReclamationWorker {
     const assertCurrent = () => {
       params.assertCurrent();
       this.assertSourceCurrent(this.options, params.expectedSource.key.slice(5));
-      assertExistingDatabaseIdentity(
-        this.options.path,
-        params.expectedSource.key,
-        params.expectedSource.birthtime,
-      );
     };
     const { source, validation } = await this.runRequest({
       ...params,
@@ -267,7 +251,6 @@ export class SqliteReclamationWorker {
       sessionId:
         params.plan.kind === "canonical-validation" ? undefined : reclamationSessionId(params.plan),
       readOpeningValidation: () => {
-        assertCurrent();
         const openingValidation = getOpenClawAgentDatabaseValidationForTransfer(this.options);
         return openingValidation?.identity === params.expectedSource.key.slice(5)
           ? openingValidation
@@ -282,44 +265,16 @@ export class SqliteReclamationWorker {
         expectedSource: params.expectedSource,
       }),
     });
-    assertCurrent();
-    try {
-      if (
-        !this.lease ||
-        `file:${source.identity}` !== params.expectedSource.key ||
-        !source.incarnation ||
-        (params.expectedSource.birthtime !== undefined &&
-          source.birthtime !== params.expectedSource.birthtime) ||
-        (this.preparedSource && !isDeepStrictEqual(this.preparedSource, source))
-      ) {
-        throw new Error(
-          "SQLite reclamation opening did not confirm its original native source and lease",
-        );
-      }
-      assertExistingDatabaseIdentity(
-        source.filename,
-        params.expectedSource.key,
-        params.expectedSource.birthtime,
-      );
-      const preparedSource = (this.preparedSource ??= source);
-      return {
-        source,
-        validation,
-        claim: {
-          identity: source.identity,
-          incarnation: source.incarnation,
-          assertCurrent: () => {
-            assertCurrent();
-            if (this.preparedSource !== preparedSource) {
-              throw new Error("SQLite reclamation native source changed");
-            }
-          },
-        },
-      };
-    } catch (error) {
-      this.failure ??= toStringifiedError(error);
-      throw error;
-    }
+    // The native opener already checked the expected file and returned its lease.
+    return {
+      source,
+      validation,
+      claim: {
+        identity: source.identity,
+        incarnation: source.incarnation,
+        assertCurrent,
+      },
+    };
   }
 
   run(
@@ -337,7 +292,6 @@ export class SqliteReclamationWorker {
       request: (operationId, coordination) => ({
         type: "reclaim",
         operationId,
-        commitGate: params.commitGate,
         plan: params.plan,
         coordination,
       }),
@@ -360,7 +314,6 @@ export class SqliteReclamationWorker {
       request: (operationId, coordination) => ({
         type: "canonical-validation",
         operationId,
-        commitGate: params.commitGate,
         databaseOptions: params.databaseOptions,
         maxRows: params.maxRows,
         maxBytes: params.maxBytes,
@@ -380,7 +333,10 @@ export class SqliteReclamationWorker {
       request: (
         operationId: number,
         coordination: SqliteMutationWorkerCoordination,
-      ) => SqliteMutationWorkerRequest;
+      ) =>
+        | SqliteReclamationWorkerRequest
+        | SqliteReclamationPrepareRequest
+        | SqliteCanonicalValidationWorkerRequest;
       transferList: ArrayBuffer[];
     },
   ): Promise<Result> {
@@ -389,13 +345,11 @@ export class SqliteReclamationWorker {
     params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
-    const worker = transport.channel;
     if (params.diagnostics) {
       params.diagnostics.workerThreadId = this.workerThreadId;
     }
     const operationId = ++this.operationId;
     this.opsServed += 1;
-    this.commitGate = params.commitGate;
     let exitCode: number | undefined;
     const operation = withSqliteMutationWorkerCoordination(
       this.stateContext,
@@ -420,12 +374,14 @@ export class SqliteReclamationWorker {
           onExit: (code) => {
             exitCode = code;
           },
-          onCommitRequest: params.onCommitRequest,
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
           readOpeningValidation: params.readOpeningValidation,
           dispatch: () =>
-            worker.postMessage(params.request(operationId, coordination), [...params.transferList]),
+            transport.channel.postMessage(params.request(operationId, coordination), [
+              ...params.transferList,
+              ...(coordination.databaseAdmission ? [coordination.databaseAdmission] : []),
+            ]),
         }).then(
           (value) => ({ value }),
           (error: unknown) => {
@@ -435,6 +391,7 @@ export class SqliteReclamationWorker {
             throw error;
           },
         ),
+      params.assertCurrent,
     )
       .catch((error: unknown) => {
         this.failure ??= toStringifiedError(error);
@@ -462,9 +419,7 @@ export class SqliteReclamationWorker {
         (error: unknown) => observeCompletion("rejected", error),
       )
       .catch(() => {});
-    return operation.finally(() => {
-      this.commitGate = undefined;
-    });
+    return operation;
   }
 
   private async start(): Promise<SqliteMutationWorkerTransport> {
@@ -500,21 +455,8 @@ export class SqliteReclamationWorker {
         } catch (error) {
           this.failure ??= toStringifiedError(error);
         }
-        try {
-          // Revoked read authority cannot discard an already acquired exact cleanup receipt.
-          if (
-            message.receipt.agentId !== this.options.agentId ||
-            message.receipt.path !== this.options.path ||
-            message.receipt.ownerPid !== process.pid ||
-            message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
-            (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
-          ) {
-            throw new Error("SQLite reclamation Worker changed its lease receipt");
-          }
-          this.lease = message.receipt;
-        } catch (error) {
-          this.failure ??= toStringifiedError(error);
-        }
+        // Keep the native owner's exact receipt for crash cleanup.
+        this.lease = message.receipt;
         if (this.failure) {
           this.requestTermination(transport);
         }
@@ -596,9 +538,6 @@ export class SqliteReclamationWorker {
   revoke(): void {
     this.retirementReason ??= "revoked";
     this.revoked = true;
-    if (this.commitGate) {
-      revokeSqliteReclamationCommit(this.commitGate);
-    }
     this.clearIdleTimer();
   }
 
@@ -607,12 +546,6 @@ export class SqliteReclamationWorker {
     this.revoke();
     if (this.retired) {
       return;
-    }
-    if (this.execution?.failure) {
-      await this.execution.retryFailedRetirements();
-      if (this.retired) {
-        return;
-      }
     }
     return (this.closing ??= (async () => {
       await this.active?.catch(() => {});

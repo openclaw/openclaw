@@ -32,9 +32,12 @@ import {
   schemaAdmission,
   type SqliteSchemaFacts,
 } from "./sqlite-schema-admission.js";
+import { observeSchemaLifetime } from "./sqlite-schema-lifetime.js";
 import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   bindSqliteSchemaScope as bindScope,
+  finishSqliteReadScope,
+  observeSqliteTransactionState as observeTransactionState,
   releaseSqliteSchemaScope,
   publishSqliteSchemaChange as publishSchemaChange,
   type SqliteSchemaOwner as SchemaOwner,
@@ -58,20 +61,6 @@ const owners = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, SchemaOwner>(),
 );
 
-function observeTransactionState(database: DatabaseSync, owner: SchemaOwner): void {
-  const inTransaction = database.isTransaction;
-  if (owner.transactionOpen !== inTransaction) {
-    if (owner.transactionOpen) {
-      // A read error can roll back SQLite without passing through a tracked write.
-      owner.mutationRevision += 1;
-    }
-    owner.transactionOpen = inTransaction;
-    owner.transactionSnapshot = undefined;
-    owner.transactionRead = false;
-    owner.transactionCatalogBound = false;
-  }
-}
-
 /** Schema publications outside DDL (such as a deferred version marker) share this revision. */
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   invalidateSchemaFacts(database, true);
@@ -80,12 +69,16 @@ export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
 function invalidateSchemaFacts(
   database: DatabaseSync,
   publish: boolean,
-  change: "main" | "temp" | "rollback" = "main",
+  change: "main" | "temp" | "local" | "rollback" = "main",
+  notify = change !== "temp",
 ): void {
   const owner = owners.get(database);
   if (owner) {
     const changesMain = change === "main";
     owner.isolatedTempTables.clear();
+    if (database.isTransaction) {
+      owner.transactionMutationRevision = undefined;
+    }
     if (changesMain) {
       beginSqliteDatabaseSchemaMutation(database);
       invalidateLocalSqliteSchemaAdmissions(database);
@@ -93,7 +86,7 @@ function invalidateSchemaFacts(
     if (changesMain && database.isTransaction && !owner.transactionalSchema) {
       owner.transactionBaseFacts = owner.facts;
     }
-    if (change !== "temp") {
+    if (notify) {
       for (const listener of owner.mutationListeners ?? []) {
         listener(undefined);
       }
@@ -102,6 +95,7 @@ function invalidateSchemaFacts(
     bindScope(database, owner);
     invalidate(owner);
     owner.transactionalSchema ||= changesMain && database.isTransaction;
+    owner.transactionalTempSchema ||= change === "temp" && database.isTransaction;
     owner.pendingSchema ||= changesMain && owner.nativeDepth > 0;
     if (publish && changesMain && !database.isTransaction && owner.nativeDepth === 0) {
       publishSchemaChange(database, owner);
@@ -124,7 +118,7 @@ export function registerSqliteSchemaMutationListener(
   return () => listeners.delete(listener);
 }
 
-/** Only the fixed tracking shapes are non-revoking; ordinary TEMP DDL stays observed. */
+/** Fixed tracking shapes retain local facts; other TEMP DDL still expires its connection's facts. */
 export function installSqliteTempTrackingSchema(
   database: DatabaseSync,
   schema: SqliteTempTrackingSchema,
@@ -149,6 +143,7 @@ function trackSchemaChanges(
       discardSqliteDatabaseTransactionAdmissions(database);
       invalidate(owner);
       owner.transactionalSchema = false;
+      owner.transactionalTempSchema = false;
       owner.transactionalFacts = false;
       if (snapshot && owner.admitted && !owner.authorizerActive) {
         // A still-active native read cursor keeps its old catalog locally until the pin ends.
@@ -163,7 +158,7 @@ function trackSchemaChanges(
     }
     if (
       (boundary || !database.isTransaction) &&
-      (owner.transactionalSchema || owner.transactionalFacts)
+      (owner.transactionalSchema || owner.transactionalTempSchema || owner.transactionalFacts)
     ) {
       if (owner.transactionalSchema) {
         // A local first-use writer must publish to already-admitted sibling connections.
@@ -172,19 +167,8 @@ function trackSchemaChanges(
       invalidate(owner);
       // A batch may commit one transaction and leave another containing DDL open.
       owner.transactionalSchema &&= database.isTransaction;
+      owner.transactionalTempSchema &&= database.isTransaction;
       owner.transactionalFacts = false;
-    }
-  };
-  const finishReadScope = (wasTransaction: boolean, expiresRead: boolean, succeeded: boolean) => {
-    const inTransaction = database.isTransaction;
-    if (!succeeded && wasTransaction && !inTransaction) {
-      owner.mutationRevision += 1;
-    }
-    owner.transactionOpen = inTransaction;
-    if (wasTransaction !== inTransaction || expiresRead) {
-      owner.transactionSnapshot = undefined;
-      owner.transactionRead = false;
-      owner.transactionCatalogBound = false;
     }
   };
   const execute = observeSqliteNativeOperations(database, native, (mutation, phase) => {
@@ -193,7 +177,7 @@ function trackSchemaChanges(
     }
     const { control, dataChange } = mutation;
     // The parser proves these batches contain only outer rollback plus ordinary reads.
-    const schemaChange = mutation.schemaChange && control?.outerRollback !== true;
+    const schemaChange = control?.outerRollback === true ? false : mutation.schemaChange;
     const mainSchemaChange = mutation.mainSchemaChange && control?.outerRollback !== true;
     observeTransactionState(database, owner);
     const snapshot = phase === "bind" ? undefined : getSqlitePinnedReadSnapshot(database);
@@ -237,6 +221,10 @@ function trackSchemaChanges(
     ) {
       prepareSqliteDatabaseWriter(database);
     }
+    const openingMutationRevision =
+      !wasTransaction && control?.kind === "BEGIN" && control.single
+        ? owner.mutationRevision
+        : undefined;
     if (!wasTransaction && control?.kind === "BEGIN" && owner.admitted) {
       getAdmittedSqliteSchemaFacts(database);
     }
@@ -244,16 +232,31 @@ function trackSchemaChanges(
       Boolean(control) && !canPreserveTransactionSnapshot(control, wasTransaction);
     const rollback = control?.kind === "ROLLBACK";
     const rollsBackSchema = rollback && owner.transactionalSchema && !control.outerRollback;
+    // Row-only rollback expires reads without revoking schema-based authority.
+    const notifySchema =
+      (schemaChange && !mutation.temporaryTableSchemaChange) ||
+      (rollback && owner.transactionalSchema);
     const schemaInvalidation =
-      mainSchemaChange || rollsBackSchema ? "main" : rollback ? "rollback" : "temp";
+      mainSchemaChange || rollsBackSchema
+        ? "main"
+        : rollback
+          ? owner.transactionalTempSchema && !owner.transactionalSchema
+            ? "temp"
+            : "rollback"
+          : mutation.temporaryTableSchemaChange
+            ? "temp"
+            : "local";
     if (rollback) {
       discardSqliteDatabaseTransactionAdmissions(database);
     }
     if (schemaChange || rollback) {
-      invalidateSchemaFacts(database, false, schemaInvalidation);
+      invalidateSchemaFacts(database, false, schemaInvalidation, notifySchema);
     }
-    if (dataChange || control?.kind === "ROLLBACK") {
+    if (dataChange || mutation.temporaryTableSchemaChange || control?.kind === "ROLLBACK") {
       owner.mutationRevision += 1;
+    }
+    if (control?.kind === "ROLLBACK") {
+      owner.rollbackRevision += 1;
     }
     if (
       phase !== "bind" &&
@@ -338,7 +341,7 @@ function trackSchemaChanges(
           if (rollback) {
             discardSqliteDatabaseTransactionAdmissions(database);
           }
-          invalidateSchemaFacts(database, false, schemaInvalidation);
+          invalidateSchemaFacts(database, false, schemaInvalidation, notifySchema);
         }
         const rolledBack =
           succeeded &&
@@ -387,7 +390,14 @@ function trackSchemaChanges(
             owner.settling = false;
           }
         }
-        finishReadScope(wasTransaction, expiresRead, succeeded);
+        finishSqliteReadScope(
+          database,
+          owner,
+          wasTransaction,
+          expiresRead,
+          succeeded,
+          openingMutationRevision,
+        );
         if (owner.nativeDepth === 0 && !database.isTransaction) {
           finishSqliteDatabaseWrite(database);
         }
@@ -407,14 +417,14 @@ function trackSchemaChanges(
       execute(() => native.DatabaseSync.prototype.exec.call(database, sql), {
         schemaChange: unexpected,
         mainSchemaChange: unexpected,
-        dataChange: true,
+        temporaryTableSchemaChange: false,
+        // Known generation triggers change no rows and must not revoke in-flight reads.
+        dataChange: unexpected || schema.kind !== "generation",
         temporaryWriteTables: [],
         control: undefined,
       });
-      if (!unexpected) {
-        for (const table of schema.kind === "generation"
-          ? [schema.table]
-          : [schema.statusTable, schema.pendingTable]) {
+      if (!unexpected && schema.kind === "transcript-index") {
+        for (const table of [schema.statusTable, schema.pendingTable]) {
           owner.isolatedTempTables.add(table.toLowerCase());
         }
       }
@@ -443,6 +453,34 @@ function trackSchemaChanges(
 /** Local mutation witness; committed sibling writes use the physical admission revision. */
 export function readSqliteNativeMutationRevision(database: DatabaseSync): number | undefined {
   return owners.get(database)?.mutationRevision;
+}
+
+/** A callback inside native SQL cannot retain a token across that statement's rollback. */
+export function readSqliteRollbackRevision(database: DatabaseSync): number | undefined {
+  const owner = owners.get(database);
+  if (!owner) {
+    return undefined;
+  }
+  observeTransactionState(database, owner);
+  return owner.mutationDepth === 0 ? owner.rollbackRevision : undefined;
+}
+
+/** Derived caches may retain reads from a tracked transaction until its first mutation. */
+export function hasUncommittedSqliteWrites(database: DatabaseSync): boolean {
+  const owner = owners.get(database);
+  if (owner) {
+    observeTransactionState(database, owner);
+  }
+  return (
+    !owner ||
+    owner.authorizerActive ||
+    owner.mutationDepth > 0 ||
+    owner.unmanagedSnapshots.size > 0 ||
+    getSqlitePinnedReadSnapshot(database) !== undefined ||
+    (database.isTransaction &&
+      (owner.transactionMutationRevision === undefined ||
+        owner.transactionMutationRevision !== owner.mutationRevision))
+  );
 }
 
 /** Reuse schema only through unchanged synchronous transaction work, never as write authority. */
@@ -560,6 +598,7 @@ export function trackSqliteSchema(
       revision: 0,
       readDepth: 0,
       mutationRevision: 0,
+      rollbackRevision: 0,
       mutationDepth: 0,
       transactionOpen: database.isOpen && database.isTransaction,
       transactionRead: false,
@@ -570,6 +609,7 @@ export function trackSqliteSchema(
       settling: false,
       capturing: false,
       transactionalSchema: false,
+      transactionalTempSchema: false,
       transactionalFacts: false,
       authorizerActive: false,
       unmanagedSnapshots: new Set(),
@@ -624,49 +664,6 @@ export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSche
     current.schemaVersion === facts.schemaVersion &&
     current.userVersion === facts.userVersion
   );
-}
-
-function observeSchemaLifetime(
-  database: DatabaseSync,
-  owner: SchemaOwner,
-  snapshot: object | undefined,
-): boolean {
-  if (owner.snapshot && owner.snapshot !== snapshot) {
-    invalidate(owner);
-    owner.snapshot = undefined;
-    owner.qualifiedSnapshot = undefined;
-  }
-  const scope = bindScope(database, owner);
-  const processRevision = getSqliteDatabaseSchemaRevision(database);
-  const scopeChanged =
-    owner.scopeRevision !== scope.revision ||
-    (owner.processRevision !== undefined && owner.processRevision !== processRevision);
-  if (
-    scopeChanged &&
-    owner.facts &&
-    !owner.transactionalSchema &&
-    ((database.isTransaction && owner.transactionCatalogBound) ||
-      (snapshot && owner.qualifiedSnapshot === snapshot))
-  ) {
-    // An active SQLite snapshot keeps the catalog it admitted, even after a sibling publishes DDL.
-    owner.transactionalFacts ||= database.isTransaction;
-    owner.snapshot = snapshot;
-    return false;
-  }
-  owner.processRevision = processRevision;
-  if (scopeChanged) {
-    invalidate(owner);
-    owner.scopeRevision = scope.revision;
-  }
-  if ((owner.transactionalSchema || owner.transactionalFacts) && !database.isTransaction) {
-    if (owner.transactionalSchema) {
-      publishSchemaChange(database, owner);
-    }
-    invalidate(owner);
-    owner.transactionalSchema = false;
-    owner.transactionalFacts = false;
-  }
-  return scopeChanged;
 }
 
 /** Consume the physical database's admitted facts and owner-published schema changes. */

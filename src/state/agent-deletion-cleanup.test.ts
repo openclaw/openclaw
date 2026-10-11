@@ -21,7 +21,7 @@ import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
@@ -416,7 +416,7 @@ describe("agent deletion database cleanup authority", () => {
     const f = fixture();
     const reader = acquireAuthProfileReadDatabase(f.target.path);
     expect(reader.status).toBe("readable");
-    const admission = captureSqliteDatabaseAdmissions().find(
+    const retainedAdmission = captureSqliteDatabaseAdmissions().find(
       (record) => record.location === f.target.path,
     )!;
     await f.withDeletion(async (deletion) => {
@@ -428,10 +428,10 @@ describe("agent deletion database cleanup authority", () => {
           runDatabaseCleanup: deletion.runDatabaseCleanup,
         }),
       ).toBe(false);
-      expect(() => fs.fstatSync(admission.descriptor)).not.toThrow();
+      expect(() => fs.fstatSync(retainedAdmission.descriptor)).not.toThrow();
       try {
         await closeDeletedAgentDatabases("worker", [f.target.path], deletion);
-        expect(() => fs.fstatSync(admission.descriptor)).toThrow();
+        expect(() => fs.fstatSync(retainedAdmission.descriptor)).toThrow();
       } finally {
         await reviveAgentDatabases(["worker"]);
       }

@@ -114,7 +114,7 @@ export function createApplicationGateway(
     lastError: null,
     lastErrorCode: null,
     lastErrorAuthReason: null,
-    selfUser: null,
+    selfUser: undefined,
   };
   let client: GatewayBrowserClient | null = null;
   const selfProfile = createGatewaySelfProfile({
@@ -194,7 +194,7 @@ export function createApplicationGateway(
     setSnapshot({
       hello: null,
       canvasPluginSurfaceUrl: null,
-      selfUser: null,
+      selfUser: undefined,
       lastError: null,
       lastErrorCode: null,
       lastErrorAuthReason: null,
@@ -494,10 +494,11 @@ export function createApplicationGateway(
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
           assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
           sessionKey,
-          selfUser: resolveSelfPresenceUser(
-            readPresenceEntries(hello.snapshot) ?? [],
-            nextClient.instanceId,
-          ),
+          selfUser:
+            resolveSelfPresenceUser(
+              readPresenceEntries(hello.snapshot) ?? [],
+              nextClient.instanceId,
+            ) ?? undefined,
         });
         if (isCurrentClient(nextClient) && !snapshot.selfUser) {
           refreshSelfProfile();
@@ -568,6 +569,18 @@ export function createApplicationGateway(
                   : willRetry
                     ? "connecting"
                     : "stopped",
+          // Retain only established profileless display identity through transport loss.
+          // Rejected admission and unresolved/replaced identities must stay fail-closed.
+          selfUser:
+            everConnected &&
+            (!error ||
+              restartPending ||
+              suspensionPhase ||
+              isRetryableGatewayStartupUnavailableError(error)) &&
+            !nextClient.offlineRecoveryRetired &&
+            snapshot.selfUser === null
+              ? null
+              : undefined,
           restartPending: restartPending || snapshot.restartPending === true,
           suspensionPhase,
           lastError: startupPending
@@ -611,6 +624,13 @@ export function createApplicationGateway(
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
       reconnectAt: undefined,
+      selfUser:
+        !credentialsChanged &&
+        everConnected &&
+        !snapshot.client?.offlineRecoveryRetired &&
+        snapshot.selfUser === null
+          ? null
+          : undefined,
       assistantAgentId: null,
       sessionKey: nextSessionKey,
     });

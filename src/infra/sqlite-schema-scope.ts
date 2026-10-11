@@ -83,9 +83,11 @@ export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
   facts?: SqliteSchemaFacts;
   readDepth: number;
   mutationRevision: number;
+  rollbackRevision: number;
   mutationDepth: number;
   transactionOpen: boolean;
   transactionSnapshot?: object;
+  transactionMutationRevision?: number;
   transactionRead: boolean;
   transactionCatalogBound: boolean;
   nativeDepth: number;
@@ -95,6 +97,7 @@ export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
   capturing: boolean;
   readRevision?: SqliteReadScopeRevision;
   transactionalSchema: boolean;
+  transactionalTempSchema: boolean;
   transactionBaseFacts?: SqliteSchemaFacts;
   transactionalFacts: boolean;
   snapshot?: object;
@@ -107,3 +110,46 @@ export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
   isolatedTempTables: Set<string>;
   installTempTrackingSchema?: (schema: SqliteTempTrackingSchema) => void;
 };
+
+export function observeSqliteTransactionState(
+  database: DatabaseSync,
+  owner: SqliteSchemaOwner,
+): void {
+  const inTransaction = database.isTransaction;
+  if (owner.transactionOpen !== inTransaction) {
+    if (owner.transactionOpen) {
+      // A read error can roll back SQLite without passing through a tracked write.
+      owner.mutationRevision += 1;
+      owner.rollbackRevision += 1;
+    }
+    owner.transactionOpen = inTransaction;
+    owner.transactionMutationRevision = undefined;
+    owner.transactionSnapshot = undefined;
+    owner.transactionRead = false;
+    owner.transactionCatalogBound = false;
+  }
+}
+
+export function finishSqliteReadScope(
+  database: DatabaseSync,
+  owner: SqliteSchemaOwner,
+  wasTransaction: boolean,
+  expiresRead: boolean,
+  succeeded: boolean,
+  openingMutationRevision?: number,
+): void {
+  const inTransaction = database.isTransaction;
+  if (!succeeded && wasTransaction && !inTransaction) {
+    owner.mutationRevision += 1;
+    owner.rollbackRevision += 1;
+  }
+  owner.transactionOpen = inTransaction;
+  if (!wasTransaction || !inTransaction) {
+    owner.transactionMutationRevision = inTransaction ? openingMutationRevision : undefined;
+  }
+  if (wasTransaction !== inTransaction || expiresRead) {
+    owner.transactionSnapshot = undefined;
+    owner.transactionRead = false;
+    owner.transactionCatalogBound = false;
+  }
+}

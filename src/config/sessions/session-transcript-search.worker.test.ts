@@ -13,7 +13,7 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import {
@@ -140,8 +140,8 @@ it("keeps a warmed search reader through discovery and retires it through its ca
         const before = searchSessionTranscriptsReadOnlySync(request, database);
         expect(before.revision).toBeDefined();
         const changed = await reader.owner.searchTranscripts(request, async () => {
-          await broker.runOperation(store!, (scope) =>
-            scope.execute({
+          await broker.runOperation(store!, (operation) =>
+            operation.execute({
               type: "writeRows",
               input: {
                 sql: "UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'",

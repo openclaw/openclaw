@@ -28,7 +28,6 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
-  SessionActorNativeIncognitoIdentity,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
@@ -237,6 +236,7 @@ export type SessionActorCommitObserver<Value> = {
   committed(outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>): void;
 };
 
+/** Storage-independent commands and receipts; database handles stay inside each backend. */
 export type SessionActorOperations = {
   [Phase in SessionActorPhase as `session.actor.${Phase}`]: {
     input: SessionActorCommandContext &

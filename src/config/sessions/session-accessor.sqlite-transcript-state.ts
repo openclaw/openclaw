@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   createSqliteQueryCache,
@@ -12,6 +13,10 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import {
+  getSqliteReadScopeRevision,
+  type SqliteReadScopeRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
@@ -41,51 +46,107 @@ import {
 
 const transcriptContextVersionQuery = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
-  return prepareSqliteQueryTakeFirstSync<string, SessionTranscriptContextVersion>(
-    database,
-    (parameter) =>
-      db
-        .selectFrom("transcript_events")
-        .select((eb) => [
-          eb.fn
-            .coalesce(
-              eb
-                .selectFrom("session_transcript_cold_archives")
-                .select("last_seq")
-                .where(
-                  "session_id",
-                  "=",
-                  parameter((sessionId) => sessionId),
-                ),
-              eb.fn.max<number | null>("seq"),
-            )
-            .as("rawSeq"),
-          eb
-            .selectFrom("transcript_rewrite_watermarks")
-            .select("generation")
-            .where(
-              "session_id",
-              "=",
-              parameter((sessionId) => sessionId),
-            )
-            .as("generation"),
-          eb
-            .selectFrom("session_windows")
-            .select("transcript_updated_at")
-            .where(
-              "session_id",
-              "=",
-              parameter((sessionId) => sessionId),
-            )
-            .as("updatedAt"),
-        ])
-        .where(
-          "session_id",
-          "=",
-          parameter((sessionId) => sessionId),
-        ),
+  return prepareSqliteQueryTakeFirstSync<
+    string,
+    SessionTranscriptContextVersion & { cold: number }
+  >(database, (parameter) =>
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn
+          .coalesce(
+            eb
+              .selectFrom("session_transcript_cold_archives")
+              .select("last_seq")
+              .where(
+                "session_id",
+                "=",
+                parameter((sessionId) => sessionId),
+              ),
+            eb.fn.max<number | null>("seq"),
+          )
+          .as("rawSeq"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where(
+            "session_id",
+            "=",
+            parameter((sessionId) => sessionId),
+          )
+          .as("generation"),
+        eb
+          .selectFrom("session_windows")
+          .select("transcript_updated_at")
+          .where(
+            "session_id",
+            "=",
+            parameter((sessionId) => sessionId),
+          )
+          .as("updatedAt"),
+        eb
+          .exists(
+            eb
+              .selectFrom("session_transcript_cold_archives")
+              .select("session_id")
+              .where(
+                "session_id",
+                "=",
+                parameter((sessionId) => sessionId),
+              ),
+          )
+          .as("cold"),
+      ])
+      .where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
   );
 });
+
+// Only the current transaction's last transcript is retained. Native writes and
+// rollback retire its revision; committed facts never become a turn-long cache.
+const contextFacts = new WeakMap<
+  DatabaseSync,
+  {
+    sessionId: string;
+    revision: SqliteReadScopeRevision;
+    version: SessionTranscriptContextVersion;
+    cold?: boolean;
+  }
+>();
+
+function readContextFacts(database: Pick<OpenClawAgentDatabase, "db">, sessionId: string) {
+  const revision = database.db.isTransaction ? getSqliteReadScopeRevision(database.db) : undefined;
+  const retained = contextFacts.get(database.db);
+  return revision && retained?.revision === revision && retained.sessionId === sessionId
+    ? retained
+    : undefined;
+}
+
+function retainContextFacts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  version: SessionTranscriptContextVersion,
+  revision: SqliteReadScopeRevision | undefined,
+  cold?: boolean,
+) {
+  if (
+    database.db.isTransaction &&
+    revision &&
+    getSqliteReadScopeRevision(database.db) === revision
+  ) {
+    contextFacts.set(database.db, { sessionId, revision, version: { ...version }, cold });
+  }
+}
+
+function readContextState(database: Pick<OpenClawAgentDatabase, "db">, sessionId: string) {
+  const revision = getSqliteReadScopeRevision(database.db);
+  const { cold, ...version } = transcriptContextVersionQuery(database.db)(sessionId)!;
+  retainContextFacts(database, sessionId, version, revision, Boolean(cold));
+  return { version, cold: Boolean(cold) };
+}
 
 export function readTranscriptContextVersionInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -95,7 +156,10 @@ export function readTranscriptContextVersionInTransaction(
   if (actor) {
     return { ...actor.hot.transcript.version };
   }
-  return transcriptContextVersionQuery(database.db)(sessionId)!;
+  return {
+    ...(readContextFacts(database, sessionId)?.version ??
+      readContextState(database, sessionId).version),
+  };
 }
 
 /** Preparation consumes cold presence and the matching version from one read phase. */
@@ -110,9 +174,11 @@ export function readTranscriptContextStateInTransaction(
       version: { ...actor.hot.transcript.version },
     };
   }
+  const retained = readContextFacts(database, sessionId);
+  const state = retained?.cold === undefined ? readContextState(database, sessionId) : retained;
   return {
-    coldArchive: readSessionColdTranscript(database.db, sessionId),
-    version: readTranscriptContextVersionInTransaction(database, sessionId),
+    coldArchive: state.cold ? readSessionColdTranscript(database.db, sessionId) : undefined,
+    version: { ...state.version },
   };
 }
 
@@ -317,29 +383,24 @@ export function ensureTranscriptSessionRoot(
           }
         }
       }
-      executeSqliteQuerySync<unknown>(
+      executeSqliteQuerySync(
         database.db,
-        actor?.window
-          ? db
-              .updateTable("session_windows")
-              .set({ updated_at: updatedAt })
-              .where("session_id", "=", scope.sessionId)
-          : db
-              .insertInto("session_windows")
-              .values({
-                session_id: scope.sessionId,
-                session_key: scope.sessionKey,
-                previous_session_id: null,
-                reason: null,
-                session_scope: "conversation",
-                created_at: updatedAt,
-                updated_at: updatedAt,
-              })
-              .onConflict((conflict) =>
-                conflict.column("session_id").doUpdateSet({
-                  updated_at: updatedAt,
-                }),
-              ),
+        db
+          .insertInto("session_windows")
+          .values({
+            session_id: scope.sessionId,
+            session_key: scope.sessionKey,
+            previous_session_id: null,
+            reason: null,
+            session_scope: "conversation",
+            created_at: updatedAt,
+            updated_at: updatedAt,
+          })
+          .onConflict((conflict) =>
+            conflict.column("session_id").doUpdateSet({
+              updated_at: updatedAt,
+            }),
+          ),
       );
       if (actor?.window) {
         actor.window.updated_at = updatedAt;
@@ -401,7 +462,7 @@ const transcriptMutationStateQuery = createSqliteQueryCache((database) => {
 });
 
 export function readTranscriptMutationStateInTransaction(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): { observedAt: number | null; updatedAt: number | null } {
   const actor = readSessionActorTransactionState(database, { sessionId });
@@ -458,22 +519,24 @@ export function advanceTranscriptMutationAtInTransaction(
             : transcriptUpdatedAt,
       }))
       .where("session_id", "=", sessionId);
-    if (actor?.window || !findOpenClawAgentDatabaseIdentity(database)) {
+    if (!findOpenClawAgentDatabaseIdentity(database)) {
       executeSqliteQuerySync(database.db, update);
-      if (actor?.window) {
-        actor.window.transcript_updated_at = transcriptUpdatedAt;
-        actor.hot.transcript.version.updatedAt = transcriptUpdatedAt;
-        const projection = actor.transcript.projection;
-        publishSessionTranscriptAuthority(database, {
-          ...actor.hot.transcript.version,
-          sessionId,
-          sessionKey: actor.hot.target.sessionKey,
-          leafEventId: projection?.leafEventId ?? null,
-          indexedSeq: projection?.indexedSeq ?? null,
-          activeMessageCount: projection?.activeMessageCount ?? null,
-          needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
-        });
-      }
+      return;
+    }
+    if (actor?.window) {
+      executeSqliteQuerySync(database.db, update);
+      actor.window.transcript_updated_at = transcriptUpdatedAt;
+      actor.hot.transcript.version.updatedAt = transcriptUpdatedAt;
+      const projection = actor.transcript.projection;
+      publishSessionTranscriptAuthority(database, {
+        ...actor.hot.transcript.version,
+        sessionId,
+        sessionKey: actor.hot.target.sessionKey,
+        leafEventId: projection?.leafEventId ?? null,
+        indexedSeq: projection?.indexedSeq ?? null,
+        activeMessageCount: projection?.activeMessageCount ?? null,
+        needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
+      });
       return;
     }
     const context = executeSqliteQueryTakeFirstSync(
@@ -524,6 +587,16 @@ export function advanceTranscriptMutationAtInTransaction(
         .$assertType<SessionTranscriptAuthority>(),
     );
     if (context) {
+      retainContextFacts(
+        database,
+        sessionId,
+        {
+          generation: context.generation,
+          rawSeq: context.rawSeq,
+          updatedAt: context.updatedAt,
+        },
+        getSqliteReadScopeRevision(database.db),
+      );
       publishSessionTranscriptAuthority(database, context);
     }
   });

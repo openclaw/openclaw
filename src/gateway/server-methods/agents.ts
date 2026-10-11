@@ -8,7 +8,6 @@ import {
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createAgent } from "../../agents/agent-create.js";
 import {
   AgentSharedStoreOwnerError,
   assertAgentSessionStoreDeletionSafe,
@@ -66,7 +65,6 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/wo
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
   readConfigFileSnapshotForWrite,
-  transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../../config/config.js";
 import {
@@ -92,6 +90,7 @@ import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
   AgentConfigPreconditionError,
   AgentModelSelectionError,
+  createAgentConfigEntry,
   deleteAgentConfigEntry,
   isConfiguredAgent,
   isImplicitAgentModelUpdate,
@@ -113,6 +112,10 @@ import {
   writeWorkspaceFileOrRespond,
 } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
+import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -161,31 +164,40 @@ function agentOwnsSharedAuthStore(cfg: OpenClawConfig, agentId: string): boolean
 
 export const agentsHandlers: GatewayRequestHandlers = {
   "agents.list": agentListHandler,
-  "agents.create": async ({ params, respond, client, context }) => {
+  "agents.create": async (options) => {
+    const { params, respond, client, context } = options;
     if (!assertValidParams(params, validateAgentsCreateParams, "agents.create", respond)) {
       return;
     }
 
+    let assertOwnerCurrent: (() => void) | undefined;
+    try {
+      assertOwnerCurrent = params.expectedOwnerId
+        ? captureLocalStateMutationGuard(params.expectedOwnerId, options)
+        : undefined;
+    } catch (error) {
+      respond(false, undefined, localStateOwnerChangedError(error));
+      return;
+    }
     const application = createAgentConfigApplication(respond);
     try {
-      const result = await createAgent({
-        name: params.name,
-        workspace: params.workspace,
-        model: params.model,
-        emoji: params.emoji,
-        avatar: params.avatar,
-        transformConfig: (mutation) =>
-          transformConfigFileWithRetry({
-            ...mutation,
-            writeOptions: application.attach(mutation.writeOptions ?? {}),
+      const result = await createAgentConfigEntry(
+        {
+          name: params.name,
+          workspace: params.workspace,
+          model: params.model,
+          emoji: params.emoji,
+          avatar: params.avatar,
+          beforePersistentApply: assertOwnerCurrent,
+          assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
+            method: "agents.create",
+            requestParams: params,
+            client,
+            context,
           }),
-        assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
-          method: "agents.create",
-          requestParams: params,
-          client,
-          context,
-        }),
-      });
+        },
+        application.attach({}),
+      );
       if (result.status === "error") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
         return;
@@ -203,6 +215,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           agentId: result.agentId,
           name: result.name,
           workspace: result.workspace,
+          agentDir: result.agentDir,
           ...(result.model ? { model: result.model } : {}),
         },
         undefined,

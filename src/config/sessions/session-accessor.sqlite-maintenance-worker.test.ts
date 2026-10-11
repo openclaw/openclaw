@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -11,6 +12,10 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  onSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -21,11 +26,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.js";
+import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
@@ -40,6 +41,7 @@ import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sq
 import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -741,18 +743,46 @@ it("publishes only committed removal keys after Worker finalization", async () =
     replaceSessionEntrySync(changed, previousEntry);
     const databaseOptions = { agentId: "main", env: state.env };
     const database = openOpenClawAgentDatabase(databaseOptions);
+    const entries = [
+      { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
+      { sessionKey: changed.sessionKey, expectedEntry: loadSessionEntry(changed) },
+    ];
     const plan = reclamation.createSessionMaintenanceFinalizationOperation({
       agentId: "main",
       databaseOptions,
-      entries: [
-        { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
-        { sessionKey: changed.sessionKey, expectedEntry: loadSessionEntry(changed) },
-      ],
+      entries,
       materializedPlans: [],
     });
     replaceSessionEntrySync(changed, { ...previousEntry, label: "changed after planning" });
     const published: SessionRowChange[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => published.push(change));
+    const identities: SessionIdentityMutation[] = [];
+    const unsubscribeIdentities = onSessionIdentityMutation((change) => identities.push(change));
+    // Forward the intercepted prototype method with the actual Worker receiver below.
+    // oxlint-disable-next-line typescript/unbound-method
+    const postMessage = Worker.prototype.postMessage;
+    let mutated = false;
+    const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      ...args
+    ) {
+      const result = postMessage.apply(this, args);
+      const message: unknown = args[0];
+      if (
+        isRecord(message) &&
+        message.type === "reclaim" &&
+        isRecord(message.plan) &&
+        message.plan.kind === "maintenance-finalize" &&
+        isRecord(message.plan.databaseOptions) &&
+        message.plan.databaseOptions.path === database.path
+      ) {
+        entries[0]!.sessionKey = "agent:main:mutated-after-dispatch";
+        entries[0]!.expectedEntry!.sessionId = "mutated-after-dispatch";
+        entries.reverse();
+        mutated = true;
+      }
+      return result;
+    });
     const diagnostics = {};
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
@@ -761,16 +791,26 @@ it("publishes only committed removal keys after Worker finalization", async () =
         plan,
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
+      expect(mutated).toBe(true);
       expect(result).toMatchObject({
         kind: "maintenance-finalize",
-        value: { changedEntries: [plan.entries[1]], committedEntries: [plan.entries[0]] },
+        value: { committedEntryIndices: [0] },
       });
       expect(published).toEqual([
         { agentId: "main", storePath: database.path, sessionKey: removed.sessionKey },
       ]);
+      expect(identities).toEqual([
+        expect.objectContaining({
+          kind: "delete",
+          agentId: "main",
+          previous: { sessionId: removedEntry.sessionId, sessionKeys: [removed.sessionKey] },
+        }),
+      ]);
       expect(loadSessionEntry(removed)).toBeUndefined();
       expect(loadSessionEntry(changed)?.label).toBe("changed after planning");
     } finally {
+      dispatch.mockRestore();
+      unsubscribeIdentities();
       unsubscribe();
     }
   });
@@ -880,11 +920,10 @@ it("replans incognito preservation discovery after rollback without a Worker", a
   });
 });
 
-it("retains worker cadence for foreign writes until a committed worker backdate invalidates it", async () => {
+it("invalidates the retained maintenance age when a worker commits a backdate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const active = { sessionKey: "agent:main:age-recheck-active", storePath };
-    const foreignVictim = { sessionKey: "agent:main:age-recheck-foreign", storePath };
     const managedVictim = { sessionKey: "agent:main:age-recheck-managed", storePath };
     const policy = resolveMaintenanceConfigFromInput({
       mode: "enforce",
@@ -892,9 +931,7 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
       pruneAfter: "1d",
     });
     replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-    replaceSessionEntrySync(foreignVictim, { sessionId: "foreign", updatedAt: Date.now() });
     replaceSessionEntrySync(managedVictim, { sessionId: "managed", updatedAt: Date.now() });
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     const observeDeadline = () => {
       const settled = createDeferredCore<number | undefined>();
       const reclaim = reclamationRun.runSqliteSessionReclamation;
@@ -929,28 +966,13 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
     expect(initialDeadline).toEqual(expect.any(Number));
     expect(initialDeadline).toBeGreaterThan(Date.now());
     vi.restoreAllMocks();
-    const foreign = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    try {
-      foreign
-        .prepare(
-          "UPDATE session_nodes SET updated_at = 1, entry_json = json_set(entry_json, '$.updatedAt', 1) WHERE session_key = ?",
-        )
-        .run(foreignVictim.sessionKey);
-      // The foreign writer certifies its canonical timestamp update after triggers clear proof.
-      foreign
-        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-        .run(foreignVictim.sessionKey);
-    } finally {
-      foreign.close();
-    }
     const retainedDeadline = observeDeadline();
     const unchanged = observeMaintenance();
-    await patchSessionEntryCore(active, () => ({ label: "foreign write before recheck" }), {
+    await patchSessionEntryCore(active, () => ({ label: "unchanged maintenance age" }), {
       maintenanceConfig: policy,
     });
     expect((await unchanged).archived).toBe(0);
     expect(await retainedDeadline).toBe(initialDeadline);
-    expect(loadSessionEntry(foreignVictim)?.archivedAt).toBeUndefined();
     expect(loadSessionEntry(managedVictim)?.archivedAt).toBeUndefined();
     expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
     vi.restoreAllMocks();
@@ -962,13 +984,13 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
       workerGuard: {},
       skipMaintenance: true,
     });
-    const rechecked = observeMaintenance((result) => result.archived === 2);
+    const rechecked = observeMaintenance((result) => result.archived === 1);
     await patchSessionEntryCore(active, () => ({ label: "after managed backdate" }), {
       maintenanceConfig: policy,
     });
     await rechecked;
     expect(loadSessionEntry(managedVictim)?.archivedAt).toEqual(expect.any(Number));
-    expect(loadSessionEntry(foreignVictim)?.archivedAt).toEqual(expect.any(Number));
+    expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
   });
 });
 

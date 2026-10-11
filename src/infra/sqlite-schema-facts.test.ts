@@ -3,7 +3,6 @@ import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
 import { participantRecordsBySessionKey } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { assertCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
@@ -253,71 +252,6 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it.each([
-    "CREATE TABLE unexpected (id INTEGER)",
-    "DROP TABLE session_nodes",
-    "DROP TABLE main.session_nodes",
-    "DROP TABLE temp.openclaw_session_nodes_cache_generation; CREATE TABLE unexpected (id)",
-    "DROP TRIGGER temp.openclaw_session_nodes_cache_generation_update",
-    "ALTER TABLE temp.openclaw_session_nodes_cache_generation ADD COLUMN unexpected INTEGER",
-  ])("still revokes admission for ordinary DDL after tracker installation: %s", (sql) => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    readSessionNodesGeneration(database);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    database.exec(sql);
-    expect(schemaMutation).toHaveBeenCalledWith(undefined);
-  });
-
-  it("observes reentrant MAIN DDL during a declared tracker installation", () => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    const nativeExec = DatabaseSync.prototype.exec.bind(database);
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementationOnce((sql) => {
-      database.exec("CREATE TABLE unexpected (id INTEGER)");
-      return nativeExec(sql);
-    });
-    try {
-      readSessionNodesGeneration(database);
-      expect(schemaMutation).toHaveBeenCalled();
-    } finally {
-      exec.mockRestore();
-    }
-  });
-
-  it("revokes admission when tracker installation fails after creating its counter", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    expect(() => readSessionNodesGeneration(database)).toThrow(/session_nodes/u);
-    expect(schemaMutation).toHaveBeenCalled();
-  });
-
-  it.each([
-    "CREATE TEMP TABLE openclaw_session_nodes_cache_generation (id INTEGER PRIMARY KEY, generation INTEGER)",
-    "CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_update AFTER INSERT ON main.session_nodes BEGIN SELECT 1; END",
-  ])("revokes admission for a preexisting mismatched tracker object: %s", (sql) => {
-    const database = openDatabase(`CREATE TABLE session_nodes (id INTEGER); ${sql}`);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    readSessionNodesGeneration(database);
-    expect(schemaMutation).toHaveBeenCalled();
-  });
-
-  it("retains readmitted facts when reinstalling the tracker's existing exact shapes", () => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    expect(readSessionNodesGeneration(database)).toBe(0);
-    database.exec("ALTER TABLE session_nodes ADD COLUMN value TEXT");
-    admitSqliteSchema(database);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    expect(readSessionNodesGeneration(database)).toBe(1);
-    expect(schemaMutation).not.toHaveBeenCalled();
-    database.exec("INSERT INTO session_nodes (id) VALUES (1)");
-    expect(readSessionNodesGeneration(database)).toBe(2);
-  });
-
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
     const database = openDatabase(
@@ -565,15 +499,16 @@ describe("admitted SQLite schema facts", () => {
       expect(revision()).not.toBe(before);
       expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
       const tracking = {
-        kind: "generation",
-        table: "local_status",
-        triggers: [],
-        advance: false,
+        kind: "transcript-index",
+        statusTable: "local_status",
+        pendingTable: "local_pending",
+        pendingIndex: "local_pending_state",
+        observedTables: [],
       } as const;
       installSqliteTempTrackingSchema(writer, tracking);
       const committed = revision();
       writer.exec(
-        'BEGIN; INSERT OR REPLACE INTO temp.local_status VALUES (1,1); UPDATE "temp".local_status SET generation=2; COMMIT',
+        'BEGIN; INSERT OR REPLACE INTO temp.local_status VALUES (1,1,0,0,NULL,0); UPDATE "temp".local_status SET sibling_write_revision=2; COMMIT',
       );
       expect(revision()).toBe(committed);
       writer.exec("BEGIN; INSERT INTO original VALUES (2); ROLLBACK");
@@ -590,9 +525,11 @@ describe("admitted SQLite schema facts", () => {
       insertSuffix.run();
       expect(revision()).not.toBe(beforeSuffix);
       expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }, { id: 8 }]);
-      const updateTracking = writer.prepare("UPDATE temp.local_status SET generation=3");
+      const updateTracking = writer.prepare(
+        "UPDATE temp.local_status SET sibling_write_revision=3",
+      );
       writer.exec(
-        "CREATE TEMP TRIGGER custom_tracking_write AFTER UPDATE ON local_status BEGIN INSERT INTO original VALUES (9); END",
+        "CREATE TEMP TRIGGER custom_tracking_write AFTER UPDATE ON local_status WHEN NEW.sibling_write_revision = 3 BEGIN INSERT INTO original VALUES (9); END",
       );
       installSqliteTempTrackingSchema(writer, tracking);
       const beforeTrigger = revision();

@@ -49,13 +49,26 @@ async function runDatabaseOwnership(
 ): Promise<void> {
   try {
     const databasePath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
+    const managerId = options.manager;
     const ownership =
-      options.manager !== undefined
-        ? (
-            await import("../../state/openclaw-state-ownership-operations.js")
-          ).claimOpenClawStateOwnership(options.manager, {
-            path: databasePath,
-            env: process.env,
+      managerId !== undefined
+        ? await (
+            await import("../local-state-owner.js")
+          ).runWithLocalStateOwner({
+            method: "database.ownership.claim",
+            params: { manager: managerId },
+            target: databasePath,
+            onForeignOwner: async () => {
+              throw new Error(
+                "Cannot claim shared-state ownership while a Gateway or embedded agent is running. Stop the Gateway through the external supervisor and stop any embedded agents, then retry the ownership claim.",
+              );
+            },
+            runLocal: async ({ env, assertCurrent }) => {
+              const { claimOpenClawStateOwnership } =
+                await import("../../state/openclaw-state-ownership-operations.js");
+              assertCurrent();
+              return claimOpenClawStateOwnership(managerId, { path: databasePath, env });
+            },
           })
         : (
             await import("../../state/openclaw-state-ownership.js")
@@ -97,6 +110,45 @@ export function registerDatabaseCommand(program: Command): void {
     .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
     .option("--json", "emit machine-readable JSON", false)
     .action(runDatabasePreflight);
+
+  database
+    .command("verify-preservation")
+    .description(
+      "Compare retained recovery captures without changing state or authorizing activation",
+    )
+    .argument("<original-manifest>", "sealed original recovery manifest")
+    .argument("<candidate-manifest>", "sealed capture after migration")
+    .requiredOption(
+      "--original-sha256 <digest>",
+      "original manifest digest recorded before migration",
+    )
+    .requiredOption("--candidate-sha256 <digest>", "candidate manifest digest")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (originalPath, candidatePath, options) => {
+      try {
+        const ref = (manifestPath: string, manifestSha256: string) => ({
+          manifestPath: path.resolve(manifestPath),
+          directory: path.dirname(path.resolve(manifestPath)),
+          manifestSha256,
+        });
+        const { inspectDoctorMigrationPreservation } =
+          await import("../../commands/doctor-migration-preservation.js");
+        const result = await inspectDoctorMigrationPreservation({
+          original: ref(originalPath, options.originalSha256),
+          candidate: ref(candidatePath, options.candidateSha256),
+        });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Migration preservation: ${result.status}; ${result.databases} databases, ${result.files} files. Inspection only.\n${result.warnings.join("\n")}\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
 
   const ownership = database.command("ownership").description("Inspect or claim write ownership");
   ownership

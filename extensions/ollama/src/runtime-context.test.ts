@@ -1,6 +1,6 @@
 import type { Message } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { convertToOllamaMessages } from "./stream.runtime.js";
+import { convertToOllamaMessages } from "./stream-messages.js";
 
 describe("Ollama runtime context", () => {
   it("preserves labeled context through the user-role compatibility contract", () => {

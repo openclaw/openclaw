@@ -281,10 +281,9 @@ export async function tryReuseCodexLiveThread(
         // This read-only preflight cannot change native configuration. Direct-input
         // refusals and failed reads preserve it too, but revocation or cancellation cannot.
         assertWarmOwner();
-        preserveSubscription = isSameCodexAppServerThreadOwner(
-          params.bindingStore.read(bindingIdentity),
-          binding,
-        );
+        const currentBinding = await params.bindingStore.readAsync(bindingIdentity);
+        assertWarmOwner();
+        preserveSubscription = isSameCodexAppServerThreadOwner(currentBinding, binding);
         throw error;
       }
       assertWarmOwner();

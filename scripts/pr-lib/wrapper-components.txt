@@ -38,6 +38,7 @@ packages/gateway-protocol/src/schema/worker-session-tools.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
+packages/gateway-protocol/src/session-communication.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
@@ -177,6 +178,7 @@ scripts/lib/gateway-server-test-plan.mts
 scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
 scripts/lib/managed-child-process.mts
+scripts/lib/managed-cleanup-handoff.mts
 scripts/lib/managed-windows-job-entrypoint.mts
 scripts/lib/managed-windows-job-launcher.mts
 scripts/lib/managed-windows-job.mts
@@ -332,6 +334,7 @@ src/agents/worktrees/preparation-timing.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts
+src/agents/worktrees/registry-publication.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
 src/agents/worktrees/registry-run-end.ts
@@ -340,6 +343,10 @@ src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
+src/agents/sandbox/registry-publication.ts
+src/config/sessions/session-actor-transaction.ts
+src/infra/sqlite-database-write-receipts.ts
+src/state/openclaw-agent-execution-incognito-session-actors.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts
@@ -361,7 +368,7 @@ src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
 src/auto-reply/tokens.ts
-src/bootstrap/node-exit-safe-compilers.ts
+src/bootstrap/node-compiler-args.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
 src/channels/chat-meta-shared.ts
@@ -634,6 +641,7 @@ src/config/sessions/session-incognito-transcript-contract.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-pending-input-operations.types.ts
@@ -744,6 +752,7 @@ src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
 src/gateway/worker-environments/placement-state.ts
+src/gateway/worker-environments/placement-turn-authority.receipt.ts
 src/gateway/worker-environments/placement-turn-authority.ts
 src/gateway/worker-environments/placement-workspace-journal.ts
 src/gateway/worker-environments/placement-workspace-journal.types.ts
@@ -818,6 +827,7 @@ src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
+src/infra/delivery-queue-cache.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
@@ -1011,6 +1021,7 @@ src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
+src/infra/sqlite-file-generation-worker.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
@@ -1056,6 +1067,7 @@ src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
+src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
@@ -1071,6 +1083,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-snapshot.ts
+src/infra/sqlite-source-fence-contract.ts
+src/infra/sqlite-source-fence.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-source-revision.ts
 src/infra/sqlite-source-revision.worker.ts
@@ -1093,6 +1107,7 @@ src/infra/sqlite-worker-broker.ts
 src/infra/sqlite-worker-input-admission.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
+src/infra/sqlite-worker-database-admission-relay.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
@@ -1267,6 +1282,7 @@ src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
+src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
@@ -1379,6 +1395,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
@@ -1395,6 +1412,8 @@ src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
+src/plugins/plugin-state-operation-module-loader.ts
+src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
@@ -1508,6 +1527,7 @@ src/process/kill-tree.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
+src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
@@ -1528,6 +1548,8 @@ src/process/supervisor/service-child-group-ownership.ts
 src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/proxy-capture/child-transport.ts
+src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
@@ -1615,6 +1637,7 @@ src/shared/regexp.ts
 src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
+src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
@@ -1625,6 +1648,7 @@ src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
+src/state/agent-database-preparation-context.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts
@@ -1685,7 +1709,6 @@ src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-cleanup.ts
-src/state/openclaw-agent-execution-config.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-incognito-absence.ts
 src/state/openclaw-agent-execution-incognito.ts
@@ -1776,6 +1799,7 @@ src/state/openclaw-state-feature-schema.ts
 src/state/openclaw-state-lease-acquisition.ts
 src/state/openclaw-state-lease-cleanup.ts
 src/state/openclaw-state-lease-error.ts
+src/state/openclaw-state-lease-heartbeat-carrier.ts
 src/state/openclaw-state-lease-heartbeat-cleanup.ts
 src/state/openclaw-state-lease-heartbeat-shared.ts
 src/state/openclaw-state-lease-heartbeat.ts
@@ -1940,12 +1964,14 @@ src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.ts
 src/config/sessions/session-accessor.sqlite-entry-cache.types.ts
+src/config/sessions/session-accessor.sqlite-entry-facts.worker.ts
 src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
 src/config/sessions/session-transcript-authority.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
+src/config/sessions/session-accessor.sqlite-metadata-read.ts
 src/config/sessions/session-accessor.sqlite-model-context.ts
 src/config/sessions/session-accessor.sqlite-projection-read.ts
 src/config/sessions/session-accessor.sqlite-read.ts
@@ -1957,6 +1983,7 @@ src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts
 src/config/sessions/session-entry-capability-facts.ts
 src/config/sessions/session-entry-navigation.ts
+src/config/sessions/session-entry-publication-source.ts
 src/config/sessions/session-pin-policy.ts
 src/config/sessions/session-sharing-store.kernel.ts
 src/config/sessions/session-transcript-anchor-read.kernel.ts
@@ -1965,3 +1992,26 @@ src/config/sessions/store-maintenance-activity.ts
 src/utils/chunk-items.ts
 src/utils/message-channel-normalize.ts
 src/utils/message-channel.ts
+src/config/sessions/cli-history-boundary.ts
+src/config/sessions/session-accessor.sqlite-identity.ts
+src/config/sessions/session-accessor.sqlite-worker-coordination.ts
+src/config/sessions/session-accessor.sqlite-worker-transport.ts
+src/config/sessions/session-actor-replica.ts
+src/config/sessions/session-actor.ts
+src/config/sessions/session-entry-cohort-scope.ts
+src/config/sessions/session-incognito-binding.ts
+src/config/sessions/session-incognito-projection.ts
+src/config/sessions/session-transcript-index-maintenance.ts
+src/config/sessions/session-transcript-projection-writer.ts
+src/config/sessions/session-transcript-reconcile-memory.ts
+src/config/sessions/session-transcript-reconcile-pool.ts
+src/config/sessions/session-transcript-reconcile-readiness.ts
+src/config/sessions/session-transcript-reconcile.ts
+src/config/sessions/session-transcript-worker-read-admission.ts
+src/config/sessions/session-transcript-worker-readers.ts
+src/config/sessions/session-transcript-worker-resources.ts
+src/config/sessions/session-transcript-worker-runtime.ts
+src/config/sessions/transcript-write-context.ts
+src/sessions/session-lifecycle-events.ts
+src/sessions/session-row-facts.ts
+src/state/openclaw-agent-worker-store.ts

@@ -9,7 +9,7 @@ import type { SecretInput } from "./types.secrets.js";
 export type MSTeamsWebhookConfig = {
   /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
   port?: number;
-  /** Path for the messages endpoint. Default: /api/messages. */
+  /** Gateway messages route. Default: /api/messages; named accounts append their account ID. */
   path?: string;
 };
 
@@ -144,4 +144,11 @@ export type MSTeamsConfig = Omit<
     };
     /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
     sso?: MSTeamsSsoConfig;
+    /** Named Microsoft Teams bot accounts. Each account represents one Azure Bot identity. */
+    accounts?: Record<
+      string,
+      Omit<MSTeamsConfig, "accounts" | "defaultAccount"> & { name?: string }
+    >;
+    /** Preferred account when no binding/account context selects one. */
+    defaultAccount?: string;
   };

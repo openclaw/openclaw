@@ -202,7 +202,7 @@ describe("session discussion panel", () => {
       return candidate!;
     });
     await empty.updateComplete;
-    expect(empty.shadowRoot?.textContent).toContain("This discussion cannot be embedded");
+    expect(empty.textContent).toContain("This discussion cannot be embedded");
     const external = panel.querySelector<HTMLAnchorElement>("a");
     expect(panel.querySelector("iframe")).toBeNull();
     expect(external?.textContent).toContain("Open discussion in a new tab");

@@ -4,7 +4,6 @@ import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-bound
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
-import { validatePreparedAssistantAppendSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
@@ -18,7 +17,6 @@ import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
 } from "../../config/sessions/session-manager-write-contract.js";
-import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { readStagedSessionTranscriptAuthority } from "../../config/sessions/session-transcript-authority.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import {
@@ -202,22 +200,6 @@ export function bindSqliteWorkerBackend(
         ? prepareSessionMetadataAppend(context.database, command.input)
         : undefined;
     const event = prepared?.event;
-    if (
-      prepared &&
-      command.type === "session.metadata.append" &&
-      event?.type === "message" &&
-      command.input.message?.validateTurn
-    ) {
-      const mutationAt = validatePreparedAssistantAppendSync(
-        scope,
-        event.parentId,
-        command.input.view?.admission?.entryId,
-      );
-      if (mutationAt === undefined) {
-        throw new SqliteTranscriptMutationConflictError(scope.sessionId);
-      }
-      prepared.expectedMutationAt = mutationAt;
-    }
     const messageControl =
       command.type === "session.metadata.append" ? command.input.message : undefined;
     const result = runWithMetadataMessageAdmission(

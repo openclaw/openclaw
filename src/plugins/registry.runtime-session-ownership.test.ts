@@ -3,6 +3,7 @@ import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createPluginRecord } from "./loader-records.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -28,6 +29,119 @@ function createApis(runtime: PluginRuntime, config: OpenClawConfig = {}) {
 }
 
 describe("plugin registry runtime session ownership", () => {
+  it.each(["upsert", "route"] as const)(
+    "refuses a prepared %s when its plugin retires before worker admission",
+    async (operation) => {
+      const runtime = createPluginRuntime();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const original = { sessionId: "managed", updatedAt: 1, label: "original" };
+      const delivery = normalizeSessionDeliveryState({
+        context: { channel: "slack", to: "C123" },
+      });
+      let stored: SessionEntry = original;
+      runtime.agent.session.getSessionEntry = () => stored;
+      runtime.agent.session.upsertSessionEntry = async ({ entry }) => {
+        entered.resolve();
+        await resume.promise;
+        stored = entry;
+      };
+      runtime.agent.session.prepareSessionEntryPatch = async (params) => {
+        const patch = await params.prepare(stored, { existingEntry: stored });
+        entered.resolve();
+        await resume.promise;
+        if (params.authority?.kind === "host") {
+          params.authority.assertCurrent();
+        }
+        if (params.authority?.kind === "source") {
+          params.authority.source();
+        }
+        if (patch) {
+          stored = { ...stored, ...patch };
+        }
+        return stored;
+      };
+      runtime.channel.session.updateLastRoute = async () => {
+        entered.resolve();
+        await resume.promise;
+        stored = { ...stored, delivery };
+        return stored;
+      };
+      runtime.channel.session.updateLastRouteWithAuthority = async ({ authority }) => {
+        entered.resolve();
+        await resume.promise;
+        if (authority.kind === "host") {
+          authority.assertCurrent();
+        } else {
+          authority.source();
+        }
+        stored = { ...stored, delivery };
+        return stored;
+      };
+      const registry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "managed-writer",
+        source: "/plugins/managed-writer/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = registry.createApi(record, { config: {} });
+      const writing =
+        operation === "upsert"
+          ? api.runtime.agent.session.upsertSessionEntry({
+              sessionKey: "agent:main:managed",
+              entry: { ...original, label: "must not persist" },
+            })
+          : api.runtime.channel.session.updateLastRoute({
+              sessionKey: "agent:main:managed",
+              storePath: "/synthetic/sessions.json",
+              channel: "slack",
+            });
+      await entered.promise;
+      const refused = expect(writing).rejects.toThrow("runtime is no longer active");
+      revokePluginRecord(registry.registry, record);
+      resume.resolve();
+      await refused;
+      expect(stored).toEqual(original);
+    },
+  );
+
+  it.each(["key", "id"] as const)(
+    "fences a managed asynchronous %s read when its plugin retires before disclosure",
+    async (selection) => {
+      const runtime = createPluginRuntime();
+      const pending = createDeferredCore<SessionEntry | undefined>();
+      const entry = { sessionId: "managed", updatedAt: 1 };
+      runtime.agent.session.getSessionEntryAsync = () => pending.promise;
+      runtime.agent.session.getSessionEntryByIdAsync = async () => {
+        const selectedEntry = await pending.promise;
+        return selectedEntry
+          ? { sessionKey: "agent:main:managed", entry: selectedEntry }
+          : undefined;
+      };
+      const registry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "managed-reader",
+        source: "/plugins/managed-reader/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = registry.createApi(record, { config: {} });
+      const reading =
+        selection === "key"
+          ? api.runtime.agent.session.getSessionEntryAsync({ sessionKey: "agent:main:managed" })
+          : api.runtime.agent.session.getSessionEntryByIdAsync({
+              agentId: "main",
+              sessionId: "managed",
+            });
+      revokePluginRecord(registry.registry, record);
+      pending.resolve(entry);
+      await expect(reading).rejects.toThrow("runtime is no longer active");
+    },
+  );
+
   it.each(["factory", "read", "snapshot"] as const)(
     "revokes a session listing reader when its plugin retires during %s",
     async (phase) => {
@@ -256,6 +370,17 @@ describe("plugin registry runtime session ownership", () => {
       });
       return patch ? { ...entry, ...patch } : entry;
     });
+    session.prepareSessionEntryPatch = vi.fn(async (params) => {
+      const existingEntry = entries[params.sessionKey];
+      const entry = existingEntry ?? params.fallbackEntry;
+      if (!entry) {
+        return null;
+      }
+      const patch = await params.prepare(structuredClone(entry), {
+        existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
+      });
+      return patch ? { ...entry, ...patch } : entry;
+    });
     session.upsertSessionEntry = vi.fn(async () => {});
     session.updateSessionStoreEntry = vi.fn(async (params) => entries[params.sessionKey] ?? null);
     let admissionScope = getPluginRuntimeGatewayRequestScope();
@@ -429,6 +554,12 @@ describe("plugin registry runtime session ownership", () => {
       "does not match its reserved session key",
     );
     const otherSession = other.runtime.agent.session;
+    await rejectedByOwner(
+      otherSession.upsertSessionEntry({
+        sessionKey: key.locked,
+        entry: { ...plugin, sessionId: locked.sessionId },
+      }),
+    );
     await expect(
       otherSession.upsertSessionEntry({
         sessionKey: key.legacy,

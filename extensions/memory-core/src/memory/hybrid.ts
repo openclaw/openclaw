@@ -29,6 +29,11 @@ export type HybridSearchResult<TSource extends HybridSource = HybridSource> = {
   provenance?: MemoryEntryProvenance;
 };
 
+type RankedHybridResult<TSource extends HybridSource = HybridSource> =
+  HybridSearchResult<TSource> & {
+    eligibilityScore: number;
+  };
+
 type HybridCandidate<TSource extends HybridSource = HybridSource> = Omit<
   HybridSearchResult<TSource>,
   "score" | "vectorScore" | "textScore"
@@ -68,7 +73,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
-}): Promise<HybridSearchResult<TSource>[]> {
+}): Promise<RankedHybridResult<TSource>[]> {
   const createCandidate = (r: HybridCandidate<TSource>) => ({
     ...r,
     vectorScore: 0,
@@ -169,18 +174,27 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     );
   });
 
-  // Keep component scores as raw retrieval diagnostics. Temporal decay and MMR
-  // may adjust the combined score, but cannot cross the exact-identifier tier.
+  const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
+  // Eligibility keeps importance and project affinity, but never ages out.
+  const weighted = applyRetrievalRanking(merged, activeProjects).map((entry) =>
+    Object.assign(entry, {
+      eligibilityScore:
+        entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, activeProjects)
+          : entry.contentScore === 0
+            ? 0
+            : entry.score,
+    }),
+  );
   const decayed = await applyTemporalDecayToHybridResults({
-    results: merged,
+    results: weighted,
     temporalDecay: temporalDecayConfig,
     workspaceDir: params.workspaceDir,
     sessionSourceMtimes: params.sessionSourceMtimes,
     memorySourceMtimes: params.memorySourceMtimes,
     nowMs: params.nowMs,
   });
-  const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
-  const rankable = applyRetrievalRanking(decayed, activeProjects).map((entry) => {
+  const rankable = decayed.map((entry) => {
     // Exact tiers and recall-only LIKE hits keep their public confidence;
     // their private ranking score still includes every weighting pass.
     const rankingScore = entry.score;
@@ -256,28 +270,33 @@ function hybridResultRangeKey(entry: HybridResultRange): string {
 }
 
 export function selectHybridSearchResults<TSource extends HybridSource>(params: {
-  merged: HybridSearchResult<TSource>[];
+  merged: RankedHybridResult<TSource>[];
   keyword: HybridResultRange<TSource>[];
+  vectorCandidates: HybridResultRange<TSource>[];
   maxResults: number;
   minScore: number;
 }): HybridSearchResult<TSource>[] {
-  const strict = params.merged.filter((entry) => entry.score >= params.minScore);
+  const strict = params.merged.filter((entry) => entry.eligibilityScore >= params.minScore);
   const selected = strict.slice(0, params.maxResults);
   if (params.keyword.length === 0 || selected.length === params.maxResults) {
-    return selected;
+    return selected.map(({ eligibilityScore: _eligibilityScore, ...entry }) => entry);
   }
 
   const keywordKeys = new Set(params.keyword.map((entry) => hybridResultRangeKey(entry)));
+  const isLexicalCandidate = (entry: RankedHybridResult<TSource>) =>
+    entry.eligibilityScore >= 0 && keywordKeys.has(hybridResultRangeKey(entry));
   if (strict.length === 0) {
     // Preserve the established all-lexical fallback when every weighted score
     // is below the configured threshold.
     return params.merged
-      .filter((entry) => entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry)))
-      .slice(0, params.maxResults);
+      .filter(isLexicalCandidate)
+      .slice(0, params.maxResults)
+      .map(({ eligibilityScore: _eligibilityScore, ...entry }) => entry);
   }
 
-  // Strict recall owns the result window. MMR-ranked keyword-only hits may use
-  // spare capacity, but must never displace a qualifying result.
+  // Score completion does not turn a keyword-only candidate into a vector
+  // candidate. Preserve its spare-capacity eligibility after enrichment.
+  const vectorKeys = new Set(params.vectorCandidates.map(hybridResultRangeKey));
   const seen = new Set(selected.map((entry) => hybridResultRangeKey(entry)));
   for (const entry of params.merged) {
     if (selected.length === params.maxResults) {
@@ -285,14 +304,14 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
     }
     const key = hybridResultRangeKey(entry);
     if (
-      entry.score < params.minScore &&
-      entry.vectorScore === 0 &&
-      keywordKeys.has(key) &&
+      entry.eligibilityScore < params.minScore &&
+      (entry.vectorScore === 0 || !vectorKeys.has(key)) &&
+      isLexicalCandidate(entry) &&
       !seen.has(key)
     ) {
       seen.add(key);
       selected.push(entry);
     }
   }
-  return selected;
+  return selected.map(({ eligibilityScore: _eligibilityScore, ...entry }) => entry);
 }

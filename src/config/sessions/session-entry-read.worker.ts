@@ -78,7 +78,7 @@ import {
   type SessionRowFactsWorkerResult,
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
-import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 /** Hydrate a newly admitted resident store using the projection lane's native reader. */
 export function readSessionStoreProjection(
@@ -128,8 +128,8 @@ export async function readSessionEntryWorkerRequest(
     const { readSessionTranscriptRuntimeTarget } =
       await import("./session-accessor.transcript-target.js");
     const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        const target = readSessionTranscriptRuntimeTarget(
+      (database) => ({
+        target: readSessionTranscriptRuntimeTarget(
           request.scope,
           {
             keyFormat: request.keyFormat,
@@ -137,16 +137,13 @@ export async function readSessionEntryWorkerRequest(
             continuation: request.continuation,
           },
           database,
-        );
-        return {
-          target,
-          source: captureSessionEntryReadSource(
-            database,
-            undefined,
-            "Session runtime target requires its current durable owner",
-          ),
-        };
-      },
+        ),
+        source: captureSessionEntryReadSource(
+          database,
+          undefined,
+          "Session runtime target requires its current durable owner",
+        ),
+      }),
       { ...request.database, env: request.scope.env },
     );
     return {
@@ -166,53 +163,9 @@ export async function readSessionEntryWorkerRequest(
           }),
     };
   }
-  const [{ loadSessionEntryReadOnlyResultInScope }, { encodeSessionTranscriptWorkerError }] =
-    await Promise.all([
-      import("./session-accessor.sqlite-exact-read.js"),
-      import("./session-history-worker-errors.js"),
-    ]);
-  let source: SessionEntryReadWorkerResult["source"];
-  let facts: SessionEntryReadWorkerResult["facts"];
-  const read = loadSessionEntryReadOnlyResultInScope(
-    {
-      ...request.scope,
-      env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-    },
-    request.continuation,
-    (readSource) => {
-      if (typeof readSource.databaseIdentity !== "string") {
-        throw new Error("Private session entry requires its process-held owner");
-      }
-      source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
-    },
-    (database, sessionKey, projection) => {
-      const selected = readExactSessionEntryFactsInDatabase(
-        database,
-        collectSessionEntryLookupKeys(sessionKey),
-        projection,
-      );
-      const captured = captureSessionEntryReadSource(database, undefined);
-      facts = {
-        kind: "session-exact-entries",
-        ...selected,
-        source: captured,
-        databaseIdentity: {
-          ...readOpenClawAgentDatabaseIdentity(database),
-          identity: captured.databaseIdentity,
-        },
-        lifecycleTimestamps: {},
-      };
-      return selected.entries.find((row) => row.sessionKey === sessionKey.trim())?.entry;
-    },
-  );
-  if (!read.ok) {
-    const readError = encodeSessionTranscriptWorkerError(read.error);
-    if (!readError || readError.kind === "fence") {
-      throw read.error;
-    }
-    return { kind: "session-entry-read", entry: undefined, source, readError };
-  }
-  return { kind: "session-entry-read", entry: read.value, source, facts };
+  // Keep the exact-read owner off the lazy reader import graph.
+  const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
+  return readSessionEntryResult(request);
 }
 
 /** Canonical entry currency reuses parsed facts only at the same native connection revision. */
@@ -474,7 +427,8 @@ export function readExactSessionEntriesWithLifecycle(
               const selectedById = request.selection
                 ? readSessionEntryByIdInDatabase(database, {
                     sessionId: request.selection.sessionId,
-                    projection: "list",
+                    orderBy: request.selection.orderBy,
+                    projection: request.projection === "sharing" ? "list" : "full",
                   })
                 : undefined;
               const selected = request.selection
@@ -608,7 +562,10 @@ export function readExactSessionEntriesWithLifecycle(
                 ...(request.includeParticipantRecords
                   ? {
                       participantRecords: Object.fromEntries(
-                        participantRecordsBySessionKey(database.db, request.sessionKeys),
+                        participantRecordsBySessionKey(
+                          database.db,
+                          request.sessionKeys ?? selected.value.map(({ sessionKey }) => sessionKey),
+                        ),
                       ),
                     }
                   : {}),

@@ -328,12 +328,7 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   const matches = (stat: BigIntStats, expected: string) =>
     expected === databaseFileIdentityKey(stat) ||
     (legacyNumeric && expected === `${Number(stat.dev)}:${Number(stat.ino)}`);
-  if (
-    previous &&
-    (canonical !== previous.databasePath ||
-      !matches(file, previous.databaseIdentity) ||
-      !matches(parent, previous.parentIdentity))
-  ) {
+  if (previous) {
     const changes: string[] = [];
     if (canonical !== previous.databasePath) {
       changes.push(`path (recorded ${previous.databasePath}; current ${canonical})`);
@@ -348,7 +343,9 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
         `parent directory identity (recorded ${previous.parentIdentity}; current ${databaseFileIdentityKey(parent)})`,
       );
     }
-    throw new Error(identityChangedMessage(databasePath, changes));
+    if (changes.length) {
+      throw new Error(identityChangedMessage(databasePath, changes));
+    }
   }
   return Object.freeze({
     databasePath: canonical,

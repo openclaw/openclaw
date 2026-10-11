@@ -55,7 +55,9 @@ import {
 } from "./doctor-update-refusal.js";
 
 export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
-  if (!(params.options.repair === true || params.options.yes === true)) {
+  if (
+    !(params.options.repair === true || params.options.yes === true || params.interactiveRepair)
+  ) {
     return undefined;
   }
   const env = { ...process.env, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
@@ -65,7 +67,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     ? resolveUpdateParentGatewayActivation(env)
     : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
-  // ownership for every explicit repair before running those inspections.
+  // ownership for every admitted repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
   let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
@@ -183,6 +185,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         }
       }
       if (
+        // Custody consent restores our own stop; it does not authorize starting
+        // a service the operator had already stopped. Explicit repair retains recovery.
+        (params.interactiveRepair &&
+          params.options.repair !== true &&
+          params.options.yes !== true) ||
         resolveDoctorRepairMode(params.options).updateInProgress ||
         before.offline !== true ||
         verdict?.kind !== "owned" ||

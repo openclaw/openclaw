@@ -306,6 +306,7 @@ it("uses generation metadata only after its schema version admits it", () => {
 });
 
 it.each([
+  { operation: "consume", failure: "inspection" },
   { operation: "consume", failure: "full" },
   { operation: "consume", failure: "rollback" },
   { operation: "clear", failure: "full" },
@@ -313,13 +314,21 @@ it.each([
 ] as const)("preserves the original $failure failure during receipt $operation", (params) => {
   const fixture = createFixture();
   const before = readOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env);
-  failReceiptWrite(
-    fixture.storePath,
-    params.operation === "consume" ? "UPDATE" : "DELETE",
-    params.failure,
-  );
-  const execute = kyselySync.executeSqliteQuerySync;
   let primaryError: unknown;
+  if (params.failure === "inspection") {
+    primaryError = Object.assign(new Error("Receipt inspection refused"), { code: "EACCES" });
+    vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
+      throw primaryError;
+    });
+    vi.spyOn(fs, "existsSync").mockReturnValueOnce(false);
+  } else {
+    failReceiptWrite(
+      fixture.storePath,
+      params.operation === "consume" ? "UPDATE" : "DELETE",
+      params.failure,
+    );
+  }
+  const execute = kyselySync.executeSqliteQuerySync;
   vi.spyOn(kyselySync, "executeSqliteQuerySync").mockImplementation((...args) => {
     try {
       return execute(...args);
@@ -339,18 +348,24 @@ it.each([
     observed = error;
   }
   expect(primaryError).toMatchObject(
-    params.failure === "full" ? { errcode: 13 } : { message: "receipt write failed" },
+    params.failure === "inspection"
+      ? { code: "EACCES" }
+      : params.failure === "full"
+        ? { errcode: 13 }
+        : { message: "receipt write failed" },
   );
   expect(observed).toBe(primaryError);
+  vi.restoreAllMocks();
   expect(readOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env)).toEqual(before);
 
-  vi.restoreAllMocks();
-  const database = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
-  try {
-    expect(database.prepare("SELECT * FROM failure_payload").all()).toEqual([]);
-    database.exec("DROP TRIGGER fail_receipt");
-  } finally {
-    database.close();
+  if (params.failure !== "inspection") {
+    const database = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
+    try {
+      expect(database.prepare("SELECT * FROM failure_payload").all()).toEqual([]);
+      database.exec("DROP TRIGGER fail_receipt");
+    } finally {
+      database.close();
+    }
   }
   clearOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env);
   expect(readOpenClawAgentIntegrityVerification(fixture.pathname, fixture.env)).toBeUndefined();

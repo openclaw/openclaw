@@ -40,6 +40,7 @@ import {
   openOpenClawStateReadConnection,
   type OpenClawStateReadConnection,
 } from "./openclaw-state-db-read-connection.js";
+import { admitStateReadSchemaFacts } from "./openclaw-state-db-read-schema.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import {
   executeExistingOpenClawStateRead,
@@ -128,25 +129,13 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
         unregister();
       },
     };
-    try {
-      unregister = registerOpenClawStateDatabaseAsyncResource({
-        async close(identity) {
-          if (!identity || identity.key === key || identity.canonicalPath === canonicalPath) {
-            opened.close();
-          }
-        },
-      });
-    } catch (error) {
-      try {
-        opened.close();
-      } catch (cleanupError) {
-        throwSqliteLifecycleErrors(
-          [error, cleanupError],
-          "Current shared-state reader registration and cleanup failed",
-        );
-      }
-      throw error;
-    }
+    unregister = registerOpenClawStateDatabaseAsyncResource({
+      async close(identity) {
+        if (!identity || identity.key === key || identity.canonicalPath === canonicalPath) {
+          opened.close();
+        }
+      },
+    });
     currentReaders.set(physicalKey, opened);
     reader = opened;
   }
@@ -208,9 +197,7 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
     return {
       writeRevision() {
         assertCurrent();
-        const revision = readSqliteDatabaseWriteRevision(retained.connection.database.db);
-        assertCurrent();
-        return revision;
+        return readSqliteDatabaseWriteRevision(retained.connection.database.db);
       },
       read<T>(operation: (database: OpenClawStateReadOnlyDatabase) => T): T {
         assertCurrent();
@@ -229,11 +216,7 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
               "require-proof",
             ),
           );
-        const result = context.runInCapturedSchemaScope
-          ? context.runInCapturedSchemaScope(read)
-          : read();
-        assertCurrent();
-        return result;
+        return context.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
       },
       dispose() {
         try {
@@ -339,7 +322,6 @@ export function createOpenClawStateCurrentWarmReader<T>(
               operation,
               openStateSchemaReadAdmission,
             );
-            assertCurrent();
             retained.observe();
             return result;
           },
@@ -378,7 +360,6 @@ const currentReaderSchemaAdmissions = new WeakMap<
     facts: SqliteSchemaFacts;
     existingSchema: boolean;
     admission?: OpenClawStateSchemaReadAdmission;
-    legacyAdmission: boolean;
   }
 >();
 
@@ -394,21 +375,12 @@ function runOpenClawStateCurrentReadConnection<T>(
   const errors: unknown[] = [];
   let result!: T;
   try {
-    const previous = currentReaderSchemaAdmissions.get(db);
-    // Physical schema admission is shared across current reader handles.
-    const facts =
-      previous && !previous.legacyAdmission
-        ? runSqliteReadOperationSync(db, () => getAdmittedSqliteSchemaFacts(db))
-        : undefined;
-    if (
-      !previous ||
-      previous.admission !== openStateSchemaReadAdmission ||
-      previous.legacyAdmission ||
-      previous.facts !== facts
-    ) {
-      closeAdmission = openStateSchemaReadAdmission?.(db);
-    }
+    // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
+    closeAdmission = openStateSchemaReadAdmission?.(db);
     const existingSchema = isExistingOpenClawStateSchema(pathname, db);
+    if (openStateSchemaReadAdmission) {
+      admitStateReadSchemaFacts(db, pathname);
+    }
     const admit = () => {
       const current = getAdmittedSqliteSchemaFacts(db);
       const accepted = currentReaderSchemaAdmissions.get(db);
@@ -428,7 +400,6 @@ function runOpenClawStateCurrentReadConnection<T>(
           facts: admitted,
           existingSchema,
           admission: openStateSchemaReadAdmission,
-          legacyAdmission: closeAdmission !== undefined,
         });
       }
     };
@@ -440,8 +411,6 @@ function runOpenClawStateCurrentReadConnection<T>(
       }
       return value;
     });
-    // Local migration publication can replace the admitted facts during the read.
-    runSqliteReadOperationSync(db, admit);
   } catch (error) {
     errors.push(error);
   }

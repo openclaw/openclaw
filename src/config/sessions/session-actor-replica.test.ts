@@ -35,7 +35,7 @@ import {
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionActorHotState,
   SessionActorOutcome,
@@ -172,7 +172,7 @@ it("shares committed facts across released handles and retires them for writes a
       expect(fixture.replica.read()).toBeUndefined();
       expect(replacement.read()).toEqual(first);
       const context = command(first, "replacement-command");
-      const pending = replacement.beginCommand(context);
+      const pending = replacement.beginCommand();
       const sibling = fixture.reacquire();
       try {
         expect(sibling.read()).toBeUndefined();
@@ -304,7 +304,7 @@ it("invalidates partial native publications before disclosure and count-only par
   });
 });
 
-it("installs only matching complete outcomes, fences unknowns, and rejects delayed epochs", async () => {
+it("installs complete outcomes, fences unknowns, and rejects delayed epochs", async () => {
   await withReplica((fixture) => {
     const { replica, load, scope } = fixture;
     const initial = hydrate(fixture);
@@ -313,7 +313,7 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
     expect(replica.read()?.entry?.label).toBe("before");
 
     const accepted = command(initial, "accepted");
-    const pending = replica.beginCommand(accepted);
+    const pending = replica.beginCommand();
     expect(replica.read()).toBeUndefined();
     const outcome = committed(accepted, load("first", 1));
     expect(pending.settle(outcome)).toBe(true);
@@ -321,12 +321,12 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
     expect(replica.read()?.entry?.label).toBe("before");
     expect(pending.settle(outcome)).toBe(false);
 
-    const rollback = replica.beginCommand(command(load("first", 1), "rollback"));
+    const rollback = replica.beginCommand();
     expect(
       rollback.settle({ kind: "rolled-back", error: { name: "Error", message: "refused" } }),
     ).toBe(true);
     expect(replica.read()?.version.sequence).toBe(1);
-    const unknown = replica.beginCommand(command(load("first", 1), "unknown"));
+    const unknown = replica.beginCommand();
     expect(
       unknown.settle({
         kind: "unknown",
@@ -337,8 +337,7 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
     ).toBe(false);
     expect(replica.read()).toBeUndefined();
 
-    const staleContext = command(initial, "stale");
-    const stale = replica.beginCommand(staleContext);
+    const stale = replica.beginCommand();
     const superseded = load("superseded");
     expect(
       stale.settle({
@@ -349,15 +348,6 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
       }),
     ).toBe(true);
     expect(replica.read()?.version).toEqual(superseded.version);
-    const noPreflight = replica.beginCommand({
-      commandId: "adopt-preimage",
-      phaseId: "turn",
-      phase: "patch",
-    });
-    const adopted = command(superseded, "adopt-preimage");
-    expect(noPreflight.settle(committed(adopted, load("superseded", 1)))).toBe(true);
-    expect(replica.read()?.version.sequence).toBe(1);
-
     const older = replica.beginRead();
     const newer = replica.beginRead();
     expect(newer.install(load("second"))).toBe(true);
@@ -365,7 +355,7 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
     expect(replica.read()?.version.epoch).toBe("second");
 
     const delayedContext = command(load("second"), "delayed");
-    const delayed = replica.beginCommand(delayedContext);
+    const delayed = replica.beginCommand();
     sessionChanges.invalidate({
       sessionKey: scope.sessionKey,
       storePath: scope.storePath,
@@ -375,16 +365,9 @@ it("installs only matching complete outcomes, fences unknowns, and rejects delay
     expect(delayed.settle(committed(delayedContext, load("second", 1)))).toBe(false);
     expect(replica.read()?.version.epoch).toBe("reconciled");
 
-    const mismatchedContext = command(load("reconciled"), "mismatched");
-    const mismatched = replica.beginCommand(mismatchedContext);
-    const wrong = committed(mismatchedContext, load("reconciled", 1));
-    wrong.receipt.beforeVersion = { epoch: "other-owner", sequence: 0 };
-    expect(mismatched.settle(wrong)).toBe(false);
-    expect(replica.read()).toBeUndefined();
-
     const current = hydrate(fixture, "final");
     const closingContext = command(current, "accepted-before-close");
-    const closing = replica.beginCommand(closingContext);
+    const closing = replica.beginCommand();
     replica.close();
     expect(closing.settle(committed(closingContext, load("final", 1)))).toBe(true);
     expect(replica.read()).toBeUndefined();

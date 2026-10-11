@@ -187,6 +187,16 @@ function serviceLane(name: string, options: LaneOptions = {}) {
   });
 }
 
+function codexHarnessLane(name: string, envPrefix: string) {
+  return liveLane(name, {
+    command: liveDockerScriptCommand("test-live-codex-harness-docker.sh", envPrefix),
+    cacheKey: "codex-harness",
+    provider: "openai",
+    resources: ["npm"],
+    timeoutMs: LIVE_ACP_TIMEOUT_MS,
+  });
+}
+
 const bundledPluginInstallUninstallLanes = Array.from(
   { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
   (_, index) =>
@@ -510,26 +520,11 @@ export const mainLanes: DockerE2eLane[] = [
 
 export const tailLanes: DockerE2eLane[] = [
   serviceLane("openai-web-search-minimal", { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 }),
-  liveLane("live-codex-harness", {
-    command: liveDockerScriptCommand(
-      "test-live-codex-harness-docker.sh",
-      CODEX_HARNESS_API_KEY_ENV,
-    ),
-    cacheKey: "codex-harness",
-    provider: "openai",
-    resources: ["npm"],
-    timeoutMs: LIVE_ACP_TIMEOUT_MS,
-  }),
-  liveLane("live-codex-media-path", {
-    command: liveDockerScriptCommand(
-      "test-live-codex-harness-docker.sh",
-      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE=1 OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0",
-    ),
-    cacheKey: "codex-harness",
-    provider: "openai",
-    resources: ["npm"],
-    timeoutMs: LIVE_ACP_TIMEOUT_MS,
-  }),
+  codexHarnessLane("live-codex-harness", CODEX_HARNESS_API_KEY_ENV),
+  codexHarnessLane(
+    "live-codex-media-path",
+    "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE=1 OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0",
+  ),
   liveLane("live-subagent-announce", {
     command: liveDockerScriptCommand("test-live-subagent-announce-docker.sh"),
     cacheKey: "subagent-announce",
@@ -537,16 +532,10 @@ export const tailLanes: DockerE2eLane[] = [
     resources: ["npm"],
     timeoutMs: 25 * 60 * 1000,
   }),
-  liveLane("live-codex-bind", {
-    command: liveDockerScriptCommand(
-      "test-live-codex-harness-docker.sh",
-      `${CODEX_HARNESS_API_KEY_ENV} OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts`,
-    ),
-    cacheKey: "codex-harness",
-    provider: "openai",
-    resources: ["npm"],
-    timeoutMs: LIVE_ACP_TIMEOUT_MS,
-  }),
+  codexHarnessLane(
+    "live-codex-bind",
+    `${CODEX_HARNESS_API_KEY_ENV} OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts`,
+  ),
   liveLane("live-codex-npm-plugin", {
     command: liveDockerScriptCommand("e2e/codex-npm-plugin-live-docker.sh"),
     cacheKey: "codex-npm-plugin",
