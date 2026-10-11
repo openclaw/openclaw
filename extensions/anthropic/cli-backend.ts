@@ -178,7 +178,8 @@ export function buildAnthropicCliBackend(
     nativeToolMode: "selectable",
     hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
-    transformSystemPrompt: ({ systemPrompt }) => appendClaudeCliToolNamingGuidance(systemPrompt),
+    transformSystemPrompt: ({ systemPrompt, openClawMcpToolNames }) =>
+      appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
