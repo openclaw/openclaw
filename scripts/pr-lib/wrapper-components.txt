@@ -263,6 +263,7 @@ src/agents/model-auth-policy.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
+src/agents/model-cost-normalization.ts
 src/agents/model-extra-params.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
