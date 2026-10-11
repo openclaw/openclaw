@@ -62,18 +62,16 @@ export type { PersonalGitHubSessionActionV2 } from "../gateway/github-personal-p
 export async function prepareGitHubPublicationRequesterV2(
   ...args: Parameters<typeof PrepareGitHubPublicationRequester>
 ): ReturnType<typeof PrepareGitHubPublicationRequester> {
-  const { prepareGitHubPublicationRequesterV2: prepare } =
-    await import("../gateway/github-publication-requester.js");
-  return await prepare(...args);
+  const runtime = await import("../gateway/github-publication-requester.js");
+  return runtime.prepareGitHubPublicationRequesterV2(...args);
 }
 
 /** Prepare personal publication authority and release it when the handler settles. */
 export async function preparePersonalGitHubSessionActionV2(
   ...args: Parameters<typeof PreparePersonalGitHubSessionAction>
 ): ReturnType<typeof PreparePersonalGitHubSessionAction> {
-  const { preparePersonalGitHubSessionActionV2: prepare } =
-    await import("../gateway/server-methods/github-personal-authorization.js");
-  return await prepare(...args);
+  const runtime = await import("../gateway/server-methods/github-personal-authorization.js");
+  return runtime.preparePersonalGitHubSessionActionV2(...args);
 }
 
 export {

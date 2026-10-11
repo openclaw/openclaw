@@ -68,18 +68,18 @@ describe("GitHub publication transcript reporting", () => {
       const loadRuntime = vi.fn(async () => {
         throw new Error("Private reports must not select native storage");
       });
-      const markReported = vi.fn();
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
       const sql = observeHostDataSql();
       try {
         await withIncognitoSessionBinding({ actor }, async () => {
           await reportGitHubPublicationTranscript(
             loadRuntime,
-            { markReported },
+            { markReportedAsync },
             { ...session, result },
           );
           await reportGitHubPublicationTranscript(
             loadRuntime,
-            { markReported },
+            { markReportedAsync },
             { ...session, result },
           );
           const events = await loadTranscriptEvents({
@@ -96,7 +96,7 @@ describe("GitHub publication transcript reporting", () => {
           );
           expect(reports).toHaveLength(1);
           expect(JSON.stringify(reports[0])).toContain(result.url);
-          expect(markReported).toHaveBeenCalledTimes(2);
+          expect(markReportedAsync).toHaveBeenCalledTimes(2);
           expect(loadRuntime).not.toHaveBeenCalled();
           expect(sql.queries).toEqual([]);
         });
