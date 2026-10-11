@@ -419,7 +419,10 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
             }
           }}
         >
-          <form class="exec-approval-card session-group-defaults" onSubmit={handleSubmit}>
+          <form
+            class="exec-approval-card session-group-defaults"
+            onSubmit={(event) => void handleSubmit(event)}
+          >
             <div class="exec-approval-header">
               <div>
                 <div class="exec-approval-title">
