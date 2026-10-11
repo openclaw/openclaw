@@ -625,13 +625,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it.each(["model-output-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
+  it.each(["cap-model-limit", "cap-staged-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
     "summarizes with provider-prepared model settings: %s",
     async (mode) => {
       mockSummarizeCompactionHistory.mockResolvedValue("mock summary");
       const model = createAnthropicModelFixture(
-        mode === "model-output-limit"
-          ? { contextWindow: 1_000_000, maxTokens: 128_000 }
+        mode.startsWith("cap-")
+          ? { contextWindow: 1_000_000, maxTokens: mode === "cap-model-limit" ? 4_000 : 128_000 }
           : mode === "copilot-headers"
             ? {
                 id: "gpt-5.4",
@@ -660,12 +660,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
             },
       );
       const event = createCompactionEvent(
-        mode === "model-output-limit"
+        mode.startsWith("cap-")
           ? {
               preparation: {
                 messagesToSummarize: [userMessage("large history", 1)],
                 tokensBefore: 250_000,
-                settings: { reserveTokens: 240_000 },
+                settings: { reserveTokens: mode === "cap-model-limit" ? 8_000 : 80_000 },
               },
             }
           : { messageText: "summarize me", tokensBefore: 1000 },
@@ -676,8 +676,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
       );
       expect(requireRecord(result).cancel).not.toBe(true);
       const call = mockSummarizeCompactionHistory.mock.lastCall?.[0];
-      if (mode === "model-output-limit") {
-        expect(call?.reserveTokens).toBe(128_000);
+      if (mode.startsWith("cap-")) {
+        expect(call?.reserveTokens).toBe(mode === "cap-model-limit" ? 4_000 : 20_000);
       } else if (mode === "copilot-headers") {
         for (const [name, value] of Object.entries(headers)) {
           expect(call?.headers?.[name]).toBe(value);
