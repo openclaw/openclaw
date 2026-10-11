@@ -232,6 +232,7 @@ describe("workspace .env blocklist completeness", () => {
           "CLAWHUB_TOKEN",
           "CLAWHUB_AUTH_TOKEN",
           "CLAWHUB_CONFIG_PATH",
+          "CLAW_1PASSWORD_OP",
           "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
@@ -332,6 +333,10 @@ describe("workspace .env blocklist completeness", () => {
           "STATE_DIRECTORY",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
+          "VAULT_ADDR",
+          "VAULT_NAMESPACE",
+          "VAULT_TOKEN",
+          "VAULT_TOKEN_FILE",
         ];
 
         await writeEnvFile(
