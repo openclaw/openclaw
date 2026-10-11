@@ -384,9 +384,13 @@ const reviewedOperations = new Map([
           "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
       },
       {
-        tier: "T2",
-        operations: ["createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart"],
-        evidence: "Only server-worker-environment-startup.ts:177 clears restart claims",
+        tier: "T1",
+        operations: [
+          "createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart",
+          "clearLocalTurnClaimsInDatabase",
+        ],
+        evidence:
+          "The released placement-store.ts clearLocalTurnClaimsAfterRestart facade retains synchronous native access until the next Plugin SDK major; bundled startup awaits the placement-lifecycle.worker.ts clearLocalTurnClaims operation. The shared kernel remains native compatibility debt.",
       },
     ],
   ],

@@ -544,7 +544,7 @@ function parseUpdateFileChunk(
     );
   }
 
-  if (startIndex >= lines.length) {
+  if (startIndex >= lines.length || lines[startIndex] === EOF_MARKER) {
     throw new Error(
       `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
     );
@@ -561,11 +561,6 @@ function parseUpdateFileChunk(
   let parsedLines = 0;
   for (const line of lines.slice(startIndex)) {
     if (line === EOF_MARKER) {
-      if (parsedLines === 0) {
-        throw new Error(
-          `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
-        );
-      }
       chunk.isEndOfFile = true;
       parsedLines += 1;
       break;

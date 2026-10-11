@@ -259,18 +259,13 @@ export function resolveModelContextTokenProjectionFromCache(
         configuredModel,
         normalizePositiveContextTokens,
       );
-    if (effectiveConfiguredTokens !== undefined) {
-      return { contextTokens: effectiveConfiguredTokens, authoredContextTokens };
+    const configuredTokens = effectiveConfiguredTokens ?? fixedContextWindow;
+    if (configuredTokens !== undefined) {
+      return { contextTokens: configuredTokens, authoredContextTokens };
     }
-    if (fixedContextWindow !== undefined) {
-      return { contextTokens: fixedContextWindow, authoredContextTokens };
-    }
-    const providerResult = lookupContextTokens(
-      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-    );
-    const providerWindow = lookupContextWindow(
-      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-    );
+    const providerKey = providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model);
+    const providerResult = lookupContextTokens(providerKey);
+    const providerWindow = lookupContextWindow(providerKey);
     const discoveredCap = minPositiveContextTokens(
       providerResult,
       normalizePositiveContextTokens(params.modelContextTokens),
