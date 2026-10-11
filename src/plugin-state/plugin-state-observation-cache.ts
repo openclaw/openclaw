@@ -39,11 +39,11 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservation
       }
     } else if (change.kind === "committed") {
       for (const [key, fact] of change.receipt.facts) {
-        const cacheKey = JSON.stringify([identity, key]);
+        const entryKey = JSON.stringify([identity, key]);
         if (fact.kind === "unknown") {
-          entries.delete(cacheKey);
+          entries.delete(entryKey);
         } else {
-          entries.set(cacheKey, {
+          entries.set(entryKey, {
             identity,
             loaded: true,
             row: fact.kind === "postimage" ? fact.value : undefined,
@@ -68,7 +68,7 @@ export function readPluginStateObservationCache(identity: string, key: Key) {
     return undefined;
   }
   const row = entry.row;
-  return { row: row?.expires_at != null && Number(row.expires_at) <= Date.now() ? undefined : row };
+  return { row: row?.expires_at != null && row.expires_at <= Date.now() ? undefined : row };
 }
 
 export function preparePluginStateObservationCacheRead(identity: string, key: Key) {

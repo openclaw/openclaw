@@ -85,8 +85,6 @@ function SearchPageContent() {
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
   const [query, setQuery] = createSignal(t("searchPage.queryDefault"));
-  let generation = 0;
-  let testGeneration = 0;
   let selectedAgent = "";
   let configRevision = "";
   let disposed = false;
@@ -132,27 +130,20 @@ function SearchPageContent() {
   const stopSelection = selectionProjection.subscribe(() => untrack(syncAgent));
   onCleanup(() => {
     disposed = true;
-    generation++;
-    testGeneration++;
     stopRuntime();
     stopSelection();
   });
 
   function invalidateTest() {
     testingActive = false;
-    testGeneration++;
     setTestResult(null);
     setTestError("");
-    setTesting(false);
   }
 
   function invalidate() {
-    generation++;
     invalidateTest();
     setResult(null);
     setError("");
-    loadingActive = false;
-    setLoading(false);
     setModels([]);
   }
 
@@ -199,16 +190,18 @@ function SearchPageContent() {
 
   async function load(modelValue = model()) {
     const scope = gateway.capture();
-    if (!scope) {
+    if (!scope || loadingActive) {
       return;
     }
-    const requestGeneration = ++generation;
     invalidateTest();
     loadingActive = true;
     setLoading(true);
     setError("");
-    const current = () => !disposed && requestGeneration === generation && gateway.isCurrent(scope);
     const selected = selection(modelValue);
+    const current = () =>
+      !disposed &&
+      gateway.isCurrent(scope) &&
+      JSON.stringify(selection()) === JSON.stringify(selected);
     if (canEdit()) {
       const runtime = context.runtimeConfig;
       void runtime
@@ -223,12 +216,12 @@ function SearchPageContent() {
       if (!current()) {
         return;
       }
-      setModels(catalog?.models ?? []);
       const status = await scope.client.request<WebSearchStatusResult>(
         "webSearch.status",
         selected,
       );
       if (current()) {
+        setModels(catalog?.models ?? []);
         setResult(status);
         if (!status.providers.some((provider) => provider.id === setupProvider())) {
           const preferred = status.provider ?? status.route.provider;
@@ -241,13 +234,16 @@ function SearchPageContent() {
         }
       }
     } catch (cause) {
-      if (current()) {
+      if (!disposed) {
         setError(formatUiError(cause));
       }
     } finally {
-      if (current()) {
-        loadingActive = false;
+      loadingActive = false;
+      if (!disposed) {
         setLoading(false);
+        if (!current() && gateway.connected) {
+          void load();
+        }
       }
     }
   }
@@ -289,14 +285,12 @@ function SearchPageContent() {
     }
   }
 
-  async function test(scope: GatewayConnectionScope | null, statusGeneration: number) {
+  async function test(scope: GatewayConnectionScope | null) {
     const queryText = (queryInput?.value ?? query()).trim();
     const runtime = context.runtimeConfig;
-    const revision = searchConfigRevision(runtime.state);
     if (
       !scope ||
       !gateway.isCurrent(scope) ||
-      statusGeneration !== generation ||
       !canEdit() ||
       !queryText ||
       queryText.length > 500 ||
@@ -307,21 +301,18 @@ function SearchPageContent() {
     ) {
       return;
     }
-    const requestGeneration = ++testGeneration;
+    const selected = selection();
     const current = () =>
       !disposed &&
-      requestGeneration === testGeneration &&
       gateway.isCurrent(scope) &&
-      context.runtimeConfig === runtime &&
-      isSearchConfigSettled(runtime.state) &&
-      searchConfigRevision(runtime.state) === revision;
+      JSON.stringify(selection()) === JSON.stringify(selected);
     testingActive = true;
     setTesting(true);
     setTestResult(null);
     setTestError("");
     try {
       const response = await scope.client.request<WebSearchTestResult>("webSearch.test", {
-        ...selection(),
+        ...selected,
         ...(result()?.testProvider ? { providerId: result()!.testProvider!.id } : {}),
         query: queryText,
       });
@@ -333,8 +324,8 @@ function SearchPageContent() {
         setTestError(formatUiError(cause));
       }
     } finally {
-      if (current()) {
-        testingActive = false;
+      testingActive = false;
+      if (!disposed) {
         setTesting(false);
       }
     }
@@ -551,7 +542,7 @@ function SearchPageContent() {
                             }}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
-                                void test(renderScope, generation);
+                                void test(renderScope);
                               }
                             }}
                           />
@@ -571,7 +562,7 @@ function SearchPageContent() {
                               !isSearchConfigSettled(configState()) ||
                               !connected()
                             }
-                            onClick={() => void test(renderScope, generation)}
+                            onClick={() => void test(renderScope)}
                           >
                             {testing()
                               ? t("searchPage.testing")

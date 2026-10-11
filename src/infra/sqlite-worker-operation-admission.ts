@@ -18,7 +18,6 @@ import {
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
   withSqliteDatabaseAdmissionExchange,
-  type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import { SqliteWorkerAdmissionTimeoutError, SqliteWorkerError } from "./sqlite-worker-contract.js";
@@ -296,7 +295,10 @@ function createOperationAdmission(
             }
           }
         }
-        message.port.postMessage(captureSqliteDatabaseAdmissions(databaseAdmissionCursor), []);
+        const scope =
+          message.location === undefined ? undefined : { location: message.location, admissions };
+        const reply = captureSqliteDatabaseAdmissions(databaseAdmissionCursor, scope);
+        message.port.postMessage(reply, []);
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
         recordFailure(error, "protocol");
@@ -603,26 +605,19 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
   return currentAdmission.run(scope, () =>
     withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
       if (!scope.active) {
-        if (!create) {
-          return exchangeSqliteDatabaseLifetimeAdmissions(admissions, location);
+        const upstream = getSqliteDatabaseAdmissionUpstream();
+        if (create || !upstream || upstream.closed) {
+          throw new SqliteWorkerError(
+            "SQLite facts require their retained admission",
+            "unavailable",
+          );
         }
-        throw new SqliteWorkerError("SQLite facts require their retained admission", "unavailable");
+        // Retained cleanup may publish facts; creation still needs the live grant.
+        return exchangeDatabaseAdmissions(upstream.port, admissions, location);
       }
       return exchangeSqliteDatabaseAdmissions(scope.port, admissions, location, create);
     }, operation),
   );
-}
-
-/** Retained cleanup may publish facts after its operation ends; creation still needs a live grant. */
-function exchangeSqliteDatabaseLifetimeAdmissions(
-  admissions: SqliteDatabaseAdmissions,
-  location?: string,
-): SqliteDatabaseAdmissions {
-  const upstream = getSqliteDatabaseAdmissionUpstream();
-  if (!upstream || upstream.closed) {
-    throw new SqliteWorkerError("SQLite facts require their retained admission", "unavailable");
-  }
-  return exchangeDatabaseAdmissions(upstream.port, admissions, location);
 }
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */
@@ -698,23 +693,6 @@ export function requestSqliteWorkerOperationAdmission(
         : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;
     throw refusal;
-  }
-}
-
-/** A native waiter may block MAIN; this interval must complete without host messages. */
-export function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
-  const scope = currentAdmission.getStore();
-  if (!scope?.active || scope.owner.sourceReservations) {
-    throw new SqliteWorkerError(
-      "SQLite source fence requires exclusive operation custody",
-      "closed",
-    );
-  }
-  scope.owner.sourceReservations = true;
-  try {
-    return operation();
-  } finally {
-    delete scope.owner.sourceReservations;
   }
 }
 
