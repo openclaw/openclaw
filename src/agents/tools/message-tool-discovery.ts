@@ -44,6 +44,8 @@ export type MessageToolDiscoveryParams = {
   agentId?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  /** Host-redeemed scheduled turn, including trusted jobs without account scoping. */
+  isScheduledRun?: boolean;
   /** Host-redeemed scheduled account; never changes the current delivery context. */
   scheduledAccountScope?: { channels?: readonly string[]; accountId: string };
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
@@ -267,8 +269,7 @@ function resolveMessageToolDiscoveryChannels(params: MessageToolDiscoveryParams)
   // also retain the configured union; channel sessions only need their bindings.
   return listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog)
     .filter(
-      (plugin) =>
-        params.scheduledAccountScope || boundChannels.size === 0 || boundChannels.has(plugin.id),
+      (plugin) => params.isScheduledRun || boundChannels.size === 0 || boundChannels.has(plugin.id),
     )
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

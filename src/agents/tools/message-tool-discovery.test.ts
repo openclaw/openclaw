@@ -484,6 +484,7 @@ describe("scheduled account discovery", () => {
         cfg,
         currentChannelProvider: origin === "external" ? "slack" : undefined,
         currentAccountId: delivery,
+        isScheduledRun: true,
         scheduledAccountScope: {
           ...(origin === "external" ? { channels: ["slack"] } : {}),
           accountId: owner,
@@ -534,6 +535,7 @@ describe("scheduled account discovery", () => {
       const baselineContexts = foreignContexts.splice(0);
       const scoped = discover({
         ...params,
+        isScheduledRun: true,
         scheduledAccountScope: { channels: ["slack"], accountId: "ops" },
       });
 

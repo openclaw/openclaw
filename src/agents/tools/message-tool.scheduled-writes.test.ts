@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -14,9 +15,73 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createMessageTool } from "./message-tool-execution.js";
+import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
 
 const target = "channel:100000000000000001";
+
+it.each([
+  { scheduled: true, currentChannelProvider: "signal", actions: ["poll", "send"] },
+  { scheduled: true, currentChannelProvider: undefined, actions: ["broadcast", "poll", "send"] },
+  { scheduled: false, currentChannelProvider: "signal", actions: ["send"] },
+  { scheduled: false, currentChannelProvider: undefined, actions: ["broadcast", "send"] },
+])(
+  "keeps configured-channel schemas only for admitted scheduled turns ($scheduled, $currentChannelProvider)",
+  async ({ scheduled, currentChannelProvider, actions }) => {
+    const identity = {
+      agentId: "main",
+      runId: "scheduled-schema-run",
+      sessionKey: "agent:main:cron:scheduled-schema:run:fixture",
+    };
+    const channels: PreparedMessageToolCatalog["channels"] = [
+      {
+        id: "signal",
+        reconcilesUnknownSend: false,
+        actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+      },
+      {
+        id: "discord",
+        reconcilesUnknownSend: false,
+        actions: { describeMessageTool: () => ({ actions: ["send", "poll"] }) },
+      },
+    ];
+    const config: OpenClawConfig = {
+      bindings: [{ agentId: "main", match: { channel: "signal" } }],
+      channels: { signal: { enabled: true }, discord: { enabled: true } },
+    };
+    const capability = scheduled
+      ? mintMessageActionTurnCapability({
+          ...identity,
+          scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent() {} },
+        })
+      : undefined;
+    try {
+      const tool = await createMessageToolAsync({
+        config,
+        agentId: identity.agentId,
+        agentSessionKey: identity.sessionKey,
+        runId: identity.runId,
+        currentChannelProvider,
+        messageActionTurnCapability: capability,
+        admitScheduledInvocation: () => config,
+        preparedMessageToolCatalog: {
+          version: 1,
+          channels,
+          getChannel: (id) => channels.find((channel) => channel.id === id),
+        },
+      });
+      expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
+      for (const property of ["pollQuestion", "pollOption", "pollMulti"]) {
+        if (scheduled) {
+          expect(tool.parameters).toHaveProperty(`properties.${property}`);
+        } else {
+          expect(tool.parameters).not.toHaveProperty(`properties.${property}`);
+        }
+      }
+    } finally {
+      revokeMessageActionTurnCapability(capability);
+    }
+  },
+);
 
 it("separates generic sends, source reads, and simulated writes", async () => {
   const registry = captureActivePluginRegistrySnapshot();

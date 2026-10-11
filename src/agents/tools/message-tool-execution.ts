@@ -157,6 +157,7 @@ function* createMessageToolSteps(
           currentThreadTs,
           currentMessageId: options.currentMessageId,
           currentAccountId: agentAccountId,
+          isScheduledRun: turnAuthority.isScheduledRun,
           scheduledAccountScope: turnAuthority.scheduledAccountScope,
           sessionKey: options.agentSessionKey,
           sessionId: options.sessionId,
