@@ -16,6 +16,7 @@ import {
   clearCronJobActive,
   hasActiveCronJobs,
   hasActiveCronJobsExceptMarkers,
+  hasActiveCronJobsForAgentExceptMarkers,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
@@ -418,5 +419,26 @@ describe("active cron schedule ownership", () => {
     for (const [index, marker] of markers.entries()) {
       expect(marker?.scheduleMutated).toBe(index % 2 === 0 ? true : undefined);
     }
+  });
+});
+
+describe("agent-scoped active cron accounting", () => {
+  it("exempts the owning agent's own marker but not a bystander's", () => {
+    const own = expectDefined(markCronJobActive("own-job", { agentId: "agent-a" }));
+    const other = expectDefined(markCronJobActive("other-job", { agentId: "agent-b" }));
+
+    // Each agent discounts only its own coalesced wake.
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-a", [own])).toBe(false);
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-b", [other])).toBe(false);
+    // Agent A's marker is no exemption for agent B, whose own run still competes.
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-b", [own])).toBe(true);
+  });
+
+  it("discounts every marker of one coalesced wake for its own agent", () => {
+    const first = expectDefined(markCronJobActive("wake-1", { agentId: "agent-a" }));
+    const second = expectDefined(markCronJobActive("wake-2", { agentId: "agent-a" }));
+
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-a", [first, second])).toBe(false);
+    expect(hasActiveCronJobsForAgentExceptMarkers("agent-a", [first])).toBe(true);
   });
 });

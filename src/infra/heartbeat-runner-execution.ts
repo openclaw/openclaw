@@ -23,8 +23,8 @@ import {
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  hasActiveCronJobs,
-  hasActiveCronJobsExceptMarkers,
+  hasActiveCronJobsForAgent,
+  hasActiveCronJobsForAgentExceptMarkers,
   listCronHeartbeatWaitOwners,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
@@ -218,11 +218,26 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
 
   // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
   // Keep unrelated Cron work and all CronNested work as busy signals.
+  //
+  // The marker term is scoped to this agent, matching the agent-scoped reply-run gate
+  // below. A cron run against agent X still suppresses agent X's scheduled heartbeats;
+  // only cross-agent suppression is dropped, so a bystander agent is not held back by
+  // another agent's automation. The reply-run gate below already had this shape, so the
+  // cron gate looked unintentionally global.
+  //
+  // `listCronHeartbeatWaitOwners` stays process-wide, as in #134464: the owners it
+  // reports carry the exact lane task they occupy, so exempting them from the lane-depth
+  // comparison is an exact-marker exemption rather than a count-based guess. Only the
+  // markers fed to the busy query are narrowed to this agent, so a wake never discounts
+  // another agent's coalesced wake.
   const heartbeatWaitOwners = listCronHeartbeatWaitOwners();
+  const ownHeartbeatWaitMarkers = heartbeatWaitOwners.activeJobMarkers.filter(
+    (marker) => !marker.agentId || marker.agentId === agentId,
+  );
   const cronBusy =
-    heartbeatWaitOwners.activeJobMarkers.length > 0
-      ? hasActiveCronJobsExceptMarkers(heartbeatWaitOwners.activeJobMarkers)
-      : hasActiveCronJobs();
+    ownHeartbeatWaitMarkers.length > 0
+      ? hasActiveCronJobsForAgentExceptMarkers(agentId, ownHeartbeatWaitMarkers)
+      : hasActiveCronJobsForAgent(agentId);
   const owningCronLaneTaskIds = new Set(
     heartbeatWaitOwners.owningCronLaneTaskMarkers
       .filter(
@@ -230,12 +245,26 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       )
       .map((marker) => marker.taskId),
   );
-  const cronLaneDepth = getSize(CommandLane.Cron);
-  // HookDispatch is included so moving hook agent runs off `cron-nested` onto
-  // their own lane does not silently stop them from suppressing heartbeats.
-  // They are still active agent work; only the lane they occupy changed.
+  // Lane depth is counted globally and never reduced by agent attribution. A cron marker
+  // and a Cron lane entry are different populations with different lifecycles: a scheduled
+  // run publishes its marker before (or without) entering the lane
+  // (src/cron/service/run-admission.ts), while a queued manual run holds a lane slot
+  // before its marker exists (src/cron/service/ops-run-preparation.ts). Subtracting one
+  // count from the other silently mis-attributes lane slots whenever the two counts
+  // happen to agree, which is how #109440 and #134464 came to treat broad lane-count
+  // discounts as unsafe by design. Without owner attribution on CommandLaneTaskMarker
+  // (src/process/command-queue.ts, out of scope here) the depth cannot be narrowed soundly,
+  // so it stays process-wide.
+  //
+  // CronNested and HookDispatch are likewise global. They carry no run attribution and are
+  // not reachable from cron markers alone: gateway hook dispatch
+  // (gateway/server/hooks.ts) and the reply-runner fallback enqueue into these lanes with
+  // no owning cron marker, so marker-based attribution cannot prove the work is foreign.
+  // Both residuals are pinned by heartbeat-runner.cron-gate-agent-scope.test.ts; fixing
+  // them requires agentId on CommandLaneTaskMarker, i.e. src/process/command-queue.ts,
+  // which is outside this card's allowed_files.
   const cronLaneBusy =
-    cronLaneDepth > owningCronLaneTaskIds.size ||
+    getSize(CommandLane.Cron) > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
     getSize(CommandLane.HookDispatch) > 0;
   if (!isSessionExecCompletion && (cronBusy || cronLaneBusy)) {

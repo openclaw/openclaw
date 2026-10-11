@@ -483,6 +483,32 @@ export function hasActiveCronJobsForAgent(agentId: string): boolean {
   return false;
 }
 
+/**
+ * Agent-scoped sibling of `hasActiveCronJobsExceptMarkers`.
+ *
+ * Ignores only the exact cron executions represented by one coalesced heartbeat wake,
+ * and only counts runs attributed to `agentId`. Markers with no recorded agent stay
+ * counted for every agent: unattributed work must keep suppressing rather than let a
+ * heartbeat fire into a cron run whose owner this process cannot name.
+ */
+export function hasActiveCronJobsForAgentExceptMarkers(
+  agentId: string,
+  markersToIgnore: readonly CronActiveJobMarker[],
+): boolean {
+  const state = getCronActiveJobState();
+  const ignoredMarkers = new Set(markersToIgnore);
+  for (const marker of state.activeJobs.values()) {
+    if (
+      !ignoredMarkers.has(marker) &&
+      isMarkerActiveInGeneration(marker, state.generation) &&
+      (!marker.agentId || marker.agentId === agentId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Runs a callback when the exact cron job no longer has an active in-process run. */
 export function onCronJobInactive(
   marker: CronActiveJobMarker | undefined,
