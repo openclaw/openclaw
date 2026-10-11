@@ -94,8 +94,10 @@ export async function openSidebarCustomizationPage(
 
 export async function openSidebarPages(page: Page): Promise<Locator> {
   const sidebar = page.locator("openclaw-app-sidebar:visible");
-  await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
   const pages = sidebar.locator(".sidebar-pages");
+  if (!(await pages.isVisible())) {
+    await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+  }
   await pages.waitFor();
   return pages;
 }
