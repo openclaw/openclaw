@@ -174,7 +174,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       active &&
       active !== dialog &&
       containsComposed(dialog, active) &&
-      (!initial || !autofocus || active === autofocus)
+      (!initial || active === autofocus)
     ) {
       return;
     }
@@ -432,6 +432,9 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
   const focusin = (event: FocusEvent) => {
     if (event.target === dialog) {
+      if (initialFocusPending && !openingInteraction) {
+        return;
+      }
       focusBeforeChrome =
         isHtmlElement(event.relatedTarget) && containsComposed(dialog, event.relatedTarget)
           ? event.relatedTarget

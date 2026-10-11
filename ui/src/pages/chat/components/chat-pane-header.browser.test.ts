@@ -67,7 +67,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             .find((element) => element?.matches(":popover-open"));
         await expect
           .poll(() => tooltip()?.textContent)
-          .toContain(editor ? "Open in editor" : busy ? reason : "Session branches");
+          .toContain(editor ? "Open in editor" : busy ? reason : "Versions");
         await expect
           .poll(() => {
             const body = tooltip();

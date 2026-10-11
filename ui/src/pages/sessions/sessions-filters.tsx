@@ -119,11 +119,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                         }
                         value={value()}
                         disabled={key === "activeMinutes" && props.statusFilter !== "active"}
-                        onInput={(event: Event) => {
-                          if (event.currentTarget instanceof HTMLInputElement) {
-                            updateFilter(key, event.currentTarget.value);
-                          }
-                        }}
+                        onInput={(event) => updateFilter(key, event.currentTarget.value)}
                       />
                     </label>
                   </openclaw-tooltip>
@@ -150,11 +146,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                       class="session-filter-check__input"
                       type="checkbox"
                       checked={props[key]}
-                      onChange={(event: Event) => {
-                        if (event.currentTarget instanceof HTMLInputElement) {
-                          updateFilter(key, event.currentTarget.checked);
-                        }
-                      }}
+                      onChange={(event) => updateFilter(key, event.currentTarget.checked)}
                     />
                     <span class="session-filter-check__mark" aria-hidden="true">
                       <Icon name="check" />
@@ -169,11 +161,9 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
             <select
               class="session-groupby__select"
-              onChange={(event: Event) => {
-                if (event.currentTarget instanceof HTMLSelectElement) {
-                  props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value));
-                }
-              }}
+              onChange={(event) =>
+                props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
+              }
             >
               <For
                 each={SESSION_GROUP_MODES.filter(

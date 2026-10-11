@@ -1,4 +1,4 @@
-import { nothing, render as renderLit, type TemplateResult } from "lit";
+import type { TemplateResult } from "lit";
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
 import {
   TooltipController,
@@ -16,11 +16,6 @@ export interface TooltipRuntime {
   update(): void;
   retire(): void;
   dispose(): void;
-}
-
-/** Retained Lit callers own this opaque template leaf until their Solid cutover. */
-export function renderTooltipTemplate(leaf: HTMLElement, template?: TemplateResult) {
-  renderLit(template ?? nothing, leaf);
 }
 
 const SKIP_DELAY = 300;

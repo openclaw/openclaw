@@ -119,7 +119,7 @@ export function createOverlay(
   const notifyClosed = () => listeners.forEach((listener) => listener(false));
   const valid = () =>
     !disposed &&
-    surface?.isConnected === true &&
+    surface.isConnected &&
     (!trigger || trigger.isConnected) &&
     (!parent || (parent.open && parent.phase !== "closing")) &&
     (options.isValid?.(surface, trigger) ?? true);
@@ -393,7 +393,9 @@ export function createOverlay(
         return false;
       }
       refreshOverlayRoots(registry, api);
+      setPhase("opening");
       if (!setNativeOpen(true)) {
+        setPhase("hidden");
         return false;
       }
       reconcileNative(registry, api);
@@ -408,7 +410,6 @@ export function createOverlay(
       if (requested !== intent) {
         return false;
       }
-      setPhase("opening");
       const token = ++generation;
       publish(true);
       complete(true, token);
@@ -628,7 +629,8 @@ export function createOverlay(
     });
   }
   function nativeToggle() {
-    if (!surface) {
+    // Synchronous native autofocus must not publish this request halfway through admission.
+    if (!surface || nativeMutation) {
       return;
     }
     const next = native.isOpen(surface);

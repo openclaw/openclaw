@@ -641,8 +641,8 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
 
   it("leaves native chrome focused when there is no autofocus target or displaced field", async () => {
     const { dialog } = await mountModal(container, "", false);
-    expect(dialog.matches(":focus")).toBe(true);
     expect(document.activeElement).toBe(dialog);
+    expect(dialog.matches(":focus")).toBe(true);
     expect(dialog.getAttribute("aria-label")).toBe("Edit details");
     expect(dialog.getAttribute("aria-modal")).toBe("true");
   });

@@ -25,6 +25,35 @@ async function finishHover() {
 }
 
 describe("Solid menu branch lifetime", () => {
+  it("opens custom form content and retains it when generated items become empty", async () => {
+    const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
+    let input!: HTMLInputElement;
+    const view = mountMenu({
+      get items() {
+        return entries();
+      },
+      children: (
+        <input
+          autofocus
+          aria-label="Filter"
+          ref={(element) => {
+            input = element;
+          }}
+        />
+      ),
+    });
+    expect(view.handle.open()).toBe(true);
+    expect(document.activeElement).toBe(input);
+    setEntries([{ id: "result", label: "Result" }]);
+    flush();
+    setEntries([]);
+    flush();
+    await Promise.resolve();
+    expect(view.handle.overlay.open).toBe(true);
+    expect(surface().matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(input);
+  });
+
   it.each(["ltr", "rtl"] as const)(
     "routes hover to a sibling then Back → Down in %s",
     async (dir) => {

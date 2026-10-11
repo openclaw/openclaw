@@ -38,7 +38,7 @@ export type MenuProps = {
   dir?: "ltr" | "rtl";
   open?: boolean;
   disabled?: boolean;
-  onSelect?(item: MenuItem, event: CustomEvent<MenuItem>): void;
+  onSelect?: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
   onOpenChange?(open: boolean): void;
   onBeforeShow?(event: Event): void;
   onBeforeHide?(event: Event): void;
@@ -76,7 +76,11 @@ export function Menu(props: BranchProps): JSX.Element {
   const overlay = createOverlay(identity.id, identity.parent, {
     exclusiveGroup: "menu",
     isValid: (panel) =>
-      Boolean(panel.querySelector('[role^="menuitem"], [data-form-control], [data-search]')),
+      Boolean(
+        panel.querySelector(
+          '[role^="menuitem"], [data-form-control], [data-search], input, textarea, select, button, a[href]',
+        ),
+      ),
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,

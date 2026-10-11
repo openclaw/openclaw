@@ -13,6 +13,7 @@ describe("Solid native popover", () => {
     const view = render(() => (
       <Popover id="search-popover" label="Search" ref={(value) => (handle = value)}>
         <input
+          autofocus
           aria-label="Search query"
           value="query"
           onKeyDown={(event) => {
@@ -26,9 +27,9 @@ describe("Solid native popover", () => {
     ));
     flush();
     handle.show();
+    expect(document.activeElement).toBe(view.getByRole("textbox"));
     await phase(handle.overlay.surface, "open");
     const input = view.getByRole("textbox") as HTMLInputElement;
-    input.focus();
     await userEvent.keyboard("{Escape}");
     expect(input.value).toBe("");
     expect(handle.overlay.open).toBe(true);

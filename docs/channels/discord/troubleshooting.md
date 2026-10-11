@@ -10,6 +10,13 @@ sidebarTitle: "Troubleshooting"
 
 Symptom-first checks for a Discord account that is not behaving.
 
+Each account start logs `[account] starting account (reason: ...)` at info level.
+The reason distinguishes startup, manual starts, automatic retries, health recovery,
+config/plugin/secret reloads, and host-thaw recovery. A Discord socket reconnect or
+resume stays inside the existing account lifetime and does not produce this line.
+An event-loop stall label identifies work while its named operation is active; it
+does not by itself establish that an account restarted.
+
 ## Troubleshooting
 
 <AccordionGroup>

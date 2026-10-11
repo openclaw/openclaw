@@ -1,34 +1,17 @@
 import { render } from "@solidjs/web";
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, createSignal, flush, onCleanup } from "solid-js";
+import { Show, createSignal, flush } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
 import type { TooltipController } from "../tooltip-controller.ts";
-import {
-  TooltipElement,
-  renderTooltipTemplate,
-  type TooltipProps,
-  type TooltipRuntime,
-} from "../tooltip.ts";
+import { TooltipElement, type TooltipProps, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
 export type { TooltipElement } from "../tooltip.ts";
-
-/** Opaque Lit presentation stays inside a leaf owned only by Lit. */
-function TooltipTemplate(props: { template: NonNullable<TooltipProps["contentTemplate"]> }) {
-  const leaf = document.createElement("span");
-  createEffect(
-    () => props.template,
-    (template) => {
-      renderTooltipTemplate(leaf, template);
-    },
-  );
-  onCleanup(() => renderTooltipTemplate(leaf));
-  return leaf;
-}
 
 /** The native tag owns policy and slots; Solid owns only its lazily loaded text content. */
 export function mountTooltipView(
@@ -54,7 +37,7 @@ export function mountTooltipView(
     };
     return (
       <Show when={template()} fallback={text()}>
-        {(value) => <TooltipTemplate template={value()} />}
+        {(value) => <LitContent value={value()} />}
       </Show>
     );
   }, content);

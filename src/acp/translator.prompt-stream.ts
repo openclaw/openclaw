@@ -515,12 +515,12 @@ export class AcpTranslatorPromptStream {
         .map((block) => block[field] ?? "")
         .join("\n")
         .trimEnd();
-      const sentSoFar = pending[sentField]?.length ?? 0;
-      if (!fullText || fullText.length <= sentSoFar) {
+      const sent = pending[sentField] ?? "";
+      if (!fullText || fullText.length <= sent.length || !fullText.startsWith(sent)) {
         continue;
       }
       pending[sentField] = fullText;
-      await this.emitPromptChunk(pending, kind, fullText.slice(sentSoFar));
+      await this.emitPromptChunk(pending, kind, fullText.slice(sent.length));
       if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
         return false;
       }
