@@ -30,6 +30,7 @@ import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
+  withSessionTranscriptWrite,
   type SessionTranscriptAssistantMirrorAppendParams,
 } from "./session-transcript-runtime.js";
 
@@ -94,6 +95,10 @@ describe("channel-final transcript mirrors", () => {
         { role: "assistant", content: firstText, __openclaw: { runId: "later-run" } },
         "later-answer",
       );
+      const facts = await withSessionTranscriptWrite(scope, (writer) =>
+        writer.readMessageFacts({ idempotencyKeys: [], sourceRunId: "queued-run" }),
+      );
+      expect(facts.sourceEvents).toMatchObject([{ id: "first-answer" }, { id: "second-answer" }]);
       const first = { ...delivery("first-delivery", firstText), sourceRunId: "queued-run" };
       const second = { ...delivery("second-delivery", secondText), sourceRunId: "queued-run" };
       await appendAssistantMirrorMessageByIdentity(first);

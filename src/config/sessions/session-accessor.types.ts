@@ -382,10 +382,14 @@ export type SessionTranscriptWriteLockAccessorContext = {
     result: TranscriptMessageAppendResult<TMessage> | undefined;
   }>;
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
-  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+  readMessageFacts: (params: {
+    idempotencyKeys: readonly string[];
+    sourceRunId?: string;
+  }) => Promise<{
     anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
     existingIdempotencyKeys: Set<string>;
     messagesByIdempotencyKey: Map<string, unknown>;
+    sourceEvents?: TranscriptEvent[];
   }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;

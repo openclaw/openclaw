@@ -436,7 +436,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     }
     if (params.deliveryMirror?.kind === "channel-final" && params.idempotencyKey) {
       const key = params.idempotencyKey.trim();
-      const facts = await locked.readMessageFacts({ idempotencyKeys: [key] });
+      const facts = await locked.readMessageFacts({ idempotencyKeys: [key], sourceRunId });
       let sourceAssistantMessageId: string | undefined;
       if (facts.existingIdempotencyKeys.has(key)) {
         // Keep the writer's original correlation while normal append still checks the payload.
@@ -447,7 +447,7 @@ export async function appendAssistantMirrorMessageByIdentity(
         }
       } else if (sourceRunId) {
         sourceAssistantMessageId = findEquivalentAssistantMessageInRun(
-          selectVisibleTranscriptEvents(await locked.readEvents()),
+          facts.sourceEvents ?? [],
           message,
           params.config,
           sourceRunId,
@@ -485,6 +485,7 @@ export async function appendAssistantMirrorMessageByIdentity(
       }
       const correlatedMessage = {
         ...message,
+        ...(sourceRunId ? { __openclaw: { runId: sourceRunId } } : {}),
         openclawDeliveryMirror: {
           kind: "channel-final",
           ...(params.deliveryMirror.sourceMessageId !== undefined

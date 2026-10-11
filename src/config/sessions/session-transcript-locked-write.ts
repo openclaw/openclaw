@@ -441,7 +441,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                       database.agentId,
                       {
                         type: "session.transcript.lock.facts",
-                        input: { ...target, idempotencyKeys: params.idempotencyKeys },
+                        input: { ...target, ...params },
                       },
                     );
                     assertCurrent();
