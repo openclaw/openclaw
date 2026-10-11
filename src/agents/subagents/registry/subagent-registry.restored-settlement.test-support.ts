@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { deleteGatewaySession } from "../../../gateway/server-methods/sessions-delete.js";
@@ -12,6 +13,7 @@ import {
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import {
+  createSessionEntry,
   createSubagentRunRecord,
   waitForFast,
   type SubagentRegistryHarness,
@@ -188,6 +190,80 @@ export function registerRestoredRollbackPublicationTest({
     expect(
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "chat.abort"),
     ).toHaveLength(1);
+  });
+}
+
+export function registerRestoredSessionReadTests({
+  mocks,
+  hydrateAndActivateRegistry,
+  mockPendingAgentWait,
+}: {
+  mocks: Pick<
+    ReturnType<typeof createSubagentRegistryMockState>,
+    "entries" | "callGateway" | "mockRestoredRuns" | "withSessionEntryReadOnlyInWorker"
+  >;
+  hydrateAndActivateRegistry: () => Promise<void>;
+  mockPendingAgentWait: () => void;
+}): void {
+  it("routes restored waits for a newer session run", async () => {
+    const runId = "run-restored-orphan-routing";
+    const restored = createSubagentRunRecord({
+      runId,
+      execution: {
+        status: "running",
+        lifecycleGeneration: "retired-generation",
+      },
+    });
+    mocks.entries = {
+      "agent:main:subagent:child": createSessionEntry({
+        lifecycleRunId: "newer-run",
+        abortedLastRun: false,
+      }),
+    };
+    mocks.mockRestoredRuns(() => [restored]);
+    mockPendingAgentWait();
+
+    await hydrateAndActivateRegistry();
+
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId }),
+      }),
+    );
+  });
+
+  it("restores active runs without reopening completed child sessions", async () => {
+    const completed = createSubagentRunRecord({
+      runId: "run-restored-completed",
+      childSessionKey: "agent:main:subagent:completed",
+      execution: {
+        status: "terminal",
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "ok" },
+      },
+      cleanupCompletedAt: Date.now(),
+    });
+    const active = createSubagentRunRecord({ runId: "run-restored-active" });
+    mocks.mockRestoredRuns(() => [completed, active]);
+    const readSession = mocks.withSessionEntryReadOnlyInWorker;
+    vi.mocked(withSessionEntryReadOnlyInWorker).mockImplementation((...args) => {
+      if (args[0].sessionKey === completed.childSessionKey) {
+        throw new Error("completed child store is unavailable");
+      }
+      return readSession(...args);
+    });
+    mockPendingAgentWait();
+
+    await hydrateAndActivateRegistry();
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId: active.runId }),
+      }),
+    );
   });
 }
 

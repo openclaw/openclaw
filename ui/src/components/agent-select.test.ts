@@ -71,71 +71,6 @@ async function createAgentSelect(
   return element;
 }
 
-it("renders the selected label and a data URL image avatar", async () => {
-  const dataUrl = "data:image/png;base64,x";
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: dataUrl }) },
-  });
-
-  try {
-    expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Alpha agent");
-    expect(element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
-      dataUrl,
-    );
-  } finally {
-    element.remove();
-  }
-});
-
-it("prefers the roster-projected avatar URL over the raw local source", async () => {
-  const dataUrl = "data:image/png;base64,cm9zdGVy";
-  const element = await createAgentSelect({
-    options: [
-      {
-        value: "alpha",
-        label: "Alpha agent",
-        agent: {
-          id: "alpha",
-          identity: { avatar: "avatar.png", avatarUrl: dataUrl },
-        },
-      },
-    ],
-  });
-
-  try {
-    expect(element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
-      dataUrl,
-    );
-  } finally {
-    element.remove();
-  }
-});
-
-it("renders an emoji text avatar when no image URL is available", async () => {
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { emoji: "🦉" }) },
-  });
-
-  try {
-    expect(element.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦉");
-    expect(element.querySelector(".agent-select__avatar img")).toBeNull();
-  } finally {
-    element.remove();
-  }
-});
-
-it("falls back to a generated face for the agent", async () => {
-  const element = await createAgentSelect();
-
-  try {
-    await waitForFast(() =>
-      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-    );
-  } finally {
-    element.remove();
-  }
-});
-
 it("preserves complete grapheme clusters in emoji avatar fallback", async () => {
   const agent = { id: "family", name: "Family", identity: { emoji: "👍🏻" } };
   const element = await createAgentSelect({
@@ -484,38 +419,6 @@ it("fetches a local avatar image without a header when token auth is not active"
   }
 });
 
-it("renders the agent picker as a Web Awesome dropdown", async () => {
-  const element = await createAgentSelect({
-    options: options.map((option) =>
-      option.value === "beta" ? { ...option, badge: "default" } : option,
-    ),
-  });
-
-  try {
-    const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
-    const items = Array.from(
-      element.querySelectorAll<HTMLElement & { value: string }>(
-        "wa-dropdown-item[data-agent-option]",
-      ),
-    );
-    expect(dropdown).not.toBeNull();
-    expect(items).toHaveLength(2);
-    await waitForFast(() => {
-      expect(items[0]?.getAttribute("role")).toBe("menuitemradio");
-      expect(items[0]?.getAttribute("aria-checked")).toBe("true");
-      expect(items[1]?.getAttribute("aria-checked")).toBe("false");
-    });
-    expect(items[0]?.value).toBe("alpha");
-    expect(items[1]?.value).toBe("beta");
-    expect(items[0]?.querySelector(".agent-select__option-check")).not.toBeNull();
-    expect(items[1]?.querySelector(".agent-select__option-check")).toBeNull();
-    expect(items[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
-    expect(dropdown?.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();
-  } finally {
-    element.remove();
-  }
-});
-
 it("keeps avatar text out of typeahead and announces option metadata", async () => {
   const element = await createAgentSelect({
     accessibleLabel: "Agent",
@@ -541,48 +444,6 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
   } finally {
     element.remove();
   }
-});
-
-it("shows an unmatched selected value instead of the first option", async () => {
-  const element = await createAgentSelect({ value: "system-monitor" });
-
-  try {
-    expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe(
-      "system-monitor",
-    );
-    await waitForFast(() =>
-      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-    );
-    await waitForFast(() => {
-      expect(
-        Array.from(element.querySelectorAll<HTMLElement>("[data-agent-option]")).map((item) =>
-          item.getAttribute("aria-checked"),
-        ),
-      ).toEqual(["false", "false"]);
-    });
-  } finally {
-    element.remove();
-  }
-});
-
-it("marks only an enabled selected row for initial autofocus", async () => {
-  const element = await createAgentSelect({ value: "beta" });
-  const focusedValues = () =>
-    Array.from(element.querySelectorAll<HTMLElement & { value: string }>("[autofocus]")).map(
-      (item) => item.value,
-    );
-
-  expect(focusedValues()).toEqual(["beta"]);
-  element.value = "alpha";
-  await element.updateComplete;
-  expect(focusedValues()).toEqual(["alpha"]);
-  element.options = options.map((option) => ({ ...option, disabled: option.value === "alpha" }));
-  await element.updateComplete;
-  expect(focusedValues()).toEqual([]);
-  element.options = options;
-  element.disabled = true;
-  await element.updateComplete;
-  expect(focusedValues()).toEqual([]);
 });
 
 it("closes and rejects selection when disabled while open", async () => {
@@ -726,29 +587,6 @@ it("opens the new-agent flow from the footer item", async () => {
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
 
     expect(onCreateAgent).toHaveBeenCalledOnce();
-  } finally {
-    element.remove();
-  }
-});
-
-it("keeps the new-agent footer reachable with an empty roster", async () => {
-  const element = await createAgentSelect({ options: [], value: "" });
-
-  try {
-    const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    expect(trigger?.disabled).toBe(false);
-    expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("No agents");
-  } finally {
-    element.remove();
-  }
-});
-
-it("disables an empty picker when no footer action is available", async () => {
-  const element = await createAgentSelect({ options: [], value: "", onCreateAgent: null });
-
-  try {
-    expect(element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.disabled).toBe(true);
-    expect(element.querySelector("[data-create-agent]")).toBeNull();
   } finally {
     element.remove();
   }

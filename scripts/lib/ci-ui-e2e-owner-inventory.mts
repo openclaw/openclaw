@@ -255,6 +255,8 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/select-picker.ts",
       "ui/src/components/settings-save-indicator.ts",
       "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
     ],
   ),
   pageWatch(
@@ -1261,7 +1263,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/model-alias-display.e2e.test.ts",
     ["agents-home", "agents", "chat", "config"],
-    ["ui/src/components/select-picker.ts", "ui/src/pages/agents/agents-page.ts"],
+    [
+      "ui/src/components/select-picker.ts",
+      "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/model-defaults-recovery.e2e.test.ts",
@@ -1543,6 +1550,8 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
     ],
   ),
   pageWatch("ui/src/e2e/placement-error-unicode.e2e.test.ts", ["chat", "new-session"]),

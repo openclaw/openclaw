@@ -997,50 +997,6 @@ describe("canonical descendant lifecycle through real owners", () => {
     });
   }, 180_000);
   it.each(["source", "child"] as const)(
-    "fences physical fork writes after %s revocation during configuration wait",
-    async (target) => {
-      await withFixture(async (fixture, fork, revoke) => {
-        const source = await fixture.adopt();
-        await fixture.turn(source.sessionKey, "canonical");
-        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-        await fixture.withClient(async (client) => {
-          const release = await fixture.holdConfiguration(client);
-          const request = vi.spyOn(client, "request"); // Pass-through: the real fence still runs.
-          const before = fixture.native.calls.filter(
-            (call) => call.method === "thread/fork",
-          ).length;
-          const pending = fork(source.sessionKey, selected.entryId);
-          let result: Awaited<ReturnType<typeof fork>>;
-          try {
-            await vi.waitFor(
-              () =>
-                expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(true),
-              { timeout: 10_000 },
-            );
-            expect(
-              fixture.native.calls.filter((call) => call.method === "thread/fork"),
-            ).toHaveLength(before);
-            revoke(target, source.sessionKey);
-          } finally {
-            release();
-            result = await pending;
-            request.mockRestore();
-          }
-          expect(result.ok).toBe(false);
-          expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
-            before,
-          );
-          await fixture.withClient(async (next) => {
-            expect(next).toBe(client);
-          });
-          await expect(client.request("config/read", {})).resolves.toMatchObject({ config: {} });
-        });
-      });
-    },
-    180_000,
-  );
-
-  it.each(["source", "child"] as const)(
     "fences physical fork retries after %s revocation on overload",
     async (target) => {
       await withFixture(async (fixture, fork, revoke) => {

@@ -301,6 +301,21 @@ from the new installation before restarting through the service manager.
 
 ## `update repair`
 
+Repair exits nonzero with the original recovery command when an older package
+journal remains pending and the current CLI cannot settle it. It does not report
+successful repair or continue post-update maintenance while that record remains.
+
+For a record written by the published 2026.9.8 package recovery helper, repair
+can settle an aborted operation after rollback or finish publication into a
+missing installation when ctime or link-count drift invalidates the previous
+package's historical seal. It requires the recorded directory identity and package version,
+verifies launchers, and records: `legacy package record settled by identity and
+version; content could not be re-verified`. The original journal, helper, and
+remaining package evidence are preserved. This accepts unverified contents of
+reinstallable legacy package code; records written by current versions retain
+their existing verification rules. Use a CLI containing this fix: the original sealed helper
+cannot acquire newer recovery behavior.
+
 An older updater can leave package activation at `prepared` after refusing an
 update before publication. Run `openclaw update repair` from an installation
 containing this fix. Repair verifies that the original package and launchers are
