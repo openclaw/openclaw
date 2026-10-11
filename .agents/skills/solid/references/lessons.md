@@ -21,6 +21,7 @@ The [rc.14 changelog](https://github.com/solidjs/solid/blob/8d23a5a13b23f8bfd5f0
 - **Dynamic refs run before child insertion.** `dynamic()` and `<Dynamic>` now match compiled elements. A ref must not assume its children are already present.
 - **Effect tuples infer as const.** `createEffect` and `createRenderEffect` retain inline tuple element types without extra casts. Consumers that only read those facts must accept readonly arrays, as the hosted-tab notifier does.
 - **Effect callbacks cannot create primitives implicitly.** Capture the component owner and use `runWithOwner` when a callback deliberately mounts projections or Solid-backed Lit directives. Signals published by those adapters need `ownedWrite: true` for intentional writes under the restored owner.
+- **Teardown releases resources without publishing state.** Keep signal updates in live error/visibility handlers; cleanup only aborts work and releases resources. A video-poster cleanup write failed when its rendered parent was disposed.
 - **RPC fixtures must return fresh snapshots.** Reusing and mutating objects already passed into a store bypasses reactive updates. Clone mock responses when simulating later JSON replies, as the snapshot polling test does.
 - **Binding slots were renamed.** `BindingSlot` replaces `AttributeSlot` without an alias and restricts fill output types. OpenClaw currently uses neither API.
 
