@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { t } from "../i18n/index.ts";
+import type { JSX } from "../types/solid-elements.d.ts";
 import "./web-awesome.ts";
 
 export type LobsterPetDismissMenuPosition = { x: number; y: number };
@@ -8,7 +9,7 @@ export function LobsterPetDismissMenu(params: {
   position: LobsterPetDismissMenuPosition | null;
   onDismiss: (permanently: boolean) => void;
   onClose: () => void;
-}) {
+}): JSX.Element {
   // Auto-size clamps the menu to whatever placement flip picks rather than
   // relocating it, so top-start is forced directly since the footer always
   // has clear room above — leaving it to flip risks a shrunk-in-place menu.
