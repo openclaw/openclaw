@@ -339,6 +339,103 @@ describe("resolveGatewayScopedTools", () => {
     expect(denied.tools.map((tool) => tool.name)).toEqual(expected.filter((name) => name !== "ls"));
   });
 
+  it.each([
+    {
+      label: "explicit policy cap",
+      resolve: resolveMcpLoopbackPolicyTools,
+      toolsAllow: ["message", "read"],
+      denyMessage: false,
+      denyGatewayMessage: false,
+      providerCodingProfile: false,
+      expected: ["message", "read"],
+    },
+    {
+      label: "explicit exact cap",
+      resolve: resolveMcpLoopbackScopedTools,
+      toolsAllow: ["message", "read"],
+      denyMessage: false,
+      denyGatewayMessage: false,
+      providerCodingProfile: false,
+      expected: ["message", "read"],
+    },
+    {
+      label: "messaging group policy cap",
+      resolve: resolveMcpLoopbackPolicyTools,
+      toolsAllow: ["group:messaging", "read"],
+      denyMessage: false,
+      denyGatewayMessage: false,
+      providerCodingProfile: false,
+      expected: ["message", "read"],
+    },
+    {
+      label: "explicit message denial",
+      resolve: resolveMcpLoopbackPolicyTools,
+      toolsAllow: ["message", "read"],
+      denyMessage: true,
+      denyGatewayMessage: false,
+      providerCodingProfile: false,
+      expected: ["read"],
+    },
+    {
+      label: "read-only policy cap",
+      resolve: resolveMcpLoopbackPolicyTools,
+      toolsAllow: ["read"],
+      denyMessage: false,
+      denyGatewayMessage: false,
+      providerCodingProfile: false,
+      expected: ["read"],
+    },
+    {
+      label: "Gateway message denial",
+      resolve: resolveMcpLoopbackPolicyTools,
+      toolsAllow: ["message", "read"],
+      denyMessage: false,
+      denyGatewayMessage: true,
+      providerCodingProfile: false,
+      expected: ["read"],
+    },
+    {
+      label: "provider coding profile",
+      resolve: resolveMcpLoopbackPolicyTools,
+      toolsAllow: ["message", "read"],
+      denyMessage: false,
+      denyGatewayMessage: false,
+      providerCodingProfile: true,
+      expected: ["message", "read"],
+    },
+  ])(
+    "preserves message requests and configured denials through $label",
+    async ({
+      resolve,
+      toolsAllow,
+      denyMessage,
+      denyGatewayMessage,
+      providerCodingProfile,
+      expected,
+    }) => {
+      const result = await resolve({
+        cfg: {
+          plugins: { enabled: false },
+          tools: {
+            profile: providerCodingProfile ? "full" : "coding",
+            ...(providerCodingProfile ? { byProvider: { anthropic: { profile: "coding" } } } : {}),
+            ...(denyMessage ? { deny: ["message"] } : {}),
+          },
+          ...(denyGatewayMessage ? { gateway: { tools: { deny: ["message"] } } } : {}),
+        },
+        context: {
+          sessionKey: "agent:main:cron:explicit-message",
+          workspaceDir: os.tmpdir(),
+          messageProvider: "telegram",
+          modelProvider: "anthropic",
+          senderIsOwner: true,
+          toolsAllow,
+        },
+      });
+      expect(result.tools.map((tool) => tool.name).toSorted()).toEqual(expected);
+    },
+  );
+
   it("keeps managed shell tools subject to explicit denies", async () => {
     const cfg = {
       plugins: { enabled: false },

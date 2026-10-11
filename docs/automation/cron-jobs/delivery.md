@@ -89,6 +89,8 @@ When announce delivery uses `channel: "last"` or omits `channel`, a provider-pre
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
 
+Explicitly including `message` in the run's tool cap keeps it available through restrictive tool profiles on both embedded and CLI runtimes. Other tool policies, the final tool cap, and message invocation authority still apply.
+
 Scheduled `message` actions use the Gateway that owns the live run. Keep the
 job's account, channel, target, and configured delivery route, but do not supply
 per-call `gatewayUrl` or `gatewayToken` fields. Ordinary and standalone message
