@@ -5,20 +5,15 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
   getSqliteDatabaseAdmission,
-  hasPendingSqliteDatabaseSchemaMutation,
   installSqliteDatabaseAdmissions,
   publishSqliteDatabaseAdmission,
-  readSqliteDatabaseWriteRevision,
   retireSqliteDatabaseAdmissionForPath,
   withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerBackend, SqliteWorkerCommand } from "./sqlite-worker-contract.js";
-import {
-  requestSqliteWorkerOperationAdmission,
-  takeSqliteWorkerOperationAdmissionAttachment,
-} from "./sqlite-worker-operation-admission.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 export type AdmissionOperations = {
   admitted: {
@@ -29,31 +24,12 @@ export type AdmissionOperations = {
     input: { path: string };
     output: { value: number | undefined; lookupMessages: number };
   };
-  transactionFacts: {
-    input: undefined;
-    output: {
-      transactionLookups: number;
-      transactionRevision: number | undefined;
-      transactionHostFact: number | undefined;
-      transactionWorkerFact: number | undefined;
-      pendingSchema: boolean;
-      transactionSchemaHasProof: boolean;
-      outsideLookups: number;
-      outsideRevision: number | undefined;
-      outsideHostFact: number | undefined;
-      outsideWorkerFact: number | undefined;
-    };
-  };
   mutate: { input: undefined; output: undefined };
   retirePath: { input: { path: string }; output: undefined };
   writeRows: { input: { sql: string; sessionKeys?: string[] }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
     output: { native: boolean; admitted: boolean };
-  };
-  mutateHeld: {
-    input: { rollback: boolean; exit: boolean; wait?: boolean };
-    output: undefined;
   };
   read: {
     input: { path: string; awaitPublication?: boolean };
@@ -67,7 +43,7 @@ export const hostFactKey: SqliteDatabaseAdmissionKey<number> = {
   read: (value) => (typeof value === "number" ? value : undefined),
 };
 const absentHostFactKey = { ...hostFactKey, name: "admission-test-host-absent" };
-export const workerFactKey = {
+const workerFactKey = {
   name: "admission-test-worker-value",
   read: hostFactKey.read,
 };
@@ -163,48 +139,6 @@ export function createSqliteWorkerBackend(
         reader.close();
       }
     }
-    if (command.type === "transactionFacts") {
-      let transactionRevision: number | undefined;
-      let transactionHostFact: number | undefined;
-      let transactionWorkerFact: number | undefined;
-      let pendingSchema = false;
-      let transactionSchemaHasProof = false;
-      let transactionLookups = 0;
-      database.exec("BEGIN IMMEDIATE");
-      try {
-        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
-        transactionLookups = countLookupMessages(() => {
-          transactionRevision = readSqliteDatabaseWriteRevision(database);
-          pendingSchema = hasPendingSqliteDatabaseSchemaMutation(database);
-          transactionHostFact = getSqliteDatabaseAdmission(database, hostFactKey);
-          transactionWorkerFact = getSqliteDatabaseAdmission(database, workerFactKey);
-          transactionSchemaHasProof =
-            getAdmittedSqliteSchemaFacts(database)?.tables.has("proof") === true;
-        });
-      } finally {
-        database.exec("ROLLBACK");
-      }
-      let outsideRevision: number | undefined;
-      let outsideHostFact: number | undefined;
-      let outsideWorkerFact: number | undefined;
-      const outsideLookups = countLookupMessages(() => {
-        outsideWorkerFact = getSqliteDatabaseAdmission(database, workerFactKey);
-        outsideHostFact = getSqliteDatabaseAdmission(database, hostFactKey);
-        outsideRevision = readSqliteDatabaseWriteRevision(database);
-      });
-      return {
-        transactionLookups,
-        transactionRevision,
-        transactionHostFact,
-        transactionWorkerFact,
-        pendingSchema,
-        transactionSchemaHasProof,
-        outsideLookups,
-        outsideRevision,
-        outsideHostFact,
-        outsideWorkerFact,
-      };
-    }
     if (command.type === "retirePath") {
       retireSqliteDatabaseAdmissionForPath(command.input.path);
       return undefined;
@@ -238,30 +172,6 @@ export function createSqliteWorkerBackend(
       } finally {
         writer.close();
       }
-    }
-    if (command.type === "mutateHeld") {
-      database.function("hold_publication", () => {
-        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
-        if (command.input.exit) {
-          process.exit(0);
-        }
-        if (command.input.wait) {
-          const wait = takeSqliteWorkerOperationAdmissionAttachment();
-          if (!(wait instanceof SharedArrayBuffer)) {
-            throw new Error("Held mutation requires its admission gate");
-          }
-          Atomics.wait(new Int32Array(wait), 0, 0);
-        }
-        return 1;
-      });
-      if (command.input.rollback) {
-        database.exec(
-          "BEGIN; CREATE TABLE worker_publication (value); SELECT hold_publication(); ROLLBACK",
-        );
-      } else {
-        database.exec("CREATE TABLE worker_publication (value); SELECT hold_publication()");
-      }
-      return undefined;
     }
     if (command.input.awaitPublication) {
       requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });

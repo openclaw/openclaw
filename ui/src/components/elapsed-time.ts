@@ -37,3 +37,15 @@ class ElapsedTime extends TickingLabel {
 if (!customElements.get("openclaw-elapsed-time")) {
   customElements.define("openclaw-elapsed-time", ElapsedTime);
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-elapsed-time": HTMLAttributes<ElapsedTime> &
+        Properties<ElapsedTime> & {
+          "prop:startMs"?: number | null;
+          "prop:endMs"?: number | null;
+        };
+    }
+  }
+}

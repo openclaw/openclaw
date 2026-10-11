@@ -283,8 +283,9 @@ The private SQLite SDK's `openOpenClawAgentSqliteWorkerStoreV2` captures the
 existing agent executor without opening a host writer. Its required live
 authority remains bound through preparation, transaction, commit, and close;
 explicit preparation can create storage, while existing-only commands preserve
-absence. Memory Core sends lineage-origin, standing-intent, and Forget commands
-through that owner.
+absence. Memory Core sends vector/schema, metadata, lineage-origin,
+standing-intent, and Forget commands through that owner. Its published host
+reader is physically read-only and retires with the agent lifecycle.
 Logbook and Workboard already keep native SQL inside their worker backends.
 
 Released raw SQLite and opaque approval callbacks remain named native
@@ -666,6 +667,14 @@ evicting resident entries, while a before/after write-token check preserves one
 consistent cohort. Physical-source and live-authority checks remain with the
 caller. Schemas, stored data, and update behavior are unchanged.
 
+Session rows also reuse the replica's Board presence and transcript watermark,
+avoiding a history-worker request when those facts are resident. Exact metadata
+receipts preserve Board presence for the same session lifecycle; summaries need
+a complete watermark from an actor or projection receipt. Board writes and
+unknown publications invalidate that coverage. Row reads omit the large saved
+prompt snapshots before cloning and retain their existing shared-fact and access
+owners.
+
 Confirmed rollback leaves committed state intact. A lost reply reconciles
 against native commit evidence; an unknown outcome fences further commands and
 disclosure until a read rehydrates the original owner. Neither path replays the
@@ -698,6 +707,17 @@ authority. Pre- and post-hook checkpoints remain separate when the hook is an
 external effect. Actor-bound acceptance does not hold a legacy writer reservation
 around its commands. Unbound native and SDK callers retain their compatibility
 adapters, whose committed writes invalidate actor facts.
+
+Input staging, transcript acceptance, and run adoption rebase once on an explicit
+stale-version refusal, including when deferred participant recording commits
+ahead of admission. They retain the original lifecycle and pending-input
+predicates, prepared message bytes, and live authority checks. Committed and
+unknown outcomes never replay. Durable commands retain the physical writer FIFO
+across snapshot selection, command settlement, and the single rebase, so another
+queued writer cannot invalidate the refused postimage before its retry enters.
+Transcript appends and terminal accounting use the same command owner. Message
+preparation and external hooks remain outside this reservation; each native
+transaction still settles before another command starts.
 
 Canonical retry payloads stay with the existing bounded reader. A fresh input
 can prove absence from complete MAIN pending, completion, and idempotency facts;

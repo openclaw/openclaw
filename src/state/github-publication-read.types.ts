@@ -1,6 +1,13 @@
 import type { DB } from "./openclaw-state-db.generated.js";
 
 export type GitHubPublicationRow = DB["github_publication_requests"];
+export type SharedGitHubPublicationFilter = {
+  pending?: boolean;
+  status?: "requested" | "publishing" | "published" | "failed";
+  claimNull?: boolean;
+  sessionId?: string;
+  unreported?: boolean;
+};
 export type GitHubPublicationExecutionRow = Omit<
   GitHubPublicationRow,
   "claim_id" | "run_id" | "environment_id" | "owner_epoch" | "placement_generation"

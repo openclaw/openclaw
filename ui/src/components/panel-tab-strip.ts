@@ -254,7 +254,7 @@ export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
   newLabel: string;
   newDisabled?: boolean;
   newTabAction?: boolean;
-  newControl?: TemplateResult | typeof nothing;
+  newControl?: TemplateResult | Node | typeof nothing;
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {

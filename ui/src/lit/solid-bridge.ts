@@ -1,10 +1,11 @@
 import { ContextProvider } from "@lit/context";
-import { render, spread } from "@solidjs/web";
+import { insert, render, spread } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createEffect,
   createRenderEffect,
+  createRoot,
   createSignal,
   flush,
   onCleanup,
@@ -266,46 +267,50 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       }
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
-      this.#dispose = render(
-        () => {
-          const [revision, setRevision] = createSignal(0);
-          this.#notify = () => setRevision((value) => value + 1);
-          const props = {
-            ...defaults,
-            get children() {
-              return children ? children() : source;
+      const view = () => {
+        // Solid-owned hosts publish property updates while their parent renders.
+        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+        this.#notify = () => setRevision((value) => value + 1);
+        const props = {
+          ...defaults,
+          get children() {
+            return children ? children() : source;
+          },
+        };
+        for (const [key] of properties) {
+          Object.defineProperty(props, key, {
+            get: () => {
+              revision();
+              return this.#values.get(key);
             },
-          };
-          for (const [key] of properties) {
-            Object.defineProperty(props, key, {
-              get: () => {
-                revision();
-                return this.#values.get(key);
-              },
-            });
-          }
-          const renderContent = () => content(props, this.#host);
-          const view = () =>
-            layout
-              ? createComponent(ShellLayoutProvider, {
-                  value: { owner: layout, host: this },
-                  get children() {
-                    return renderContent();
-                  },
-                })
-              : renderContent();
-          return this.#application
-            ? createComponent(ApplicationProvider, {
-                value: this.#application,
+          });
+        }
+        const renderContent = () => content(props, this.#host);
+        const contentView = () =>
+          layout
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layout, host: this },
                 get children() {
-                  return view();
+                  return renderContent();
                 },
               })
-            : view();
-        },
-        this,
-        source,
-      );
+            : renderContent();
+        return this.#application
+          ? createComponent(ApplicationProvider, {
+              value: this.#application,
+              get children() {
+                return contentView();
+              },
+            })
+          : contentView();
+      };
+      // A nested top-level render would flush child effects under the parent's render owner.
+      this.#dispose = this.#solidOwned
+        ? createRoot((dispose) => {
+            insert(this, view());
+            return dispose;
+          })
+        : render(view, this, source);
     }
 
     #disposeRoot() {
