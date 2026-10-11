@@ -1,9 +1,10 @@
 import { createMemo, For } from "solid-js";
+import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import "../../components/web-awesome.ts";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
@@ -14,7 +15,6 @@ import {
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { cronRunEntryMatchesLink } from "./route-model.ts";
 import type { CronProps } from "./view-types.ts";
 registerEnglishCatalog(registerCronEnglish);
 type CronRunsSectionProps = Pick<
@@ -207,6 +207,7 @@ export function RunsSection(props: CronRunsSectionProps) {
     return props.runs.toSorted((a, b) => (ascending ? a.ts - b.ts : b.ts - a.ts));
   });
   const hasRunFilters = () =>
+    Boolean(props.highlightedRunId) ||
     props.runsQuery.trim().length > 0 ||
     props.runsStatuses.length > 0 ||
     props.runsDeliveryStatuses.length > 0;
@@ -216,6 +217,17 @@ export function RunsSection(props: CronRunsSectionProps) {
     <div class="cron-runs" aria-busy={props.runsState === "pending" ? "true" : "false"}>
       {props.conditionActivity ? (
         <ConditionActivity activity={props.conditionActivity} />
+      ) : undefined}
+      {props.highlightedRunId ? (
+        <div class="row">
+          <span>{t("cron.linkedRun.label")}</span>
+          <button
+            class="btn btn--sm"
+            onClick={() => void props.onRunsFiltersChange({ cronRunsRunId: null })}
+          >
+            {t("cron.linkedRun.showAll")}
+          </button>
+        </div>
       ) : undefined}
       <div class="cron-run-filters">
         <div class="cron-search-box cron-run-filter-search">

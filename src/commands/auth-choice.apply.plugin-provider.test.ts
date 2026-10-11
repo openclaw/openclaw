@@ -71,7 +71,8 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 const loadAuthProfileStoreWithoutExternalProfilesAsync = vi.hoisted(() => vi.fn());
-vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreWithoutExternalProfilesAsync,
 }));
 

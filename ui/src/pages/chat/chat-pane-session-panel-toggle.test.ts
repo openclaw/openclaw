@@ -351,7 +351,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     expect(
       pane
         .querySelector("openclaw-browser-panel")
-        ?.shadowRoot?.querySelector(".bp-shot")
+        ?.renderRoot?.querySelector(".bp-shot")
         ?.getAttribute("alt"),
     ).toBe("Local preview");
   } finally {

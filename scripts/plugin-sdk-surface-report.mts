@@ -161,7 +161,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
   // +5: released auth-store and TTS methods retain synchronous compatibility.
-  "agent-runtime": 9,
+  "agent-runtime": 10,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -191,7 +191,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "security-runtime": 1,
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
-  "session-store-runtime": 4,
+  "session-store-runtime": 6,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
@@ -199,7 +199,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 22,
   "models-provider-runtime": 1,
   // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
-  "command-auth-native": 1,
+  "command-auth-native": 3,
+  "native-command-registry": 1,
   "skill-commands-runtime": 2,
 } satisfies Record<string, number>);
 
@@ -231,9 +232,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: approved sync-to-async replacements: inspectConversationBinding,
       // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
       // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
+      // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
       // +3: approved async skill-command preparation pairs on two existing entrypoints.
       // +14: approved async auth, model, and TTS replacement pairs.
-      3678,
+      // +6: approved async session, command-menu, model-override, and TTS-path replacements.
+      3691,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -251,9 +254,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
       // +5: the five awaited inspection, authorization, and approval factory replacements above.
+      // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
       // +3: the same skill-command preparation replacements.
       // +14: the same auth, model, and TTS replacement pairs.
-      2144,
+      // +6: the same session, command-menu, model-override, and TTS-path replacements.
+      2152,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -265,7 +270,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: released synchronous conversation binding contracts during V2 migration.
       // +3: released synchronous skill-command list helpers during async migration.
       // +14: retained synchronous auth, model, and TTS compatibility exports.
-      175,
+      // +6: retained synchronous session, command-menu, model-override, and TTS-path exports.
+      181,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

@@ -1,7 +1,10 @@
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { materializePersonalAuthProfile } from "./personal-profiles.js";
-import type { LoadAuthProfileStoreOptions, PreparedAuthProfileStoreReads } from "./runtime-read.js";
+import type {
+  LoadAuthProfileStoreOptions,
+  PreparedAuthProfileStoreReads,
+} from "./runtime-read.types.js";
 import type { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import type { AuthProfileStore } from "./types.js";
 

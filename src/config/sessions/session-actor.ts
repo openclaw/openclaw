@@ -203,10 +203,10 @@ export function createSessionActor(params: {
         ) {
           throw new Error("Session actor admission belongs to another target");
         }
-        // SAFETY: The paired actor kernel supplies this full snapshot on its private admission port.
-        const snapshot = structuredClone(facts.snapshot) as SessionActorHotState;
+        // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
+        const snapshot = facts.snapshot as SessionActorHotState;
         authority.authorize(request.stage, structuredClone(snapshot), facts.publication);
-        observe?.(native, request.stage, structuredClone(snapshot), facts.final === true);
+        observe?.(native, request.stage, snapshot, facts.final === true);
       } else if (
         actorAdmissionSeen &&
         (request.stage === "commit" || (request.stage === "transaction" && facts !== undefined))

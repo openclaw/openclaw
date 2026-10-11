@@ -46,11 +46,10 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(async () => true),
 }));
 
-vi.mock("../../agents/auth-profiles.js", async () => {
-  const { clearRuntimeAuthProfileStoreSnapshots } =
-    await import("../../agents/auth-profiles/runtime-snapshots.js");
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
   return {
-    clearRuntimeAuthProfileStoreSnapshots,
+    ...actual,
     ensureAuthProfileStoreWithoutExternalProfiles:
       mocks.ensureAuthProfileStoreWithoutExternalProfiles,
     ensureAuthProfileStoreWithoutExternalProfilesAsync: async () =>

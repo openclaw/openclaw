@@ -16,6 +16,16 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+Gateway adapters use the existing `core` or `gateway-runtime`
+`GatewayRequestHandlerOptions.context.githubPublicationService` contract for
+GitHub publication. Prepare its required capabilities with
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `gateway-runtime`, using admitted handler options, and release them after
+the operation settles. The host's worker and source-fence modules remain private.
+Migrate wrappers and lifecycle calls using the
+[GitHub publication method mapping](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations),
+without adding imports from Gateway internals.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or

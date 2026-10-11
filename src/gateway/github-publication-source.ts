@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  createSqliteSourceFenceAdmission,
+  type SqliteSourceFenceOwner,
+} from "../infra/sqlite-source-fence-admission.js";
 import type { SqliteSourceFenceIdentity } from "../infra/sqlite-source-fence-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -7,6 +11,7 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
+import type { GitHubPublicationSourcePredicate } from "../state/github-publication-source-contract.js";
 import type { GitHubPublicationSourceSelector } from "../state/github-publication-source.types.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import {
@@ -14,13 +19,23 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { observeUserGitHubConnectionAuthority } from "../state/user-github-connection-events.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 
-const { destinationIncarnations } = resolveGlobalSingleton(
+type SourceBinding = {
+  context: OpenClawStateWorkerContext;
+  predicate: GitHubPublicationSourcePredicate;
+  source: SqliteSourceFenceOwner;
+  destination: SqliteSourceFenceOwner;
+  signal: AbortSignal;
+  admitted: boolean;
+};
+const { bindings, destinationIncarnations } = resolveGlobalSingleton(
   Symbol.for("openclaw.githubPublicationSourceCapabilities"),
   () => ({
+    bindings: new WeakMap<GitHubPublicationSourceCapability, SourceBinding>(),
     destinationIncarnations: new WeakMap<object, string>(),
   }),
 );
@@ -30,6 +45,44 @@ export type GitHubPublicationSourceCapability = Readonly<{
   version: 1;
   release(): Promise<void>;
 }>;
+
+/** Compose the publication runtime's lifetime before native admission captures its signals. */
+export function bindGitHubPublicationSourceLifetime(
+  capability: GitHubPublicationSourceCapability,
+  lifetime: AbortSignal,
+): GitHubPublicationSourceCapability {
+  const binding = bindings.get(capability);
+  if (!binding || binding.admitted) {
+    throw new Error("GitHub publication source lifetime was already admitted.");
+  }
+  const signal = AbortSignal.any([binding.signal, lifetime]);
+  signal.throwIfAborted();
+  binding.signal = signal;
+  binding.source = { ...binding.source, signal };
+  binding.destination = { ...binding.destination, signal };
+  return capability;
+}
+
+export function bindGitHubPublicationSource(capability: GitHubPublicationSourceCapability) {
+  const binding = bindings.get(capability);
+  if (!binding) {
+    throw new Error("GitHub publication source capability is unavailable.");
+  }
+  binding.signal.throwIfAborted();
+  return {
+    context: binding.context,
+    predicate: binding.predicate,
+    createAdmission: ((operation) => {
+      binding.admitted = true;
+      return createSqliteSourceFenceAdmission({
+        destination: binding.destination,
+        sources: [binding.source],
+        signal: binding.signal,
+        deadlineNs: process.hrtime.bigint() + 120_000_000_000n,
+      })(operation);
+    }) satisfies ReturnType<typeof createSqliteSourceFenceAdmission>,
+  };
+}
 
 /** Host policy executes before reservation; the worker rechecks every durable source fact. */
 export async function prepareGitHubPublicationSource(params: {
@@ -47,11 +100,13 @@ export async function prepareGitHubPublicationSource(params: {
   }
   const closed = new AbortController();
   const signal = AbortSignal.any([params.signal, closed.signal]);
+  const pending = new Set<Promise<unknown>>();
   const releases: Array<() => void> = [];
   let releasing: Promise<void> | undefined;
   const revoke = () => closed.abort(new Error("GitHub publication source authority changed."));
   const drain = async () => {
     revoke();
+    await Promise.allSettled(pending);
   };
   const release = () =>
     (releasing ??= (async () => {
@@ -64,6 +119,14 @@ export async function prepareGitHubPublicationSource(params: {
     signal.throwIfAborted();
     context.admission.assertCurrent();
     assertExistingDatabaseIdentity(params.sourcePath, physical.key, physical.birthtime);
+  };
+  const retain: SqliteSourceFenceOwner["retain"] = (operation) => {
+    assertCurrent();
+    pending.add(operation.settled);
+    void operation.settled.then(
+      () => pending.delete(operation.settled),
+      () => pending.delete(operation.settled),
+    );
   };
   const sourceIdentity: SqliteSourceFenceIdentity = { physical, incarnation: randomUUID() };
   releases.push(
@@ -116,16 +179,34 @@ export async function prepareGitHubPublicationSource(params: {
       destination: { physical: context.admission.identity, incarnation },
       selector: structuredClone(params.selector),
     };
-    await runOpenClawStateWorkerOperation(
+    const expected = await runOpenClawStateWorkerOperation(
       context,
       (scope) =>
         scope.execute({ type: "githubPublication.sourceFacts", input: { source: sourceRead } }),
       { signal, assertCurrent },
     );
+    sourceRead.destination.physical = context.admission.identity;
     // Policy callbacks may write SQLite. Such a write revokes this captured basis.
     params.assertCurrent();
     assertCurrent();
     const capability: GitHubPublicationSourceCapability = Object.freeze({ version: 1, release });
+    bindings.set(capability, {
+      context,
+      predicate: { ...sourceRead, expected },
+      source: {
+        identity: sourceIdentity,
+        signal,
+        assertCurrent: () => {
+          // S8 invokes this only before reservations, including its final prepare grant.
+          params.assertCurrent();
+          assertCurrent();
+        },
+        retain,
+      },
+      destination: { identity: sourceRead.destination, signal, assertCurrent, retain },
+      signal,
+      admitted: false,
+    });
     return capability;
   } catch (error) {
     await release();
