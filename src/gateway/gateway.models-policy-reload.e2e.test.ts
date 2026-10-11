@@ -120,7 +120,8 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
   // Equivalent spellings exercise each RPC instead of its one-second response cache.
   const nextRequest = () => {
     const mask = requestIndex++;
-    const provider = [..."openai"]
+    const provider = "openai"
+      .split("")
       .map((letter, index) => (mask & (1 << index) ? letter.toUpperCase() : letter))
       .join("");
     return { agentId: "main", authProfileId, provider };
