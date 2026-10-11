@@ -48,6 +48,7 @@ export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
   const directCache = createBoundedSchemaCache<T>(maxEntries);
   const preparedCache = createBoundedSchemaCache<{
     inputJson: string;
+    inputTruncated: boolean;
     outputJson: string;
     truncated: boolean;
   }>(maxEntries);
@@ -58,7 +59,8 @@ export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
         return inheritToolSchemaTruncation(source, directCache.get(source, key));
       }
       const entry = preparedCache.get(prepared.source, key);
-      return entry?.inputJson === prepared.inputJson
+      return entry?.inputJson === prepared.inputJson &&
+        entry.inputTruncated === wasToolSchemaTruncated(source)
         ? inheritToolSchemaTruncation(
             source,
             JSON.parse(entry.outputJson) as T, // SAFETY: This pool stores only this normalizer's JSON schema output.
@@ -76,6 +78,7 @@ export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
       if (outputJson !== undefined) {
         preparedCache.remember(prepared.source, key, {
           inputJson: prepared.inputJson,
+          inputTruncated: wasToolSchemaTruncated(source),
           outputJson,
           truncated: wasToolSchemaTruncated(result),
         });

@@ -149,6 +149,24 @@ describe("shared tool schema depth budget", () => {
         });
       }
     }
+    let materialized: unknown = parameters;
+    const tools = [
+      {
+        name: "mutable_reference_tool",
+        description: "Mutable reference tool",
+        parameters: { toJSON: () => materialized },
+      },
+    ];
+    const freshSchema: unknown = JSON.parse(JSON.stringify(parameters));
+    for (const [next, strict] of [
+      [parameters, false],
+      [freshSchema, true],
+      [parameters, false],
+      [freshSchema, true],
+    ] as const) {
+      materialized = next;
+      expect(convertResponsesToolPayload(tools, { strict: true })[0]?.strict).toBe(strict);
+    }
   });
 
   it("keeps deep provider tools and observes source edits and toJSON once per payload", () => {
