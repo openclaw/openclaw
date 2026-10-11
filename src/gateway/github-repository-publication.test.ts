@@ -69,6 +69,7 @@ describe("repository checkpoint GitHub publication", () => {
         f.runtime.accountId = personalPublicationAccount.accountId;
       }
       let current = true;
+      let checkedPublishingTransaction = false;
       const transport = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (args: string[], options) => {
         const result = await transport(args, options);
@@ -100,6 +101,12 @@ describe("repository checkpoint GitHub publication", () => {
               sessionKey: SESSION_KEY,
               idempotencyKey: "accepted-before-close",
               assertCurrent: () => {
+                if (
+                  openOpenClawStateDatabase().db.isTransaction &&
+                  listRepositoryGitHubPublications().some((row) => row.status === "publishing")
+                ) {
+                  checkedPublishingTransaction = true;
+                }
                 if (!current) {
                   throw new Error("Publication authority closed");
                 }
@@ -107,6 +114,9 @@ describe("repository checkpoint GitHub publication", () => {
             });
       const published = await request();
       expect(published).toMatchObject({ status: "published", url });
+      if (source === "shared") {
+        expect(checkedPublishingTransaction).toBe(true);
+      }
       expect(readRepositoryGitHubPublication(published.requestId)).toMatchObject({
         status: "published",
         pull_request_url: url,
