@@ -28,7 +28,6 @@ import {
   requireActivePluginChannelRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -51,7 +50,6 @@ import {
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
@@ -64,10 +62,6 @@ import {
   type TestAccount,
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
