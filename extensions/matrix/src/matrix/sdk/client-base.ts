@@ -35,6 +35,7 @@ import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./idb-persistence-lock.js";
+import { persistMatrixKeyUploadIfNeeded } from "./key-upload-fence.js";
 import { withMatrixLiveEncryptedRoom } from "./live-room-readiness.js";
 import { LogService, noop } from "./logger.js";
 import { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
@@ -222,6 +223,18 @@ export abstract class MatrixClientBase {
         // Complete admitted key persistence before checking live wire authority.
         await this.recoveryKeyStore.drainPendingPersistence();
         await this.messageWireDispatchGuards.beforeRequest(resource, init);
+        await persistMatrixKeyUploadIfNeeded({
+          resource,
+          init,
+          encryptionEnabled: this.encryptionEnabled,
+          snapshotPath: this.idbSnapshotPath,
+          databasePrefix: this.cryptoDatabasePrefix,
+          stateRuntime: this.stateRuntime,
+          assertClientActive: this.assertClientActive,
+          requestAuthority: this.captureRequestAuthority(),
+          requestSignal: this.cryptoRequestOwner.getStore()?.requestSignal,
+          loadCryptoRuntime: loadMatrixCryptoRuntime,
+        });
       },
     });
     this.client = createMatrixJsClient({
