@@ -176,7 +176,7 @@ export default defineControlUiPlugin({
     ),
     "README.md": `# ${params.name}
 
-This OpenClaw feature plugin includes a typed draft-analysis operation, a model tool, a native page, and a composer replacement. The browser entry owns its DOM and uses the host's canonical draft and send operations.
+This OpenClaw feature plugin includes a typed draft-analysis operation, a model tool, a native page, and a composer replacement. The browser entry owns its DOM and uses the host's standard draft and send operations.
 
 ## Build and install
 

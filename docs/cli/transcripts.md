@@ -17,7 +17,7 @@ Inspector and export command for durable meeting transcripts.
 browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
 
-Canonical transcript state lives in the shared SQLite database at
+Stored transcript state lives in the shared SQLite database at
 `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`. `show` and `path` explicitly
 materialize user-facing artifacts under the state directory:
 
@@ -52,7 +52,7 @@ Search titles, session/source IDs, saved summary notes, and transcript text;
 meeting URLs are not searched. Filter by
 exact provider, account, or agent ID, or by the session start date. Date filters
 use UTC: **Started on or after** includes the selected day, and **Started before**
-excludes it. Results load in deterministic pages. Changing a filter or selecting
+excludes it. Results load in consistently ordered pages. Changing a filter or selecting
 **Refresh** starts pagination again.
 
 Select a meeting to open its stored **Summary**. Existing
@@ -107,7 +107,7 @@ openclaw transcripts path <session> --json
 | `--json`                      | Print machine-readable output (any subcommand).      |
 
 Use the selector printed by `list` to address an exact capture. An existing
-canonical selector takes priority over a raw session ID with the same text.
+export selector takes priority over a raw session ID with the same text.
 Otherwise, `show` and `path` accept `YYYY-MM-DD/<raw-session-id>`, keeping the
 entire suffix literal, including punctuation and slashes. For example:
 
@@ -123,7 +123,7 @@ include a timestamp and random suffix; give a session a fixed ID only when
 that ID is unique within the day.
 
 If the filesystem-safe export name exceeds 255 bytes, OpenClaw shortens it
-to a prefix plus a deterministic SHA-256 hash of the complete original session
+to a prefix plus a SHA-256 hash of the complete original session
 ID. Only the derived export name and its selector change; the raw session ID,
 provider stop handle, and stored notes stay intact. Names that already fit
 remain unchanged. Use the selector printed by `list` for the shortened name.
@@ -173,7 +173,7 @@ Reading notes does not regenerate the summary or export artifacts.
 
 ### Selecting a capture
 
-The `transcripts` tool returns both the unchanged raw `sessionId` and a canonical
+The `transcripts` tool returns both the unchanged raw `sessionId` and an export
 `selector` from start, import, stop, and summarize. Authorized `status` results
 include selectors for active captures and entries awaiting finalization. Its
 model-facing text shows up to three complete selectors, prioritizing captures
@@ -188,7 +188,7 @@ or summarize calls:
 
 Show, stop, and summarize require exactly one of `selector` or `sessionId`. Other
 actions reject `selector`; start and import continue to accept raw IDs through
-`sessionId`. Explicit `selector` input accepts canonical selectors and the
+`sessionId`. Explicit `selector` input accepts export selectors and the
 historical date/raw-ID form above, but never falls back to the whole input as a
 raw ID.
 
@@ -197,7 +197,7 @@ they identify different captures, the tool reports ambiguity without listing
 candidate details. This stays ambiguous after a capture ends. Use a selector
 returned by start, import, or authorized list/status, or inspect `openclaw transcripts
 list` locally and pass the desired value in the `selector` field. Both sides of
-a raw-ID/selector collision remain addressable by their own canonical selector.
+a raw-ID/selector collision remain addressable by their own export selector.
 
 Without a conflicting qualified meaning or a different raw-ID/slug candidate,
 legacy `sessionId` selects the current exact raw-ID capture for stop and
@@ -245,7 +245,7 @@ notes and participants. Search time grows with the saved text being searched.
 Cursors belong to their current query and filters;
 changing either requires a fresh first page. A null `nextCursor` ends pagination.
 
-The stored summary Markdown is the canonical notes text, matching the CLI's
+The stored summary Markdown is the saved notes text, matching the CLI's
 `show` output. Reads do not generate summaries or materialize files. Utterances
 are omitted unless `includeUtterances` is true. Supplying `limit`, `cursor`, or
 `query` selects paginated reads: at most 100 utterances per page, default 50,
@@ -326,7 +326,7 @@ request generation. The archive read RPCs themselves remain read-only.
 
 Meeting notes use the owning agent's utility model first, then its primary model
 when needed. If no model is available, a request times out, or the model returns
-invalid output, OpenClaw saves deterministic heuristic notes instead. Model
+invalid output, OpenClaw saves rule-based notes instead. Model
 generation enhances the notes; it does not gate saving them. Notes include an
 overview, participants, decisions, action items, risks, and finally the transcript,
 so bounded readers see the notes before long transcripts.
@@ -391,7 +391,7 @@ openclaw agent --agent <owning-agent-or-main> --local --message \
 
 ## Upgrading the legacy file store
 
-OpenClaw releases that predate the SQLite store wrote canonical runtime state
+OpenClaw releases that predate the SQLite store wrote runtime state
 directly beneath `$OPENCLAW_STATE_DIR/transcripts/`. Run:
 
 ```bash

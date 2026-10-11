@@ -221,7 +221,7 @@ export async function createClawProject(
   if (!isCanonicalClawHubPackageName(name)) {
     throw new ClawProjectError(
       "invalid_package_name",
-      `Package name ${JSON.stringify(name)} must be a canonical ClawHub package name.`,
+      `Package name ${JSON.stringify(name)} must be a valid ClawHub package name.`,
     );
   }
 

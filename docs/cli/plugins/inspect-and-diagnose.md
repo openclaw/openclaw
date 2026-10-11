@@ -48,7 +48,7 @@ Global discovery diagnostics go to stderr, including with `--json`. This explain
 
 SDK import failures appear in the existing plugin error output and Doctor's
 plugin diagnostics. The diagnostic names the plugin, imported
-`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
+`openclaw/plugin-sdk/*` API, running core version, and build version when known.
 For an official plugin, run `openclaw plugins update <id>`. A running Gateway applies
 the update before the command completes; otherwise it loads the update at its next start.
 If the error identifies a nested SDK, the plugin bundles an incompatible

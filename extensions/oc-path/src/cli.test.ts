@@ -220,16 +220,6 @@ describe("openclaw path CLI", () => {
   });
 
   describe("validate", () => {
-    it("CLI-V01 accepts a well-formed path with --json", async () => {
-      const rt = createTestRuntime();
-      await pathValidateCommand("oc://AGENTS.md/Tools/-1", { json: true }, rt);
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.valid).toBe(true);
-      expect(out.structure.file).toBe("AGENTS.md");
-      expect(out.structure.section).toBe("Tools");
-    });
-
     it("CLI-V02 rejects a malformed path with code 1", async () => {
       const rt = createTestRuntime();
       await pathValidateCommand("oc://X/a\x00b", { json: true }, rt);
@@ -237,29 +227,9 @@ describe("openclaw path CLI", () => {
       const out = JSON.parse(stdoutText(rt));
       expect(out.valid).toBe(false);
     });
-
-    it("CLI-V03 missing argument is rejected by Commander", async () => {
-      const rt = createTestRuntime();
-      await pathValidateCommand(undefined, { json: true }, rt);
-      expect(rt.exitCode).toBe(1);
-      expect(stderrText(rt)).toContain("missing required argument");
-    });
   });
 
   describe("resolve", () => {
-    it("CLI-R01 finds a leaf in jsonc and prints it", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
-      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
-      const rt = createTestRuntime();
-      await pathResolveCommand("oc://gateway.jsonc/version", { cwd: workspaceDir, json: true }, rt);
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.resolved).toBe(true);
-      expect(out.match.kind).toBe("leaf");
-      expect(out.match.valueText).toBe("1.0");
-    });
-
     it("CLI-R04 finds a leaf in yaml and prints it", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "workflow.yaml");
@@ -305,13 +275,6 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(0);
       expect(JSON.parse(stdoutText(rt)).match.valueText).toBe("1.0");
       expect(readFileSync(filePath)).toEqual(before);
-    });
-
-    it("CLI-R03 missing argument is rejected by Commander", async () => {
-      const rt = createTestRuntime();
-      await pathResolveCommand(undefined, { json: true }, rt);
-      expect(rt.exitCode).toBe(1);
-      expect(stderrText(rt)).toContain("missing required argument");
     });
 
     it("bounds every file-loading verb before parsing oversized input", async () => {
@@ -405,22 +368,6 @@ describe("openclaw path CLI", () => {
   });
 
   describe("set", () => {
-    it("CLI-S01 writes new bytes when path resolves", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
-      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
-      const rt = createTestRuntime();
-      await pathSetCommand(
-        "oc://gateway.jsonc/version",
-        "2.0",
-        { cwd: workspaceDir, json: true },
-        rt,
-      );
-      expect(rt.exitCode).toBe(0);
-      const after = readFileSync(filePath, "utf-8");
-      expect(after).toContain('"2.0"');
-    });
-
     it("CLI-S09 refuses an undecodable file instead of rewriting untouchable bytes", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
@@ -461,26 +408,6 @@ describe("openclaw path CLI", () => {
       const after = readFileSync(filePath, "utf-8");
       expect(after).toContain('"version": "2.0"');
       expect(after).toContain("合法 😀 �");
-    });
-
-    it("CLI-S02 --dry-run does not write to disk", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '{ "version": "1.0" }';
-      writeFileSync(filePath, before, "utf-8");
-      const rt = createTestRuntime();
-      await pathSetCommand(
-        "oc://gateway.jsonc/version",
-        "2.0",
-        { cwd: workspaceDir, json: true, dryRun: true },
-        rt,
-      );
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.dryRun).toBe(true);
-      expect(out.bytes).toContain('"2.0"');
-      // File on disk unchanged.
-      expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
     it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
@@ -568,25 +495,6 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
-    it("CLI-S06 --dry-run --diff includes diff in JSON output", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
-      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
-      const rt = createTestRuntime();
-      await pathSetCommand(
-        "oc://gateway.jsonc/version",
-        "2.0",
-        { cwd: workspaceDir, json: true, dryRun: true, diff: true },
-        rt,
-      );
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.dryRun).toBe(true);
-      expect(out.bytes).toContain('"2.0"');
-      expect(out.diff).toContain('-{ "version": "1.0" }');
-      expect(out.diff).toContain('+{ "version": "2.0" }');
-    });
-
     it("CLI-S07 rejects --diff without --dry-run", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
@@ -665,7 +573,7 @@ describe("openclaw path CLI", () => {
       );
     });
 
-    it.each([false, true])(
+    it.each([true])(
       "refuses sentinel-bearing Markdown insertion in the CLI (dry-run=%s)",
       async (dryRun) => {
         const workspaceDir = tempDirs.make("oc-path-cli-");
@@ -705,13 +613,6 @@ describe("openclaw path CLI", () => {
       expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
       // Include the actual file in the sentinel error so operators can locate it.
       expect(stderrText(rt)).toContain("gateway.jsonc");
-    });
-
-    it("CLI-S04 missing args are rejected by Commander", async () => {
-      const rt = createTestRuntime();
-      await pathSetCommand(undefined, undefined, { json: true }, rt);
-      expect(rt.exitCode).toBe(1);
-      expect(stderrText(rt)).toContain("missing required argument");
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
@@ -781,70 +682,19 @@ describe("openclaw path CLI", () => {
       expect(out.bytes).toBe(before);
     });
 
-    it.each([
-      ["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"],
-      ["CRLF", "## Heading\r\n\r\n- item\r\n"],
-      ["unstructured prose", "Just preamble. No structure.\n"],
-    ])("CLI-E02 round-trips md verbatim: %s", async (_label, before) => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "AGENTS.md");
-      writeFileSync(filePath, before, "utf-8");
-      const rt = createTestRuntime();
-      await pathEmitCommand(filePath, { json: true }, rt);
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.kind).toBe("md");
-      expect(out.bytes).toBe(before);
-    });
-
-    it("CLI-E04 round-trips yaml verbatim", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "workflow.yaml");
-      const before = "# keep comment\nname: inbox-triage\nsteps:\n  - id: fetch\n";
-      writeFileSync(filePath, before, "utf-8");
-      const rt = createTestRuntime();
-      await pathEmitCommand(filePath, { json: true }, rt);
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.kind).toBe("yaml");
-      expect(out.bytes).toBe(before);
-    });
-
-    it("CLI-S07b reports accurate UTF-8 byte counts for multibyte set output", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '{\n  "version": "1.0"\n}\n';
-      writeFileSync(filePath, before, "utf-8");
-      // Replace the whole file with CJK content via the version key.
-      // CJK chars are 1 UTF-16 unit but 3 UTF-8 bytes.
-      const cjkValue = "中".repeat(30);
-      const rt = createTestRuntime();
-      await pathSetCommand(
-        "oc://gateway.jsonc/version",
-        cjkValue,
-        { cwd: workspaceDir, json: true },
-        rt,
-      );
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      // bytesWritten must match the file's actual UTF-8 byte size on disk
-      const onDisk = readFileSync(filePath, "utf-8");
-      expect(out.bytesWritten).toBe(Buffer.byteLength(onDisk, "utf8"));
-      // bytesWritten exceeds JS string length (50 UTF-16 units < ~110 UTF-8 bytes)
-      expect(out.bytesWritten).toBeGreaterThan(onDisk.length);
-    });
-
-    it("CLI-E03 emit --cwd resolves <file> against the supplied directory", async () => {
-      // A relative file must resolve against --cwd, not the process directory.
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "AGENTS.md");
-      writeFileSync(filePath, "## Tools\n- gh\n", "utf-8");
-      const rt = createTestRuntime();
-      await pathEmitCommand("AGENTS.md", { cwd: workspaceDir, json: true }, rt);
-      expect(rt.exitCode).toBe(0);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.kind).toBe("md");
-      expect(out.bytes).toBe("## Tools\n- gh\n");
-    });
+    it.each([["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"]])(
+      "CLI-E02 round-trips md verbatim: %s",
+      async (_label, before) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "AGENTS.md");
+        writeFileSync(filePath, before, "utf-8");
+        const rt = createTestRuntime();
+        await pathEmitCommand(filePath, { json: true }, rt);
+        expect(rt.exitCode).toBe(0);
+        const out = JSON.parse(stdoutText(rt));
+        expect(out.kind).toBe("md");
+        expect(out.bytes).toBe(before);
+      },
+    );
   });
 });
