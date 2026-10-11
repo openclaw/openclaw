@@ -186,8 +186,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as { index?: number }).index;
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as { partialJson?: string }).partialJson;
       }
       if (refusalBuffer) {
         refusalBuffer.discard();

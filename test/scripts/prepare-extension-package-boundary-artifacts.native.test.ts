@@ -50,7 +50,11 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   );
   write(
     "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({ extends: "../../tsconfig.json", include: ["../../src/**/*.ts"] }),
+    JSON.stringify({
+      extends: "../../tsconfig.json",
+      include: ["../../src/**/*.ts"],
+      exclude: ["../../src/shared/deferred.ts"],
+    }),
   );
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
@@ -63,11 +67,12 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
+    "src/shared/deferred.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
   ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
-  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "@openclaw/fs-safe", "@openclaw/proc-safe"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target);

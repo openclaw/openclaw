@@ -330,14 +330,7 @@ function expectStringSchema(
     description?: string;
   },
 ) {
-  if (!schema || typeof schema !== "object") {
-    throw new Error("Expected string schema");
-  }
-  const record = schema as Record<string, unknown>;
-  expect(record.type).toBe("string");
-  if (expected?.description) {
-    expect(record.description).toBe(expected.description);
-  }
+  expect(schema).toMatchObject({ type: "string", ...expected });
 }
 
 const { runMessageAction: actualRunMessageAction } = await vi.importActual<
@@ -2096,9 +2089,13 @@ describe("message tool schema scoping", () => {
     registerPlugins();
   });
 
-  it("includes configured plugin fields and actions in the scoped schema", () => {
+  it("includes bound plugin fields and actions in the scoped schema", () => {
     registerPlugins(telegramPlugin, discordPlugin, slackPlugin);
-    const tool = createMessageTool({ config: {}, currentChannelProvider: "telegram" });
+    const tool = createMessageTool({
+      config: { bindings: [{ agentId: "main", match: { channel: "discord" } }] },
+      agentId: "main",
+      currentChannelProvider: "telegram",
+    });
     const properties = getToolProperties(tool);
     expect(getActionEnum(properties)).toEqual(["poll", "poll-vote", "react", "send"]);
     expect(properties).toHaveProperty("presentation");
@@ -2278,7 +2275,8 @@ describe("message tool cross-channel schema", () => {
     registerPlugins(signalPlugin, telegramPlugin);
 
     const tool = createMessageTool({
-      config: {} as never,
+      config: { bindings: [{ agentId: "main", match: { channel: "telegram" } }] },
+      agentId: "main",
       currentChannelProvider: "signal",
     });
 
@@ -2306,7 +2304,8 @@ describe("message tool cross-channel schema", () => {
     registerPlugins(signalPlugin, matrixProfilePlugin);
 
     const crossChannelTool = createMessageTool({
-      config: {} as never,
+      config: { bindings: [{ agentId: "main", match: { channel: "matrix" } }] },
+      agentId: "main",
       currentChannelProvider: "signal",
     });
     const crossChannelProperties = getToolProperties(crossChannelTool);

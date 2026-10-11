@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
-import type { PluginPage } from "../pages/plugin/plugin-page.ts";
+import type { PluginPageElement } from "../pages/plugin/plugin-page.tsx";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI plugin tab slugs" });
 const pluginId = "reports-fixture";
@@ -61,15 +62,12 @@ async function expectReports(page: Page, pathname = "/reports") {
     .waitFor();
   expect(new URL(page.url()).pathname).toBe(pathname);
   expect(
-    await page.locator("openclaw-plugin-page").evaluate((element: PluginPage) => ({
+    await page.locator("openclaw-plugin-page").evaluate((element: PluginPageElement) => ({
       pluginId: element.pluginId,
       id: element.tabId,
     })),
   ).toEqual({ pluginId, id: tabId });
-  await page
-    .locator("openclaw-app-sidebar")
-    .getByRole("button", { name: "Pages", exact: true })
-    .click();
+  await openSidebarPages(page);
   const sidebarEntry = page.locator(
     `.sidebar-pages [data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`,
   );

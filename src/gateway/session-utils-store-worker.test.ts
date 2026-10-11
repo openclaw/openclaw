@@ -80,6 +80,14 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
     } finally {
       sql.restore();
     }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, env },
+      { sessionId: "updated-worker-projection", updatedAt: 2, label: "Updated in process" },
+    );
+    expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).entry).toMatchObject({
+      sessionId: "updated-worker-projection",
+      label: "Updated in process",
+    });
   });
 });
 

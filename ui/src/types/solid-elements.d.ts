@@ -5,7 +5,10 @@ import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/ta
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
+import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
+import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { MascotMood } from "../components/mascot-pose.ts";
+import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
 
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
@@ -15,7 +18,26 @@ type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key
 
 declare module "@solidjs/web" {
   namespace JSX {
+    interface ExplicitProperties {
+      messageActions: MessageActionDetails | null | undefined;
+    }
     interface IntrinsicElements {
+      "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
+        "prop:surface": "tool-result";
+        "prop:props": ControlUiSurfaceProps["tool-result"];
+        "prop:defaultView": unknown;
+        "prop:presented": boolean;
+      };
+      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
+        compact?: boolean;
+        placement?: "bottom-start" | "bottom-end";
+        "prop:activeEmoji"?: ReadonlySet<string>;
+        "prop:onSelect"?: (emoji: string, remove: boolean) => void;
+      };
+      "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
+        "prop:recommendation"?: ClawHubRecommendation;
+        "prop:agentId"?: string;
+      };
       "wa-tab-group": HTMLAttributes<WaTabGroup> & {
         "prop:active": string;
         activation: "auto" | "manual";
@@ -44,6 +66,7 @@ declare module "@solidjs/web" {
       };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
+        "prop:openOnClick"?: boolean;
         "prop:describe"?: boolean;
         placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
         "open-on-click"?: boolean;
@@ -58,6 +81,30 @@ declare module "@solidjs/web" {
             "staticParticipants" | "totalCount" | "maxVisible" | "personActivity"
           >
         >;
+      "openclaw-viewer-avatar": HTMLAttributes<HTMLElementTagNameMap["openclaw-viewer-avatar"]> &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-viewer-avatar"],
+            "identity" | "user" | "markAsViewer"
+          >
+        > & { variant?: HTMLElementTagNameMap["openclaw-viewer-avatar"]["variant"] };
+      "openclaw-ip-location": HTMLAttributes<HTMLElementTagNameMap["openclaw-ip-location"]> &
+        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-ip-location"], "ip">>;
+      "openclaw-link-reader-hovercard-provider": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-link-reader-hovercard-provider"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-link-reader-hovercard-provider"],
+            "client" | "readers" | "agentId" | "previewSeeds"
+          >
+        >;
+      "openclaw-session-owner-chip": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-session-owner-chip"]
+      > &
+        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-session-owner-chip"], "owner">> & {
+          size?: HTMLElementTagNameMap["openclaw-session-owner-chip"]["size"];
+        };
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };

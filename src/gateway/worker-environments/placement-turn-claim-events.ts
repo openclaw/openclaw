@@ -27,7 +27,7 @@ import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-
 import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { notifyListeners } from "../../shared/listeners.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
@@ -100,6 +100,7 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
+    inference?: WorkerInferenceExecutor;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
@@ -403,6 +404,7 @@ export function bindWorkerTurnCapabilities(
   capabilities: {
     toolSurface: WorkerGatewayToolRuntime;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
+    inference?: WorkerInferenceExecutor;
   },
 ): void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -425,6 +427,10 @@ export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
 
 export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
   return resolveWorkerTurnRuntime(identity)?.toolSurface;
+}
+
+export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.inference;
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */

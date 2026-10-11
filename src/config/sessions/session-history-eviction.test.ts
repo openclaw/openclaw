@@ -35,7 +35,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import * as diskBudgetModule from "./disk-budget.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -54,6 +54,7 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -685,18 +686,23 @@ describe("SQLite historical session disk budget", () => {
         const writer =
           writerKind === "external connection" ? new DatabaseSync(owner.path) : owner.db;
         try {
+          const entryJson = JSON.stringify({
+            sessionId: "survivor-current",
+            updatedAt: 1,
+            usageFamilySessionIds: ["reference-old"],
+          });
+          const columns = deriveSessionPredicateColumns(entryJson);
           writer
             .prepare(
-              "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+              `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at,
+                session_started_at, has_optional_references) VALUES (?, ?, ?, 1, ?, ?)`,
             )
             .run(
               referringKey,
               "survivor-current",
-              JSON.stringify({
-                sessionId: "survivor-current",
-                updatedAt: 1,
-                usageFamilySessionIds: ["reference-old"],
-              }),
+              entryJson,
+              columns.session_started_at,
+              columns.has_optional_references,
             );
           // Complete the canonical writer's validity settlement for this healthy fixture row.
           writer

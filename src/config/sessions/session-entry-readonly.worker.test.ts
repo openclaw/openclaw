@@ -411,9 +411,9 @@ it("propagates raw worker failure without calling the optional-data consumer", a
   });
 });
 
-it("retains the registry witness even when the first read rejects before returning a snapshot", async () => {
+it("retains the scoped registry witness even when the first read rejects before returning a snapshot", async () => {
   await withOpenClawTestState({ label: "readonly-registry-witness" }, async ({ env }) => {
-    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
+    const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env }, () => false);
     const pending = prepared.read();
     invalidateRegisteredAgentDatabasesMemo({ env });
     await expect(pending).rejects.toThrow("registry changed");

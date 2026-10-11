@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../../agents/agent-roster.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
@@ -10,7 +11,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
-import { isAcpSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import {
   isNativeCommandTurn,
@@ -76,6 +77,30 @@ export async function resolveSessionStoreLookup(
     assertCurrent?.();
     return target;
   }
+}
+
+/** Legacy free-harness keys retain storage identity but use the inspected channel owner. */
+export function resolveBoundAcpDispatchRuntimeOwner(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): string {
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    fallbackAgentId: params.ctx.AgentId,
+  });
+  const configured = listAgentIds(params.cfg);
+  const rest = parseAgentSessionKey(params.sessionKey)?.rest.toLowerCase();
+  const route = readConversationBindingRouteFacts(params.ctx);
+  return !configured.includes(agentId) &&
+    rest?.startsWith("acp:") &&
+    !rest.startsWith("acp:binding:") &&
+    route?.kind === "agent" &&
+    route.targetSessionKey.trim() === params.sessionKey?.trim() &&
+    configured.includes(route.fallbackAgentId)
+    ? route.fallbackAgentId
+    : agentId;
 }
 
 export async function resolveBoundAcpDispatchSessionKey(params: {

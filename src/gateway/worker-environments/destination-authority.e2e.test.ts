@@ -288,9 +288,6 @@ process.stdin.pipe(child.stdin);
                 bootstrapWorker: async () => {
                   throw new Error("Warm allocation already bootstrapped");
                 },
-                executeInference: async () => {
-                  throw new Error("No inference belongs in destination proof");
-                },
                 nodeTunnelManager: tunnels,
                 placementStore: createWorkerSessionPlacementGate(placements),
               });

@@ -25,6 +25,7 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -40,9 +41,15 @@ function createFixture(state: OpenClawTestState, agentId = "main") {
     replaceSessionEntrySync(scope(sessionId), { sessionId, updatedAt: 1 });
   }
   const database = openOpenClawAgentDatabase(options);
+  createTranscriptEventInserter(
+    database.db,
+    "hot",
+  )({
+    seq: 0,
+    eventJson: '{"type":"session"}',
+    createdAt: 1,
+  });
   database.db.exec(`
-    INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-      VALUES ('hot', 0, '{"type":"session"}', 1);
     INSERT INTO session_transcript_cold_archives
       (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
        archive_bytes, last_seq, archived_at, storage)
@@ -109,6 +116,7 @@ it.each(["presence", "mutation"] as const)(
       for (const [index, id] of ids.entries()) {
         expect(read(scope(id))).toEqual(expected[index]);
       }
+      const inserts = ["cold", "empty"].map((id) => createTranscriptEventInserter(database.db, id));
       const compile = vi.spyOn(getSessionKysely(database.db).getExecutor(), "compileQuery");
       for (let repeat = 0; repeat < 2; repeat += 1) {
         for (const [index, id] of ids.entries()) {
@@ -119,13 +127,12 @@ it.each(["presence", "mutation"] as const)(
         db.exec(`
           DELETE FROM transcript_events WHERE session_id = 'hot';
           DELETE FROM session_transcript_cold_archives WHERE session_id = 'cold';
-          INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-            VALUES ('cold', 0, '{"type":"session"}', 1);
-          INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-            VALUES ('empty', 0, '{"type":"session"}', 1);
           UPDATE session_windows SET transcript_observed_at = NULL, transcript_updated_at = 50
             WHERE session_id = 'hot';
         `);
+        for (const insert of inserts) {
+          insert({ seq: 0, eventJson: '{"type":"session"}', createdAt: 1 });
+        }
       }, options);
       if (kind === "presence") {
         expect(ids.map((id) => read(scope(id)))).toEqual([false, true, true, false]);

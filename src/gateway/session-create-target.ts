@@ -18,8 +18,19 @@ import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.j
 import { unavailableSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+
+export async function readRequestedSessionCreateTarget(
+  params: CreateGatewaySessionParams,
+  agentId: string,
+  key: string | undefined,
+) {
+  return key
+    ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg: params.cfg, key, agentId })
+    : undefined;
+}
 
 // The caller holds target lifecycle custody from this reread through commit and rollback.
 export async function readSessionCreateTarget(
@@ -28,7 +39,9 @@ export async function readSessionCreateTarget(
   expectedSessionId: string | undefined,
   lifecycleIdentities: readonly string[],
 ): Promise<Result<InternalSessionEntry | undefined, ErrorShape>> {
-  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [
+    { agentId: target.agentId, sessionKey: target.canonicalKey },
+  ]);
   const assertCurrent = () => {
     params.commitGuard?.();
     assertRoutingCurrent(params.getCurrentConfig?.() ?? params.cfg);

@@ -79,9 +79,6 @@ export type GatewayWorkerEnvironmentRuntime = {
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
 );
-const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
-  () => import("./worker-environments/inference-runtime.js"),
-);
 const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(
   () => import("./worker-environments/worker-session-tool-executor.js"),
 );
@@ -528,10 +525,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
     }).commit,
-    executeInference: async (inferenceParams) => {
-      const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
-      return await workerInferenceRuntime.executeWorkerInference(inferenceParams);
-    },
     placementStore: placementGate,
     createGatewayTools: (request) => createGatewayTools(request),
     liveEvents: workerLiveEvents,

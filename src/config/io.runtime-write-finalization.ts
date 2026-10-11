@@ -120,6 +120,8 @@ export async function finalizeCommittedConfigWrite(params: {
       configPath: io.configPath,
       snapshot: expectDefined(canonicalRead, "canonical config reread").snapshot,
       sourceConfig: canonicalSourceConfig,
+      previousSourceConfig: baseSnapshot.sourceConfig,
+      writtenSourceConfig: params.nextCfg,
       runtimeConfig: canonicalRuntimeConfig,
       persistedHash: canonicalPersistedHash,
       deferRuntimeActivation,
