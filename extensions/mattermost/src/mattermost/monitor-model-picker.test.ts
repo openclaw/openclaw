@@ -207,9 +207,11 @@ describe("Mattermost model-picker interaction dispatch", () => {
                   ? "/models openai"
                   : "/models",
             commandId:
-              catalogStatus === "empty"
-                ? expect.stringMatching(/^mattermost:default:channel-1:picker-post-1:/)
-                : `mattermost:default:channel-1:trigger-${action}`,
+              action === "select"
+                ? '["mattermost","default","channel:channel-1","interaction:picker-post-1:select:openai/gpt-5.4"]'
+                : catalogStatus === "empty"
+                  ? expect.stringMatching(/^mattermost:default:channel-1:picker-post-1:/)
+                  : `mattermost:default:channel-1:trigger-${action}`,
             replyText: expect.stringContaining(visibleText),
           }),
         );
@@ -256,7 +258,8 @@ describe("Mattermost model-picker interaction dispatch", () => {
         expect.objectContaining({
           sessionKey: "agent:main:mm",
           commandText: "/model openai/gpt-5.4",
-          commandId: `mattermost:default:channel-1:trigger-${action}`,
+          commandId:
+            '["mattermost","default","channel:channel-1","interaction:picker-post-1:select:openai/gpt-5.4"]',
           replyText: expect.stringContaining("Select a model to switch immediately."),
         }),
       );

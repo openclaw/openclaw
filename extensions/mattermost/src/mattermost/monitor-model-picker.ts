@@ -1,5 +1,8 @@
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  recordDeliveredCommandExchange,
+  scopeCommandTranscriptId,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type {
@@ -129,6 +132,22 @@ export function createMattermostModelPickerInteractionHandler(
     const interactionId =
       params.payload.trigger_id ??
       `${params.payload.post_id}:${params.payload.user_id}:${pickerCommandText}:${"page" in pickerState ? pickerState.page : 1}`;
+    const messageSid =
+      pickerState.action === "select"
+        ? buildMattermostModelPickerSelectMessageSid({
+            postId: params.payload.post_id,
+            provider: pickerState.provider,
+            model: pickerState.model,
+          })
+        : interactionId;
+    const commandId =
+      pickerState.action === "select"
+        ? scopeCommandTranscriptId(messageSid, {
+            channelId: "mattermost",
+            accountId: account.accountId,
+            conversationId: eventPlan.to,
+          })
+        : `mattermost:${account.accountId}:${params.payload.channel_id}:${interactionId}`;
     const updatePickerPost = async (
       message: string,
       buttons?: MattermostInteractiveButtonInput[][],
@@ -145,7 +164,7 @@ export function createMattermostModelPickerInteractionHandler(
         ...modelSessionRoute,
         expectedSessionId: sessionEntry?.sessionId,
         commandText: pickerCommandText,
-        commandId: `mattermost:${account.accountId}:${params.payload.channel_id}:${interactionId}`,
+        commandId,
         replyId: "picker-update",
         replyText: [
           text,
@@ -184,11 +203,6 @@ export function createMattermostModelPickerInteractionHandler(
     if (!buildMattermostAllowedModelRefs(data).has(targetModelRef)) {
       return { ephemeral_text: `That model is no longer available: ${targetModelRef}` };
     }
-    const messageSid = buildMattermostModelPickerSelectMessageSid({
-      postId: params.payload.post_id,
-      provider: pickerState.provider,
-      model: pickerState.model,
-    });
 
     // The HTTP response returns before the command finishes. Reserve a new root
     // while the request is still admitted so session dispatch survives that ack.

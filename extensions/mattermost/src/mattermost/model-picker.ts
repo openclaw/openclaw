@@ -200,23 +200,32 @@ export async function resolveMattermostModelPickerCurrentModel(params: {
       sessionKey: params.route.sessionKey,
       readConsistency: params.readConsistency,
     });
-    const parentSessionKey = sessionEntry?.parentSessionKey;
-    const parentSessionEntry = parentSessionKey
-      ? await getSessionEntryAsync({
-          agentId: params.route.agentId,
-          storePath,
-          sessionKey: parentSessionKey,
-          readConsistency: params.readConsistency,
-        })
-      : undefined;
-    const override = resolveStoredModelOverride({
+    const overrideParams = {
       sessionEntry,
-      loadSessionEntry: (sessionKey) =>
-        sessionKey === parentSessionKey ? parentSessionEntry : undefined,
       sessionKey: params.route.sessionKey,
-      parentSessionKey,
+      parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
+    };
+    let parentSessionKey: string | undefined;
+    let override = resolveStoredModelOverride({
+      ...overrideParams,
+      loadSessionEntry: (key) => {
+        parentSessionKey = key;
+        return undefined;
+      },
     });
+    if (parentSessionKey) {
+      const parentSessionEntry = await getSessionEntryAsync({
+        agentId: params.route.agentId,
+        storePath,
+        sessionKey: parentSessionKey,
+        readConsistency: params.readConsistency,
+      });
+      override = resolveStoredModelOverride({
+        ...overrideParams,
+        loadSessionEntry: () => parentSessionEntry,
+      });
+    }
     if (!override?.model) {
       return fallback;
     }
