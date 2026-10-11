@@ -371,6 +371,59 @@ describe("durable model prompt projection at provider dispatch", () => {
       );
     });
   });
+  it("keeps a fallback retry prompt request-local after the turn was sent unprojected", async () => {
+    await withOpenClawTestState({ label: "retry-model-prompt-projection" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:retry-model-prompt-projection",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        sessionEntry: { sessionId, updatedAt: 1 },
+      };
+      await upsertSessionEntryCore(target, target.sessionEntry);
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "original task", timestamp: 1, idempotencyKey: "retry:user" },
+        target,
+      });
+      await recorder.persistApproved();
+      // The failed primary attempt already dispatched the original bytes.
+      recorder.markSentToProvider?.();
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      const { session } = await createTestSession({ sessionManager: manager });
+      const convert = session.agent.convertToLlm;
+      session.agent.convertToLlm = (messages) => convert(normalizeMessagesForLlmBoundary(messages));
+      const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+      streamMocks.streamSimple.mockImplementation((model, context) => {
+        requests.push(buildOpenAIResponsesParams(model, context, undefined));
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "done" }]),
+        );
+      });
+
+      await submitEmbeddedAttemptPrompt({
+        ...createBaseInput(),
+        activeSession: session,
+        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        transcriptPrompt: "original task",
+        modelPrompt: "retry marker\n\noriginal task",
+        prependContext: undefined,
+        appendContext: undefined,
+        getUserTranscriptContexts: () => [],
+        withTranscriptWrite: (write) => write(),
+        promptActiveSession: async (_prompt, options) => {
+          options?.preflightResult?.(true);
+          await session.agent.continue();
+        },
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(requests[0])).toContain("retry marker");
+      expect(JSON.stringify(requests[0])).not.toContain("modelPromptProjection");
+      expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
+        "modelPromptProjection",
+      );
+    });
+  });
 });
 
 describe("tool-result projection persistence at dispatch", () => {

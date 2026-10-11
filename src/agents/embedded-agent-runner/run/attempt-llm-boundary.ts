@@ -10,6 +10,7 @@ import {
 } from "../../../llm/types.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import {
   readModelPromptProjection,
@@ -444,7 +445,13 @@ export function installModelPromptProjection(params: {
                 }));
         if (text !== undefined && (frozen !== undefined || text !== firstText)) {
           const captureProjection = params.recorder?.captureModelPromptProjection;
-          if (frozen === undefined && captureProjection) {
+          // A fallback retry can change the prompt after the turn already reached a provider
+          // unprojected. Its text stays request-local; history keeps the bytes first sent.
+          const sentUnprojected =
+            frozen === undefined &&
+            params.recorder !== undefined &&
+            getUserTurnTranscriptAdmissionOwner(params.recorder)?.sentToProvider() === true;
+          if (frozen === undefined && captureProjection && !sentUnprojected) {
             const pendingText = text;
             const capture = () => captureProjection(pendingText, assertCurrent);
             const captured = await (params.withTranscriptWrite
@@ -469,7 +476,7 @@ export function installModelPromptProjection(params: {
             promptMessages = messages.map((message) =>
               message === target ? projectedTarget : message,
             );
-            if (agent.state) {
+            if (agent.state && !sentUnprojected) {
               agent.state.messages = agent.state.messages.map((message) =>
                 message === target ? projectedTarget : message,
               );
