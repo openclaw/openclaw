@@ -13,6 +13,7 @@ import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -44,7 +45,6 @@ import {
   refreshTranscriptByteCompactionLatch,
 } from "../../context-engine/transcript-byte-limit.js";
 import { logVerbose } from "../../globals.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -73,8 +73,8 @@ import {
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
-  truncateMemoryFlushErrorMessage,
 } from "./memory-flush-errors.js";
+import { recordMemoryFlushFailure } from "./memory-flush-failure.js";
 import {
   isToolsMemoryFlushPlan,
   memoryFlushResultIsSilent,
@@ -99,7 +99,6 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-const MAX_FLUSH_FAILURES = 3;
 const preflightCompactionLog = createSubsystemLogger("auto-reply/preflight-compaction");
 const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 
@@ -701,8 +700,6 @@ type MemoryFlushResult = {
   outcome: MemoryFlushOutcome;
 };
 
-type MemoryFlushRunParams = Parameters<typeof runMemoryFlushIfNeeded>[0];
-
 /** Runs pre-compaction memory flush when transcript state warrants it. */
 export async function runMemoryFlushIfNeeded(params: {
   /** Supplied only by required preflight, while this admitted input is unprocessed. */
@@ -1125,6 +1122,15 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
+    emitInternalRunUsageDiagnostic(flushExecution.result, {
+      config: params.cfg,
+      agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
+      agentDir: params.followupRun.run.agentDir,
+      sessionId: memorySession.sessionId,
+      sessionKey: memorySession.sessionKey,
+      provider: flushExecution.provider,
+      model: flushExecution.model,
+    });
     deferredLifecycle.signal.throwIfAborted();
     if (visibleErrorPayloads.length > 0) {
       // Do not stamp memory-flush success for a resolved run that returned an error.
@@ -1178,72 +1184,4 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 }
 
-async function recordMemoryFlushFailure(
-  error: unknown,
-  run: MemoryFlushRunParams,
-  initialSessionEntry?: SessionEntry,
-): Promise<MemoryFlushResult> {
-  let sessionEntry = initialSessionEntry;
-  let outcome: MemoryFlushOutcome = "failed";
-  // Caller cancellation may use any reason, not only an AbortError instance.
-  if ((run.replyOperation?.abortSignal ?? run.abortSignal)?.aborted) {
-    logVerbose("memory flush cancelled by its owner");
-    return { sessionEntry, outcome };
-  }
-  const truncatedError = truncateMemoryFlushErrorMessage(error);
-  const { sessionKey, storePath } = run;
-  if (!isAbortError(error) && storePath && sessionKey) {
-    try {
-      const adoptEntry = (entry: SessionEntry | null) => {
-        if (entry) {
-          sessionEntry = entry;
-          if (run.sessionStore) {
-            run.sessionStore[sessionKey] = entry;
-          }
-        }
-      };
-      const updateEntry = (update: Parameters<typeof updateSessionEntry>[1]) =>
-        updateSessionEntry({ storePath, sessionKey }, update, {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        });
-      const failedEntry = await updateEntry(async (currentEntry) => ({
-        memoryFlush: {
-          kind: "failed",
-          ...(currentEntry.memoryFlush?.compactionCount !== undefined
-            ? { compactionCount: currentEntry.memoryFlush.compactionCount }
-            : {}),
-          failureCount:
-            (currentEntry.memoryFlush?.kind === "failed"
-              ? currentEntry.memoryFlush.failureCount
-              : 0) + 1,
-        },
-      }));
-      adoptEntry(failedEntry);
-      const failureCount =
-        failedEntry?.memoryFlush?.kind === "failed" ? failedEntry.memoryFlush.failureCount : 0;
-      logVerbose(
-        `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
-      );
-      if (failedEntry && failureCount >= MAX_FLUSH_FAILURES) {
-        outcome = "exhausted";
-        logVerbose(
-          `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
-        );
-        const exhaustedEntry = await updateEntry(async (currentEntry) => ({
-          memoryFlush: {
-            kind: "succeeded",
-            compactionCount: currentEntry.compactionCount ?? 0,
-          },
-        }));
-        adoptEntry(exhaustedEntry);
-      }
-    } catch (persistError) {
-      logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
-    }
-  } else {
-    logVerbose(`memory flush run failed: ${String(error)}`);
-  }
-  return { sessionEntry, outcome };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

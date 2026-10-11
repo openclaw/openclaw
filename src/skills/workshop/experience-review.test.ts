@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   createOpenClawTestState,
@@ -47,6 +52,109 @@ afterEach(async () => {
 });
 
 describe("runSkillExperienceReview", () => {
+  it.each([
+    { enabled: true, hasUsage: true, failed: false },
+    { enabled: true, hasUsage: true, failed: true },
+    { enabled: false, hasUsage: true, failed: false },
+    { enabled: true, hasUsage: false, failed: false },
+    { enabled: true, hasUsage: true, failed: false, unpriced: true },
+  ])(
+    "settles review usage without foreground attribution: %j",
+    async ({ enabled, hasUsage, failed, unpriced }) => {
+      const candidate = await createExperienceReviewCandidate(
+        "usage-review",
+        [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+        { workspaceDir: state.workspaceDir, modelId: "usage-fixture" },
+      );
+      candidate.config.diagnostics = { enabled };
+      const provider = expectDefined(
+        candidate.config.models?.providers?.openai,
+        "fixture provider",
+      );
+      provider.models = unpriced
+        ? []
+        : [
+            {
+              id: "usage-fixture",
+              name: "Usage fixture",
+              reasoning: false,
+              input: ["text"],
+              contextWindow: 100_000,
+              maxTokens: 2048,
+              cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
+            },
+          ];
+      const events: Extract<DiagnosticEventPayload, { type: "model.usage" }>[] = [];
+      const stop = onTrustedInternalDiagnosticEvent((event) => {
+        if (event.type === "model.usage") {
+          events.push(event);
+        }
+      });
+      mocks.runSkillWorkshopReview.mockImplementation(
+        async (params: Parameters<typeof runSkillWorkshopReview>[0]) => ({
+          meta: {
+            durationMs: 123,
+            ...(failed ? { error: { kind: "timeout", message: "synthetic review failed" } } : {}),
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: "openai",
+              model: "usage-fixture",
+              ...(hasUsage
+                ? {
+                    usage: { input: 10, output: 5 },
+                    diagnosticUsage: { input: 100, output: 40, cacheRead: 20, cacheWrite: 10 },
+                  }
+                : {}),
+              lastCallUsage: { input: 10, output: 5 },
+              contextTokens: 100_000,
+              promptTokens: 10,
+            },
+          },
+        }),
+      );
+      try {
+        const pending = runSkillExperienceReview(candidate);
+        if (failed) {
+          await expect(pending).rejects.toThrow("synthetic review failed");
+        } else {
+          await pending;
+        }
+        expect(events).toHaveLength(enabled && hasUsage ? 1 : 0);
+        if (enabled && hasUsage) {
+          const event = expectDefined(events[0], "Workshop review usage diagnostic");
+          expect(event).toMatchObject({
+            agentId: "main",
+            sessionKey: expect.stringMatching(
+              /^agent:main:internal-session-effects:skill-workshop-review/,
+            ),
+            sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review/),
+            provider: "openai",
+            model: "usage-fixture",
+            usage: {
+              input: 100,
+              output: 40,
+              cacheRead: 20,
+              cacheWrite: 10,
+              promptTokens: 130,
+              total: 170,
+            },
+            lastCallUsage: { input: 10, output: 5 },
+            context: { limit: 100_000, used: 10 },
+            durationMs: 123,
+          });
+          if (unpriced) {
+            expect(event.costUsd).toBeUndefined();
+          } else {
+            expect(event.costUsd).toBeCloseTo(0.0002);
+          }
+          expect(event.channel).toBeUndefined();
+        }
+      } finally {
+        stop();
+      }
+    },
+  );
+
   it("announces changes committed before the review run failed", async () => {
     const workspaceDir = state.workspaceDir;
     const candidate = await createExperienceReviewCandidate(
