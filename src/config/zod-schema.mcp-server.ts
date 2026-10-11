@@ -103,7 +103,7 @@ export const McpServerSchema = z
       const replacement =
         typeof disabled === "boolean"
           ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
-          : 'the canonical "enabled" boolean instead';
+          : 'the "enabled" boolean instead';
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `unsupported key "disabled"; use ${replacement}`,

@@ -20,7 +20,7 @@ export const mattermostChannelConfigUiHints = {
     implicitMentions: true,
     streaming: {
       "": 'Unified Mattermost stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery.',
-      mode: 'Canonical Mattermost preview mode: "off" | "partial" | "block" | "progress".',
+      mode: 'Mattermost preview mode: "off" | "partial" | "block" | "progress".',
       "block.enabled":
         'Enable chunked block-style Mattermost preview delivery when channels.mattermost.streaming.mode="block".',
       "block.coalesce": "Merge streamed Mattermost block replies before final delivery.",

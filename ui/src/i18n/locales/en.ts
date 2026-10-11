@@ -3092,7 +3092,7 @@ export const en: TranslationMap & {
       fullscreenFailed: "Could not change fullscreen mode: {error}",
       workboardCard: "Workboard card: {title}, {status}",
       defaultTab: "Main",
-      mockPlaceholder: "Board view seam · {tabs} tabs · {widgets} widgets",
+      mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
       resetTitle: "Reset conversation?",
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },

@@ -69,7 +69,7 @@ The Control UI generates links with all 32 UUID characters by default, so a
 selected session keeps its identity even when another session shares its prefix
 and display name. Existing shorter links still resolve, and the disambiguation
 view can offer the shortest unique prefix. Resolving a literal or display-name
-link to a UUID session also keeps the full UUID in its canonical URL.
+link to a UUID session also keeps the full UUID in its standard URL.
 
 Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:<agentId>:` becomes one URL-encoded path segment. For example,
@@ -104,7 +104,7 @@ and `sessions`. Exactly one segment after the agent id is literal when it is
 reserved or does not contain a valid short id; otherwise it is a short reference.
 Two or more segments after the agent id are always literal.
 
-The canonical main session `agent:research:main` uses the agent-only path
+The main session `agent:research:main` uses the agent-only path
 `/chat/research`. Custom `session.mainKey` values are ignored by config loading;
 setting it to `"workspace"` does not make `/chat/research/workspace` a main-session
 route. It follows ordinary session lookup; if no existing session matches, it shows
@@ -128,12 +128,12 @@ unique UUID-prefix match within the selected agent. If several visible sessions
 match the prefix, matching slugs narrow the candidates. Exactly one remaining
 candidate resolves; otherwise the disambiguation view is shown. A slug that
 matches none of the candidates is ignored. After resolution, the Control UI
-replaces the address bar with the canonical session path and current display-name
+replaces the address bar with the standard session path and current display-name
 slug without adding a browser-history entry.
 
 Renaming a session or rotating its `sessionId` does not break an otherwise unique
 short-id link. Moving a session to a different agent id is not covered by this
-stability guarantee; use its current canonical link. A URL does not bypass
+stability guarantee; use its current link. A URL does not bypass
 session authorization or enable public access.
 
 In literal-key form, the agent segment is authoritative because it is part of
@@ -163,10 +163,10 @@ missing sessions keep showing the "Session not found" recovery page.
 To continue one of these links in the terminal or attach a coding harness, see
 [Session synchronization and attachment](/concepts/session-attachment).
 
-Canonical links do not use `?session=` or `?face=`. Released links such as
+Standard links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a
 migration aid and immediately rewritten, without adding browser history, to the
-canonical path. The released `?face=dashboard` companion selects the
+standard path. The released `?face=dashboard` companion selects the
 `/dashboard` namespace during that rewrite. Loaders and page code never read the
 query-form identity, and new links must not emit it. The Sessions list keeps its
 own `?session=` parameter because that parameter expands a row; it is not a
@@ -220,7 +220,7 @@ host. See [Cloudflare's application path rules](https://developers.cloudflare.co
 This is an operator deployment step; OpenClaw does not change proxy policies.
 
 Set the existing `gateway.publicOrigin` to your external HTTP(S) origin when TLS
-terminates at the proxy, so the image and canonical URLs use the public HTTPS
+terminates at the proxy, so the image and standard URLs use the public HTTPS
 address. Without it, previews use the request's Host and direct connection
 protocol; forwarded headers are not trusted for public preview URLs.
 
@@ -420,7 +420,7 @@ it returns the corresponding normal route when one exists:
 /openclaw/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb
 ```
 
-Dashboard focus routes use the complete canonical `/dashboard` grammar above:
+Dashboard focus routes use the complete standard `/dashboard` format above:
 
 ```text
 /focus/dashboard/<agentId>
@@ -428,10 +428,9 @@ Dashboard focus routes use the complete canonical `/dashboard` grammar above:
 ```
 
 The Control UI removes the focus modifier before passing the dashboard route to
-the canonical session resolver. Canonical address replacement and ambiguity
+the shared session resolver. Address-bar updates and ambiguity
 candidate links preserve `/focus`. Missing, ambiguous, and unavailable sessions
-remain visible, and the dashboard is not read until the session resolves to a
-canonical key.
+remain visible, and the dashboard is not read until the session key has been resolved.
 
 The other focus targets are:
 
@@ -506,7 +505,7 @@ With `gateway.controlUi.basePath: "/openclaw"`, use
 This table lists every Control UI application route. A dash means the route has
 no route-specific URL parameters.
 
-| Page                | Canonical path                                 | Aliases                   | Parameters or dynamic forms                                                       |
+| Page                | Primary path                                   | Aliases                   | Parameters or dynamic forms                                                       |
 | ------------------- | ---------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------- |
 | Chat                | `/chat`                                        | -                         | Key-backed session forms above; `?draft=<text>`                                   |
 | Dashboard           | `/dashboard`                                   | -                         | Key-backed session forms above; `?draft=<text>`                                   |
