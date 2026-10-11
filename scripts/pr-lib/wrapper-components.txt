@@ -23,6 +23,7 @@ packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
+packages/gateway-protocol/src/schema/background-preferences.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
@@ -30,6 +31,9 @@ packages/gateway-protocol/src/schema/presence.ts
 packages/gateway-protocol/src/schema/primitives.ts
 packages/gateway-protocol/src/schema/session-placement-state.ts
 packages/gateway-protocol/src/schema/since.ts
+packages/gateway-protocol/src/schema/tab-icon.ts
+packages/gateway-protocol/src/schema/ui-appearance-preferences.ts
+packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts

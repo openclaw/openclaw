@@ -308,6 +308,7 @@ export function renderSettingsToggleRow(
     title: unknown;
     ariaLabel?: unknown;
     description?: unknown;
+    controlClass?: string;
   },
 ): TemplateResult {
   return html`
@@ -316,7 +317,7 @@ export function renderSettingsToggleRow(
       @click=${(event: MouseEvent) => settingsToggleRowClick(event, props)}
     >
       ${props.icon ?? nothing} ${renderSettingsRowText(props.title, props.description)}
-      <div class="settings-row__control">
+      <div class="settings-row__control ${props.controlClass ?? ""}">
         ${renderToggleControl(props, props.ariaLabel ?? props.title)}
       </div>
     </div>

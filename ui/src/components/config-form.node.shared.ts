@@ -90,6 +90,10 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    usingDefault:
+      params.value === undefined &&
+      (params.schema.default !== undefined ||
+        hintForPath(params.path, params.hints)?.inheritedDefault === true),
     helpId:
       params.descriptionId ??
       (showLabel && help ? configFieldId(params.path, "description") : undefined),
@@ -234,6 +238,7 @@ export function renderFieldRow(params: {
   showLabel: boolean;
   control: TemplateResult | typeof nothing;
   stacked?: boolean;
+  usingDefault?: boolean;
   error?: unknown;
   errorId?: string;
 }): TemplateResult {
@@ -284,7 +289,9 @@ export function renderFieldRow(params: {
       }
       ${
         params.control !== nothing
-          ? html`<div class="settings-row__control">
+          ? html`<div
+              class="settings-row__control${params.usingDefault ? " cfg-default-control" : ""}"
+            >
               ${params.control}
               ${
                 params.errorId
@@ -369,6 +376,7 @@ export function renderSchemaDefaultDescription(
 export function renderSegmentedControl(params: {
   options: unknown[];
   resolvedValue: unknown;
+  usingDefault?: boolean;
   disabled: boolean;
   ariaLabel: string;
   descriptionId?: string;
@@ -377,6 +385,12 @@ export function renderSegmentedControl(params: {
   const selectedIndex = params.options.findIndex((option) =>
     configValuesEqual(option, params.resolvedValue),
   );
+  const select = (index: string) => {
+    const option = params.options[Number(index)];
+    if (option !== undefined) {
+      return params.onSelect(option);
+    }
+  };
   return renderSettingsSegmented({
     value: selectedIndex < 0 ? "" : String(selectedIndex),
     options: params.options.map((option, index) => ({
@@ -386,12 +400,8 @@ export function renderSegmentedControl(params: {
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
     descriptionId: params.descriptionId,
-    onChange: (index) => {
-      const option = params.options[Number(index)];
-      if (option !== undefined) {
-        return params.onSelect(option);
-      }
-    },
+    onChange: select,
+    onReselect: params.usingDefault && !params.disabled ? select : undefined,
   });
 }
 

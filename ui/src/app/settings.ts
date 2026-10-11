@@ -4,7 +4,10 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  UI_PREFERENCE_DEFAULTS,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
@@ -372,9 +375,9 @@ export function loadUiPreferences(
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
     themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    chatPersistCommentary: true,
+    chatShowThinking: UI_PREFERENCE_DEFAULTS.chatShowThinking,
+    chatShowToolCalls: UI_PREFERENCE_DEFAULTS.chatShowToolCalls,
+    chatPersistCommentary: UI_PREFERENCE_DEFAULTS.chatPersistCommentary,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,

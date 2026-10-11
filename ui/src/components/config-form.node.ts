@@ -9,6 +9,7 @@ import { renderJsonTextarea } from "./config-form.node.json.ts";
 import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.node.scalar.ts";
 import {
   renderFieldRow,
+  resolveConfigFieldPresentation,
   isAnySchema,
   isSecretRefObject,
   renderSchemaDefaultDescription,
@@ -77,16 +78,18 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   }
 
   const renderOptions = (options: unknown[], nullable = false) =>
-    options.length > 5 || nullable
+    options.length > 5 ||
+    nullable ||
+    (schema.default === undefined && hintForPath(path, hints)?.inheritedDefault === true)
       ? renderSelect({ ...params, options })
       : renderFieldRow({
-          label,
-          help,
+          ...resolveConfigFieldPresentation(params),
           defaultDescription: renderSchemaDefaultDescription(schema, value),
           showLabel,
           control: renderSegmentedControl({
             options,
             resolvedValue: value !== undefined ? value : schema.default,
+            usingDefault: value === undefined && schema.default !== undefined,
             disabled,
             ariaLabel: label,
             descriptionId: params.descriptionId,
@@ -195,9 +198,7 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     const onChange = (checked: boolean) => onPatch(path, checked);
     if (params.compact) {
       return renderFieldRow({
-        label,
-        help,
-        showLabel,
+        ...resolveConfigFieldPresentation(params),
         control: html`<input
           type="checkbox"
           aria-label=${label}
@@ -218,9 +219,7 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       // Control-only contexts (array items, map values) have no visible title,
       // so the switch keeps its accessible name from the field label.
       return renderFieldRow({
-        label,
-        help,
-        showLabel,
+        ...resolveConfigFieldPresentation(params),
         control: renderSettingsToggle({
           checked: displayValue,
           disabled,
@@ -239,6 +238,9 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     return renderSettingsToggleRow({
       title: label,
       description,
+      controlClass: resolveConfigFieldPresentation(params).usingDefault
+        ? "cfg-default-control"
+        : undefined,
       checked: displayValue,
       disabled,
       onChange,
