@@ -26,7 +26,9 @@ export function BoardMcpAppContent(props: {
 }) {
   let element: RetiringAppView | undefined;
   let generation = 0;
-  const [presented, setPresented] = createSignal<ReadyAppView>(undefined, { ownedWrite: true });
+  const [presented, setPresented] = createSignal<ReadyAppView | undefined>(undefined, {
+    ownedWrite: true,
+  });
   createEffect(
     () => {
       const view = props.appView;
@@ -112,7 +114,7 @@ export function BoardMcpAppContent(props: {
             prop:viewId={ready().viewId}
             prop:fillContainer={true}
             prop:surface="board"
-            prop:title={props.widget.title || props.widget.name}
+            title={props.widget.title || props.widget.name}
             onOpenclaw-mcp-app-view-expired={() => props.expired()}
           />
         )}
@@ -124,8 +126,8 @@ export function BoardMcpAppContent(props: {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "mcp-app-view": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["mcp-app-view"]> &
-        SolidJSX.Properties<HTMLElementTagNameMap["mcp-app-view"]>;
+      "mcp-app-view": HTMLAttributes<HTMLElementTagNameMap["mcp-app-view"]> &
+        Properties<HTMLElementTagNameMap["mcp-app-view"]>;
     }
   }
 }

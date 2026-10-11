@@ -19,6 +19,7 @@ import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderGroupedMessage } from "./components/chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./components/chat-message-markdown.ts";
 import "../../plugins/control-ui-view.runtime.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
 
 afterEach(() => resetComposerFixture());

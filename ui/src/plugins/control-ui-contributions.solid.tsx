@@ -111,7 +111,8 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   });
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
-    const name = entry.value.icon ?? fallback;
+    const icon = entry.value.icon;
+    const name = icon && Object.hasOwn(iconData, icon) ? icon : fallback;
     // SAFETY: the own-key check admits only names from the fixed icon registry.
     return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
   };
@@ -211,35 +212,37 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                     class="btn btn--sm"
                     type="button"
                     disabled={action().state?.disabled ?? false}
-                    onClick={async () => {
-                      const current = action();
-                      const runtime = context?.plugins;
-                      if (
-                        !runtime ||
-                        current.signal.aborted ||
-                        !host.presented ||
-                        !host.isConnected
-                      ) {
-                        return;
-                      }
-                      setActionError("");
-                      try {
-                        await runControlUiPluginAction({
-                          runtime,
-                          id: current.entry.key,
-                          placement: current.entry.value.placement,
-                          sessionKey: host.sessionKey,
-                          agentId: host.agentId,
-                          session: currentSession(),
-                          signal: current.signal,
-                          isCurrent: () => host.isConnected && host.presented,
-                        });
-                      } catch (error) {
-                        if (!current.signal.aborted) {
-                          setActionError(error instanceof Error ? error.message : String(error));
+                    onClick={() =>
+                      void (async () => {
+                        const current = action();
+                        const runtime = context?.plugins;
+                        if (
+                          !runtime ||
+                          current.signal.aborted ||
+                          !host.presented ||
+                          !host.isConnected
+                        ) {
+                          return;
                         }
-                      }
-                    }}
+                        setActionError("");
+                        try {
+                          await runControlUiPluginAction({
+                            runtime,
+                            id: current.entry.key,
+                            placement: current.entry.value.placement,
+                            sessionKey: host.sessionKey,
+                            agentId: host.agentId,
+                            session: currentSession(),
+                            signal: current.signal,
+                            isCurrent: () => host.isConnected && host.presented,
+                          });
+                        } catch (error) {
+                          if (!current.signal.aborted) {
+                            setActionError(error instanceof Error ? error.message : String(error));
+                          }
+                        }
+                      })()
+                    }
                   >
                     {action().state?.label ?? action().entry.value.label}
                   </button>

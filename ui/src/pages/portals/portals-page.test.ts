@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -352,6 +353,49 @@ describe("PortalsPage", () => {
       expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
       expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
       expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
+    },
+  );
+
+  it.each(["solid", "custom element"] as const)(
+    "retains the embedded iframe document through %s presentation changes",
+    async (entry) => {
+      let title = portal.title;
+      const source = createContext(["portal.list"], async () => ({
+        portals: [{ ...portal, title }],
+      }));
+      let page: HTMLElementTagNameMap["openclaw-portals-page"];
+      if (entry === "solid") {
+        page = await mountPage(source.context, portal.id);
+      } else {
+        page = document.createElement("openclaw-portals-page");
+        page.embedded = true;
+        page.requestedPortalId = portal.id;
+        const provider = createApplicationContextProvider(source.context);
+        provider.append(page);
+        mountSolid(() => provider);
+        await page.updateComplete;
+      }
+      await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+      const frame = page.querySelector("iframe")!;
+      const writes = vi.spyOn(frame, "setAttribute");
+      const sourceWrites = vi.spyOn(frame, "src", "set");
+
+      page.presented = false;
+      await page.updateComplete;
+      expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
+      title = "Refreshed app";
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", { detail: { open: true, portalId: portal.id } }),
+      );
+      page.presented = true;
+      await page.updateComplete;
+      await waitForSolid(() =>
+        expect(page.querySelector("iframe")?.title).toBe("Refreshed app portal preview"),
+      );
+
+      expect(page.querySelector("iframe")).toBe(frame);
+      expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
+      expect(sourceWrites).not.toHaveBeenCalled();
     },
   );
 

@@ -7,6 +7,7 @@ import { SidebarMenusController } from "../components/sidebar-menus-controller.t
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import "./control-ui-view.runtime.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;
 afterEach(() => {
@@ -204,10 +205,13 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
   const icon = document.createElement("div");
   render(icons.activity, icon);
-  expect(children[0]?.querySelector("svg")?.outerHTML).toBe(icon.querySelector("svg")?.outerHTML);
-  expect(children[1]?.querySelector("svg")?.outerHTML).toBe(
-    parent.querySelector(".nav-item__icon svg")?.outerHTML,
-  );
+  expect(
+    [...children[0]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  render(icons.layers, icon);
+  expect(
+    [...children[1]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
   expect(pinned.querySelectorAll("a")).toHaveLength(1);
   expect(pinned.querySelector(".nav-item--child")).toBeNull();
   expect(pinned.querySelector("a")?.getAttribute("aria-current")).toBe("page");

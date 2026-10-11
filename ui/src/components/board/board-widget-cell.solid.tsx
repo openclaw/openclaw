@@ -310,18 +310,26 @@ function BoardWidgetCellContent(
       }
     },
   );
+  let observedErrorBinding = false;
   createEffect(
     () => [props.widget, props.widgetFrameUrl, plugins.revision(), gateway.revision()] as const,
     () => {
-      if (bodyErrored) {
+      // The first observation belongs to the initial render, including its error fallback.
+      if (observedErrorBinding && bodyErrored) {
         bodyErrored = false;
         resetBodyError?.();
       }
+      observedErrorBinding = true;
     },
   );
   onSettled(() => {
-    frame.connect();
-    requestUpdate();
+    // A nested bridge settles before its returned host is inserted by the parent.
+    queueMicrotask(() => {
+      if (connected) {
+        frame.connect();
+        requestUpdate();
+      }
+    });
   });
   onCleanup(() => {
     connected = false;
@@ -331,7 +339,7 @@ function BoardWidgetCellContent(
     appView.disconnect();
     frame.disconnect();
   });
-  const unavailable = () => Boolean(props.busy || state().pending || !canMutate());
+  const unavailable = () => props.busy || state().pending || !canMutate();
   const AccessNotice = () => (
     <Show
       when={props.widget?.grantState === "pending"}
@@ -346,7 +354,7 @@ function BoardWidgetCellContent(
     >
       <BoardPendingCapabilities
         widget={props.widget!}
-        disabled={Boolean(props.busy || state().pending || !canGrant())}
+        disabled={props.busy || state().pending || !canGrant()}
         onGrant={(decision) =>
           void runAction(
             () => props.callbacks!.grant(props.widget!.name, decision),
@@ -571,7 +579,7 @@ function BoardWidgetCellContent(
         ]}
         style={style()}
         role="listitem"
-        tabIndex={props.focusTabIndex ?? -1}
+        tabindex={props.focusTabIndex ?? -1}
         aria-posinset={props.positionInSet ?? 1}
         aria-setsize={props.setSize ?? 1}
         aria-label={
@@ -611,7 +619,7 @@ function BoardWidgetCellContent(
               <BoardWidgetMenu
                 widget={props.widget!}
                 tabs={props.tabs ?? []}
-                disabled={Boolean(props.busy || state().pending)}
+                disabled={props.busy || state().pending}
                 onSelect={(event) => selectMenuItem(event.detail.item.value)}
               />
             </Show>

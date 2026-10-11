@@ -1,4 +1,13 @@
-import { createEffect, createMemo, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Match,
+  onCleanup,
+  Show,
+  Switch,
+  untrack,
+} from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
@@ -34,10 +43,11 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
     subscribe: (source, notify) => source?.subscribe(notify) ?? (() => {}),
     equality: "revision",
   });
-  const unsubscribeGateway = gateway.subscribe(lifecycle.update);
-  const unsubscribePlugins = plugins.subscribe(lifecycle.update);
-  createEffect(() => [props.pluginId, props.tabId], lifecycle.update);
-  lifecycle.update();
+  const update = () => untrack(lifecycle.update);
+  const unsubscribeGateway = gateway.subscribe(update);
+  const unsubscribePlugins = plugins.subscribe(update);
+  createEffect(() => [props.pluginId, props.tabId], update);
+  update();
   onCleanup(() => {
     unsubscribeGateway();
     unsubscribePlugins();

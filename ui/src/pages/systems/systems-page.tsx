@@ -1,8 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { html, nothing } from "lit";
 import { For, Show, createEffect, createMemo, onSettled } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import "../../components/sparkline-tile.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -19,8 +16,7 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { SystemsBackups } from "./systems-backups.tsx";
-import { SystemsController } from "./systems-controller.ts";
-import type { SystemsRouteData } from "./systems-controller.ts";
+import type { SystemsController, SystemsRouteData } from "./systems-controller.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
 import {
@@ -586,30 +582,10 @@ declare global {
   }
 }
 
-/** Route rendering stays in the lazy page module, not in startup route metadata. */
-export function render(data: SystemsRouteData | undefined, _pending: boolean, presented = true) {
-  return data
-    ? html`<openclaw-systems-page
-        .routeData=${data}
-        .presented=${presented}
-      ></openclaw-systems-page>`
-    : nothing;
-}
-
-export function renderSidebar(data: SystemsRouteData | undefined) {
-  return data
-    ? html`<openclaw-systems-sidebar .controller=${data.controller}></openclaw-systems-sidebar>`
-    : nothing;
-}
-
-export function load(context: ApplicationContext): SystemsRouteData {
-  return { controller: new SystemsController(context) };
-}
-
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sparkline": SolidJSX.HTMLAttributes<HTMLElement> & {
+      "openclaw-sparkline": HTMLAttributes<HTMLElement> & {
         "prop:label"?: string;
         "prop:sub"?: string;
         "prop:samples"?: readonly SparklineSample[];
@@ -617,9 +593,7 @@ declare module "@solidjs/web" {
         "prop:floorMax"?: number;
         "prop:autorange"?: boolean;
       };
-      "openclaw-desktop-panel": SolidJSX.HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-desktop-panel"]
-      > & {
+      "openclaw-desktop-panel": HTMLAttributes<HTMLElementTagNameMap["openclaw-desktop-panel"]> & {
         embedded?: boolean;
         "prop:client"?: HTMLElementTagNameMap["openclaw-desktop-panel"]["client"];
         "prop:available"?: boolean;

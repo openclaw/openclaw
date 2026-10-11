@@ -8,6 +8,7 @@ import {
   flush,
   onCleanup,
   runWithOwner,
+  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
@@ -236,7 +237,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const renderContent = () => content(props, this.#host);
+        // Provider child memos must not subscribe to component setup reads.
+        const renderContent = () => untrack(() => content(props, this.#host));
         const view = () =>
           layout
             ? createComponent(ShellLayoutProvider, {

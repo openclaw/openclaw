@@ -263,7 +263,7 @@ describe("board MCP App cell lifecycle", () => {
   });
 
   it("awaits native teardown before replacing an expired app with its stale notice", async () => {
-    const retired = deferred<void>();
+    const retired = deferred();
     const refreshWidgetAppView = vi.fn(async () => ({
       status: "stale" as const,
       error: "lease rejected",

@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
@@ -320,22 +319,5 @@ export const SystemsSidebar = defineSolidBridge<SystemsSidebarProps>(
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-systems-sidebar": SystemsSidebarElement;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-dropdown": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-dropdown"]> & {
-        placement?: HTMLElementTagNameMap["wa-dropdown"]["placement"];
-        "onWa-select"?: (event: CustomEvent<{ item: { value?: string } }>) => void;
-      };
-      "wa-dropdown-item": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-dropdown-item"]> & {
-        value?: string;
-        disabled?: boolean;
-        checked?: boolean;
-        type?: HTMLElementTagNameMap["wa-dropdown-item"]["type"];
-      };
-    }
   }
 }

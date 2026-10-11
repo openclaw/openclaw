@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { BoardTab } from "../../lib/board/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -36,7 +35,7 @@ export function BoardTabs(props: {
           prop:active={props.activeTabId}
           prop:activation="manual"
           prop:withoutScrollControls={true}
-          onWa-tab-show={(event) => props.onTabShow(event)}
+          onWa-tab-show={(event: CustomEvent<{ name: string }>) => props.onTabShow(event)}
         >
           <For each={visible()} keyed={(tab) => tab.tabId}>
             {(tab) => (
@@ -93,10 +92,10 @@ export function BoardTabs(props: {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab-group": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-tab-group"]> &
-        SolidJSX.Properties<HTMLElementTagNameMap["wa-tab-group"]>;
-      "wa-tab": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-tab"]> &
-        SolidJSX.Properties<HTMLElementTagNameMap["wa-tab"]>;
+      "wa-tab-group": HTMLAttributes<HTMLElementTagNameMap["wa-tab-group"]> &
+        Properties<HTMLElementTagNameMap["wa-tab-group"]>;
+      "wa-tab": HTMLAttributes<HTMLElementTagNameMap["wa-tab"]> &
+        Properties<HTMLElementTagNameMap["wa-tab"]>;
     }
   }
 }

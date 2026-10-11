@@ -18,6 +18,7 @@ import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import "./control-ui-manager.solid.tsx";
 import "./control-ui-view.runtime.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";

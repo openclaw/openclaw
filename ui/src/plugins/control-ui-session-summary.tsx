@@ -1,7 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { nothing, render, type TemplateResult } from "lit";
 import {
   For,
   Show,
@@ -31,7 +29,7 @@ import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import "../styles/chat/progress-card.css";
@@ -46,28 +44,11 @@ export type PluginSessionSummaryProps = {
   agentIdentity: AgentIdentityCapability | null;
 };
 
-// The shared progress and sender-avatar helpers remain Lit-owned until their callers migrate.
-function LitContent(props: { content: TemplateResult | typeof nothing }) {
-  const host = document.createElement("span");
-  host.style.display = "contents";
-  let part: ReturnType<typeof render> | undefined;
-  createEffect(
-    () => props.content,
-    (content) => {
-      part = render(content, host);
-    },
-  );
-  onCleanup(() => {
-    part?.setConnected(false);
-    render(nothing, host);
-  });
-  return host;
-}
-
 type SummaryScope = {
   gateway: ApplicationGateway;
   client: NonNullable<ApplicationGateway["snapshot"]["client"]>;
   revision: number;
+  signal: AbortSignal;
   session: BoardGetParams;
 };
 
@@ -82,6 +63,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     untrack(
       () =>
         alive &&
+        !scope.signal.aborted &&
         props.presented &&
         props.gateway === scope.gateway &&
         scope.gateway.snapshot.phase === "connected" &&
@@ -233,15 +215,17 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
             <p>{t("sessionProgressCard.widgetLoading")}</p>
           ) : (
             <LitContent
-              content={renderSessionProgressCard(
-                progress.read().card,
-                "board",
-                undefined,
-                history()?.sessionInfo?.status,
-                history()?.sessionInfo?.startedAt,
-                history()?.sessionInfo?.endedAt,
-                history()?.sessionInfo?.hasActiveRun === true,
-              )}
+              render={() =>
+                renderSessionProgressCard(
+                  progress.read().card,
+                  "board",
+                  undefined,
+                  history()?.sessionInfo?.status,
+                  history()?.sessionInfo?.startedAt,
+                  history()?.sessionInfo?.endedAt,
+                  history()?.sessionInfo?.hasActiveRun === true,
+                )
+              }
             />
           )}
         </section>
@@ -266,7 +250,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
                 <header class="plugin-session-summary__message-header">
                   <span class="plugin-session-summary__avatar">
                     {message().sender ? (
-                      <LitContent content={renderChatAuthorAvatar(message().sender)} />
+                      <LitContent render={() => renderChatAuthorAvatar(message().sender)} />
                     ) : message().agentId ? (
                       <openclaw-agent-avatar
                         prop:option={{
@@ -322,13 +306,37 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
   const gateway = createMemo(() => (props.presented ? props.gateway : null));
   const projection = createMemo(() => {
     const current = gateway();
-    return current ? projectGateway(current) : null;
+    if (!current) {
+      return null;
+    }
+    const state = projectGateway(current);
+    let connection = new AbortController();
+    const stop = state.subscribe(() => {
+      // Retire while the owner publishes; Solid may only see the final reconnected snapshot.
+      if (state.read().snapshot.phase !== "connected") {
+        connection.abort();
+      } else if (connection.signal.aborted) {
+        connection = new AbortController();
+      }
+    });
+    onCleanup(() => {
+      stop();
+      connection.abort();
+    });
+    return {
+      read: state.read,
+      get signal() {
+        return connection.signal;
+      },
+    };
   });
   const scope = createMemo<SummaryScope | null>(
     () => {
       const current = gateway();
-      const state = projection()?.read();
+      const connection = projection();
+      const state = connection?.read();
       return current &&
+        connection &&
         state?.snapshot.phase === "connected" &&
         state.snapshot.client &&
         props.session
@@ -336,6 +344,7 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
             gateway: current,
             client: state.snapshot.client,
             revision: state.connectionRevision,
+            signal: connection.signal,
             session: { ...props.session },
           }
         : null;
@@ -345,6 +354,7 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
         left?.gateway === right?.gateway &&
         left?.client === right?.client &&
         left?.revision === right?.revision &&
+        left?.signal === right?.signal &&
         left?.session.sessionKey === right?.session.sessionKey &&
         left?.session.agentId === right?.session.agentId,
     },
@@ -385,7 +395,7 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-agent-avatar": SolidJSX.HTMLAttributes<AgentAvatarElement> & {
+      "openclaw-agent-avatar": HTMLAttributes<AgentAvatarElement> & {
         "prop:option"?: AgentAvatarElement["option"];
         "prop:identity"?: AgentAvatarElement["identity"];
       };

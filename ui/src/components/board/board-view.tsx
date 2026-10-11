@@ -30,7 +30,10 @@ type CellEntry = {
   key: string;
   present: boolean;
   retiring?: boolean;
-  element?: HTMLElementTagNameMap["openclaw-board-widget-cell"];
+  element?: Pick<
+    HTMLElementTagNameMap["openclaw-board-widget-cell"],
+    "teardown" | "restartAfterTeardown"
+  >;
   options: BoardWidgetCellProps;
 };
 
@@ -169,7 +172,12 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     () => view(),
     (current) => {
       host.toggleAttribute("data-initial-loading", current.loading);
-      state.reconcileInitialPresentation();
+      // Nested bridge roots flush while this parent is still being inserted.
+      queueMicrotask(() => {
+        if (!disposed) {
+          state.reconcileInitialPresentation();
+        }
+      });
     },
   );
   onSettled(() => {

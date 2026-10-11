@@ -1,5 +1,4 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
@@ -87,8 +86,8 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-board-widget-cell": SolidJSX.HTMLAttributes<BoardWidgetCellElement> &
-        SolidJSX.Properties<BoardWidgetCellElement>;
+      "openclaw-board-widget-cell": HTMLAttributes<BoardWidgetCellElement> &
+        Properties<BoardWidgetCellElement>;
     }
   }
 }

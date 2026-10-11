@@ -121,12 +121,3 @@ export function BoardGrantedCapabilities(props: {
     </Show>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-tooltip": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> &
-        SolidJSX.Properties<HTMLElementTagNameMap["openclaw-tooltip"]>;
-    }
-  }
-}

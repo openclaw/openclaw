@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { render as renderLit, nothing } from "lit";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
@@ -13,6 +12,7 @@ import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
@@ -273,26 +273,6 @@ export class BoardWidgetFrameLifecycle {
         covered: this.host.loadingCovered?.(),
       };
     });
-    // The shared confirmation owner still serves unported Lit panes. This island
-    // owns only its own children; the surrounding frame remains Solid-owned.
-    const Confirmation = () => {
-      let root!: HTMLDivElement;
-      createEffect(
-        () => revision(),
-        () => {
-          renderLit(this.confirmation.render(), root);
-        },
-      );
-      onCleanup(() => renderLit(nothing, root));
-      return (
-        <div
-          ref={(element) => {
-            root = element;
-          }}
-          style={{ display: "contents" }}
-        />
-      );
-    };
     return (
       <Show
         when={Boolean(view().sandboxSrc)}
@@ -314,7 +294,12 @@ export class BoardWidgetFrameLifecycle {
         }
       >
         <div class="board-widget__frame-pane">
-          <Confirmation />
+          <LitContent
+            render={() => {
+              revision();
+              return this.confirmation.render();
+            }}
+          />
           <Show when={!view().visible && !view().covered}>
             <Show
               when={view().stalled}

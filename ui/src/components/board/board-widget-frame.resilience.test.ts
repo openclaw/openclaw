@@ -230,7 +230,7 @@ it.each(["current", "revision", "replacement", "reconnect"] as const)(
       position: 0,
       grantState: "none",
     };
-    const refreshResult = createDeferred<void>();
+    const refreshResult = createDeferred();
     const refreshFrame = vi.fn(() => refreshResult.promise);
     const root = document.createElement("div");
     document.body.append(root);

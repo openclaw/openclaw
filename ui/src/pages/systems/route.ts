@@ -3,7 +3,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 
-const loadModule = () => import("./systems-page.tsx");
+const loadModule = () => import("./systems-page.ts");
 
 export const page = definePage({
   ...routePageSpec("systems"),

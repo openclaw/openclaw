@@ -21,6 +21,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import "../../plugins/control-ui-view.runtime.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 
 class PluginQuestionChatHost extends LitElement {
   props = createChatProps();

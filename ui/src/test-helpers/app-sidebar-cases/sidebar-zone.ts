@@ -16,6 +16,7 @@ import { createDataTransferStub } from "../drag-data.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 import "../../plugins/control-ui-view.runtime.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 
 function dispatchDragEvent(
   target: Element,
@@ -494,11 +495,12 @@ describe("AppSidebar interleaved zone", () => {
       ["notes", "plug"],
     ] as const) {
       render(icons[expectedIcon], icon);
-      expect(
-        sidebar.querySelector(
-          `.sidebar-pages [data-sidebar-entry="plugin:example/${id}"] .nav-item__icon svg`,
-        )?.outerHTML,
-      ).toBe(icon.querySelector("svg")?.outerHTML);
+      const paths = sidebar.querySelectorAll(
+        `.sidebar-pages [data-sidebar-entry="plugin:example/${id}"] .nav-item__icon svg path`,
+      );
+      expect([...paths].map((path) => path.getAttribute("d"))).toEqual(
+        [...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+      );
     }
     const review = sidebar.querySelector(
       '.sidebar-pages [data-sidebar-entry="plugin:example/review"]',

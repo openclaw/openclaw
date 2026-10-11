@@ -15,6 +15,7 @@ import {
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { renderPluginSurface } from "./control-ui-view.ts";
 import "./control-ui-view.runtime.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 function increment(this: SurfaceTestHost) {
   this.count += 1;

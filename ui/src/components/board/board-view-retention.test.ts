@@ -111,7 +111,7 @@ describe("openclaw-board-view retention", () => {
     const widget = boardWidget({ contentKind: "mcp-app" });
     const view = await mount({ snapshot: snapshot({ widgets: [widget] }) });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
-    const teardown = createDeferred<void>();
+    const teardown = createDeferred();
     vi.spyOn(cell, "teardown").mockReturnValue(teardown.promise);
 
     view.snapshot = snapshot({ revision: 2, widgets: [] });

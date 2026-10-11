@@ -5,6 +5,7 @@ import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 // Native views and contributions must be defined before activation can publish registrations.
 import "./control-ui-view.runtime.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 export async function initializeControlUiPlugin(
   getContext: () => ApplicationContext,

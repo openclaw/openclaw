@@ -1,5 +1,4 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { render as renderLit, nothing, type LitElement } from "lit";
 import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type {
   ControlUiSurface,
@@ -13,8 +12,7 @@ import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
-import type { ViewKind } from "./control-ui-view.ts";
-import "./control-ui-contributions.solid.tsx";
+import { renderPluginTemplate, type ViewKind } from "./control-ui-view.ts";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
 export type PluginViewProps = {
@@ -24,7 +22,7 @@ export type PluginViewProps = {
   props: unknown;
   defaultView: unknown;
   replacementCompanion: unknown;
-  defaultHost: LitElement | undefined;
+  defaultHost: object | undefined;
   presented: boolean;
 };
 type PluginViewElement = SolidBridgeElement<
@@ -68,10 +66,10 @@ function MountedContent(props: { value: unknown; host?: object }) {
   createEffect(
     () => ({ value: props.value, host: props.host }),
     ({ value, host }) => {
-      renderLit(value, container, { host });
+      renderPluginTemplate(value, container, host);
     },
   );
-  onCleanup(() => renderLit(nothing, container));
+  onCleanup(() => renderPluginTemplate(undefined, container));
   return (
     <div
       style={{ display: "contents" }}
@@ -122,7 +120,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       context?.plugins.reportError(registration?.pluginId ?? "host", failure);
     }
     for (const target of defaultContainers) {
-      renderLit(nothing, target);
+      renderPluginTemplate(undefined, target);
     }
     defaultContainers.clear();
     viewContext = undefined;
@@ -221,7 +219,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       };
       handle?.update?.(viewContext);
       for (const target of defaultContainers) {
-        renderLit(host.defaultView, target, { host: host.defaultHost ?? host });
+        renderPluginTemplate(host.defaultView, target, host.defaultHost ?? host);
       }
     } catch (failure) {
       fail(failure);
@@ -285,13 +283,13 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
             throw new Error("This plugin UI view has ended.");
           }
           defaultContainers.add(target);
-          renderLit(host.defaultView, target, { host: host.defaultHost ?? host });
+          renderPluginTemplate(host.defaultView, target, host.defaultHost ?? host);
           notify();
           return () => {
             if (!defaultContainers.delete(target)) {
               return;
             }
-            renderLit(nothing, target);
+            renderPluginTemplate(undefined, target);
             if (!disposed) {
               notify();
             }
@@ -381,8 +379,8 @@ export const PluginView = defineSolidBridge<
     contributionKey: { default: "", attribute: false },
     surface: { default: "workspace", attribute: false },
     props: { default: {}, attribute: false },
-    defaultView: { default: nothing, attribute: false },
-    replacementCompanion: { default: nothing, attribute: false },
+    defaultView: { default: undefined, attribute: false },
+    replacementCompanion: { default: undefined, attribute: false },
     defaultHost: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
   },

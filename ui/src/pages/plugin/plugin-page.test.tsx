@@ -14,7 +14,8 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { getLogbookState } from "./logbook-controller.ts";
+import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
+import { BUNDLED_TAB_VIEWS } from "./plugin-page-lifecycle.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
 
 type ApplicationConfig = ApplicationConfigCapability["current"];
@@ -305,8 +306,8 @@ describe("PluginPage", () => {
     vi.useFakeTimers();
     const refresh = vi.fn(async () => externalPluginConfig());
     const fixture = createExternalPluginPage(refresh);
-    await settle();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(refresh).toHaveBeenCalledOnce();
     const frame = fixture.page.querySelector("iframe");
     expect(frame).not.toBeNull();
@@ -322,8 +323,8 @@ describe("PluginPage", () => {
     vi.useFakeTimers();
     const { refresh, maxActiveRefreshes } = createHungRenewal();
     const { page } = createExternalPluginPage(refresh);
-    await settle();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     expect(page.querySelector("iframe")).not.toBeNull();
     await vi.advanceTimersByTimeAsync(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 2);
     expect(refresh).toHaveBeenCalledTimes(2);
@@ -340,8 +341,8 @@ describe("PluginPage", () => {
     vi.setSystemTime(new Date(0));
     const { refresh, maxActiveRefreshes } = createHungRenewal();
     const { page } = createExternalPluginPage(refresh);
-    await settle();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
     await vi.advanceTimersByTimeAsync(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 2);
     expect(refresh).toHaveBeenCalledTimes(2);
     vi.setSystemTime(new Date(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS));
@@ -410,10 +411,10 @@ describe("PluginPage", () => {
 });
 
 type BundledView = (typeof import("./logbook-view.tsx"))["Logbook"];
-function setBundledLoad(load: Promise<BundledView>) {
-  vi.doMock("./logbook-view.tsx", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("./logbook-view.tsx")>()),
-    Logbook: await load,
+function setBundledLoad(load: Promise<BundledView>, stop = stopLogbookPolling) {
+  vi.spyOn(BUNDLED_TAB_VIEWS, "logbook/logbook").mockImplementationOnce(async () => ({
+    render: await load,
+    stop,
   }));
 }
 
@@ -485,16 +486,11 @@ function logbookResponse(method: string) {
 }
 
 describe("bundled plugin views", () => {
-  afterEach(() => {
-    vi.doUnmock("./logbook-view.tsx");
-  });
-
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const loaded = createDeferred<BundledView>();
     let renderedHost: object | undefined;
-    setBundledLoad(loaded.promise);
-    const controller = await import("./logbook-controller.ts");
-    const stop = vi.spyOn(controller, "stopLogbookPolling");
+    const stop = vi.fn();
+    setBundledLoad(loaded.promise, stop);
     const fixture = createBundledPage();
     loaded.resolve((props) => {
       createEffect(
@@ -513,7 +509,8 @@ describe("bundled plugin views", () => {
   });
 
   it("isolates an in-flight bundled load across a same-client reconnect", async () => {
-    vi.doUnmock("./logbook-view.tsx");
+    await import("./logbook-view.tsx");
+    vi.setSystemTime(new Date(2026, 6, 5, 12));
     const staleStatus = createDeferred<unknown>();
     const staleDays = createDeferred<unknown>();
     const staleTimeline = createDeferred<unknown>();
@@ -538,14 +535,13 @@ describe("bundled plugin views", () => {
     staleStatus.resolve(logbookResponse("logbook.status"));
     staleDays.resolve(logbookResponse("logbook.days"));
     staleTimeline.resolve(logbookResponse("logbook.timeline"));
-    await settle();
-    await settle();
-    expect(fixture.page.querySelector(".logbook__day")?.textContent).not.toBe("2026-07-05");
+    await Promise.all([staleStatus.promise, staleDays.promise, staleTimeline.promise]);
+    flush();
+    expect(fixture.page.querySelector(".logbook__chips")).toBeNull();
     fixture.snapshot.phase = "connected";
     fixture.notify();
-    await waitForSolid(() =>
-      expect(fixture.page.querySelector(".logbook__day")?.textContent).toBe("2026-07-05"),
-    );
+    await waitForSolid(() => expect(fixture.page.querySelector(".logbook__chips")).not.toBeNull());
+    expect(fixture.page.querySelector(".logbook__day")?.textContent).toBe("2026-07-05");
     expect(request).toHaveBeenCalledTimes(6);
   });
 

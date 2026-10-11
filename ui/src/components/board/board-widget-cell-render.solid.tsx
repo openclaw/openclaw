@@ -49,7 +49,10 @@ export function BoardWidgetMenuItems(props: {
       >
         <For keyed={false} each={tabs()}>
           {(tab) => (
-            <wa-dropdown-item value={`${prefix()}move:${tab().tabId}`} disabled={props.disabled}>
+            <wa-dropdown-item
+              value={`${prefix()}move:${tab().tabId}`}
+              prop:disabled={props.disabled}
+            >
               {tab().title}
             </wa-dropdown-item>
           )}
@@ -61,7 +64,7 @@ export function BoardWidgetMenuItems(props: {
           <wa-dropdown-item
             class="board-widget__preset"
             value={`${prefix()}resize:${entry()[0]}`}
-            disabled={props.disabled}
+            prop:disabled={props.disabled}
           >
             {entry()[0].toUpperCase()}
             <span slot="details">
@@ -73,10 +76,10 @@ export function BoardWidgetMenuItems(props: {
       <Show when={props.widget.contentKind === "html"}>
         <wa-dropdown-item
           class="board-widget__preset"
-          type="checkbox"
+          prop:type="checkbox"
           value={`${prefix()}height:auto`}
-          checked={props.widget.heightMode !== "fixed"}
-          disabled={props.disabled}
+          prop:checked={props.widget.heightMode !== "fixed"}
+          prop:disabled={props.disabled}
         >
           {t("board.widget.autoHeight")}
         </wa-dropdown-item>
@@ -85,7 +88,7 @@ export function BoardWidgetMenuItems(props: {
       <wa-dropdown-item
         class="board-widget__menu-danger"
         value={`${prefix()}remove`}
-        disabled={props.disabled}
+        prop:disabled={props.disabled}
       >
         <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">
           <Icon name="trash" />

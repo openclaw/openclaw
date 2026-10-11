@@ -39,17 +39,19 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={async () => {
-                      setReloading(true);
-                      setReloadError("");
-                      try {
-                        await source.read()?.reload();
-                      } catch (error) {
-                        setReloadError(error instanceof Error ? error.message : String(error));
-                      } finally {
-                        setReloading(false);
-                      }
-                    }}
+                    onClick={() =>
+                      void (async () => {
+                        setReloading(true);
+                        setReloadError("");
+                        try {
+                          await source.read()?.reload();
+                        } catch (error) {
+                          setReloadError(error instanceof Error ? error.message : String(error));
+                        } finally {
+                          setReloading(false);
+                        }
+                      })()
+                    }
                   >
                     {t("pluginUi.reload")}
                   </button>

@@ -10,6 +10,7 @@ import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "./control-ui-dashboard.tsx";
 import "./control-ui-view.runtime.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
   updateComplete: Promise<boolean>;
