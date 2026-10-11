@@ -25,6 +25,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type {
   InitialSessionTranscriptWriter,
@@ -198,6 +199,27 @@ export function getOwnedSessionTranscriptActor(
   context.assertCommitAllowed?.();
   actor.actor.assertCurrent();
   return actor;
+}
+
+/** Borrow committed entry facts only while the caller holds the transcript writer FIFO. */
+export function readOwnedSessionTranscriptEntry(
+  scope: SessionTranscriptWriteTarget,
+): SessionTranscriptAnchorEntry | undefined {
+  const binding = getOwnedSessionTranscriptActor(scope);
+  if (!binding) {
+    return undefined;
+  }
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
+  const entry = binding.actor.snapshot({ assertCurrent, authorize: assertCurrent })?.entry;
+  return (
+    entry && {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      activeWriterRunId: entry.activeWriterRunId,
+      cliHistoryBoundary: entry.cliHistoryBoundary,
+      permissionMode: entry.permissionMode,
+    }
+  );
 }
 
 function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTranscriptWriteTarget {
