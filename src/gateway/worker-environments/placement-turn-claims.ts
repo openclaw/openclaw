@@ -16,10 +16,7 @@ import {
 } from "./placement-record.js";
 import { find, fromRow, getRequired, query, turnClaimValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
-import {
-  assertNoRunningWorkerSessionToolOperations,
-  clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.kernel.js";
+import { clearWorkerTurnToolState } from "./placement-session-tool-operations.kernel.js";
 import {
   publishPlacementTurnClaimState,
   publishPlacementWorkspaceJournalState,
@@ -327,7 +324,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     }
     // Local claims cannot authorize worker tools, so only worker claims own this cleanup.
     if (claim.owner.kind === "worker") {
-      assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
       clearWorkerTurnToolState(db, { sessionId, claimId });
     }
     return placement;
@@ -381,7 +377,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (!environment && !hasCurrentWorkspaceResultClaim(db, claim)) {
           throw new Error(`Session ${sessionId} workspace result owner changed before release`);
         }
-        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
         const statement = releaseTurnQuery(db, now());
         clearWorkerWorkspacePendingResult(db, sessionId);
@@ -449,7 +444,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             `Session ${sessionId} workspace result owner changed before cancellation`,
           );
         }
-        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
         clearWorkerWorkspacePendingResult(db, sessionId);
         return publishTurnRelease(

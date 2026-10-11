@@ -1,5 +1,6 @@
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { advanceMessageActionPrompt } from "../gateway/message-action-turn-capability.js";
 import { prepareModelVisibleToolTextBlock } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -139,6 +140,7 @@ export function guardSessionManager(
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
+  let transcriptRunId = opts?.runId;
   let prepareAssistantTranscriptMessage =
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
@@ -355,6 +357,13 @@ export function guardSessionManager(
       recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
         appended: persistence.appended,
       });
+      advanceMessageActionPrompt({
+        runId: transcriptRunId,
+        agentId: opts?.agentId,
+        sessionKey: opts?.sessionKey,
+        sessionId: sessionManager.getSessionId(),
+        recorder,
+      });
       await opts?.onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
@@ -391,6 +400,7 @@ export function guardSessionManager(
     suppressUserPersistence,
     preparedUserTurn,
   ) => {
+    transcriptRunId = runId;
     guard.setTranscriptRunId(runId, errors);
     guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence === true);
     prepareAssistantTranscriptMessage = prepare;

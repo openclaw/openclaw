@@ -204,7 +204,7 @@ export async function planClawExtensions(params: {
         ? blocker(
             "extension_provenance_incomplete",
             `$.profiles.openclaw.extensions[${index}]`,
-            `Extension ${JSON.stringify(extension.id)} did not resolve complete canonical identity and adapter provenance.`,
+            `Extension ${JSON.stringify(extension.id)} did not resolve complete identity and adapter provenance.`,
           )
         : undefined;
     const formatMismatch =
@@ -212,7 +212,7 @@ export async function planClawExtensions(params: {
         ? blocker(
             "extension_format_mismatch",
             `$.profiles.openclaw.extensions[${index}].format`,
-            `Extension ${JSON.stringify(extension.id)} declares format ${JSON.stringify(extension.format)}, but the canonical plugin detector found ${JSON.stringify(preflight.detectedFormat ?? "unknown")}.`,
+            `Extension ${JSON.stringify(extension.id)} declares format ${JSON.stringify(extension.format)}, but the plugin detector found ${JSON.stringify(preflight.detectedFormat ?? "unknown")}.`,
           )
         : undefined;
     const diagnostic = !preflight.ok

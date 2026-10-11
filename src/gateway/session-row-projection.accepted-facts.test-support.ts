@@ -9,6 +9,7 @@ import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-fac
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabases from "../state/openclaw-agent-db.js";
@@ -205,6 +206,12 @@ export async function withAcceptedSuffix(
           { agentId: "main", sessionKey },
           { ...entries[index]!, updatedAt: 2, label: `accepted-${index}` },
         );
+        sessionChanges.emit({
+          agentId: "main",
+          storePath: previous.storeTarget.storePath,
+          sessionKey,
+          factsInvalidated: true,
+        });
       }
       reading = projection.ensureMaterialized();
       await Promise.race([

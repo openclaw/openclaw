@@ -35,7 +35,7 @@ By default it runs:
 - one **allowed** check against `https://example.com/` (override/add with `--allowed-url`, repeatable)
 - one **denied** check against a temporary loopback canary (override with `--denied-url`, repeatable)
 
-Custom `--denied-url` targets are fail-closed: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
+Custom `--denied-url` targets need a verified denial signal: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
 
 Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the proxy and confirm sandbox APNs responds. The check sends an intentionally invalid provider token, so an APNs `403 InvalidProviderToken` response counts as a successful reachability signal (not a failure).
 

@@ -1079,35 +1079,6 @@
           ]
         },
         {
-          "path": "service-child-windows-job-native-WxEb3Wn2.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-YCx8MSBm.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
-              }
-            }
-          ]
-        },
-        {
           "path": "update-command-database-context--bimzNfw.mjs",
           "imports": [
             {
@@ -1599,43 +1570,6 @@
               "origin": {
                 "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-C0l-NsIL.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-DLKeuYeM.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -2258,43 +2192,6 @@
               "origin": {
                 "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-DzERrPTV.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -3304,43 +3201,6 @@
           ]
         },
         {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-C0g6_AIJ.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
-              }
-            }
-          ]
-        },
-        {
           "path": "systemd-definition-mutation-CTQgoJdy.mjs",
           "imports": [
             {
@@ -4144,27 +4004,6 @@
           ]
         },
         {
-          "path": "infra/gateway-scheduler.js",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-Bcfqw4Hq.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "GatewayScheduler"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "GatewayScheduler",
-              "origin": {
-                "module": "src/infra/gateway-scheduler.ts",
-                "symbol": "GatewayScheduler"
-              }
-            }
-          ]
-        },
-        {
           "path": "inspect-CtTdxwJH.mjs",
           "imports": [
             {
@@ -4525,43 +4364,6 @@
               "origin": {
                 "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-Bcfqw4Hq.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -5428,27 +5230,6 @@
           ]
         },
         {
-          "path": "infra/gateway-scheduler.js",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-Bcfqw4Hq.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "GatewayScheduler"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "GatewayScheduler",
-              "origin": {
-                "module": "src/infra/gateway-scheduler.ts",
-                "symbol": "GatewayScheduler"
-              }
-            }
-          ]
-        },
-        {
           "path": "inspect-BRayseMT.mjs",
           "imports": [
             {
@@ -5809,43 +5590,6 @@
               "origin": {
                 "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-Bcfqw4Hq.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -6712,27 +6456,6 @@
           ]
         },
         {
-          "path": "infra/gateway-scheduler.js",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-4M9XlIkT.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "GatewayScheduler"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "GatewayScheduler",
-              "origin": {
-                "module": "src/infra/gateway-scheduler.ts",
-                "symbol": "GatewayScheduler"
-              }
-            }
-          ]
-        },
-        {
           "path": "inspect-Ay9NXdY2.mjs",
           "imports": [
             {
@@ -6950,27 +6673,6 @@
           ]
         },
         {
-          "path": "openclaw-state-db-cache-CaflIAKq.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-4M9XlIkT.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "closeOpenClawStateDatabaseAsync"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "closeOpenClawStateDatabaseAsync",
-              "origin": {
-                "module": "src/state/openclaw-state-db-cache.ts",
-                "symbol": "closeOpenClawStateDatabaseAsync"
-              }
-            }
-          ]
-        },
-        {
           "path": "plugins/memory-state.js",
           "imports": [
             {
@@ -7114,64 +6816,6 @@
               "origin": {
                 "module": "src/plugins/registry-lifecycle.ts",
                 "symbol": "markPluginRegistryRetired"
-              }
-            }
-          ]
-        },
-        {
-          "path": "runtime-cleanup-DWSt7bfS.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-4M9XlIkT.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "runCliDisposerAfterPending"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "runCliDisposerAfterPending",
-              "origin": {
-                "module": "src/cli/runtime-cleanup.ts",
-                "symbol": "runCliDisposerAfterPending"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-4M9XlIkT.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -8074,27 +7718,6 @@
           ]
         },
         {
-          "path": "infra/gateway-scheduler.js",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-BBQoKht1.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "GatewayScheduler"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "GatewayScheduler",
-              "origin": {
-                "module": "src/infra/gateway-scheduler.ts",
-                "symbol": "GatewayScheduler"
-              }
-            }
-          ]
-        },
-        {
           "path": "inspect-tJVfHYot.mjs",
           "imports": [
             {
@@ -8483,43 +8106,6 @@
               "origin": {
                 "module": "src/cli/runtime-cleanup.ts",
                 "symbol": "runCliDisposerAfterPending"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-BBQoKht1.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -9621,27 +9207,6 @@
           ]
         },
         {
-          "path": "infra/gateway-scheduler.js",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "GatewayScheduler"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "GatewayScheduler",
-              "origin": {
-                "module": "src/infra/gateway-scheduler.ts",
-                "symbol": "GatewayScheduler"
-              }
-            }
-          ]
-        },
-        {
           "path": "inspect--mjDOF0s.mjs",
           "imports": [
             {
@@ -10059,43 +9624,6 @@
               "origin": {
                 "module": "src/daemon/service.ts",
                 "symbol": "resolveGatewayService"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]
@@ -11168,27 +10696,6 @@
           ]
         },
         {
-          "path": "infra/gateway-scheduler.js",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-C__wD_xL.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "GatewayScheduler"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "GatewayScheduler",
-              "origin": {
-                "module": "src/infra/gateway-scheduler.ts",
-                "symbol": "GatewayScheduler"
-              }
-            }
-          ]
-        },
-        {
           "path": "inspect-BsZSpEjm.mjs",
           "imports": [
             {
@@ -11598,43 +11105,6 @@
               "origin": {
                 "module": "src/cli/runtime-cleanup.ts",
                 "symbol": "runCliDisposerAfterPending"
-              }
-            }
-          ]
-        },
-        {
-          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
-          "imports": [
-            {
-              "importer": "runtime-cleanup-scope-C__wD_xL.mjs",
-              "owner": "src/cli/runtime-cleanup-scope.ts",
-              "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
-                "retainWindowsProcessJobUntilExit"
-              ]
-            }
-          ],
-          "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
-            {
-              "exported": "retainWindowsProcessJobUntilExit",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "retainWindowsProcessJobUntilExit"
               }
             }
           ]

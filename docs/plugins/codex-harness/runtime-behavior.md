@@ -52,7 +52,7 @@ replaced by a selected managed provider. OpenClaw keeps Codex's standalone
 its user-defined `web` namespace. `tools.web.search.enabled: false`
 disables both paths, as do tool-disabled LLM-only runs. Codex treats
 `"cached"` as a preference and resolves it to live external access for
-unrestricted app-server turns. Automatic managed fallback fails closed when
+unrestricted app-server turns. Automatic managed fallback is blocked when
 native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
