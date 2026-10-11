@@ -154,7 +154,11 @@ export class CodexNativeSubagentAssignmentInventory {
     const custody = owner.completionCustody.retain();
     try {
       store.assertCurrent();
-      for (const assignment of store.read()) {
+      const assignments = await store.read();
+      if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
+        return;
+      }
+      for (const assignment of assignments) {
         if (!matchesNativeAssignmentLifecycle(assignment.owner, current)) {
           continue;
         }

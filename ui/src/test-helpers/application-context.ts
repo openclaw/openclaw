@@ -4,6 +4,7 @@ import { normalizeApplicationContext } from "./application-context-fixtures.ts";
 
 export {
   createApplicationGateway,
+  createNavigationPreferencesFixture,
   hiddenScopeUpgradeCapability,
 } from "./application-context-fixtures.ts";
 

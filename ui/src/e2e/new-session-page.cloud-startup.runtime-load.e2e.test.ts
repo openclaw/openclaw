@@ -305,7 +305,7 @@ suite.define(() => {
             await page.locator(".sidebar-brand__new-thread").click();
             const privacy = page.getByRole("switch", { name: "Incognito" });
             await privacy.waitFor();
-            if ((await privacy.getAttribute("aria-checked")) !== "true") {
+            if (!(await privacy.isChecked())) {
               await privacy.click();
             }
             await page.locator(".new-session-page__message").fill(separateDraft);

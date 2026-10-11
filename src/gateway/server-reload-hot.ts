@@ -11,7 +11,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -100,6 +100,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
     const committedConfig = getRuntimeConfig();
+    const committedSourceConfig = projectConfigOntoRuntimeSourceSnapshot(committedConfig);
     const refreshModelRuntime = doesReloadAffectProviderAuth(plan, committedConfig, nextConfig);
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds([
       ...plan.changedPaths,
@@ -642,6 +643,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     try {
       if (refreshModelRuntime) {
+        await mrReload.pruneRemovedProviderModelCatalogs(
+          committedSourceConfig,
+          publication?.sourceConfig ?? nextConfig,
+        );
         await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {

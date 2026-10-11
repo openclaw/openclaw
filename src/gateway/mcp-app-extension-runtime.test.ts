@@ -62,8 +62,10 @@ vi.mock("./session-resource-tool-policy.js", () => ({ resolveSessionResourceTool
 vi.mock("./session-row-projection-access.js", () => ({
   getSessionRowProjection: () => ({ sharingTarget: () => ({ entry, storePath: "/store" }) }),
 }));
+// mock-isolation: App admission uses fixture model selection without native session ownership reads.
 vi.mock("./session-utils-model-selection.js", () => ({
   resolveSessionSelectedModelRef: mocks.model,
+  resolveSessionSelectedModelRefAsync: async (...args: unknown[]) => mocks.model(...args),
 }));
 const config = { mcp: { apps: { enabled: true } } };
 let entry: { sessionId: string } & Partial<SessionEntry>;

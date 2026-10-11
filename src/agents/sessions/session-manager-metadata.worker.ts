@@ -26,7 +26,10 @@ import {
   isReadableSessionMessage,
   parseOpaqueLeafEntry,
 } from "../../config/sessions/session-entry-codec.js";
-import { captureSessionEntryMetadataReceipts } from "../../config/sessions/session-entry-metadata-receipt.js";
+import {
+  boundSessionEntryMetadataReceipts,
+  captureSessionEntryMetadataReceipts,
+} from "../../config/sessions/session-entry-metadata-receipt.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -191,6 +194,7 @@ export function bindSqliteWorkerBackend(
         transcriptPublication,
         entryPublication,
       };
+      boundSessionEntryMetadataReceipts(entryPublication, publication);
       deferSqliteWorkerCommitReceipt(context.database, publication);
       nativeContext.admit(stage, (request, dispatch) => {
         const publish = (restricted: typeof request) =>
