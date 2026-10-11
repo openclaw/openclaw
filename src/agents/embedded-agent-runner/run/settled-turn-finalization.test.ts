@@ -460,23 +460,52 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
   });
 
-  it.each(["user", "cron"] as const)(
-    "persists and delivers a %s fallback after empty finalization",
-    async (trigger) => {
-      const expectedText =
-        trigger === "cron" ? SILENT_REPLY_TOKEN : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
+  it.each([
+    { trigger: "user", outcome: "empty", unattended: false, label: "" },
+    { trigger: "cron", outcome: "empty", unattended: true, label: "" },
+    { trigger: "heartbeat", outcome: "empty", unattended: true, label: "" },
+    // Legacy heartbeat hosts omit terminalReplyExpectation entirely and only set the
+    // empty-reply policy, so the shared resolver is the only place the required reply
+    // survives: reading the raw field emits NO_REPLY and drops the scheduled reply.
+    {
+      trigger: "heartbeat",
+      outcome: "empty",
+      unattended: false,
+      label: " for a legacy required heartbeat",
+    },
+    { trigger: "user", outcome: "failed", unattended: false, label: "" },
+    { trigger: "cron", outcome: "failed", unattended: true, label: "" },
+    { trigger: "heartbeat", outcome: "failed", unattended: true, label: "" },
+  ] as const)(
+    "persists and delivers a $trigger fallback after $outcome finalization$label",
+    async ({ trigger, outcome, unattended, label }) => {
+      const expectedText = unattended
+        ? SILENT_REPLY_TOKEN
+        : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
       const attempt = settledSuccessfulAttempt();
       const emptyAssistant = buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "" }],
       });
-      backendMocks.runSettledFinalization.mockResolvedValue({
-        outcome: "empty",
-        result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
-      });
+      if (outcome === "failed") {
+        backendMocks.runSettledFinalization.mockRejectedValue(new Error("summary unavailable"));
+      } else {
+        backendMocks.runSettledFinalization.mockResolvedValue({
+          outcome: "empty",
+          result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+        });
+      }
 
       const input = finalizationInput(attempt);
       input.terminalBase.runParams.trigger = trigger;
       input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
+      // An unattended poll is optional work: nobody is waiting on its reply, so
+      // the placeholder is noise. A user turn is a required reply and must not
+      // be waived by an exhausted finalizer.
+      input.terminalBase.runParams.terminalReplyExpectation = unattended ? "optional" : "required";
+      if (label) {
+        delete input.terminalBase.runParams.terminalReplyExpectation;
+        input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = false;
+      }
       input.finalization.preparedAttempt.abortSignal = AbortSignal.abort(
         new Error("original attempt timed out"),
       );
@@ -497,12 +526,16 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+      // An empty completion retries the finalizer; a throwing one does not —
+      // the rejection ends the attempt, so only the first call happens.
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
+        outcome === "empty" ? 2 : 1,
+      );
       expect(result.finalizationOutcome).toBe(
-        trigger === "cron" ? "silent-fallback" : "completed-empty",
+        unattended ? "silent-fallback" : outcome === "empty" ? "completed-empty" : "failed",
       );
       expect(result.prepared.payloadsWithToolMedia).toEqual(
-        trigger === "cron" ? [] : [expect.objectContaining({ text: expectedText })],
+        unattended ? [] : [expect.objectContaining({ text: expectedText })],
       );
       expect(result.prepared.finalAssistantRawText).toBe(expectedText);
       if (trigger === "user") {
@@ -540,9 +573,10 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
         toolMetas: attempt.toolMetas,
       });
-      expect(result.prepared.agentMeta).toMatchObject({
-        assistantTurns: 3,
-      });
+      // Every accepted finalizer answer counts as an assistant turn; when the
+      // finalizer throws, the fallback ships on the original attempt instead,
+      // so no further turn is recorded.
+      expect(result.prepared.agentMeta.assistantTurns).toBe(outcome === "empty" ? 3 : 1);
       const terminalInput = makeTerminalInput({
         ...result.prepared,
         attempt: result.attempt,
@@ -560,9 +594,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       }
       expect(terminal.result.meta.error).toBeUndefined();
       expect(terminal.result.payloads).toEqual([expect.objectContaining({ text: expectedText })]);
-      expect(terminal.result.meta.terminalReplyKind).toBe(
-        trigger === "cron" ? "silent-empty" : undefined,
-      );
+      expect(terminal.result.meta.terminalReplyKind).toBe(unattended ? "silent-empty" : undefined);
     },
   );
 
