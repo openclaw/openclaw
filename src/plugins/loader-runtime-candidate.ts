@@ -3,6 +3,11 @@ import path from "node:path";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  compareOpenClawReleaseVersions,
+  resolveOpenClawReleaseCohortVersion,
+} from "../infra/npm-registry-spec.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
@@ -41,6 +46,7 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
+import { resolveConfiguredRuntimePluginInstallCandidate } from "./official-runtime-plugins.js";
 import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -238,6 +244,29 @@ export function loadRuntimePluginCandidate(params: {
   }
   if (!enableState.enabled) {
     markPluginActivationDisabled(record, enableState.reason);
+  }
+
+  const runtimePackage = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
+  const hostVersion = resolveCompatibilityHostVersion(context.env);
+  const hostCohort = resolveOpenClawReleaseCohortVersion(hostVersion);
+  const packageVersion = candidate.packageVersion;
+  if (
+    enableState.enabled &&
+    candidate.origin !== "bundled" &&
+    runtimePackage?.versionBoundToOpenClaw &&
+    candidate.packageName === runtimePackage.npmSpec &&
+    packageVersion &&
+    (compareOpenClawReleaseVersions(packageVersion, hostCohort) ?? 0) < 0
+  ) {
+    // A broad pluginApi range cannot prove lazy SDK imports from an older runtime still work.
+    record.activated = false;
+    pushPluginLoadError(
+      `Official runtime plugin ${pluginId} ${packageVersion} is older than OpenClaw ${hostVersion} ` +
+        `(required release cohort ${hostCohort}); it is unavailable until repaired. ` +
+        `Run \`openclaw update repair\` or \`openclaw plugins update ${pluginId}\`, then restart the Gateway. ` +
+        "For a linked plugin, update the linked source or remove its load-path override before retrying.",
+    );
+    return;
   }
 
   if (record.format === "bundle") {

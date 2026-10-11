@@ -670,6 +670,12 @@ their existing behavior.
 Version-bound runtime plugins converge to the base release cohort when the
 core is a correction release (for example, `YYYY.M.P-2` uses plugin
 `YYYY.M.P`).
+`openclaw plugins update` uses the same host-matching targets. An older official
+version-bound runtime, such as Codex left behind by an interrupted update, is
+reported as unavailable before it can register or serve turns. Run
+`openclaw update repair`, or `openclaw plugins update codex`, then restart the
+Gateway. Newer explicit pins and independently versioned plugins retain their
+existing compatibility behavior.
 Catalog installs created by current OpenClaw versions retain that default
 intent. Verified OpenClaw-owned packages recorded at an exact OpenClaw release
 no newer than core resume their catalog's default selector after a successful
