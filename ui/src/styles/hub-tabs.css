@@ -7,7 +7,8 @@
   display: flex;
   align-items: stretch;
   overflow-x: auto;
-  border-bottom: 2px solid var(--track-color);
+  padding-block-end: 2px;
+  box-shadow: inset 0 -2px 0 var(--track-color);
   gap: var(--space-2);
 }
 
@@ -63,6 +64,12 @@
   outline: none;
   border-radius: var(--radius-sm);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.hub-tab[active]:focus-visible {
+  box-shadow:
+    0 2px 0 var(--indicator-color),
+    0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 /* Equal outer columns keep hub tabs centered whether or not the active route

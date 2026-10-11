@@ -2,7 +2,7 @@
   min-width: 0;
 }
 
-.oc-tab {
+:where(.oc-tab) {
   appearance: none;
   flex: none;
   margin: 0;
