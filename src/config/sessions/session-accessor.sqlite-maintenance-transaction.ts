@@ -1,12 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import {
-  isOpenClawAgentDatabasePathCurrent,
-  readOpenClawAgentDatabaseIdentity,
-} from "../../state/openclaw-agent-db-identity.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -42,9 +38,7 @@ import type {
 import {
   invalidateSessionEntryMaintenanceAgeFact,
   applySessionEntryMaintenanceAgeChange,
-  captureSessionEntryMaintenanceAgeFact,
   readSessionEntryMaintenanceNextAgeAt,
-  type SessionEntryMaintenanceAgeCapture,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
@@ -67,40 +61,13 @@ type MaintenancePlan = Extract<
 
 class MaintenancePreservationRequiredError extends Error {}
 
-const ageOwners = new WeakMap<DatabaseSync, string>();
-const ageCaptureIds = new WeakMap<SessionEntryMaintenanceAgeCapture, number>();
-let nextAgeCaptureId = 0;
-
 function prepareWorkerAgeFact(
   database: Pick<OpenClawAgentDatabase, "db">,
   plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
 ) {
-  if (plan.ageOwner !== undefined && ageOwners.get(database.db) !== plan.ageOwner) {
-    invalidateSessionEntryMaintenanceAgeFact(database.db);
-    ageOwners.set(database.db, plan.ageOwner);
-  }
   for (const change of plan.ageChanges ?? []) {
     applySessionEntryMaintenanceAgeChange(database.db, change);
   }
-}
-
-function captureWorkerAgeSnapshotInTransaction(
-  database: Pick<OpenClawAgentDatabase, "db" | "path" | "agentId">,
-  maintenance: SessionEntryMaintenanceInput["maintenance"],
-) {
-  // Capture the writer receipt and local generation alongside this snapshot.
-  const revision = readSessionEntryCacheValidityToken(database.db);
-  const capture = captureSessionEntryMaintenanceAgeFact(database.db, maintenance);
-  let id = ageCaptureIds.get(capture);
-  if (id === undefined) {
-    id = ++nextAgeCaptureId;
-    ageCaptureIds.set(capture, id);
-  }
-  return {
-    incarnation: readOpenClawAgentDatabaseIdentity(database).incarnation,
-    revision,
-    capture: id,
-  };
 }
 
 function readPreservation(input: SessionEntryMaintenanceInput) {
@@ -203,50 +170,25 @@ export function readSessionMaintenanceInWorker(
               for (const change of plan.ageChanges ?? []) {
                 applySessionEntryMaintenanceAgeChange(database.db, change);
               }
-              const previous = plan.expected ?? plan.readOnly?.snapshot;
-              const capture = captureSessionEntryMaintenanceAgeFact(database.db, plan.maintenance);
-              if (
-                previous &&
-                previous.incarnation === observed.incarnation &&
-                previous.capture === ageCaptureIds.get(capture) &&
-                // Final deadline publication must still match the owning writer's receipt.
-                (!plan.expected ||
-                  cacheValidityTokensEqual(
-                    previous.revision,
-                    readSessionEntryCacheValidityToken(database.db),
-                  ))
-              ) {
-                return {
-                  kind: "maintenance-age",
-                  nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
-                };
-              }
-              // A different connection cannot certify an earlier connection's age revision.
-              invalidateSessionEntryMaintenanceAgeFact(database.db);
+              // This is a scheduling hint, not authority to delete. A stale hint is
+              // corrected by the next kick or periodic pass; deletion checks stay native.
+              return {
+                kind: "maintenance-age",
+                nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+              };
             }
             const prepared = prepareSessionEntryMaintenanceInDatabase(database, input, () =>
               readPreservation(input),
             );
             if (prepared.kind === "write") {
-              return {
-                kind:
-                  plan.kind === "maintenance-plan"
-                    ? "maintenance-write-required"
-                    : "maintenance-plan-stale",
-              };
+              return { kind: "maintenance-write-required" };
             }
-            return plan.kind === "maintenance-plan"
-              ? {
-                  kind: "maintenance-plan",
-                  value: prepared.value,
-                  readOnlyInput: input,
-                  ageSnapshot: captureWorkerAgeSnapshotInTransaction(database, input.maintenance),
-                  nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
-                }
-              : {
-                  kind: "maintenance-age",
-                  nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
-                };
+            return {
+              kind: "maintenance-plan",
+              value: prepared.value,
+              readOnlyInput: input,
+              nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
+            };
           },
           { databaseLabel: database.path, operationLabel: "session.maintenance.read" },
         ),
@@ -355,17 +297,6 @@ export function runSessionMaintenanceMetadataInTransaction(
           for (const change of plan.ageChanges ?? []) {
             applySessionEntryMaintenanceAgeChange(database.db, change);
           }
-          let expectedSnapshotMatches = true;
-          if (plan.expected) {
-            const snapshot = captureWorkerAgeSnapshotInTransaction(database, plan.maintenance);
-            expectedSnapshotMatches =
-              plan.expected.incarnation === snapshot.incarnation &&
-              plan.expected.capture === snapshot.capture &&
-              cacheValidityTokensEqual(plan.expected.revision, snapshot.revision);
-          }
-          if (!isOpenClawAgentDatabasePathCurrent(database) || !expectedSnapshotMatches) {
-            return { kind: "maintenance-plan-stale" };
-          }
           callbacks.beforeCommit?.(database);
           return {
             kind: "maintenance-age",
@@ -390,7 +321,6 @@ export function runSessionMaintenanceMetadataInTransaction(
         return {
           kind: plan.kind,
           value: maintenance,
-          ageSnapshot: captureWorkerAgeSnapshotInTransaction(database, plan.input.maintenance),
           nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.input.maintenance),
         };
       },

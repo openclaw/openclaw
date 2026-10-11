@@ -174,7 +174,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
     finalDispatchClaimed: boolean;
-    finalDeliveryNotDispatched?: boolean;
+    finalDeliveryError?: unknown;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;

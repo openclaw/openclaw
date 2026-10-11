@@ -81,10 +81,8 @@ function McpServersCardContent(props: McpServersCardProps) {
     },
   );
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
-    if (active) {
-      state.message = { kind: "error", text: formatUiError(error) };
-      invalidate();
-    }
+    state.message = { kind: "error", text: formatUiError(error) };
+    invalidate();
   });
   const hello = createMemo(() => gateway.read().snapshot.hello);
   createRenderEffect(hello, () => {
@@ -138,9 +136,6 @@ function McpServersCardContent(props: McpServersCardProps) {
     state.message = null;
     invalidate();
     const result = await patchMcpServers(context.runtimeConfig, options);
-    if (!active) {
-      return false;
-    }
     state.busy = false;
     state.message = result.ok
       ? { kind: "success", text: options.successText }

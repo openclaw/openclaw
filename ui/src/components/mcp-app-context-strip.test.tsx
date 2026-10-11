@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -15,15 +14,14 @@ import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppContextStrip } from "./mcp-app-context-strip.ts";
 
 describe("composer app context", () => {
-  it("clears consumed context immediately and ignores an earlier refresh result", async () => {
+  it("clears consumed context immediately", () => {
     const state = {
       updateId: "revision-one",
       content: [
         { type: "text" as const, text: "selected hex bolt", _meta: { "openai/title": "Hex bolt" } },
       ],
     };
-    const refresh = createDeferred<{ state: typeof state }>();
-    const request = vi.fn(() => refresh.promise);
+    const request = vi.fn(async () => ({ state }));
     const client = { request } as unknown as NonNullable<ApplicationGateway["snapshot"]["client"]>;
     const listeners = new Set<(event: GatewayEventFrame) => void>();
     publishMcpAppContext(client, {
@@ -55,8 +53,6 @@ describe("composer app context", () => {
         listener({ type: "event", event: "mcp.app.hostContextChanged", payload });
       }
     };
-    emit({ viewId: "view-one" });
-    expect(request).toHaveBeenCalledTimes(1);
     emit({ viewId: "another-view", modelContext: null, updateId: "revision-one" });
     flush();
     expect(strip.textContent).toContain("Hex bolt");
@@ -66,10 +62,6 @@ describe("composer app context", () => {
     emit({ viewId: "view-one", modelContext: null, updateId: "revision-one" });
     flush();
     expect.soft(strip.textContent?.trim()).toBe("");
-    refresh.resolve({ state });
-    await refresh.promise;
-    flush();
-    expect(strip.textContent?.trim()).toBe("");
     expect(strip.querySelector('[role="alert"]')).toBeNull();
   });
   it("clears an already-consumed item after an idempotent removal response", async () => {

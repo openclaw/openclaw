@@ -35,6 +35,7 @@ import {
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 type HookCompatibleSource = Extract<PluginsInstallParams, { source: "local" | "npm" }>;
 type InstallParams = Parameters<typeof installManagedPlugin>[0] & {
@@ -106,6 +107,17 @@ async function installHookPack(
         "--no-enable is only supported for plugins. Install hook packs separately with openclaw hooks install.",
     };
   }
+  return await runWithLocalPluginState("install (hook fallback)", (assertCurrent) =>
+    installHookPackLocal(source, params, expectedPackageKind, assertCurrent),
+  );
+}
+
+async function installHookPackLocal(
+  source: HookCompatibleSource,
+  params: InstallParams,
+  expectedPackageKind: "hook-only" | undefined,
+  assertCurrent: () => void,
+): Promise<InstallResult> {
   // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
     const request = resolvePluginInstallRequestContext({
@@ -134,6 +146,7 @@ async function installHookPack(
       return { ok: false, error: "Linked hook pack paths must be directories." };
     }
     const beforePersistentApply = () => {
+      assertCurrent();
       params.signal?.throwIfAborted();
       lease.assertOwned();
       snapshot.writeOptions.assertConfigPathForWrite?.();

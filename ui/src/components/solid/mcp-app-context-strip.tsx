@@ -50,7 +50,6 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
     revision();
     return readMcpAppContexts(gateway.read().snapshot.client, props.sessionKey, props.agentId);
   });
-  const refreshes = new Map<string, number>();
   onCleanup(
     context.gateway.subscribeEvents((event) =>
       untrack(() => {
@@ -77,21 +76,11 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
           if (!("updateId" in payload) || payload.updateId !== entry.state?.updateId) {
             return;
           }
-          refreshes.set(entry.viewId, (refreshes.get(entry.viewId) ?? 0) + 1);
           publishMcpAppContext(client, { ...entry, state: null });
           return;
         }
-        const generation = (refreshes.get(entry.viewId) ?? 0) + 1;
-        refreshes.set(entry.viewId, generation);
-        const publish = (state: McpAppContextState) => {
-          if (
-            mounted &&
-            context.gateway.snapshot.client === client &&
-            refreshes.get(entry.viewId) === generation
-          ) {
-            publishMcpAppContext(client, { ...entry, state });
-          }
-        };
+        const publish = (state: McpAppContextState) =>
+          publishMcpAppContext(client, { ...entry, state });
         void client
           .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
             sessionKey: entry.sessionKey,

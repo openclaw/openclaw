@@ -37,6 +37,7 @@ describe("write-unified-entry-dts", () => {
         "src/state/openclaw-agent-schema.sql",
         "src/shared/freebsd-process-identity.ts",
         "src/infra/update-managed-service-handoff-native-loader.ts",
+        "src/infra/package-update-activation-native-loader.ts",
       ]),
     );
     expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
