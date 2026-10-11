@@ -282,6 +282,8 @@ Personal session shortcuts stay in the icon rail in both sidebar modes, mixed wi
 
 Groups share a window of at most 300 sessions across agents with [Agents home](/web/control-ui#agents-home). This bounds the session rows loaded for the groups, not the number of saved rail shortcuts; a personal pin does not reserve a place in that window. The open conversation can remain visible outside this window. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions across groups.
 
+A saved session shortcut whose title has not loaded is labeled **Open session**. Selecting it looks up that session on demand. A missing session shows **Session not found**; a failed lookup asks you to try again.
+
 The active session list applies Gateway lifecycle row snapshots to existing members without reloading the whole list. Membership changes, missing or incomplete row snapshots, and Gateway-owned filters still require an authoritative list read. Automatic roster refreshes collect events in a randomized four-to-five-second window that later events cannot postpone, spreading reads across browsers. After an automatic refresh completes, the next waits three times its duration, bounded between five and 15 seconds. Explicit refreshes, filter or agent changes, reconnects, and foreground replacements bypass that delay.
 
 Activity refreshes pause while the browser tab is hidden and catch up once when you return, respecting the automatic refresh delay. Changes that arrive during a roster read share one follow-up refresh; switching filters never combines pages from different filters.
