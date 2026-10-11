@@ -237,7 +237,8 @@ vi.mock("./update-command-config-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config-snapshot.js")>()),
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: {
     log: mocks.log,
     error: mocks.error,

@@ -964,6 +964,11 @@ debt, as do synchronous result compatibility readers and pending-result guards.
 These changes require no schema, retention, durability, or update migration.
 
 Workspace publication and move/reclaim retain synchronous final-authority guards.
+Independent lease heartbeats for the same physical state database share one
+worker and native connection. Each lease retains its own expiry, current-owner
+checks, requests, and cleanup. Closing one lease leaves its siblings running;
+closing the last joins native worker exit. Renewal remains independent of the
+Gateway event loop, including during concurrent worktree creation.
 Workspace reservation keeps its existing lease acquisition order and native
 preparation path. Each authority check reads placement and pending-result or
 reconciliation presence in one indexed statement, including orphan results when

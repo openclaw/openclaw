@@ -158,10 +158,12 @@ protect the next update it runs.
 
 Exit always waits for accepted state operations, pending database opens, and live
 worker references to settle. After settlement, retained-worker native close and
-thread termination have a ten-second grace period. Expiry records a warning,
-keeps the retained runtime for later cleanup, and preserves the command's exit
-status. This protection belongs to the installed updater: installing a release
-with the fix enables it for the next update that release performs.
+thread termination have a ten-second reporting grace period. Expiry records a
+warning and continues waiting for actual native retirement; it does not abandon
+workers or force process exit. The retained runtime stays owned until retirement
+settles, then remains available for later cleanup. The command's recorded outcome
+is preserved. This protection belongs to the installed updater: installing a
+release with the fix enables it for the next update that release performs.
 
 The executable CLI retains its shared-state and worker cleanup code before an
 update can replace those files. Older installed development builds can finish an

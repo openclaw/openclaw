@@ -719,7 +719,6 @@ extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	3
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
 extensions/qa-lab/src/mantis/run.runtime.ts	1
-extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts	1
 extensions/qa-lab/src/mantis/visual-task.runtime.ts	2
 extensions/qa-lab/src/manual-lane.runtime.ts	2
 extensions/qa-lab/src/model-catalog.runtime.ts	2
@@ -1678,7 +1677,6 @@ src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
-src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	4
@@ -1922,8 +1920,6 @@ src/daemon/systemd-exec.ts	2
 src/daemon/systemd-install.ts	1
 src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
-src/entry.compile-cache.ts	2
-src/entry.respawn.ts	1
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-health-contributions-final.ts	1
@@ -2638,7 +2634,7 @@ src/wizard/setup.post-install-migration.ts	1
 src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	4
-src/worker/launch-descriptor.ts	5
+src/worker/launch-descriptor.ts	1
 src/worker/node-workspace-protocol.ts	1
 src/worker/worker-connection-frames.ts	2
 src/worker/worker-process.ts	1

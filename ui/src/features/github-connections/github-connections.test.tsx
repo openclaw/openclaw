@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
@@ -78,14 +78,12 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
   const element = document.createElement("openclaw-github-connections");
   provider.append(element);
   document.body.append(provider);
+  onTestFinished(() => provider.remove());
   return {
     element,
     context,
   };
 }
-afterEach(() => {
-  document.body.replaceChildren();
-});
 
 it("follows Settings selection for effective agent GitHub without changing personal or system scope", async () => {
   const pending = createDeferredCore<ToolsGitHubStatusResult>();

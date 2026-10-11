@@ -6,6 +6,7 @@ import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
@@ -379,6 +380,8 @@ suite.define(() => {
           params: { key: sessionKey, message, idempotencyKey: messageId },
         });
         if (escape === "toast") {
+          // Retained requests do not establish readiness in the reloaded document.
+          await waitForControlUiGatewayReady(page);
           await navigateToControlUiSession(page, sessionKey);
         }
         await expect

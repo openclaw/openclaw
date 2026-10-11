@@ -365,7 +365,7 @@ src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
 src/auto-reply/tokens.ts
-src/bootstrap/node-exit-safe-compilers.ts
+src/bootstrap/node-compiler-args.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
 src/channels/chat-meta-shared.ts
@@ -1524,6 +1524,7 @@ src/process/kill-tree.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
+src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
@@ -1795,6 +1796,7 @@ src/state/openclaw-state-feature-schema.ts
 src/state/openclaw-state-lease-acquisition.ts
 src/state/openclaw-state-lease-cleanup.ts
 src/state/openclaw-state-lease-error.ts
+src/state/openclaw-state-lease-heartbeat-carrier.ts
 src/state/openclaw-state-lease-heartbeat-cleanup.ts
 src/state/openclaw-state-lease-heartbeat-shared.ts
 src/state/openclaw-state-lease-heartbeat.ts
@@ -1966,6 +1968,7 @@ src/config/sessions/session-transcript-authority.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
+src/config/sessions/session-accessor.sqlite-metadata-read.ts
 src/config/sessions/session-accessor.sqlite-model-context.ts
 src/config/sessions/session-accessor.sqlite-projection-read.ts
 src/config/sessions/session-accessor.sqlite-read.ts
