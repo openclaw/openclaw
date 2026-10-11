@@ -1,10 +1,9 @@
-import { html } from "lit";
 import { For, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
-import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
+import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
@@ -53,28 +52,42 @@ export function AgentsHomeView(props: AgentsHomeProps) {
       props.context.navigate(route, options);
     }
   };
-  const manage = () => html`<a
-    class="btn"
-    href=${pathForRoute("agents", props.context.basePath)}
-    @click=${(event: MouseEvent) => navigate(event, "agents")}
-    >${t("agentsHome.manage")}</a
-  >`;
+  const manage = () => (
+    <a
+      class="btn"
+      href={pathForRoute("agents", props.context.basePath)}
+      onClick={(event) => navigate(event, "agents")}
+    >
+      {t("agentsHome.manage")}
+    </a>
+  );
   return (
     <>
       <div class="agents-home__header">
-        <LitContent
-          render={() =>
-            renderSettingsPageHeader({
-              title: title(),
-              subtitle: subtitle(),
-              actions: html`${manage()}
-                <a
-                  class="btn primary"
-                  href=${props.canCreate ? `${pathForRoute("custodian", props.context.basePath)}?intent=new-agent` : pathForRoute("agents", props.context.basePath)}
-                  @click=${(event: MouseEvent) => navigate(event, props.canCreate ? "custodian" : "agents", props.canCreate ? { search: "?intent=new-agent" } : undefined)}
-                  >${t("agentsHome.create")}</a
-                >`,
-            })
+        <SettingsPageHeader
+          title={title()}
+          subtitle={subtitle()}
+          actions={
+            <>
+              {manage()}
+              <a
+                class="btn primary"
+                href={
+                  props.canCreate
+                    ? `${pathForRoute("custodian", props.context.basePath)}?intent=new-agent`
+                    : pathForRoute("agents", props.context.basePath)
+                }
+                onClick={(event) =>
+                  navigate(
+                    event,
+                    props.canCreate ? "custodian" : "agents",
+                    props.canCreate ? { search: "?intent=new-agent" } : undefined,
+                  )
+                }
+              >
+                {t("agentsHome.create")}
+              </a>
+            </>
           }
         />
       </div>
@@ -102,7 +115,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
         <Show when={props.connected && !props.loading && !props.error && props.cards.length === 0}>
           <div class="agents-home__empty">
             <p>{t("agentsHome.empty")}</p>
-            <LitContent render={manage} />
+            {manage()}
           </div>
         </Show>
         <div class="agents-home__grid">

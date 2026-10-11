@@ -114,6 +114,7 @@ suite.define(() => {
           sessionId: "warm-reload-session",
           kind: "direct" as const,
           label: "Warm reload conversation",
+          owner: { actor: { type: "human" as const, id: "profile-a" } },
           updatedAt: timestamp,
         };
         const gateway = await installMockGateway(page, {
@@ -139,6 +140,7 @@ suite.define(() => {
               sessionId: "cached-only-session",
               kind: "direct",
               label: "Cached only session",
+              owner: { actor: { type: "human", id: "profile-a" } },
               updatedAt: timestamp - 1,
             },
           ],
@@ -234,7 +236,7 @@ suite.define(() => {
         }
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
-        await sidebar.locator(".nav-item--home").waitFor();
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
@@ -273,6 +275,9 @@ suite.define(() => {
               sessionId: "live-only-session",
               kind: "direct",
               label: "Live only session",
+              owner: {
+                actor: { type: "human", id: profile === "different" ? "profile-b" : "profile-a" },
+              },
               updatedAt: timestamp,
             },
           ],
@@ -325,7 +330,7 @@ suite.define(() => {
           expect(startup.params).toMatchObject({ sessionKey, cursor: "warm-reload-cursor" });
         }
         await gateway.waitForRequest("sessions.list");
-        await sidebar.locator(".nav-item--home").waitFor();
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
         await transcript

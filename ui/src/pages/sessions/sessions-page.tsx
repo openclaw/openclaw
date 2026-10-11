@@ -1,14 +1,15 @@
-import { html } from "lit";
 import { createEffect, createMemo, onCleanup, untrack, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { i18n } from "../../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { LitContent } from "../../lit/template-content.tsx";
 import "../../styles/settings.css";
 import type { SessionsRouteData } from "./route.ts";
@@ -36,16 +37,8 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
     return controller.sessionMenuProps();
   });
   return (
-    <>
+    <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
       <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
-        <LitContent
-          render={() =>
-            html`<span
-              hidden
-              ${shellLayoutTraits({ toolbarHeader: true, settingsWorkspace: true, settingsPage: true, settingsWide: true })}
-            ></span>`
-          }
-        />
         <div class="hub-page-header__title">
           <div class="page-title">
             {(() => {
@@ -58,14 +51,7 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
               locale.revision();
               return subtitleForRoute("sessions");
             })()}{" "}
-            <a
-              class="learn-more-link"
-              href="https://docs.openclaw.ai/concepts/session"
-              target={EXTERNAL_LINK_TARGET}
-              rel={buildExternalLinkRel()}
-            >
-              {t("common.learnMore")}
-            </a>
+            <LearnMoreLink url="https://docs.openclaw.ai/concepts/session" />
           </div>
         </div>
         <div class="hub-page-header__tabs">
@@ -102,17 +88,15 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
           />
         </div>
       </section>
-      <section class="settings-workspace" id="sessions-hub-panel">
-        <div class="settings-workspace__body">
-          <SessionsView {...view()} />
-        </div>
-      </section>
+      <SettingsWorkspace id="sessions-hub-panel">
+        <SessionsView {...view()} />
+      </SettingsWorkspace>
       <Show when={menu()}>{(current) => <SessionManagementMenu {...current()} />}</Show>
-    </>
+    </ShellLayoutBoundary>
   );
 }
 
-export function SessionsPage(props: { routeData?: SessionsRouteData }) {
+function SessionsPageRoot(props: { routeData?: SessionsRouteData }) {
   const controller = new SessionsPageController();
   controller.routeData = untrack(() => props.routeData);
   createEffect(
@@ -121,3 +105,9 @@ export function SessionsPage(props: { routeData?: SessionsRouteData }) {
   );
   return <SessionsPageContent controller={controller} />;
 }
+
+export const SessionsPage = defineSolidBridge<{ routeData?: SessionsRouteData }>(
+  "openclaw-sessions-page",
+  SessionsPageRoot,
+  { properties: { routeData: { default: undefined, attribute: false } } },
+);

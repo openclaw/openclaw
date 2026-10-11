@@ -31,10 +31,6 @@ export type TranscriptSearchProps = {
   onNavigateToChat: (sessionKey: string) => void;
 };
 
-export function renderTranscriptSearch(props: TranscriptSearchProps) {
-  return <TranscriptSearch {...props} />;
-}
-
 export function TranscriptSearch(props: TranscriptSearchProps) {
   const query = createMemo(() => props.transcriptSearchQuery);
   const hasQuery = createMemo(() => query().trim().length > 0);

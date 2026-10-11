@@ -10,7 +10,7 @@ import {
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
   parseAcpDatabaseSessionKey,
-  selectAcpSessionRow,
+  selectAcpSessionRowForRead,
 } from "./session-meta-keys.js";
 import type { AcpSessionEntryBinding, AcpSessionRow } from "./session-meta-read.types.js";
 
@@ -98,11 +98,9 @@ export function selectAcpMigrationRowForStoreEntry(
     ...(!parsed ? [`@agent:${normalizeAgentId(agentId)}:${normalizedKey}`] : []),
     ...(parsed || owner === normalizeAgentId(agentId) ? [normalizedKey] : []),
   ];
-  for (const key of keys) {
-    const row = selectAcpSessionRow(database, key);
-    if (row && (!entry || acpSessionRowMatchesEntry(row, entry))) {
-      return row;
-    }
+  const selected = selectAcpSessionRowForRead(database, { keys, entry });
+  if (selected) {
+    return selected;
   }
   const normalized = normalizeLowercaseStringOrEmpty(normalizedKey);
   const free = parseAgentSessionKey(normalized);

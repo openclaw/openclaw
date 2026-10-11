@@ -77,8 +77,8 @@ describe("MemorySettingsPage engine slot", () => {
       expect(
         [
           ...(element
-            .querySelector("wa-radio-group.settings-segmented")
-            ?.querySelectorAll("wa-radio") ?? []),
+            .querySelector('.settings-segmented[role="radiogroup"]')
+            ?.querySelectorAll(".settings-segmented__btn") ?? []),
         ].map((radio) => radio.textContent?.trim()),
       ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
     } finally {
@@ -327,10 +327,8 @@ describe("MemorySettingsPage catalog state", () => {
       expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
       expect(addonSwitch(element, "Active memory")).toBeNull();
       expect(addonSwitch(element, "Memory wiki")).toBeNull();
-      const engineGroup = element.querySelector<HTMLElement & { disabled?: boolean }>(
-        "wa-radio-group.settings-segmented",
-      );
-      expect(engineGroup?.disabled).toBe(true);
+      const engineInput = element.querySelector<HTMLInputElement>(".settings-segmented__input");
+      expect(engineInput?.disabled).toBe(true);
     } finally {
       element.remove();
     }

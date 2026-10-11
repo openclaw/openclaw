@@ -1,5 +1,4 @@
 import { ContextProvider } from "@lit/context";
-import { render } from "@solidjs/web";
 import { createComponent, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -21,7 +20,9 @@ import type {
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { SessionsPageArchive } from "./archive-actions.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionsRouteData } from "./route.ts";
@@ -91,7 +92,7 @@ export async function createPage(
   };
   const mount = () => {
     document.body.append(host);
-    dispose = render(
+    const view = mountSolid(
       () =>
         createComponent(ApplicationProvider, {
           value: currentContext,
@@ -99,8 +100,9 @@ export async function createPage(
             return createComponent(SessionsPageContent, { controller });
           },
         }),
-      host,
+      { container: host },
     );
+    dispose = view.unmount;
     flush();
   };
   const page = new Proxy(host, {
@@ -306,6 +308,7 @@ export function createContext(
   return {
     basePath: "",
     gateway,
+    navigation: createNavigationPreferencesFixture(),
     sessions,
     placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },

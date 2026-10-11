@@ -12,6 +12,10 @@ import {
 } from "../config/io.health-state.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
+import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
@@ -893,8 +897,13 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+    const location = database.db.location();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    assert(owner);
+    retireSqliteDatabaseAdmissionForPath(database.path);
+    assert.throws(() => fs.fstatSync(owner.descriptor), { code: "EBADF" });
     // Persisted startup damage gets a new physical admission, not a live foreign edit.
     fs.copyFileSync(database.path, `${database.path}.startup`);
     fs.renameSync(`${database.path}.startup`, database.path);

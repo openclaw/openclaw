@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
@@ -43,6 +44,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-current-reader.test.ts",
   "src/state/openclaw-state-db-existing-write.test.ts",
   "src/cli/admin-state-owner.process.test.ts",
+  "src/cli/claws-cli.state-owner.test.ts",
   "src/pairing/pairing-store.test.ts",
   "src/pairing/pairing-store.worker.test.ts",
   "src/plugin-sdk/channel-pairing.store.test.ts",
@@ -72,6 +74,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/session-store-history-boundary.test.ts",
   "src/plugin-sdk/session-store-runtime.recovery.test.ts",
   "src/plugin-sdk/session-store-runtime.async.test.ts",
+  "src/plugin-sdk/session-store-runtime.worker-patch.test.ts",
   "src/plugin-sdk/session-store-runtime.writer-claim.test.ts",
   "src/talk/client-voice-session.digest-retry.test.ts",
   "src/talk/voice-consult-transcript-race.test.ts",
@@ -266,6 +269,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/mcp-http.runtime.portal-readiness.test.ts",
   "src/gateway/server-methods/chat-history-worker.test.ts",
   "src/gateway/session-history.subagent-visibility.test.ts",
+  "src/gateway/session-row-projection.runtime-ownership.test.ts",
   "src/gateway/session-row-projection.worker-read.test.ts",
   "src/gateway/session-runtime-selection-projection.test.ts",
   "src/plugins/runtime/runtime-agent.acp-binding.test.ts",

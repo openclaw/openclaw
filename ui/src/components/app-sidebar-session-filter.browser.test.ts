@@ -18,6 +18,7 @@ import {
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
+import "../styles/settings-native-controls.css";
 import "./app-sidebar.ts";
 
 setupSidebarTest();
@@ -149,10 +150,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expectFits();
       await userEvent.tab();
       await expect.element(active).toHaveFocus();
-      await userEvent.keyboard("{ArrowRight}");
+      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
       await expect.element(page.getByRole("radio", { name: "Snoozed", exact: true })).toHaveFocus();
       expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
-      await userEvent.keyboard("{ArrowRight}");
+      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
       await expect
         .element(page.getByRole("radio", { name: "Archived", exact: true }))
         .toHaveFocus();

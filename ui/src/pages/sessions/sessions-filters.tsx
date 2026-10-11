@@ -1,7 +1,7 @@
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
-import { icons } from "../../components/icons.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -13,7 +13,6 @@ import {
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
-import { LitContent } from "../../lit/template-content.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -59,10 +58,6 @@ const SESSION_GROUP_MODE_LABELS = {
   date: "sessionsView.groupByDate",
 } as const satisfies Record<SessionsGroupBy, string>;
 
-export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
-  return <SessionsAdvancedFilters {...props} />;
-}
-
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
@@ -106,7 +101,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
         aria-haspopup="dialog"
         aria-expanded="false"
       >
-        <LitContent render={() => icons.listFilter} />
+        <Icon name="listFilter" />
       </button>
       <wa-popover
         ref={syncPopoverLabel}
@@ -177,7 +172,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
                       }}
                     />
                     <span class="session-filter-check__mark" aria-hidden="true">
-                      <LitContent render={() => icons.check} />
+                      <Icon name="check" />
                     </span>
                     <span class="session-filter-check__label">{label}</span>
                   </label>
@@ -215,7 +210,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
               title={props.groupWriteDisabledReason ?? undefined}
               onClick={() => props.onRequestNewCategory()}
             >
-              <LitContent render={() => icons.plus} /> {t("sessionsView.newGroup")}
+              <Icon name="plus" /> {t("sessionsView.newGroup")}
             </button>
           ) : undefined}
         </div>

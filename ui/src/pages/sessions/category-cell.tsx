@@ -11,10 +11,6 @@ type CategoryCellProps = {
   onRequestNewCategory: (sessionKey?: string) => void;
 };
 
-export function renderCategoryCell(row: GatewaySessionRow, props: CategoryCellProps) {
-  return <CategoryCell {...props} row={row} />;
-}
-
 export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow }) {
   const current = createMemo(() => normalizeOptionalString(props.row.category) ?? "");
   const options = createMemo(() =>

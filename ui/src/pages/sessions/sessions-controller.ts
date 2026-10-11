@@ -4,6 +4,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
@@ -11,7 +12,6 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SessionDetailsController } from "../../components/session-details-controller.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import "../../components/session-menu.ts";
-import type { SessionMenuWork } from "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
@@ -30,7 +30,6 @@ import {
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
-import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   filterSessionRows,
@@ -92,6 +91,32 @@ type SessionsPageListBinding = {
   transcriptKey: string;
 };
 
+type SessionsPageState = Pick<
+  SessionsProps,
+  | "result"
+  | "loading"
+  | "refreshing"
+  | "error"
+  | "activeMinutes"
+  | "limit"
+  | "includeGlobal"
+  | "includeUnknown"
+  | "statusFilter"
+  | "searchQuery"
+  | "transcriptSearchQuery"
+  | "sortColumn"
+  | "sortDir"
+  | "groupBy"
+  | "page"
+  | "pageSize"
+  | "expandedSessionKey"
+  | "transcriptSearch"
+> & {
+  selectedSessions: Map<string, SessionDeleteRow>;
+  sessionMenu: SessionsPageMenuProps["menu"] | null;
+  sessionMenuWork: SessionsPageMenuProps["work"];
+};
+
 export class SessionsPageController implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly listeners = new Set<() => void>();
@@ -116,7 +141,10 @@ export class SessionsPageController implements ReactiveControllerHost {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  requestUpdate() {
+  // Existing controllers invalidate this owner through their host contract.
+  requestUpdate = this.invalidate.bind(this);
+
+  private invalidate() {
     if (this.pendingUpdate || !this.connected) {
       return;
     }
@@ -135,26 +163,21 @@ export class SessionsPageController implements ReactiveControllerHost {
       return true;
     });
   }
-  connect(context: ApplicationContext, routeData = this.routeData) {
-    if (this.connected) {
-      this.context = context;
-      this.applyRouteData();
-      this.requestUpdate();
-      return;
-    }
+  connect(context: ApplicationContext) {
     this.context = context;
-    this.routeData = routeData;
-    this.connected = true;
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
+    if (!this.connected) {
+      this.connected = true;
+      for (const controller of this.controllers) {
+        controller.hostConnected?.();
+      }
     }
     this.applyRouteData();
-    this.requestUpdate();
+    this.invalidate();
   }
   setContext(context: ApplicationContext) {
     this.context = context;
     this.applyRouteData();
-    this.requestUpdate();
+    this.invalidate();
   }
   setRouteData(routeData?: SessionsRouteData) {
     if (this.routeData === routeData) {
@@ -162,43 +185,40 @@ export class SessionsPageController implements ReactiveControllerHost {
     }
     this.routeData = routeData;
     this.applyRouteData();
-    this.requestUpdate();
+    this.invalidate();
   }
 
   // Presentation writes stay synchronous; Solid observes published revisions.
-  readonly state = new Proxy(
+  readonly state = new Proxy<SessionsPageState>(
     {
-      result: null as SessionsListResult | null,
+      result: null,
       loading: false,
       refreshing: false,
-      error: null as string | null,
+      error: null,
       activeMinutes: "",
       limit: String(SESSIONS_PAGE_DEFAULT_LIMIT),
       includeGlobal: true,
       includeUnknown: false,
-      statusFilter: "active" as SessionArchivedFilter,
+      statusFilter: "active",
       searchQuery: "",
       transcriptSearchQuery: "",
-      submittedTranscriptSearchQuery: "",
-      sortColumn: "updated" as "key" | "kind" | "updated" | "tokens",
-      sortDir: "desc" as "asc" | "desc",
-      groupBy: loadStoredGroupBy() as SessionsGroupBy,
+      sortColumn: "updated",
+      sortDir: "desc",
+      groupBy: loadStoredGroupBy(),
       page: 0,
       pageSize: 25,
       selectedSessions: new Map<string, SessionDeleteRow>(),
-      sessionMenu: null as
-        | (Pick<GatewaySessionRow, "key" | "sessionId"> & { x: number; y: number })
-        | null,
-      sessionMenuWork: null as SessionMenuWork | null,
-      expandedSessionKey: null as string | null,
-      transcriptSearch: { status: "idle" } as SessionsProps["transcriptSearch"],
+      sessionMenu: null,
+      sessionMenuWork: null,
+      expandedSessionKey: null,
+      transcriptSearch: { status: "idle" },
     },
     {
       set: (target, key, value) => {
         const changed = !Object.is(Reflect.get(target, key), value);
         Reflect.set(target, key, value);
         if (changed) {
-          this.requestUpdate();
+          this.invalidate();
         }
         return true;
       },
@@ -241,10 +261,11 @@ export class SessionsPageController implements ReactiveControllerHost {
       this.clearSearchTimer();
       this.bindSessionList();
     }
-    this.requestUpdate();
+    this.invalidate();
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .watchStore(() => this.context?.agentIdentity)
+    .watchStore(() => this.context?.navigation)
     .effect(
       () => this.context?.agentSelection,
       (agentSelection) => this.observeAgentScope(agentSelection),
@@ -262,14 +283,12 @@ export class SessionsPageController implements ReactiveControllerHost {
   });
 
   private transcriptSearchAbort?: AbortController;
-  private async searchTranscripts() {
+  private async searchTranscripts(query: string) {
     this.transcriptSearchAbort?.abort();
     const lifetime = new AbortController();
     this.transcriptSearchAbort = lifetime;
-    const context = this.context;
     const scope = this.captureRequestScope();
-    const query = this.state.submittedTranscriptSearchQuery;
-    if (!context || !scope || !query) {
+    if (!scope) {
       this.state.transcriptSearch = { status: "idle" };
       return;
     }
@@ -284,7 +303,7 @@ export class SessionsPageController implements ReactiveControllerHost {
       } = await searchVisibleSessionTranscripts({
         client: scope.client,
         query,
-        listOptions: this.sessionListOptions(context, ""),
+        listOptions: this.sessionListOptions(scope.context, ""),
         isCurrent: () => !lifetime.signal.aborted && this.isRequestScopeCurrent(scope),
       });
       if (!lifetime.signal.aborted && this.isRequestScopeCurrent(scope)) {
@@ -645,8 +664,8 @@ export class SessionsPageController implements ReactiveControllerHost {
 
   private resetTranscriptSearchState(query: string) {
     this.state.transcriptSearchQuery = query;
-    this.state.submittedTranscriptSearchQuery = "";
-    void this.searchTranscripts();
+    this.transcriptSearchAbort?.abort();
+    this.state.transcriptSearch = { status: "idle" };
   }
 
   private updateTranscriptSearchQuery(query: string) {
@@ -669,8 +688,7 @@ export class SessionsPageController implements ReactiveControllerHost {
       return;
     }
     this.state.transcriptSearchQuery = query;
-    this.state.submittedTranscriptSearchQuery = query;
-    await this.searchTranscripts();
+    await this.searchTranscripts(query);
   }
 
   private updateFilters(next: Parameters<SessionsProps["onFiltersChange"]>[0]) {
@@ -1311,9 +1329,7 @@ export class SessionsPageController implements ReactiveControllerHost {
         }
         switch (action.kind) {
           case "toggle-pin":
-            void this.patchSession(row.key, { pinned: row.pinned !== true }, undefined, undefined, {
-              sessionScope: true,
-            });
+            togglePinnedSession(context.navigation, row.key);
             break;
           case "toggle-involving-me": {
             const scope = this.captureRequestScope();
@@ -1591,4 +1607,4 @@ export class SessionsPageController implements ReactiveControllerHost {
   }
 }
 
-/* oxlint-disable max-lines -- Existing page coordination remains together during the renderer cutover. */
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

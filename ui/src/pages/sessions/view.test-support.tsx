@@ -1,6 +1,7 @@
-import { render as mountSolid } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { SessionsView } from "./view.tsx";
 import type { SessionsProps } from "./view.tsx";
 
@@ -95,7 +96,7 @@ export function renderSessionsView(initial: SessionsProps, container: HTMLElemen
     existing.update(initial);
   } else {
     const [props, setProps] = createSignal(initial);
-    const dispose = mountSolid(() => <SessionsView {...props()} />, container);
+    const { unmount: dispose } = mountSolid(() => <SessionsView {...props()} />, { container });
     sessionViews.set(container, { update: (next) => setProps(next), dispose });
   }
   flush();

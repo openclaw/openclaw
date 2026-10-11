@@ -1,8 +1,8 @@
+import { createMemo } from "solid-js";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { LitContent } from "../../lit/template-content.tsx";
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",
@@ -14,30 +14,35 @@ const SESSION_RUN_STATUS_LABELS = {
   timeout: "sessionsView.statusTimeout",
 } as const satisfies Record<SessionRunStatus, string>;
 
-export function renderSessionStatusBadge(row: GatewaySessionRow) {
-  const active = isSessionRunActive(row);
-  const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label = t(
-    row.status === "queued"
-      ? "sessionsView.statusQueued"
-      : active
-        ? "sessionsView.statusLive"
-        : idle
-          ? "sessionsView.statusIdle"
-          : (row.status && SESSION_RUN_STATUS_LABELS[row.status]) || "sessionsView.statusUnknown",
+export function SessionStatusBadge(props: { row: GatewaySessionRow }) {
+  const active = createMemo(() => isSessionRunActive(props.row));
+  const idle = createMemo(
+    () => props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running"),
   );
-  const kind =
-    row.status === "queued"
+  const label = createMemo(() =>
+    t(
+      props.row.status === "queued"
+        ? "sessionsView.statusQueued"
+        : active()
+          ? "sessionsView.statusLive"
+          : idle()
+            ? "sessionsView.statusIdle"
+            : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
+              "sessionsView.statusUnknown",
+    ),
+  );
+  const kind = createMemo(() =>
+    props.row.status === "queued"
       ? "warn"
-      : active || row.status === "done"
+      : active() || props.row.status === "done"
         ? "ok"
-        : idle || !row.status || row.status === "interrupted"
+        : idle() || !props.row.status || props.row.status === "interrupted"
           ? "muted"
-          : "danger";
-  const title = `${t("sessionsView.status")}: ${label}`;
+          : "danger",
+  );
   return (
-    <openclaw-tooltip prop:content={title}>
-      <LitContent render={() => renderSettingsStatus({ kind, label })} />
+    <openclaw-tooltip prop:content={`${t("sessionsView.status")}: ${label()}`}>
+      <SettingsStatus kind={kind()} label={label()} />
     </openclaw-tooltip>
   );
 }

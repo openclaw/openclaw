@@ -5,33 +5,28 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
+import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { AgentsHomeView } from "./view.tsx";
 
-export function AgentsHomePage(props: { active?: boolean }) {
+function AgentsHomePageContent(props: { active: boolean }) {
   const context = useApplication();
   const store = rosterActivityStore(context);
   const roster = projectRosterActivity(store);
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
-  const snapshot = createMemo(
-    (
-      previous:
-        | {
-            roster: typeof store.snapshot;
-            gateway: typeof context.gateway.snapshot;
-            defaultId: string | undefined;
-          }
-        | undefined,
-    ) =>
-      props.active === false && previous
-        ? previous
-        : {
-            roster: roster.read(),
-            gateway: gateway.read().snapshot,
-            defaultId: agents.read().agentsList?.defaultId,
-          },
+  const snapshot = createParkedProjection(
+    () => {
+      const currentGateway = gateway.read().snapshot;
+      return {
+        roster: roster.read(),
+        defaultId: agents.read().agentsList?.defaultId,
+        connected: currentGateway.phase === "connected",
+        canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
+      };
+    },
+    () => props.active !== false,
   );
   const cards = createMemo(() => {
     const defaultId = snapshot().defaultId;
@@ -58,11 +53,11 @@ export function AgentsHomePage(props: { active?: boolean }) {
     <AgentsHomeView
       cards={cards()}
       context={context}
-      connected={snapshot().gateway.phase === "connected"}
+      connected={snapshot().connected}
       loading={snapshot().roster.loading}
       error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
       onRetry={() => void store.refresh()}
-      canCreate={canCallGatewayMethod(snapshot().gateway, "openclaw.chat", "operator.admin")}
+      canCreate={snapshot().canCreate}
     />
   );
 }
@@ -70,4 +65,8 @@ export function AgentsHomePage(props: { active?: boolean }) {
 export const header = true;
 export const render = () => html`<openclaw-agents-home-page></openclaw-agents-home-page>`;
 
-defineSolidBridge("openclaw-agents-home-page", AgentsHomePage);
+export const AgentsHomePage = defineSolidBridge(
+  "openclaw-agents-home-page",
+  AgentsHomePageContent,
+  { properties: { active: { default: true, attribute: false } } },
+);
