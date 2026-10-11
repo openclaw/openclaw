@@ -141,6 +141,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
           >
             <Show
               when={Content()}
+              keyed
               fallback={
                 <Show when={props.mode === "minimized"} fallback={<DebugOverlayLoading />}>
                   <div class="debug-overlay__compact-loading" role="status">
@@ -152,7 +153,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
               {(component) => (
                 <Show when={props.contentKey + 1} keyed>
                   {(_contentKey) =>
-                    createComponent(component(), {
+                    createComponent(component, {
                       get context() {
                         return props.context ?? inherited;
                       },

@@ -151,10 +151,10 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     }
   }
   const stopGateway = gateway.subscribe(() => untrack(syncPolling));
-  untrack(() => syncPolling(true));
   createEffect(
     () => ({ minimized: props.minimized, visible: visible() }),
-    () => syncPolling(),
+    // Start after the previous keyed content has released shared requests.
+    (_current, previous) => untrack(() => syncPolling(previous === undefined)),
   );
   const eventLog = projectGatewayEventLog(source);
   const eventRevision = () =>

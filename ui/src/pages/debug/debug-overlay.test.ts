@@ -4,7 +4,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./debug-overlay.ts";
 import "./debug-overlay-content.ts";
 import {
@@ -469,6 +469,6 @@ describe("DebugOverlay", () => {
       overlay.remove();
       vi.useRealTimers();
     }
-    expect(listeners.size).toBe(0);
+    await waitForSolid(() => expect(listeners.size).toBe(0));
   });
 });
