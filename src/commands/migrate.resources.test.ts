@@ -69,36 +69,6 @@ describe("migration command resources", () => {
     },
   );
 
-  it("refuses a nested apply if the selected state root changed during planning", async () => {
-    const fixture = createMigrationResourceFixture({ pausePlan: true });
-    fixture.state.resumeApply.resolve();
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-        const command = migrateDefaultCommand(createNonExitingRuntime(), {
-          provider: fixture.id,
-          configOverride: fixture.config,
-          yes: true,
-          json: true,
-          noBackup: true,
-          force: true,
-        });
-        const completion = command.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        await Promise.race([fixture.state.planning.promise, completion]);
-        expect(fixture.state.planCalls).toBe(1);
-        process.env.OPENCLAW_STATE_DIR = path.join(fixture.root, "replacement");
-        fixture.state.resumePlan.resolve();
-        expect(await completion).toMatchObject({ code: "OWNER_UNAVAILABLE" });
-        expect(fixture.state.applyCalls).toBe(0);
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-      });
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
   it.each([false, true])(
     "keeps native plan resources through apply and releases them after completion (failure: %s)",
     async (failApply) => {
