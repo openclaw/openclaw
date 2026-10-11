@@ -18,6 +18,13 @@ Codex plugins into synthetic `codex_plugin_*` OpenClaw dynamic tools.
 Use this page after the base [Codex harness](/plugins/codex-harness) is
 working.
 
+OpenClaw disables Codex's plugin recommendation catalog and installation-suggestion
+tools in managed threads (`features.tool_suggest` and `features.recommended_plugins`).
+This keeps recommendations for uninstalled plugins out of the model context. Installed
+plugins and connected apps remain available under the configured policy; owners can
+still browse and install plugins with `/codex plugins available` and
+`/codex plugins install <plugin>@<marketplace>`.
+
 ## Requirements
 
 - The agent runtime must be the native Codex harness.

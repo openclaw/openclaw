@@ -56,6 +56,7 @@ import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecyc
 import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
 import {
   createLeasedCodexLifecycleHarness,
+  DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
   startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   twoStartsThenResumeMethods,
   type CodexAttemptThreadInput as LifecycleInput,
@@ -228,19 +229,6 @@ function createParams(sessionFile: string, workspaceDir: string) {
   params.config = undefined;
   return params;
 }
-
-const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
-  project_doc_max_bytes: 131_072,
-  "features.goals": false,
-  "tools.update_plan.enabled": false,
-  "features.code_mode": true,
-  "features.code_mode_only": false,
-  "features.shell_tool": true,
-  "features.apply_patch_streaming_events": true,
-  suppress_unstable_features_warning: true,
-  "features.standalone_web_search": false,
-  web_search: "cached",
-} as const;
 
 const DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
