@@ -177,7 +177,7 @@ describe("DashboardsPage", () => {
     expect(subscribeList).toHaveBeenCalledWith(
       {
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-        rowMode: "compact",
+        rowMode: "dashboard",
         source: "dashboard",
         excludeDock: true,
         hasBoard: true,
@@ -193,7 +193,7 @@ describe("DashboardsPage", () => {
     await waitForSolid(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      rowMode: "compact",
+      rowMode: "dashboard",
       source: "dashboard",
       excludeDock: true,
       hasBoard: true,
