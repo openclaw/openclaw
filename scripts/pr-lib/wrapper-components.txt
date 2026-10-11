@@ -840,6 +840,7 @@ src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/delivery-queue-cache.ts
+src/infra/delivery-queue-retention-columns.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
@@ -937,6 +938,7 @@ src/infra/inline-option-token.ts
 src/infra/install-safe-path.ts
 src/infra/json-field-transfer.ts
 src/infra/json-files.ts
+src/infra/json-object-members.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
@@ -1805,6 +1807,7 @@ src/state/openclaw-state-db-schema-repair.ts
 src/state/openclaw-state-db-schema-runtime.ts
 src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
+src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
