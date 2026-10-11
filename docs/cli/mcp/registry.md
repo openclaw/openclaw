@@ -206,6 +206,41 @@ These examples save server definitions only. Run `openclaw mcp doctor --probe` a
     Scope filesystem servers to the smallest directory tree that the agent should read or edit.
 
   </Tab>
+  <Tab title="Hyperconsciousness">
+    [Hyperconsciousness (HC)](https://github.com/louis030195/hyperconsciousness) is an MIT-licensed, developer-alpha knowledge store with encrypted, append-only records and scoped, expiring grants. [Build `hc` from source](https://github.com/louis030195/hyperconsciousness#install-from-source) first. The executable and store must be on the computer running OpenClaw's MCP process.
+
+    Start with a new demo store and a read-only grant for its local device:
+
+    ```bash
+    HC_BIN="/absolute/path/to/hc"
+    HC_STORE="/absolute/path/to/new-hc-demo"
+    "$HC_BIN" start --dir "$HC_STORE"
+    "$HC_BIN" write "Demo project uses cobalt lantern." \
+      --tags demo --sensitivity normal --dir "$HC_STORE"
+    HC_DEVICE="$("$HC_BIN" id --dir "$HC_STORE" | cut -d: -f2)"
+    "$HC_BIN" grant "$HC_DEVICE" --kinds note --tags demo \
+      --sensitivity normal --days 1 --dir "$HC_STORE"
+    ```
+
+    Copy the printed grant ID into `HC_GRANT`, then save and probe the connection:
+
+    ```bash
+    HC_GRANT="<grant-id>"
+    openclaw mcp add hyperconsciousness \
+      --command "$HC_BIN" \
+      --arg mcp --arg=--as --arg "$HC_GRANT" \
+      --arg=--dir --arg "$HC_STORE" \
+      --include 'overview,access_status,search,recent,record'
+    openclaw mcp doctor hyperconsciousness --probe
+    ```
+
+    Start a new agent session and ask it to search HC for `cobalt lantern`. The filter selects read tools; HC independently checks the grant's record scope and expiration. The example does not enable capture, credential use, or access requests. For an existing store, choose the tags, kinds, sensitivity, and duration you intend to expose before granting access.
+
+    HC grants limit server responses, not a process with access to the owner's OS account, files, or keys. Hosted model providers can see returned plaintext. HC does not claim an independent security audit.
+
+    To revoke access, run `"$HC_BIN" revoke "$HC_GRANT" --dir "$HC_STORE"` and `openclaw mcp unset hyperconsciousness`. Apply the removal to any running Gateway or agent, or restart that process; a separate CLI's `mcp reload` does not refresh it. Revocation cannot remove information already returned to a model or saved in a conversation.
+
+  </Tab>
   <Tab title="Memory">
     ```bash
     openclaw mcp add memory \
