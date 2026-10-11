@@ -152,6 +152,9 @@ describe("normalizeBrowserUrlDraft", () => {
 
     const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
     await empty?.updateComplete;
+    const viewport = panel.renderRoot.querySelector("wa-tab-panel");
+    await viewport?.updateComplete;
+    expect(viewport?.getAttribute("aria-hidden")).toBe("false");
     expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
     expect(empty?.querySelector("svg")).not.toBeNull();
   });

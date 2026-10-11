@@ -12,7 +12,6 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -21,8 +20,11 @@ import { getSessionKysely, type ResolvedTranscriptScope } from "./session-access
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import {
+  isFinalInputCompletion,
+  parseSessionPendingInputMessage,
+} from "./session-pending-input-value.js";
 import type {
-  SessionPendingInput,
   SessionPendingInputRow,
   SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
@@ -291,22 +293,6 @@ export function hasRegisteredSessionPendingInputOwner(
   );
 }
 
-export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
-  const value: unknown = JSON.parse(messageJson);
-  if (asOptionalRecord(value)?.role !== "user") {
-    throw new Error("Pending input has an invalid persisted user message");
-  }
-  // SAFETY: only typed admission writes this JSON; parsing preserves its canonical message shape.
-  return value as PersistedUserTurnMessage;
-}
-
-export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
-  return (
-    outcome.reason === "completed" ||
-    (outcome.reason === "cancelled" && outcome.stopReason !== "restart")
-  );
-}
-
 type SessionInputCompletionScope = Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey"> & {
   idempotencyKey: string;
 };
@@ -420,19 +406,6 @@ export function writeSessionInputCompletion(
     }
   }
   return outcome;
-}
-
-export function projectSessionPendingInput(row: SessionPendingInputRow): SessionPendingInput {
-  if (row.state !== "queued" && row.state !== "interrupted" && row.state !== "cancelled") {
-    throw new Error("Pending input has an invalid disposition");
-  }
-  return {
-    id: row.input_id,
-    runId: row.run_id,
-    message: parseSessionPendingInputMessage(row.message_json),
-    acceptedAt: row.accepted_at,
-    state: row.state,
-  };
 }
 
 /** Capture the exact host owner before reading; claim it once in the consuming frame. */
