@@ -216,7 +216,7 @@ export async function executeWorkerTurn(
   const { manager, history, userMessageAlreadyPersisted } = context;
   let baseLeafId = context.baseLeafId;
 
-  const { model, reasoning, transcriptPolicy } = await prepareWorkerTurnModel({
+  const { model, reasoning, transcriptPolicy, inference } = await prepareWorkerTurnModel({
     target: transcriptTarget,
     modelRef,
     runtimeSnapshot: preparedRuntime.snapshot,
@@ -453,6 +453,7 @@ export async function executeWorkerTurn(
     bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
       toolSurface: toolRuntime,
       prepareReplyMedia,
+      inference,
     });
     const connectionIdentity = {
       ...toolIdentity,
