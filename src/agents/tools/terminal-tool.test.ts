@@ -32,6 +32,7 @@ const approvalMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({ getInProcessGatewayToolContext }));
+// mock-isolation: terminal ownership tests supply entry facts without opening session databases.
 vi.mock("../../gateway/session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: loadGatewaySessionEntryReadOnly,
 }));

@@ -46,6 +46,7 @@ vi.mock("./session-transcript-readers.js", () => ({
     };
   },
 }));
+// mock-isolation: transcript reconstruction tests control session identity without a live store.
 vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
 }));

@@ -20,10 +20,12 @@ vi.mock("./http-utils.js", () => ({
     mocks.authorize(...args),
 }));
 
+// mock-isolation: avatar HTTP tests use request-local config without loading operator state.
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
+// mock-isolation: avatar authorization tests supply session ownership without a database worker.
 vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: (...args: unknown[]) => mocks.loadEntry(...args),
 }));

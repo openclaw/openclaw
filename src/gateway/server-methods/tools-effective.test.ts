@@ -163,6 +163,7 @@ vi.mock("../session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils.js")>()),
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
 }));
+// mock-isolation: effective-tool policy tests supply session metadata without a database worker.
 vi.mock("../session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (
     params: Parameters<

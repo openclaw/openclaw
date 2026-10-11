@@ -16,10 +16,12 @@ vi.mock("../auto-reply/reply/commands-status.js", () => ({
   buildStatusReply,
 }));
 
+// mock-isolation: command status tests supply config without reading operator state.
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
+// mock-isolation: command status tests control entry data without a live session store.
 vi.mock("../gateway/session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: loadSessionEntry,
 }));
