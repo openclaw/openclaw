@@ -48,7 +48,8 @@ export function sanitizeInput(text: string): string {
   const dangerousPatterns = [
     /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/gi,
     /you\s+are\s+now\s+/gi,
-    /system:\s*/gi,
+    // Word boundary keeps "filesystem:" and "ecosystem:" readable.
+    /\bsystem:\s*/gi,
     /<\|.*?\|>/g, // special tokens
   ];
 
