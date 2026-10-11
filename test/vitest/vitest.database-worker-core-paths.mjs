@@ -5,6 +5,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
   "src/agents/tools/sessions-send-tool.incognito.test.ts",
+  "src/agents/tools/message-tool.current-prompt-reaction.test.ts",
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
@@ -672,6 +673,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.projections.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.orphan.test.ts",
