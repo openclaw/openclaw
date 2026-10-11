@@ -164,7 +164,7 @@ describe("board authenticated GitHub Actions", () => {
     workScopes.push(work);
     return createBoardHarness(undefined, {}, boardStore, {
       getRuntimeConfig: () => config,
-      trackExecution: (run) => work.track(run),
+      trackExecution: (execute) => work.track(execute),
     });
   }
   afterEach(async () => {
