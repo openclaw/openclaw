@@ -32,19 +32,8 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     if (method === "models.list") {
       return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
     }
-    if (
-      method === "agents.list" &&
-      params &&
-      typeof params === "object" &&
-      "includeSessionPlacement" in params &&
-      params.includeSessionPlacement === true
-    ) {
-      if (options.placementPolicy) {
-        return options.placementPolicy();
-      }
-      if (!options.request) {
-        return Promise.resolve({ sessionPlacement: {} });
-      }
+    if (method === "agents.list" && options.placementPolicy) {
+      return options.placementPolicy();
     }
     if (options.request) {
       return options.request(method, params);
