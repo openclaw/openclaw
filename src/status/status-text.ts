@@ -306,18 +306,36 @@ export async function buildStatusReplyParts(
       : {}),
   });
   let selectedModelAuth = selectedResolution.authLabel;
+  const activeResolution = modelRefs.activeDiffers
+    ? await resolveModel({
+        provider: activeStatusProvider,
+        model: modelRefs.active.model || model,
+        runtimeId: effectiveHarness,
+        acceptedProviderIds: activeAuthProviders,
+      })
+    : selectedResolution;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
-    : modelRefs.activeDiffers
-      ? (
-          await resolveModel({
-            provider: activeStatusProvider,
-            model: modelRefs.active.model || model,
-            runtimeId: effectiveHarness,
-            acceptedProviderIds: activeAuthProviders,
-          })
-        ).authLabel
-      : selectedModelAuth;
+    : activeResolution.authLabel;
+  const resolveOwnerContextCapacity = (
+    capacityProvider: string | undefined,
+    capacityModel: string | undefined,
+  ) => {
+    // Diagnostics can yield after selection; retired owner facts cannot describe current capacity.
+    if (!preparedOwner?.isCurrent()) {
+      return { state: "unavailable" as const };
+    }
+    if (capacityProvider === selectedLookupProvider && capacityModel === selectedLookupModel) {
+      return selectedResolution.ownerCapacity ?? { state: "unavailable" as const };
+    }
+    if (
+      capacityProvider === activeProvider &&
+      capacityModel === (modelRefs.active.model || model)
+    ) {
+      return activeResolution.ownerCapacity ?? { state: "unavailable" as const };
+    }
+    return { state: "unavailable" as const };
+  };
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
     modelRefs.active.label,
@@ -506,13 +524,18 @@ export async function buildStatusReplyParts(
   });
   const preparedContextTokens =
     typeof contextTokens === "number" && contextTokens > 0 ? contextTokens : undefined;
+  const capacityCatalog = (thinkingCatalog ?? []).filter((candidate) =>
+    effectiveHarness && effectiveHarness !== "openclaw"
+      ? candidate.nativeRuntime === effectiveHarness
+      : !candidate.nativeRuntime,
+  );
   const selectedCatalogEntry = findModelInCatalog(
-    thinkingCatalog ?? [],
+    capacityCatalog,
     selectedLookupProvider,
     selectedLookupModel,
   );
   const initialActiveCatalogEntry = findModelInCatalog(
-    thinkingCatalog ?? [],
+    capacityCatalog,
     activeProvider,
     modelRefs.active.model || model,
   );
@@ -586,18 +609,26 @@ export async function buildStatusReplyParts(
     modelRefs,
     activeModel,
     selectedContextWindow: selectedCatalogEntry?.contextWindow,
+    selectedContextWindowSource: selectedCatalogEntry?.contextWindowSource,
     selectedContextTokens:
       selectedCatalogEntry?.contextTokens ??
-      (selectedCatalogEntry && !activeRuntimeIsAuthoritative ? preparedContextTokens : undefined),
+      (selectedCatalogEntry &&
+      !activeRuntimeIsAuthoritative &&
+      selectedCatalogEntry.contextWindowSource !== "synthetic"
+        ? preparedContextTokens
+        : undefined),
     thinkingCatalog,
     runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
     runtimeContextTokens:
       activeRuntimeIsAuthoritative &&
-      (initialActiveCatalogEntry || fallbackState.active) &&
+      initialActiveCatalogEntry?.contextWindowSource !== "synthetic" &&
+      (initialActiveCatalogEntry ||
+        ((!effectiveHarness || effectiveHarness === "openclaw") && fallbackState.active)) &&
       (!activeModel || (activeModel.modelProvider === provider && activeModel.model === model))
         ? preparedContextTokens
         : undefined,
     sessionEntry,
+    resolveOwnerContextCapacity,
     sessionKey,
     parentSessionKey,
     sessionScope,

@@ -149,11 +149,17 @@ async function withTranscript(
 }
 
 describe("buildContextReply", () => {
-  it.each<{ resolved?: number; authored?: number; expected: number }>([
+  it.each<{
+    resolved?: number;
+    authored?: number;
+    contextTokensSource?: "synthetic";
+    expected: number;
+  }>([
     { expected: 32_768 },
     { resolved: 65_536, expected: 65_536 },
     { resolved: 200_000, expected: 200_000 },
     { authored: 16_384, expected: 16_384 },
+    { resolved: 128_000, contextTokensSource: "synthetic", expected: 32_768 },
   ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
     const params = makeParams("/context json", false, { contextTokens: 200_000 });
     params.provider = "ollama";
@@ -171,13 +177,20 @@ describe("buildContextReply", () => {
     params.contextTokenProjection = {
       contextTokens: testCase.resolved,
       authoredContextTokens: testCase.authored,
-      configuredContextTokenLimits: undefined,
+      configuredContextTokenLimits:
+        testCase.authored === undefined
+          ? undefined
+          : {
+              effectiveConfiguredTokens: testCase.authored,
+              authoredContextTokenCap: testCase.authored,
+            },
+      contextTokensSource: testCase.contextTokensSource,
       source:
         testCase.authored !== undefined
           ? "configured"
-          : testCase.resolved !== undefined
-            ? "model"
-            : "fallback",
+          : testCase.contextTokensSource === "synthetic" || testCase.resolved === undefined
+            ? "fallback"
+            : "model",
     };
 
     const result = await buildContextReply(params);

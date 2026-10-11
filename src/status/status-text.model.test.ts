@@ -1,6 +1,9 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import * as preparedCatalog from "../agents/prepared-model-catalog.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
@@ -109,6 +112,105 @@ describe("buildStatusText prepared context windows", () => {
       ...overrides,
     });
   }
+
+  it("does not borrow a host catalog scalar for native status without inventory", async () => {
+    const parts = await renderPreparedStatus({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      resolvedHarness: "codex",
+      thinkingCatalog: [
+        { provider: "openai", id: "gpt-5.6-sol", contextWindow: 1_000_000, contextTokens: 872_000 },
+      ],
+      contextTokens: 872_000,
+      sessionEntry: {
+        sessionId: "native-unreported",
+        updatedAt: 0,
+        ...tokenUsage,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 128_000,
+        contextTokensSource: "resolved",
+      },
+    });
+    expect(parts.text).toContain("Context: 45k/?");
+  });
+
+  it.each([false, true])(
+    "uses an accepted capacity only while its owner remains current after status diagnostics (retired=%s)",
+    async (retired) => {
+      let current = true;
+      const cfg = { agents: { defaults: { model: "fixture/model" } } };
+      const row = {
+        provider: "fixture",
+        id: "model",
+        name: "Fixture model",
+        api: "openai-completions" as const,
+        baseUrl: "https://fixture.example/v1",
+        contextWindow: 872_000,
+      };
+      const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => current, {
+        modelCatalog: {
+          entries: [row],
+          routeVariants: [row],
+          providerOutcomes: [
+            { provider: "fixture", profileId: "fixture:account", status: "ready" },
+          ],
+          acceptedDiscoveryOrigins: [{ provider: "fixture", profileId: "fixture:account" }],
+        },
+      });
+      vi.spyOn(preparedCatalog, "getPreparedModelCatalogOwnerSnapshot").mockReturnValue(owner);
+      const parts = await renderPreparedStatus({
+        cfg,
+        provider: "fixture",
+        model: "model",
+        thinkingCatalog: [{ ...row, contextWindow: 128_000, contextWindowSource: "synthetic" }],
+        sessionEntry: {
+          sessionId: "prepared-context",
+          updatedAt: 0,
+          ...tokenUsage,
+          modelProvider: "fixture",
+          model: "model",
+          agentHarnessId: "openclaw",
+          contextTokens: 128_000,
+          contextTokensSource: "synthetic",
+          authProfileOverride: "fixture:account",
+          authProfileOverrideSource: "user",
+        },
+        resolveDefaultThinkingLevel: async () => {
+          current = !retired;
+          return undefined;
+        },
+      });
+      expect(parts.text).toContain(retired ? "Context: 45k/?" : "Context: 45k/872k");
+    },
+  );
+
+  it("renders published model limits while the passive context cache is stale", async () => {
+    const provider = "context-fixture";
+    const model = "large-model";
+    const key = providerContextTokenCacheKey(provider, model);
+    const caches = getContextWindowCaches();
+    caches.discoveredTokenCache.set(key, 128_000);
+    caches.contextWindowCache.set(key, 128_000);
+    try {
+      const parts = await renderPreparedStatus({
+        provider,
+        model,
+        contextTokens: 1_050_000,
+        thinkingCatalog: [
+          { provider, id: model, contextWindow: 1_050_000, contextTokens: 1_050_000 },
+        ],
+      });
+
+      expect(parts.text).toContain("Context: 45k/1.1m");
+      expect(caches.discoveredTokenCache.get(key)).toBe(128_000);
+      expect(caches.contextWindowCache.get(key)).toBe(128_000);
+    } finally {
+      caches.discoveredTokenCache.delete(key);
+      caches.contextWindowCache.delete(key);
+    }
+  });
 
   it("renders the agent thinking default ahead of model and global defaults", async () => {
     const parts = await renderPreparedStatus({
@@ -414,7 +516,7 @@ describe("buildStatusText prepared context windows", () => {
     expect(parts.text).toContain(`Fallback: ${notice}`);
   });
 
-  const budget: SessionContextBudgetStatus = {
+  const budget = {
     schemaVersion: 1,
     source: "pre-prompt-estimate",
     updatedAt: 1,
@@ -433,7 +535,28 @@ describe("buildStatusText prepared context windows", () => {
     messageCount: 2,
     unwindowedMessageCount: 2,
     sessionId: "terminal-fallback",
-  };
+  } satisfies SessionContextBudgetStatus;
+  it.each([
+    { runtime: "openclaw", expected: "~64k/200k (32% est)" },
+    { runtime: "codex", expected: "~64k/?" },
+  ])(
+    "keeps estimated usage separate from unavailable $runtime capacity",
+    async ({ runtime, expected }) => {
+      const parts = await renderPreparedStatus({
+        provider: budget.provider,
+        model: budget.model,
+        resolvedHarness: runtime,
+        thinkingCatalog: [],
+        sessionEntry: {
+          sessionId: budget.sessionId,
+          updatedAt: 0,
+          contextBudgetStatus: budget,
+        },
+      });
+      expect(parts.text).toContain(`Context: ${expected}`);
+    },
+  );
+
   it.each([
     ["matching budget", {}, true],
     ["selected model budget", { provider: "deepseek", model: "deepseek-v4-flash" }, false],

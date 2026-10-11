@@ -629,34 +629,6 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("off");
   });
 
-  test("session rows project the selected catalog context window", () => {
-    const catalog = [
-      {
-        provider: "window-fixture",
-        id: "selectable-model",
-        name: "Selectable Model",
-        contextWindow: 1_000_000,
-        contextWindows: [
-          { id: "200k", label: "200K", contextWindow: 200_000 },
-          { id: "1m", label: "1M", contextWindow: 1_000_000 },
-        ],
-        contextWindowDefault: "1m",
-      },
-    ];
-    const cfg = createModelDefaultsConfig({ primary: "window-fixture/selectable-model" });
-
-    const defaults = getSessionDefaults(cfg, catalog);
-    const row = buildGatewaySessionRow({
-      cfg,
-      entry: { sessionId: "ctx", contextWindow: "200k" } as SessionEntry,
-      modelCatalog: catalog,
-    });
-
-    expect(defaults).toMatchObject({ contextWindow: "1m", contextTokens: 1_000_000 });
-    expect(row).toMatchObject({ contextWindow: "200k", contextTokens: 200_000 });
-    expect(row.contextWindows).toEqual(catalog[0]?.contextWindows);
-  });
-
   test.each([{ before: 128_000, after: 32_000, reserve: 20_000 }])(
     "projects the new cap immediately after a $before → $after context selection",
     ({ before, after, reserve }) => {

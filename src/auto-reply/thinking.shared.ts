@@ -1,3 +1,4 @@
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 /** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
 import {
   type FastMode,
@@ -35,6 +36,9 @@ export type ThinkingCatalogEntry = {
   api?: string;
   baseUrl?: string;
   contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+  contextWindowSource?: "synthetic";
   contextTokens?: number;
   reasoning?: boolean;
   configuredReasoning?: boolean;

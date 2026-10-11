@@ -35,36 +35,41 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync,
 }));
 
-vi.mock("../status/summary.runtime.js", () => ({
-  statusSummaryRuntime: {
-    classifySessionKey: vi.fn(() => "direct"),
-    resolveConfiguredStatusModelRef: vi.fn(() => ({
-      provider: "openai",
-      model: "gpt-5.5",
-    })),
-    resolveSessionModelRef: vi.fn(() => ({
-      provider: "openai",
-      model: "gpt-5.5",
-    })),
-    resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
-    resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
-      typeof model === "string" && model.length > 0
-        ? {
-            provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
-            model,
-          }
-        : null,
-    ),
-    resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
-      typeof model === "string" && model.length > 0
-        ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
-        : null,
-    ),
-    resolveAuthoredModelContextTokens: vi.fn(() => undefined),
-    resolveContextTokensForModel: vi.fn(() => 200_000),
-    waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
-  },
-}));
+vi.mock("../status/summary.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../status/summary.runtime.js")>();
+  return {
+    ...actual,
+    statusSummaryRuntime: {
+      ...actual.statusSummaryRuntime,
+      classifySessionKey: vi.fn(() => "direct"),
+      resolveConfiguredStatusModelRef: vi.fn(() => ({
+        provider: "openai",
+        model: "gpt-5.5",
+      })),
+      resolveSessionModelRef: vi.fn(() => ({
+        provider: "openai",
+        model: "gpt-5.5",
+      })),
+      resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
+      resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
+        typeof model === "string" && model.length > 0
+          ? {
+              provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
+              model,
+            }
+          : null,
+      ),
+      resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
+        typeof model === "string" && model.length > 0
+          ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
+          : null,
+      ),
+      resolveConfiguredContextTokenLimits: vi.fn(() => ({})),
+      resolveContextTokensForModel: vi.fn(() => 200_000),
+      waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
+    },
+  };
+});
 
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
@@ -213,7 +218,7 @@ describe("getStatusSummary", () => {
         ? { sessionKey, entry: { sessionId: sessionKey, updatedAt: 0, ...entry } }
         : undefined;
     });
-    vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
+    vi.mocked(statusSummaryRuntime.resolveConfiguredContextTokenLimits).mockReturnValue({});
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
     vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
       id: "openclaw",

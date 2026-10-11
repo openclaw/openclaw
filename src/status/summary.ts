@@ -127,9 +127,12 @@ function compareSessionCandidatesByUpdatedAt(
 async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const {
     classifySessionKey,
+    getPublishedPreparedModelCatalogOwnerSnapshot,
+    createStatusModelResolver,
     resolveConfiguredStatusModelRef,
-    resolveAuthoredModelContextTokens,
+    resolveConfiguredContextTokenLimits,
     resolveContextTokensForModel,
+    resolveModelContextTokenProjection,
     resolveSessionRuntime,
     resolveSessionModelRef,
     resolveStatusModelComparisonLabel,
@@ -142,7 +145,11 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const resolveProviderContext = createProviderContextResolver({ cfg });
   const modelContextCache = new Map<
     string,
-    Promise<{ modelContextWindow?: number; modelContextTokens?: number }>
+    Promise<{
+      modelContextWindow?: number;
+      modelContextTokens?: number;
+      modelContextWindowSource?: "synthetic";
+    }>
   >();
   const resolveStaticModelContext = async (
     provider: string | undefined,
@@ -162,7 +169,12 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           resolveManifestModel({ provider, modelId: model }) ??
           (await resolveProviderContext({ provider, modelId: model }));
         return {
-          ...(entry?.contextWindow ? { modelContextWindow: entry.contextWindow } : {}),
+          ...(entry?.contextWindow
+            ? {
+                modelContextWindow: entry.contextWindow,
+                modelContextWindowSource: entry.contextWindowSource,
+              }
+            : {}),
           ...(entry?.contextTokens ? { modelContextTokens: entry.contextTokens } : {}),
         };
       } catch {
@@ -196,13 +208,16 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
-  const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
+  const sessionRows = new Map<
+    SessionEntrySummary,
+    { row: SessionStatus; reprojectCapacity: () => void }
+  >();
   const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
     Promise.all(
       candidates.map(async (candidate) => {
         const cached = sessionRows.get(candidate);
         if (cached) {
-          return { ...cached, flags: [...cached.flags] };
+          return cached.row;
         }
         const { sessionKey: key, entry } = candidate;
         const agentId = parseAgentSessionKey(key)?.agentId;
@@ -260,14 +275,6 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
-        const resolvedContextTokens = resolveContextTokensForModel({
-          cfg,
-          provider: lookupModel.provider,
-          model: lookupModelId,
-          ...modelContext,
-          fallbackContextTokens: configContextTokens,
-          allowAsyncLoad: false,
-        });
         const runtime = resolveSessionRuntime({
           cfg,
           entry,
@@ -276,20 +283,82 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           agentId,
           sessionKey: key,
         });
-        const contextTokens =
-          resolveProjectedSessionContextTokens({
-            entry,
-            provider: lookupModel.provider,
-            model: lookupModelId,
-            agentHarnessId: runtime.id,
-            resolvedContextTokens,
-            authoredContextTokens: resolveAuthoredModelContextTokens({
+        const owner = agentId
+          ? getPublishedPreparedModelCatalogOwnerSnapshot({
+              config: cfg,
+              agentId,
+              workspaceDir: entry.spawnedWorkspaceDir,
+            })
+          : undefined;
+        const resolvedOwnerCapacity =
+          owner?.workspaceDir && agentId && lookupModel.provider && lookupModelId
+            ? (
+                await createStatusModelResolver({
+                  cfg,
+                  agentId,
+                  agentDir: owner.agentDir,
+                  workspaceDir: owner.workspaceDir,
+                  sessionEntry: entry,
+                  owner,
+                })({
+                  provider: lookupModel.provider,
+                  model: lookupModelId,
+                  runtimeId: runtime.id,
+                  acceptedProviderIds: [],
+                  authLabelOverride: undefined,
+                })
+              ).ownerCapacity
+            : { state: "unavailable" as const };
+        const projectContextTokens = () => {
+          const ownerCapacity = owner?.isCurrent()
+            ? resolvedOwnerCapacity
+            : { state: "unavailable" as const };
+          const reportedOwnerCapacity =
+            ownerCapacity?.state === "ready" && !ownerCapacity.synthetic
+              ? ownerCapacity.contextTokens
+              : undefined;
+          const contextProjection = resolveModelContextTokenProjection(
+            {
               cfg,
               provider: lookupModel.provider,
-              modelProvider: contextModelProvider,
               model: lookupModelId,
-            }),
-          }) ?? null;
+              nativeRuntime: runtime.id,
+              ...(reportedOwnerCapacity !== undefined
+                ? { modelContextTokens: reportedOwnerCapacity }
+                : runtime.id && runtime.id !== "openclaw"
+                  ? {}
+                  : modelContext),
+              fallbackContextTokens: configContextTokens,
+              allowAsyncLoad: false,
+            },
+            reportedOwnerCapacity !== undefined ? () => undefined : undefined,
+            reportedOwnerCapacity !== undefined ? () => undefined : undefined,
+          );
+          return (
+            resolveProjectedSessionContextTokens({
+              entry,
+              provider: lookupModel.provider,
+              model: lookupModelId,
+              agentHarnessId: runtime.id,
+              ownerCapacity,
+              resolvedContextTokens:
+                contextProjection.source === "fallback"
+                  ? undefined
+                  : contextProjection.contextTokens,
+              configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
+                cfg,
+                provider: lookupModel.provider,
+                modelProvider: contextModelProvider,
+                model: lookupModelId,
+                nativeRuntime: runtime.id,
+              }),
+            }) ??
+            (entry.contextTokensSource === "synthetic" || (runtime.id && runtime.id !== "openclaw")
+              ? null
+              : configContextTokens)
+          );
+        };
+        const contextTokens = projectContextTokens();
         const total = resolveSessionTotalTokens(entry);
         const freshTotal = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh = freshTotal !== undefined;
@@ -336,7 +405,21 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
-        sessionRows.set(candidate, row);
+        sessionRows.set(candidate, {
+          row,
+          reprojectCapacity: () => {
+            const currentContextTokens = projectContextTokens();
+            row.contextTokens = currentContextTokens;
+            row.remainingTokens =
+              currentContextTokens != null && freshTotal !== undefined
+                ? Math.max(0, currentContextTokens - freshTotal)
+                : null;
+            row.percentUsed =
+              currentContextTokens && currentContextTokens > 0 && freshTotal !== undefined
+                ? Math.min(999, Math.round((freshTotal / currentContextTokens) * 100))
+                : null;
+          },
+        });
         return row;
       }),
     );
@@ -344,6 +427,11 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   return {
     defaults: { model: configModel, contextTokens: configContextTokens },
     buildSessionRows,
+    revalidateSessionRows: () => {
+      for (const { reprojectCapacity } of sessionRows.values()) {
+        reprojectCapacity();
+      }
+    },
   };
 }
 
@@ -477,6 +565,14 @@ export async function getStatusSummary(
       includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
       options.sessionRowProjection,
     ));
+  const hostDesktopStatus =
+    options.hostDesktopStatus ??
+    (
+      await (
+        await import("../gateway/desktop/host-source.js")
+      ).inspectHostDesktop({ config: cfg.desktop?.host })
+    ).status;
+  const secretEgressProxy = await getSecretEgressCertificateStatus();
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
@@ -498,14 +594,9 @@ export async function getStatusSummary(
         ),
       )
     : [];
-  const hostDesktopStatus =
-    options.hostDesktopStatus ??
-    (
-      await (
-        await import("../gateway/desktop/host-source.js")
-      ).inspectHostDesktop({ config: cfg.desktop?.host })
-    ).status;
   const sqliteWal = readOpenClawStateWalHealth();
+  // Rows may await different owners. Reproject once after all awaits, then clone public DTOs.
+  sessionDetails?.revalidateSessionRows();
   return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     ...(options.includeCliProjection
@@ -530,7 +621,7 @@ export async function getStatusSummary(
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
     installationReplacementWarning: getGatewayInstallationReplacement()?.message,
-    secretEgressProxy: await getSecretEgressCertificateStatus(),
+    secretEgressProxy,
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
         ownerKind,
@@ -550,8 +641,12 @@ export async function getStatusSummary(
       paths: includeSensitive ? sessionStores.paths : [],
       count: sessionStores.count,
       defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
-      recent,
-      byAgent,
+      recent: recent.map((row) => Object.assign({}, row, { flags: [...row.flags] })),
+      byAgent: byAgent.map((agent) =>
+        Object.assign({}, agent, {
+          recent: agent.recent.map((row) => Object.assign({}, row, { flags: [...row.flags] })),
+        }),
+      ),
     },
   };
 }
