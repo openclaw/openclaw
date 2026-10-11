@@ -20,7 +20,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
   return {
     async read(
       key: string,
-      load: (background: boolean) => Promise<T>,
+      load: () => Promise<T>,
       readOptions: { allowStale?: boolean; refresh?: boolean } = {},
     ): Promise<{ value: T; stale: boolean }> {
       const entries = values;
@@ -54,7 +54,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
         () => {
           active += 1;
           // Start synchronously; settle only after the promise is installed in the map.
-          return (async () => load(Boolean(stale)))()
+          return (async () => load())()
             .then((value) => {
               if (loads.get(key) !== refresh) {
                 return value;

@@ -14,7 +14,7 @@ describe("stale-while-revalidate cache", () => {
     const cache = createStaleWhileRevalidateCache<string>({ maxEntries: 2, ttlMs: 100 });
     const first = vi.fn(async () => "first");
     await expect(cache.read("item", first)).resolves.toEqual({ value: "first", stale: false });
-    expect(first).toHaveBeenCalledWith(false);
+    expect(first).toHaveBeenCalledWith();
     const pending = createDeferredCore<string>();
     const refresh = vi.fn(() => pending.promise);
     await expect(cache.read("item", refresh)).resolves.toEqual({ value: "first", stale: false });
@@ -24,7 +24,7 @@ describe("stale-while-revalidate cache", () => {
     await expect(cache.read("item", refresh)).resolves.toEqual({ value: "first", stale: true });
     await expect(cache.read("item", refresh)).resolves.toEqual({ value: "first", stale: true });
     const waiting = cache.read("item", refresh, { allowStale: false });
-    expect(refresh).toHaveBeenCalledExactlyOnceWith(true);
+    expect(refresh).toHaveBeenCalledExactlyOnceWith();
     pending.resolve("second");
     await expect(waiting).resolves.toEqual({ value: "second", stale: false });
     await expect(cache.read("item", refresh)).resolves.toEqual({ value: "second", stale: false });
@@ -45,7 +45,7 @@ describe("stale-while-revalidate cache", () => {
       const oldOutcome = oldRead.catch((error: unknown) => error);
       const replace = vi.fn(() => latest.promise);
       const replacement = cache.read("item", replace, { refresh: true });
-      expect(replace).toHaveBeenCalledWith(false);
+      expect(replace).toHaveBeenCalledWith();
       const overflow = vi.fn(async () => "other");
       await expect(cache.read("other", overflow)).rejects.toThrow("busy");
       expect(overflow).not.toHaveBeenCalled();
@@ -120,7 +120,7 @@ describe("stale-while-revalidate cache", () => {
       value: "recovered",
       stale: false,
     });
-    expect(replacement).toHaveBeenCalledExactlyOnceWith(false);
+    expect(replacement).toHaveBeenCalledExactlyOnceWith();
   });
 
   it("does not retain an expired success after a noncacheable replacement", async () => {
@@ -141,6 +141,6 @@ describe("stale-while-revalidate cache", () => {
     pending.resolve(0);
     await expect(waiting).resolves.toEqual({ value: 0, stale: false });
     await expect(cache.read("item", replacement)).resolves.toEqual({ value: 2, stale: false });
-    expect(replacement).toHaveBeenCalledExactlyOnceWith(false);
+    expect(replacement).toHaveBeenCalledExactlyOnceWith();
   });
 });

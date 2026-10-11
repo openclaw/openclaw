@@ -338,15 +338,14 @@ export async function loadControlUiGitHubPreview(
   const read = () =>
     previewCache.read(
       key,
-      (background) => {
-        // A background refresh belongs to the credential-scoped cache, not the
-        // initiating request. Each reader revalidates its own identity at delivery.
-        const transportIdentity = background ? undefined : identity;
+      () => {
+        // Refreshes retain credential checks before every dispatch, including
+        // redirects. A retired initiating identity fails this refresh; a current reader retries.
         const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
         return identity && !identity.optionalAuth
-          ? fetchPreview(target, fetchImpl, signal, token, transportIdentity)
+          ? fetchPreview(target, fetchImpl, signal, token, identity)
           : withOptionalGitHubAuth(token, (requestToken) =>
-              fetchPreview(target, fetchImpl, signal, requestToken, transportIdentity),
+              fetchPreview(target, fetchImpl, signal, requestToken, identity),
             );
       },
       { refresh },

@@ -576,9 +576,8 @@ The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow
 
 `openclaw/plugin-sdk/collection-runtime` exports `createStaleWhileRevalidateCache`
 for metadata readers. It coalesces refreshes, bounds retained entries and active
-loads, and returns `{ value, stale }`. The loader receives `background: true`
-when an expired successful result can be returned immediately. Use service-owned
-work for that load, and revalidate each caller before delivering any result.
+loads, and returns `{ value, stale }`. Loads retain their credential and service authority checks before external requests.
+Revalidate each caller before delivering any result.
 `allowStale: false` waits for freshness; `refresh: true` replaces an older load.
 `clear()` retires pending cache publications. Cache keys must include the owning
 identity or revision; the cache never provides authorization.

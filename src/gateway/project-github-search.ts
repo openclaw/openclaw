@@ -165,7 +165,6 @@ export async function searchRemoteProjects(
     host?: string;
     apiBaseUrl?: string;
     assertCurrent?: () => void;
-    assertIdentityCurrent?: () => void;
     trackExecution?: <T>(run: () => Promise<T>) => Promise<T>;
     signal?: AbortSignal;
   } = {},
@@ -173,8 +172,8 @@ export async function searchRemoteProjects(
   const config = getRuntimeConfigSnapshot();
   const host = options.host ?? resolveConfiguredGitHubHost(config);
   const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(config);
-  const assertIdentityCurrent = () => {
-    options.assertIdentityCurrent?.();
+  const assertCurrent = () => {
+    options.assertCurrent?.();
     const current = getRuntimeConfigSnapshot();
     if (
       resolveConfiguredGitHubHost(current) !== host ||
@@ -189,8 +188,7 @@ export async function searchRemoteProjects(
   };
   const assertSelected = () => {
     options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    assertIdentityCurrent();
+    assertCurrent();
   };
   assertSelected();
   const normalizedQuery = query.trim().toLowerCase();
@@ -204,7 +202,7 @@ export async function searchRemoteProjects(
   // Gateway reloads run in-process, so cache results must stay credential-scoped.
   const cacheKey = `${normalizedQuery}\0${host}\0${apiBaseUrl}\0${cacheScope}`;
   const assertTransportCurrent = () => {
-    assertIdentityCurrent();
+    assertCurrent();
     if (
       options.token === undefined &&
       gitHubPublicApi.resolveGitHubApiCredentialScope(options.env).cacheScope !== cacheScope
@@ -243,7 +241,7 @@ export async function searchRemoteProjects(
     return result;
   };
   try {
-    // The Gateway owns refresh work; a retired picker only cancels its delivery.
+    // The Gateway owns refresh work; each dispatch still requires its initiating authority.
     const result = await racePromiseWithAbortSignal(
       searchCache.read(cacheKey, () => options.trackExecution?.(load) ?? load()),
       options.signal,

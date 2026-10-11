@@ -75,7 +75,7 @@ describe("project GitHub search", () => {
     },
   );
 
-  it.each([302, 401])("rechecks credential authority before retrying HTTP %s", async (status) => {
+  it.each([302, 401])("rechecks requester authority before retrying HTTP %s", async (status) => {
     let current = true;
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (requestUrl(input).includes("/user/repos")) {
@@ -91,7 +91,7 @@ describe("project GitHub search", () => {
       searchRemoteProjects(`authority-retry-${status}`, {
         token: "synthetic-retry-token",
         fetchImpl,
-        assertIdentityCurrent: () => {
+        assertCurrent: () => {
           if (!current) {
             throw new Error("Search authority retired");
           }
