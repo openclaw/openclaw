@@ -2698,10 +2698,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it("keeps the expanded mobile composer inset, scrollable, and flush with the thread", async () => {
     await withBrowserPage(openFixture(393, 852), async (page) => {
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-      // Comfortably past a quarter of the tallest viewport this case runs at,
+      // Comfortably past half of the tallest viewport this case runs at,
       // so the assertion below proves the cap and the scroll, not the draft.
       await textarea.fill(
-        Array.from({ length: 16 }, (_value, index) => `Mobile composer line ${index + 1}`).join(
+        Array.from({ length: 40 }, (_value, index) => `Mobile composer line ${index + 1}`).join(
           "\n",
         ),
       );
@@ -2777,10 +2777,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         throw new Error("Expected textarea sizing metrics");
       }
 
-      // The editor grows against the viewport, not against a line count: past a
-      // quarter of the screen the surface stops moving and the draft scrolls
+      // The editor grows against the viewport, not against a line count: past
+      // half of the screen the surface stops moving and the draft scrolls
       // inside it, so a long draft can never push the thread off the page.
-      expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
+      expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.5 + 1);
       expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
       expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
       expect(shell.x).toBeCloseTo(20, 0);

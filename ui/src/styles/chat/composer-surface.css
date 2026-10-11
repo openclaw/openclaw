@@ -344,12 +344,10 @@
 
   width: 100%;
   min-height: calc(var(--chat-composer-editor-line) + 8px);
-  /* The editor grows upward against the viewport, not against a line count:
-     past this the surface stops moving and the draft scrolls inside it. */
-  max-height: min(
-    25dvh,
-    calc(var(--chat-composer-editor-line) * 6 + var(--chat-composer-editor-inset-block) * 2)
-  );
+  /* The editor grows upward to half the chat pane, not to a line count: past
+     this the surface stops moving and the draft scrolls inside it. The pane
+     shrinks with an open virtual keyboard, which dvh alone misses on iOS. */
+  max-height: min(50dvh, 50cqh);
   resize: none;
   padding-block: var(--chat-composer-editor-inset-block);
   /* The horizontal inset belongs to the row, so the text keeps one origin while
