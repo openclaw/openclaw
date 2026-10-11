@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelGatewayContextV2 } from "../channels/plugins/types.adapters.js";
+import type {
+  GatewayApprovalEventSubscriber,
+  GatewayNativeApprovalRuntime,
+} from "../infra/approval-gateway-runtime.types.js";
+import { createApprovalNativeRuntimeAdapterStubs } from "../infra/approval-handler.test-helpers.js";
+import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
@@ -26,6 +33,71 @@ describe("channel account scheduling lifetime", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetGatewayWorkAdmission();
+  });
+
+  it("does not rearm aborted approvals when a replacement context registers before provider cleanup", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const provider = createDeferred();
+    const subscribed = createDeferred();
+    const aborted = createDeferred();
+    const subscribers = new Set<GatewayApprovalEventSubscriber>();
+    const routeCoordinator = createApprovalNativeRouteCoordinator();
+    const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      request: async <T>() => [] as T,
+      requestRoute: vi.fn(),
+      routeCoordinator,
+      subscribe: (subscriber) => {
+        subscribers.add(subscriber);
+        subscribed.resolve();
+        return () => subscribers.delete(subscriber);
+      },
+    };
+    const plugin = createTestPlugin({
+      startAccount: async (context) => {
+        context.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+        context.channelRuntime?.runtimeContexts.register({
+          channelId: "discord",
+          accountId: context.accountId,
+          capability: "approval.native",
+          context: {},
+          abortSignal: context.abortSignal,
+        });
+        await provider.promise;
+      },
+    });
+    plugin.approvalCapability = {
+      nativeRuntime: createApprovalNativeRuntimeAdapterStubs(),
+    };
+    const registry = createTestChannelRegistry(plugin);
+    const manager = createTestChannelManager({
+      getPluginRegistry: () => registry,
+      channelRuntime,
+      getNativeApprovalRuntime: () => gatewayRuntime,
+    });
+    let stopping: Promise<void> | undefined;
+    let replacement: { dispose: () => void } | undefined;
+    try {
+      await manager.startChannels();
+      await subscribed.promise;
+      expect(subscribers.size).toBe(1);
+      stopping = manager.stopChannel("discord");
+      await aborted.promise;
+      await flushMicrotasks();
+      replacement = channelRuntime.runtimeContexts.register({
+        channelId: "discord",
+        accountId: DEFAULT_ACCOUNT_ID,
+        capability: "approval.native",
+        context: {},
+      });
+      await flushMicrotasks();
+      expect(subscribers.size).toBe(0);
+    } finally {
+      replacement?.dispose();
+      provider.resolve();
+      await stopping;
+      await manager.stopChannel("discord");
+      routeCoordinator.close();
+    }
   });
 
   it("retains account capabilities until admitted scheduled I/O settles", async () => {
