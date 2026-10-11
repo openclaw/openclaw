@@ -367,8 +367,10 @@ It uses SQLite autocommit while retaining the post-commit publication scope;
 inside an existing transaction it retains the savepoint and outer publication
 owner. Prepare inputs before calling and do no fallible work after the native
 statement in its callback. The native write observer advances the managed write
-token on settlement, without an extra SQL query. Memory source refresh and index
-metadata writes use this path; compound writes retain their transactions.
+token on settlement, without an extra SQL query. Memory source refresh, index
+metadata, and worker-owned heartbeat outcome writes use this path; compound
+writes retain their transactions. Heartbeat claims remain one conditional update,
+so competing runs cannot claim the same outcome.
 Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
 
 Private receipt envelopes identify the operation, physical source and connection
