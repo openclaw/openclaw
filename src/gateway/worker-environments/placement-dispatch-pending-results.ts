@@ -392,7 +392,8 @@ export async function recoverPendingWorkspaceResults(
               (!sameGatewayInstance ||
                 reclaimResult ||
                 Boolean(stagedResultRef) ||
-                (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed"));
+                (pending.workspaceAcceptedAtMs !== null &&
+                  (workspace.kind === "local" || environment?.state === "destroyed")));
             if (active.state === "active" && teardownRequired) {
               recovery.assertCurrent();
               const draining = await placements.startWorkspaceResultDrain(

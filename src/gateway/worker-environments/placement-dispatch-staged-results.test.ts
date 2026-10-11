@@ -255,9 +255,13 @@ describe("worker placement result recovery", () => {
     ).not.toBe(0);
   });
 
-  it.each([false, true])(
-    "recovers an accepted unstaged result without its node (reclaim=%s)",
-    async (reclaim) => {
+  it.each([
+    { reclaim: false, restart: true },
+    { reclaim: true, restart: true },
+    { reclaim: false, restart: false },
+  ])(
+    "recovers an accepted unstaged result without its node (reclaim=$reclaim, restart=$restart)",
+    async ({ reclaim, restart }) => {
       const workspacePath = path.join(root, "accepted-unchanged-result");
       const priorConflictRef = workerWorkspaceResultRef("prior-conflict");
       const priorConflict = { paths: ["result.txt"], stagedResultRef: priorConflictRef };
@@ -303,19 +307,29 @@ describe("worker placement result recovery", () => {
         { stagedResultRef: null, workspaceAcceptedAtMs: 1_000 },
       ]);
       await fs.writeFile(path.join(workspacePath, "result.txt"), "later local edit\n");
-      await closeStateDatabaseForTest();
-      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-      const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+      if (restart) {
+        await closeStateDatabaseForTest();
+        database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      } else {
+        await placementStore.handoffWorkspaceResultRecovery(claim);
+      }
+      const restartedStore = restart
+        ? createWorkerSessionPlacementStore({ database, now: () => 2_000 })
+        : placementStore;
       const recovered = createHarness(database, restartedStore, {
         workspacePath,
         priorWorkspaceResultConflict: priorConflict,
       });
-      recovered.markEnvironmentDestroyed();
+      if (restart) {
+        recovered.markEnvironmentDestroyed();
+      } else {
+        recovered.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      }
       vi.mocked(recovered.environments.startTunnel).mockRejectedValue(
         new Error("node unavailable"),
       );
 
-      await recovered.service.reconcile("startup");
+      await recovered.service.reconcile(restart ? "startup" : undefined);
 
       expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(recovered.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
