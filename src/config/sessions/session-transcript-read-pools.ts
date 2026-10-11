@@ -42,7 +42,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
 export function createSessionTranscriptHistoryPool(
   maxWorkers = resolveWorkerPoolSize("singleton"),
 ) {
-  let canCloseNativeResources = false;
+  let canCloseNativeResources: boolean | undefined;
   const pool = createOwnedWorkerTaskPool<
     SessionHistoryWorkerInput,
     SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
@@ -53,13 +53,19 @@ export function createSessionTranscriptHistoryPool(
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
-      canCloseNativeResources = captureSqliteWorkerClosePolicy();
+      // Early workers stay conservative if native-close qualification was still pending.
+      canCloseNativeResources =
+        captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
       return { options: {} };
     },
   });
   return {
     ...pool,
-    canCloseNativeResources: () => canCloseNativeResources,
+    canCloseNativeResources: () => canCloseNativeResources === true,
+    async rotate() {
+      await pool.rotate();
+      canCloseNativeResources = undefined;
+    },
   };
 }
 

@@ -11,6 +11,7 @@ import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-s
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import {
   historyLane,
   maintenanceLane,
@@ -26,6 +27,28 @@ import {
   withSessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+
+it("keeps native close conservative until an unqualified reader is retired", async () => {
+  const pool = createSessionTranscriptHistoryPool();
+  const request = { kind: "prewarm" as const, database: input().database, env: {} };
+  const read = () => pool.run(() => request, {});
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+  try {
+    observed.explicitSqliteCloseReleasesNativeResources = false;
+    await read();
+    observed.rotate.mockRejectedValueOnce(new Error("reader retirement failed"));
+    await expect(pool.rotate()).rejects.toThrow("reader retirement failed");
+    observed.explicitSqliteCloseReleasesNativeResources = true;
+    await read();
+    expect(pool.canCloseNativeResources()).toBe(false);
+    await pool.rotate();
+    await read();
+    expect(pool.canCloseNativeResources()).toBe(true);
+  } finally {
+    observed.rotate.mockResolvedValue(undefined);
+    await pool.rotate();
+  }
+});
 
 it.each([false, true])(
   "orders cold read admission without holding consumer writes (prepared=%s)",

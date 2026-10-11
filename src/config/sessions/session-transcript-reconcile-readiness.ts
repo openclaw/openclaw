@@ -88,6 +88,8 @@ export async function readSessionTranscriptProjectionStatus(
     });
     if (closing) {
       await racePromiseWithAbortSignal(closing, abortSignal);
+      // A probe in the retiring lifetime must not reopen resources after close.
+      return false;
     }
     const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
     try {
