@@ -54,7 +54,7 @@ restores the previous driver and does not restart Core Audio. If status remains
 session and inspect its exact error. Never copy an unverified driver into
 `/Library/Audio/Plug-Ins/HAL` manually.
 
-The installer intentionally rejects Xcode that is not canonical, Apple-signed,
+The installer intentionally rejects Xcode that is not installed directly at `/Applications/Xcode.app`, Apple-signed,
 root-owned, or free of group/world-writable content. Reinstall Xcode from Apple
 into `/Applications` using an administrator-managed installation. If the error
 names a writable path component, an administrator must remove group/world write

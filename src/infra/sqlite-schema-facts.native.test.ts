@@ -90,6 +90,33 @@ describe("native SQLite schema snapshots and callbacks", () => {
     ).toBe(false);
   });
 
+  it.each(["scoped", "full"] as const)(
+    "keeps other database publications pending for the next %s capture",
+    (nextCapture) => {
+      const cursor = createSqliteDatabaseAdmissionCursor();
+      // Other cases retain process-wide admissions; acknowledge those before creating this pair.
+      captureSqliteDatabaseAdmissions(cursor);
+      const root = tempDirs.make("openclaw-admission-scoped-cursor-");
+      const first = path.join(root, "first.sqlite");
+      const second = path.join(root, "second.sqlite");
+      openDatabase(undefined, true, first);
+      openDatabase(undefined, true, second);
+
+      expect(
+        captureSqliteDatabaseAdmissions(cursor, { location: first }).map(
+          (record) => record.location,
+        ),
+      ).toEqual([first]);
+      expect(
+        captureSqliteDatabaseAdmissions(
+          cursor,
+          nextCapture === "scoped" ? { location: second } : undefined,
+        ).map((record) => record.location),
+      ).toEqual([second]);
+      expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    },
+  );
+
   it.each([
     "CREATE TEMP TABLE other_input (id)",
     "DROP TABLE temp.memory_publication_input",

@@ -20,7 +20,7 @@ const SIDEBAR_CREATED_ORDER_CAP = 1_000;
 // the narration throttle so replacement cadence stays consistent.
 const SIDEBAR_SUBTITLE_MIN_DISPLAY_MS = 2_000;
 
-type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
+export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 type SidebarSubtitleParams = Parameters<typeof resolveSidebarSessionSubtitle>[0];
 type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
@@ -85,6 +85,7 @@ export class SidebarSessionProjection {
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
   private readonly childModes = new Map<string, SidebarExpansionMode>();
+  private restoredChildrenPending = false;
   private readonly heldSubtitles = new Map<
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
@@ -177,12 +178,14 @@ export class SidebarSessionProjection {
       this.resetMembership();
     }
     if (
+      !this.restoredChildrenPending &&
       previous !== null &&
       (previous.agentId !== input.agentId ||
         previous.connectionIdentity !== input.connectionIdentity)
     ) {
       this.childModes.clear();
     }
+    this.restoredChildrenPending = false;
     if (scopeChanged) {
       this.heldSubtitles.clear();
     }
@@ -324,6 +327,25 @@ export class SidebarSessionProjection {
   isChildrenExpanded(key: string): boolean {
     const mode = this.childModes.get(key);
     return mode === "expanded" || mode === "expanded-fully";
+  }
+
+  captureChildrenDisplay(key: string): SidebarExpansionMode | undefined {
+    return this.childModes.get(key);
+  }
+
+  restoreChildrenDisplay(
+    rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[],
+  ): void {
+    this.childModes.clear();
+    for (const row of rows) {
+      if (row.childrenDisplayMode !== undefined) {
+        this.childModes.set(row.key, row.childrenDisplayMode);
+      }
+    }
+    // The first authoritative projection changes the connection scope; these
+    // admitted modes belong to that handoff, not the preceding empty projection.
+    this.restoredChildrenPending = this.childModes.size > 0;
+    this.revision += 1;
   }
 
   isChildrenFullyShown(key: string): boolean {

@@ -518,6 +518,27 @@ export function createEmbeddedAttemptExternalAbortController(input: {
   };
 }
 
+/** Interrupts an owned idle request without cancelling the enclosing reply or lane. */
+export function createEmbeddedAttemptIdleInterruption(input: {
+  runAbortController: AbortController;
+  activeSession: Pick<AgentSession, "isCompacting">;
+  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
+  abortRun: RunAbort;
+}): (error: Error) => boolean {
+  return (error) => {
+    if (input.runAbortController.signal.aborted) {
+      return false;
+    }
+    input.state.terminal = mergeAgentRunAttemptTerminal(input.state.terminal, {
+      kind: "timeout",
+      phase: input.activeSession.isCompacting ? "compaction" : "prompt",
+      source: "idle",
+    });
+    input.abortRun(true, error);
+    return true;
+  };
+}
+
 /** Builds the live-session abort handler shared by timeouts and explicit cancellation. */
 export function createEmbeddedAttemptRunAbort(input: {
   abortActiveSession: ActiveSessionAbort;
