@@ -2,7 +2,11 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 // Discord tests cover monitor plugin behavior.
-import { ChannelType, MessageFlags } from "discord-api-types/v10";
+import {
+  ChannelType,
+  MessageFlags,
+  type RESTPostAPIChannelMessageResult,
+} from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -1048,7 +1052,15 @@ describe("discord component interactions", () => {
     });
 
     const button = createDiscordComponentButton(createComponentContext());
-    const post = vi.fn().mockResolvedValue(undefined);
+    const finalMessage = {
+      id: "msg-agent-reply",
+      channel_id: "dm-channel",
+    } satisfies Pick<RESTPostAPIChannelMessageResult, "id" | "channel_id">;
+    const post = vi
+      .fn()
+      .mockImplementation(async (path: string) =>
+        path === "/channels/dm-channel/messages" ? finalMessage : undefined,
+      );
     const patch = vi.fn().mockResolvedValue(undefined);
     // Preserve native pre-ack state and REST serialization across the declined-plugin fallback.
     const interaction = new NativeButtonInteraction(
@@ -1078,7 +1090,7 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
-    expect(post).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenCalledTimes(3);
     expect(post).toHaveBeenNthCalledWith(1, "/interactions/interaction1/token1/callback", {
       body: { type: 6 },
     });
@@ -1090,6 +1102,12 @@ describe("discord component interactions", () => {
     );
     expect(patch).not.toHaveBeenCalled();
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(mockCall(post, 2, "final channel delivery")).toEqual(
+      expect.arrayContaining([
+        "/channels/dm-channel/messages",
+        expect.objectContaining({ body: expect.objectContaining({ content: "ok" }) }),
+      ]),
+    );
   });
 
   it("resolves plugin binding approvals without falling through to Claw", async () => {
