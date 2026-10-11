@@ -1,4 +1,4 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
@@ -18,7 +18,6 @@ import {
 } from "./kysely-sync-cache-state.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
 import { OpenClawPostgresDialect, sqliteStringSetNodes } from "./postgres-sync/query-compiler.js";
-import type { SqlConnection } from "./sql-connection.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
@@ -50,10 +49,14 @@ const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
   },
 });
 
-export function getNodeSqliteKysely<Database>(db: SqlConnection): Kysely<Database>;
+export function getNodeSqliteKysely<Database>(
+  db: DatabaseSync | PostgresSyncConnection,
+): Kysely<Database>;
 // Keep the native signature last for existing callers deriving their handle type with Parameters.
 export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database>;
-export function getNodeSqliteKysely<Database>(db: SqlConnection): Kysely<Database> {
+export function getNodeSqliteKysely<Database>(
+  db: DatabaseSync | PostgresSyncConnection,
+): Kysely<Database> {
   if (db instanceof PostgresSyncConnection) {
     let kysely = postgresKyselyByDatabase.get(db);
     if (!kysely) {
@@ -62,9 +65,6 @@ export function getNodeSqliteKysely<Database>(db: SqlConnection): Kysely<Databas
     }
     // SAFETY: this compile-only facade stores no rows; Database supplies the caller's schema types.
     return kysely as Kysely<Database>;
-  }
-  if (!(db instanceof DatabaseSync)) {
-    throw new TypeError("Unsupported synchronous SQL connection");
   }
   const existing = kyselyByDatabase.get(db) as Kysely<unknown> | undefined;
   if (existing) {
@@ -130,7 +130,7 @@ function releaseSqliteIterator(
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
 function executeCompiledSqliteQuerySync<Row>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   compiledQuery: CompiledQuery<Row>,
   firstRowOnly = false,
   parameters = compiledQuery.parameters as SQLInputValue[],
@@ -143,9 +143,6 @@ function executeCompiledSqliteQuerySync<Row>(
     return result.columns.length > 0
       ? { rows }
       : { rows: [], numAffectedRows: BigInt(result.rowCount) };
-  }
-  if (!(db instanceof DatabaseSync)) {
-    throw new TypeError("Unsupported synchronous SQL connection");
   }
   try {
     const sql = compiledQuery.sql;
@@ -219,7 +216,7 @@ function executeCompiledSqliteQuerySync<Row>(
 
 /** Compile and execute a Kysely query synchronously. */
 export function executeSqliteQuerySync<Row>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   query: Compilable<Row>,
 ): QueryResult<Row> {
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
@@ -232,7 +229,7 @@ type SqliteQueryBindingBuilder<Params, Row> = (
 /** Cache compiled query functions or bundles by native connection. */
 export function createSqliteQueryCache<
   Queries extends object,
-  Connection extends SqlConnection = DatabaseSync,
+  Connection extends DatabaseSync | PostgresSyncConnection = DatabaseSync,
 >(create: (database: Connection) => Queries): (database: Connection) => Queries {
   const queriesByDatabase = new WeakMap<Connection, Queries>();
   return (database) => {
@@ -269,7 +266,7 @@ export function compileSqliteQueryBindings<Params, Row = unknown>(
 
 /** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
 export function prepareSqliteQuerySync<Params, Row = unknown>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => QueryResult<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -278,7 +275,7 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
 
 /** Compile a fixed first-row read once and bind fresh values on every execution. */
 export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => Row | undefined {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -287,7 +284,7 @@ export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
 
 /** Compile once and capture fresh bindings before lazily opening each private iterator. */
 export function prepareSqliteQueryIterator<Params, Row = unknown>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => IterableIterator<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -301,7 +298,7 @@ export function prepareSqliteQueryIterator<Params, Row = unknown>(
 
 /** Compile and lazily iterate a Kysely query synchronously against node:sqlite. */
 export function iterateSqliteQuerySync<Row>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   query: Compilable<Row>,
 ): IterableIterator<Row> {
   if (db instanceof PostgresSyncConnection) {
@@ -309,9 +306,6 @@ export function iterateSqliteQuerySync<Row>(
     return (function* () {
       yield* executeCompiledSqliteQuerySync(db, query.compile()).rows;
     })();
-  }
-  if (!(db instanceof DatabaseSync)) {
-    throw new TypeError("Unsupported synchronous SQL connection");
   }
   const owner = captureSqliteReaderOwner();
   return (function* () {
@@ -347,7 +341,7 @@ export function iterateSqliteQuerySync<Row>(
 
 /** Execute a Kysely query synchronously and return its first row. */
 export function executeSqliteQueryTakeFirstSync<Row>(
-  db: SqlConnection,
+  db: DatabaseSync | PostgresSyncConnection,
   query: Compilable<Row>,
 ): Row | undefined {
   return executeCompiledSqliteQuerySync(db, query.compile(), true).rows[0];

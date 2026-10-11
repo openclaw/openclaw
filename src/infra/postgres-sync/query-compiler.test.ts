@@ -36,7 +36,11 @@ describe("PostgreSQL string-set compilation", () => {
   });
 
   it("lowers entries with zero-based keys and a bound or expression input", () => {
-    for (const input of ['["a",null]', sql<string>`${'["a",null]'}`]) {
+    for (const input of [
+      '["a",null]',
+      // kysely-allow-raw: Exercise a caller-supplied bound expression.
+      sql<string>`${'["a",null]'}`,
+    ]) {
       const compiled = postgres
         .selectFrom(sqliteStringSetEntries(input).as("entry"))
         .select(["entry.key", "entry.value"])

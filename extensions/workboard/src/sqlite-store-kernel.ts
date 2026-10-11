@@ -4,7 +4,6 @@ import {
   type WorkboardMetadata,
   type WorkboardExecution,
 } from "@openclaw/workboard-contract";
-import type { SqlConnection } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
@@ -44,7 +43,7 @@ import {
   type Row,
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
-import { createWorkboardDatabase } from "./sqlite-store-schema.js";
+import { createWorkboardDatabase, type WorkboardSqlConnection } from "./sqlite-store-schema.js";
 import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
 import { bindNull, insertCard, prepareWorkboardUpsert } from "./sqlite-store-write.js";
 import {
@@ -72,7 +71,7 @@ function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
 }
 
 class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
-  constructor(private readonly db: SqlConnection) {}
+  constructor(private readonly db: WorkboardSqlConnection) {}
 
   private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
     const current = executeSqliteQueryTakeFirstSync(
@@ -457,7 +456,7 @@ function readBoard(row: Row): PersistedWorkboardBoard {
 class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<PersistedWorkboardBoard>> {
   private readonly rowsQuery;
 
-  constructor(private readonly db: SqlConnection) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{ workboard_boards: Row }>(db)
       .selectFrom("workboard_boards")
       .selectAll();
@@ -569,7 +568,7 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
 class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptionStore> {
   private readonly rowsQuery;
 
-  constructor(private readonly db: SqlConnection) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{ workboard_notification_subscriptions: Row }>(db)
       .selectFrom("workboard_notification_subscriptions")
       .selectAll();
@@ -639,7 +638,7 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 > {
   private readonly rowsQuery;
 
-  constructor(private readonly db: SqlConnection) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{
       workboard_card_attachments: Row;
       workboard_attachment_blobs: Row;

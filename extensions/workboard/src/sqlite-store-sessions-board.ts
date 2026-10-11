@@ -6,7 +6,6 @@ import {
   type WorkboardSessionsBoard,
   type WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
-import type { SqlConnection } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -18,6 +17,7 @@ import type {
   PersistedWorkboardBoard,
   WorkboardSessionPlacementWrite,
 } from "./persistence-types.js";
+import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
 
 type SessionsBoardDatabase = {
   workboard_boards: { id: string; kind: string; sessions_spec: string | null; updated_at: number };
@@ -46,7 +46,7 @@ const PREVIOUS_DEFAULT_RULES = new Map(
 
 export class WorkboardSqliteSessionsBoardStore {
   constructor(
-    private readonly db: SqlConnection,
+    private readonly db: WorkboardSqlConnection,
     private readonly boards: { lookup(key: string): PersistedWorkboardBoard | undefined },
   ) {}
 
