@@ -250,10 +250,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         ) {
           throw error;
         }
-        const current = actor.snapshot({ assertCurrent, authorize: assertCurrent });
-        if (!current) {
-          throw error;
-        }
+        const authority = { assertCurrent, authorize: assertCurrent };
+        const current = actor.snapshot(authority) ?? (await actor.read(authority));
         outcome = await append(current.transcript.version.updatedAt);
       }
       try {

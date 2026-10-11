@@ -3,6 +3,7 @@ import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { ready } from "./session-row-projection-record.js";
@@ -40,6 +41,7 @@ it("collects superseded resident rows and their materializations after metadata 
       materialized: WeakRef<object>;
     }[] = [];
     const selections: WeakRef<object>[] = [];
+    const snapshots: WeakRef<object>[] = [];
     function captureSelections() {
       for (const opts of [{}, { agentId: "main" }, { configuredAgentsOnly: true }]) {
         for (const activeOnly of [false, true]) {
@@ -64,18 +66,23 @@ it("collects superseded resident rows and their materializations after metadata 
         write(row.key, revision);
       }
     }
+    async function captureList(revision: number) {
+      const result = await listProjectedSessions({
+        projection,
+        opts: { limit: keys.length, includePeople: true },
+        acceptsSerializedJson: true,
+      });
+      snapshots.push(...result.sessions.map((row) => new WeakRef(row)));
+      expect(result.sessions.map((row) => row.label)).toEqual(
+        keys.map(() => `Revision ${revision}`),
+      );
+    }
     try {
       await projection.ensureMaterialized();
       for (let revision = 1; revision <= 4; revision++) {
         refreshEntries(revision);
         await projection.ensureMaterialized();
-        const result = await listProjectedSessions({
-          projection,
-          opts: { limit: keys.length, includePeople: true },
-        });
-        expect(result.sessions.map((row) => row.label)).toEqual(
-          keys.map(() => `Revision ${revision}`),
-        );
+        await captureList(revision);
         captureSelections();
       }
       // A publication must release the last list even when no subsequent viewer arrives.
@@ -89,9 +96,21 @@ it("collects superseded resident rows and their materializations after metadata 
       expect(retired.filter(({ row }) => row.deref())).toHaveLength(0);
       expect(retired.filter(({ entry }) => entry.deref())).toHaveLength(0);
       expect(selections.filter((selection) => selection.deref())).toHaveLength(0);
+      expect(snapshots.filter((snapshot) => snapshot.deref())).toHaveLength(0);
       expect(retired.filter(({ materialized }) => materialized.deref())).toHaveLength(0);
       expect(projection.selectEntries().filter(ready)).toHaveLength(keys.length);
-      await listProjectedSessions({ projection, opts: {} });
+      await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
+      const rematerialized = projection
+        .selectEntries()
+        .filter(ready)
+        .map((row) => new WeakRef(row.materialized));
+      // Catalog refresh replaces materializations while keeping their resident rows alive.
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      await projection.ensureMaterialized();
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(rematerialized.filter((materialized) => materialized.deref())).toHaveLength(0);
+      await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
       const disposedEntries = projection.selectEntries().map((row) => new WeakRef(row.entry));
       captureSelections();
       projection.dispose();

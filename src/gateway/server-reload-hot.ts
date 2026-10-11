@@ -2,6 +2,7 @@ import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   beginPreparedModelRuntimePluginDrain,
@@ -650,6 +651,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
+      if (err instanceof PreparedModelRuntimePublicationSupersededError) {
+        // Credential writes can retire models before their queued config applies.
+        // The replacement owns publication; cancellation creates no restart debt.
+        throw createReloadCancellationError(true);
+      }
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return "applied-restart-required";
     } finally {

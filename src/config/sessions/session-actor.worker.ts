@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseScopedWriteToken,
@@ -18,6 +19,7 @@ import {
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorOperations,
   SessionActorOutcome,
@@ -34,6 +36,7 @@ import {
   applySessionActorPhase,
   SessionActorStaleStateError,
 } from "./session-actor-phase.worker.js";
+import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import {
   cloneSessionActorStoredState,
   withSessionActorTransactionState,
@@ -107,7 +110,11 @@ export function createSessionActorWorker(
       throw new Error("Session actor lost its physical database owner");
     }
   };
-  const read = (database: OpenClawAgentDatabase, target: SessionActorTarget) => {
+  const read = (
+    database: OpenClawAgentDatabase,
+    target: SessionActorTarget,
+    retry = true,
+  ): SessionActorStoredState => {
     requireTarget(target);
     const resident = residents.get(target.sessionKey)?.state;
     const currentToken = token(database, target, resident?.hot.dependencySessionIds);
@@ -135,6 +142,10 @@ export function createSessionActorWorker(
       revision === undefined ||
       readSqliteDatabaseWriteRevision(database.db) !== revision
     ) {
+      // Worker retirement can invalidate every database while this snapshot is being read.
+      if (retry) {
+        return read(database, target, false);
+      }
       throw new Error("Session actor changed while hydrating");
     }
     hydrated.hot.writeToken = hydratedToken;
@@ -170,7 +181,10 @@ export function createSessionActorWorker(
         const opened = database;
         if (command.type === "session.actor.read") {
           const before = read(database, target);
-          context.admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
+          context.admit("transaction", {
+            kind: "session-actor-admission",
+            snapshot: projectSessionActorAuthority(before.hot),
+          });
           observed.settled("read");
           return structuredClone(before.hot);
         }
@@ -185,7 +199,10 @@ export function createSessionActorWorker(
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
           const before = read(opened, target);
-          admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
+          admit("transaction", {
+            kind: "session-actor-admission",
+            snapshot: projectSessionActorAuthority(before.hot),
+          });
           if (
             command.input.expected !== undefined &&
             !isDeepStrictEqual(before.hot.version, command.input.expected)
@@ -201,6 +218,7 @@ export function createSessionActorWorker(
             throw error;
           }
           const working = cloneSessionActorStoredState(before);
+          let commitPublication: unknown;
           const borrowed: AgentWorkerOperationContext = {
             ...context,
             open: () => opened,
@@ -211,9 +229,17 @@ export function createSessionActorWorker(
               return operation(opened);
             },
             admit(stage, publication) {
+              if (stage === "commit") {
+                commitPublication = publication;
+                // An append shares this transaction and message owner. Its final
+                // custody check joins the actor's grant immediately before COMMIT.
+                if (isRecord(publication) && publication.kind === "session-message") {
+                  return;
+                }
+              }
               admit(stage, {
                 kind: "session-actor-admission",
-                snapshot: projectSessionActorHotState(working),
+                snapshot: projectSessionActorAuthority(working.hot),
                 publication,
               });
             },
@@ -234,56 +260,14 @@ export function createSessionActorWorker(
               throw new Error("Session actor lost its native writer revision");
             }
             working.hot.writeToken = pendingToken;
-            const turn =
-              value && "kind" in value && value.kind === "session-turn"
-                ? value
-                : value && "turn" in value
-                  ? value.turn
-                  : undefined;
-            const append =
-              value && "kind" in value && (value.kind === "message" || value.kind === "metadata")
-                ? value
-                : value && "append" in value
-                  ? value.append
-                  : undefined;
-            const appended = append?.value.snapshot.ok
-              ? append.value.snapshot.value.result
-              : undefined;
-            const accepted = {
-              kind: "committed" as const,
-              value,
-              receipt: {
-                kind: "session-actor-committed" as const,
-                commandId: command.input.commandId,
-                phaseId: command.input.phaseId,
-                // SAFETY: The read command returned before entering this write transaction.
-                phase: phase as SessionActorPhase,
-                beforeVersion: before.hot.version,
-                afterVersion: working.hot.version,
-                transcript: {
-                  before: before.hot.transcript.version,
-                  after: working.hot.transcript.version,
-                  appendedMessages:
-                    turn?.result.appendedMessages ??
-                    (appended && "messageId" in appended ? [appended] : []),
-                  append,
-                  projectionNeedsReconcile:
-                    Boolean(turn?.projectionNeedsReconcile) ||
-                    Boolean(append?.value.projectionNeedsReconcile) ||
-                    Boolean(append?.header?.projectionNeedsReconcile) ||
-                    Boolean(
-                      value &&
-                      "projectionNeedsReconcile" in value &&
-                      value.projectionNeedsReconcile,
-                    ),
-                },
-                pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
-                pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
-                pendingFinalDelivery: structuredClone(working.hot.entry?.pendingFinalDelivery),
-                reducers: applied.reducers,
-                postimage: structuredClone(working.hot),
-              },
-            };
+            const accepted = createSessionActorCommittedOutcome({
+              // SAFETY: The read command returned before entering this write transaction.
+              phase: phase as SessionActorPhase,
+              command: command.input,
+              before: before.hot,
+              after: working.hot,
+              applied,
+            });
             if (
               !stageSqliteTransactionState(opened.db, {
                 stage() {},
@@ -304,9 +288,16 @@ export function createSessionActorWorker(
             } else {
               deferSqliteWorkerCommitReceipt(opened.db, accepted);
             }
+            const turn =
+              value && "kind" in value && value.kind === "session-turn"
+                ? value
+                : value && "turn" in value
+                  ? value.turn
+                  : undefined;
             admit("commit", {
               kind: "session-actor-admission",
-              snapshot: projectSessionActorHotState(working),
+              snapshot: projectSessionActorAuthority(working.hot),
+              publication: turn ?? commitPublication,
               final: true,
             });
             return accepted;

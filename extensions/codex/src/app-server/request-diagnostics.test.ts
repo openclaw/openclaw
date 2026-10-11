@@ -11,14 +11,13 @@ const shared = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
   retire: vi.fn(),
-  selectionChanged: new Error("selection changed"),
 }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   createIsolatedCodexAppServerClient: shared.acquire,
   getLeasedSharedCodexAppServerClient: shared.acquire,
   releaseLeasedSharedCodexAppServerClient: shared.release,
   retireSharedCodexAppServerClientIfCurrent: shared.retire,
-  isCodexAppServerStartSelectionChangedError: (error: unknown) => error === shared.selectionChanged,
 }));
 
 const { withCodexAppServerJsonClient } = await import("./request.js");
@@ -289,53 +288,6 @@ describe("scoped Codex timeout diagnostics", () => {
     });
     expect(shared.release).not.toHaveBeenCalled();
     finish.resolve();
-  });
-
-  it("drops the prior client and methods when the existing selection retry reacquires", async () => {
-    const entered = createDeferred<void>();
-    const second = createDeferred<ReturnType<typeof client>>();
-    shared.acquire
-      .mockResolvedValueOnce(
-        client(
-          vi.fn(async () => {
-            throw shared.selectionChanged;
-          }),
-        ),
-      )
-      .mockImplementationOnce(() => {
-        entered.resolve();
-        return second.promise;
-      });
-    const result = start(async (send) => send({ method: "thread/start" }));
-    await entered.promise;
-    const stale = shared.acquire.mock.calls[0]?.[0] as CodexAppServerClientOptions;
-    const current = shared.acquire.mock.calls[1]?.[0] as CodexAppServerClientOptions;
-    current.onAcquireObservation?.({ boundary: "context" });
-    stale.onAcquireObservation?.({ boundary: "auth-handoff", startup: "created-shared" });
-    stale.onStartedClient?.({
-      ...client(),
-      getRegisteredTransportIdentity: () => ({ pid: 500002, startedAt: "fixture-boot:12345" }),
-    } as never);
-    await vi.advanceTimersByTimeAsync(50);
-    await result;
-    const logged = await record();
-    expect(logged.attributes).toMatchObject({
-      phase: "acquire-client",
-      scopeAttemptOrdinal: 2,
-      requestStartedCount: 0,
-      currentRequestCount: 0,
-      currentMethods: "[]",
-      acquireLastObservedBoundary: "context",
-    });
-    expect(logged.attributes).not.toHaveProperty("clientInstanceId");
-    expect(logged.attributes).not.toHaveProperty("lastStartedClientInstanceId");
-    expect(logged.attributes).not.toHaveProperty("lastStartedTransportIdentity");
-    expect(logged.attributes).not.toHaveProperty("acquireStartup");
-    expect(shared.acquire).toHaveBeenCalledTimes(2);
-    expect(shared.retire).toHaveBeenCalledOnce();
-    second.resolve(client());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(shared.release).toHaveBeenCalledTimes(2);
   });
 
   it.each(["available", "unavailable", "throwing"] as const)(

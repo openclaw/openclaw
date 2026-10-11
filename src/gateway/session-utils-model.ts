@@ -511,29 +511,24 @@ export async function resolveGatewayModelSupportsImages(params: {
         ) {
           return true;
         }
-        if (claudeCliSupportsImages) {
-          return true;
-        }
-        if (
-          readOnly &&
-          !snapshot?.catalogComplete &&
-          (!snapshot ||
-            !isGatewayModelExplicitlyConfiguredTextOnly({
-              snapshot,
-              provider: params.provider,
-              model: params.model,
-            }))
-        ) {
-          continue;
-        }
-        return false;
       }
       if (claudeCliSupportsImages) {
         return true;
       }
-      if (readOnly && snapshot?.catalogComplete) {
-        return false;
+      if (
+        readOnly &&
+        !snapshot?.catalogComplete &&
+        (!modelEntry ||
+          !snapshot ||
+          !isGatewayModelExplicitlyConfiguredTextOnly({
+            snapshot,
+            provider: params.provider,
+            model: params.model,
+          }))
+      ) {
+        continue;
       }
+      return false;
     }
     return false;
   } catch {

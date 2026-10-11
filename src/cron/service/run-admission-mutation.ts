@@ -4,8 +4,6 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { projectCronReceiptAuthorityJobFacts } from "../store/receipt-authority-facts.js";
-import { publishCronReceiptAuthorityAdmission } from "../store/receipt-authority-owner.js";
 import {
   claimLocalCronRunReceiptOwnership,
   listLocallyOwnedCronRunReceiptIds,
@@ -172,20 +170,6 @@ export async function activateReservedCronRun(params: {
       if (!activation) {
         return;
       }
-      publishCronReceiptAuthorityAdmission(
-        context,
-        {
-          type: "cron.currentReceipt",
-          handle: activation.receipt,
-          includeJob: true,
-          includeAvailability: true,
-        },
-        {
-          receipt: activation.receipt,
-          job: projectCronReceiptAuthorityJobFacts(activation.job),
-          deletionBlocked: false,
-        },
-      );
       noteCronJobsStoreCommit(storeKey);
       applyCronRuntimeRowsToState(state, [activation.job]);
       reservation.markerAtMs = params.startedAtMs;

@@ -1,11 +1,13 @@
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
+  SessionActorAuthority,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
+import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
@@ -29,23 +31,14 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
+  SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
-
-/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
-export type SessionActorAuthority = {
-  assertCurrent(): void;
-  authorize(
-    stage: "transaction" | "commit",
-    facts: SessionActorHotState,
-    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
-    publication?: unknown,
-  ): void;
-};
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;
@@ -110,21 +103,32 @@ export type SessionActorDeliveryEvidence = {
 
 export type SessionActorPhaseInputs = {
   acceptInput: {
-    pending: Extract<PendingInputMutation, { kind: "stage" }>;
     expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
-    /** Admission and adoption may share a durable point only before any intervening effect. */
-    turn?: SessionTurnPlan;
-    /** A retry adopts the canonical pending/transcript identity instead of appending twice. */
-    append?: SessionActorAppend;
     recovery?: SessionActorInputRecovery;
-  };
+  } & (
+    | {
+        pending: Extract<PendingInputMutation, { kind: "stage" }>;
+        /** Admission and adoption may share a durable point only before an intervening effect. */
+        turn?: SessionTurnPlan;
+        /** A retry adopts canonical pending/transcript identity instead of appending twice. */
+        append?: SessionActorAppend;
+      }
+    | {
+        /** Transcript custody before ACK does not require a queued-input row. */
+        pending?: never;
+        turn: SessionTurnPlan;
+        append?: never;
+      }
+  );
   adoptRun: {
     sessionId: string;
     expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
     /** Explicit writer adoption; omission preserves the existing lifecycle-only command. */
     runId?: string;
+    /** Consume accepted input and adopt its lifecycle at the same durable point. */
+    turn?: SessionTurnPlan;
   };
   appendToolResult:
     | { turn: SessionTurnPlan; append?: never }
@@ -188,13 +192,13 @@ export type SessionActorPhase = keyof SessionActorPhaseInputs;
 
 export type SessionActorPhaseResults = {
   acceptInput: {
-    inputId: string;
+    inputId?: string;
     turn?: SessionTurnCommitted;
     append?: SessionActorAppendCommitted;
     adoption?: Pick<PendingInputSnapshot, "existing" | "previous" | "committed">;
     pendingInputReceipt?: PendingInputMutationReceipt;
   };
-  adoptRun: undefined;
+  adoptRun: SessionTurnCommitted | undefined;
   appendToolResult: SessionTurnCommitted | SessionActorAppendCommitted;
   appendTranscriptEvent:
     | { anchor?: TranscriptEntryAnchor; projectionNeedsReconcile?: boolean }
@@ -253,7 +257,12 @@ export type SessionActorOutcome<Value> =
       value: Value;
       receipt: SessionActorReceipt;
       /** Publication/cleanup failure cannot erase a captured durable receipt. */
-      failure?: { name: string; message: string };
+      failure?: {
+        name: string;
+        message: string;
+        /** Only the command response was lost; native settlement and publication succeeded. */
+        origin?: "response";
+      };
     }
   | {
       kind: "rolled-back";
@@ -311,6 +320,8 @@ type SessionActorCommands = {
 export type SessionActor = SessionActorLifetime &
   SessionActorCommands & {
     readonly target: SessionActorTarget;
+    /** Present only when the selected backend owns the storage domain. */
+    readonly storage?: SessionActorStorage;
     /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;

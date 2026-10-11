@@ -13,6 +13,7 @@ import {
 import {
   encodeMemoryEmbedding,
   ensureMemoryChunkProvenance,
+  loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -28,9 +29,9 @@ import { runInMemoryTestBackgroundContext } from "./background-context.test-supp
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
-import * as databaseFiles from "./manager-db.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
@@ -42,7 +43,7 @@ function managerDatabase(manager: MemoryIndexManager): DatabaseSync {
   return (manager as unknown as { db: DatabaseSync }).db;
 }
 
-describe("memory manager shared agent connection", () => {
+describe("memory manager agent database lifecycle", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
@@ -53,9 +54,12 @@ describe("memory manager shared agent connection", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the borrowed connection alive across settings replacement and shutdown", async () => {
+  it("isolates manager readers across settings replacement and keeps the shared writer alive", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     const first = await fixture.getFreshManager(createConfig());
+    const firstDb = managerDatabase(first);
+    expect(firstDb.location()).toBe(shared.path);
+    expect(() => firstDb.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
     const replacement = await fixture.getFreshManager(
       fixture.createConfig({
         provider: "none",
@@ -65,9 +69,10 @@ describe("memory manager shared agent connection", () => {
     );
 
     expect(replacement === first).toBe(false);
-    expect(managerDatabase(first) === shared.db).toBe(true);
-    expect(managerDatabase(replacement) === shared.db).toBe(true);
+    expect(managerDatabase(replacement).location()).toBe(shared.path);
     await first.close();
+    expect(firstDb.isOpen).toBe(false);
+    expect(managerDatabase(replacement).isOpen).toBe(true);
     await replacement.sync({ reason: "test", force: true });
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
     await closeAllMemorySearchManagers();
@@ -108,6 +113,47 @@ describe("memory manager shared agent connection", () => {
     expect(result.error).toMatch(/foreign_key_check/);
   });
 
+  it("resumes vector writes after another manager publishes an empty rebuild", async () => {
+    const cfg = fixture.createConfig({ provider: "openai", vectorEnabled: true });
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    const memoryFile = path.join(fixture.paths.memory, "2026-01-12.md");
+    await manager.sync({ reason: "cli", force: true });
+    const db = memoryIndexFixtureWriter(manager);
+    expect((await loadSqliteVecExtension({ db })).ok).toBe(true);
+    const vectorTexts = () =>
+      db
+        .prepare(
+          "SELECT c.text FROM memory_index_chunks c JOIN memory_index_chunks_vec v ON v.id = c.id ORDER BY c.text",
+        )
+        .all();
+
+    for (const text of ["Alpha first replacement.", "Beta second replacement."]) {
+      await fs.writeFile(memoryFile, text);
+      await manager.sync({ reason: "search-bootstrap" });
+      expect(vectorTexts()).toEqual([{ text }]);
+    }
+
+    const maintenance = await MemoryIndexManager.get({
+      cfg,
+      agentId: "main",
+      purpose: "maintenance",
+      maintenanceSource: manager,
+    });
+    if (!maintenance) {
+      throw new Error("maintenance manager missing");
+    }
+    fixture.trackManager(maintenance);
+    await fs.unlink(memoryFile);
+    await maintenance.sync({ reason: "cli", force: true });
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_index_chunks_vec'").get(),
+    ).toBeUndefined();
+
+    await fs.writeFile(memoryFile, "Alpha after empty rebuild.");
+    await manager.sync({ reason: "search-bootstrap" });
+    expect(vectorTexts()).toEqual([{ text: "Alpha after empty rebuild." }]);
+  });
+
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {
     const first = await fixture.getFreshManager(createConfig());
     const originalDb = managerDatabase(first);
@@ -117,7 +163,7 @@ describe("memory manager shared agent connection", () => {
     const replacement = await fixture.getFreshManager(createConfig());
     expect(replacement === first).toBe(false);
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    expect(managerDatabase(replacement) === shared.db).toBe(true);
+    expect(managerDatabase(replacement).location()).toBe(shared.path);
     await first.close();
     await replacement.sync({ reason: "test", force: true });
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
@@ -145,12 +191,17 @@ describe("memory manager shared agent connection", () => {
       closeOpenClawAgentDatabasesForTest();
     });
     await entered.promise;
-    const admit = sqliteRuntime.withOpenClawAgentDatabaseWrite;
-    vi.spyOn(sqliteRuntime, "withOpenClawAgentDatabaseWrite").mockImplementation(
-      (options, write, expectedDatabase) => {
-        const result = admit(options, write, expectedDatabase);
-        queued.resolve();
-        return result;
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
+      async (...args) => {
+        const store = await open(...args);
+        const prepare = store.prepare.bind(store);
+        vi.spyOn(store, "prepare").mockImplementation((...prepareArgs) => {
+          const result = prepare(...prepareArgs);
+          queued.resolve();
+          return result;
+        });
+        return store;
       },
     );
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
@@ -165,7 +216,7 @@ describe("memory manager shared agent connection", () => {
     try {
       await Promise.race([queued.promise, creating]);
       released.resolve();
-      await expect(creating).rejects.toThrow(/connection is unavailable|closed or changed/);
+      await expect(creating).rejects.toThrow(/^Agent database execution admission is closed$/);
       expect(
         prepare.mock.contexts.filter(
           (database) =>
@@ -579,15 +630,15 @@ describe("memory manager shared agent connection", () => {
       sources: ["memory"],
     });
     const db = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-    const interceptedSources: Array<Parameters<typeof open>[1]> = [];
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    const interceptedPaths: Array<string | undefined> = [];
     let closeSettled: boolean;
     const intercept = vi
-      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation(async (...args) => {
         const [options, source, worker] = args;
         if (
-          source !== db ||
+          options.path !== db.location() ||
           worker.moduleUrl.href !==
             resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
         ) {
@@ -598,7 +649,7 @@ describe("memory manager shared agent connection", () => {
           moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
           input: { kind: "cache-prune-result", publication: worker.input },
         });
-        interceptedSources.push(source);
+        interceptedPaths.push(options.path);
         const close = client.close.bind(client);
         vi.spyOn(client, "close").mockImplementation(async () => {
           await close();
@@ -607,10 +658,10 @@ describe("memory manager shared agent connection", () => {
         return client;
       });
     const manager = await fixture.getFreshManager(cfg, "cli");
-    expect(managerDatabase(manager) === db).toBe(true);
+    expect(managerDatabase(manager).location()).toBe(db.location());
     try {
       await manager.sync({ reason: "baseline", force: true });
-      expect(interceptedSources.includes(db)).toBe(true);
+      expect(interceptedPaths).toContain(db.location());
       const owner = manager as unknown as { cache: { maxEntries: number } };
       owner.cache.maxEntries = 2;
       const insert = db.prepare(`INSERT INTO memory_embedding_cache
@@ -655,8 +706,8 @@ describe("memory manager shared agent connection", () => {
       let shadow: { owner: MemoryIndexDatabase; path: string } | undefined;
       const releaseFailure = new Error("controlled shadow release failure");
       const replacement = "replacement file must survive rejected identity";
-      vi.spyOn(MemoryIndexDatabase, "openShadow").mockImplementation((filename, ...args) => {
-        const owner = open(filename, ...args);
+      vi.spyOn(MemoryIndexDatabase, "openShadow").mockImplementation(async (filename, ...args) => {
+        const owner = await open(filename, ...args);
         shadow = { owner, path: filename };
         if (failure === "unreleased") {
           vi.spyOn(owner, "release").mockImplementation(() => {
@@ -702,13 +753,14 @@ describe("memory manager shared agent connection", () => {
     const manager = await fixture.getFreshManager(
       fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
     );
-    const open = databaseFiles.openMemoryDatabaseAtPath;
+    const open = MemoryIndexDatabase.openShadow.bind(MemoryIndexDatabase);
     let shadow: DatabaseSync | undefined;
     let shadowPath: string | undefined;
-    vi.spyOn(databaseFiles, "openMemoryDatabaseAtPath").mockImplementation((filename, ...args) => {
+    vi.spyOn(MemoryIndexDatabase, "openShadow").mockImplementation(async (filename, ...args) => {
       shadowPath = filename;
-      shadow = open(filename, ...args);
-      return shadow;
+      const owner = await open(filename, ...args);
+      shadow = owner.db;
+      return owner;
     });
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
