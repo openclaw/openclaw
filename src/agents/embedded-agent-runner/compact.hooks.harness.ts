@@ -24,6 +24,7 @@ import {
   createCompactHooksResolvedModel,
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
+  mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
@@ -734,19 +735,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../../context-engine/init.js", () => ({
-    ensureContextEnginesInitialized: vi.fn(),
-  }));
-
-  vi.doMock("../../context-engine/registry.js", () => ({
-    resolveContextEngine: resolveContextEngineMock,
-    resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
-    resolveLogicalTurnContextEngines: async () => {
-      const engine = await resolveContextEngineMock();
-      const ref = { engine, registeredId: "legacy" };
-      return { configured: ref, configuredId: "legacy", fallback: ref };
-    },
-  }));
+  mockCompactHooksContextEngine(resolveContextEngineMock);
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,

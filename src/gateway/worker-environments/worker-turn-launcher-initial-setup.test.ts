@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -15,6 +15,7 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -35,6 +36,8 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 // Pause the real placement store/coordinator at the producer's published setup state.
 async function setup(
@@ -131,7 +134,7 @@ function readyEnvironment() {
 
 describe("initial worker setup admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.for(["worker-turn", "remote-exec"] as const)(
     "holds %s input during initial sync without agent IO, then claims the intended active placement",

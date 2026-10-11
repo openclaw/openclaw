@@ -1638,6 +1638,13 @@ function resolveTestFilesBuildMode(files: readonly string[]): NodeTestPretestBui
   return resolveVitestPretestBuildMode([{ matchesFile: (file) => selectedFiles.has(file) }]);
 }
 
+const AUTO_REPLY_REPLY_SHARD_RULES = [
+  ["agent-runner", /^(?:agent-runner|acp-|block-)/u],
+  ["commands", /^commands/u],
+  ["dispatch", /^(?:directive-|dispatch|followup-|get-reply)/u],
+  ["session", /^session/u],
+] as const;
+
 function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
   const files = listTrackedTestFiles("src/auto-reply/reply");
   const groups = {
@@ -1650,41 +1657,23 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
     "auto-reply-reply-session": [] as string[],
     "auto-reply-reply-state-routing": [] as string[],
   };
-  const dispatchEntrypoints = new Map<string, keyof typeof groups>([
+  const namedEntrypoints = new Map<string, keyof typeof groups>([
     ["dispatch-from-config.test.ts", "auto-reply-reply-dispatch-core"],
     ["dispatch-from-config.delivery.test.ts", "auto-reply-reply-dispatch-delivery"],
     ["dispatch-from-config.lifecycle.test.ts", "auto-reply-reply-dispatch-lifecycle"],
+    ["abort.test.ts", "auto-reply-reply-agent-runner"],
+    ["bash-command.stop.test.ts", "auto-reply-reply-agent-runner"],
   ]);
 
   for (const file of files) {
     const name = relative("src/auto-reply/reply", file).replaceAll("\\", "/");
-    const dispatchEntrypointGroup = dispatchEntrypoints.get(name);
-    if (dispatchEntrypointGroup) {
-      groups[dispatchEntrypointGroup].push(file);
+    const namedEntrypointGroup = namedEntrypoints.get(name);
+    if (namedEntrypointGroup) {
+      groups[namedEntrypointGroup].push(file);
       continue;
     }
-    if (
-      name.startsWith("agent-runner") ||
-      name.startsWith("acp-") ||
-      name === "abort.test.ts" ||
-      name === "bash-command.stop.test.ts" ||
-      name.startsWith("block-")
-    ) {
-      groups["auto-reply-reply-agent-runner"].push(file);
-    } else if (name.startsWith("commands")) {
-      groups["auto-reply-reply-commands"].push(file);
-    } else if (
-      name.startsWith("directive-") ||
-      name.startsWith("dispatch") ||
-      name.startsWith("followup-") ||
-      name.startsWith("get-reply")
-    ) {
-      groups["auto-reply-reply-dispatch"].push(file);
-    } else if (name.startsWith("session")) {
-      groups["auto-reply-reply-session"].push(file);
-    } else {
-      groups["auto-reply-reply-state-routing"].push(file);
-    }
+    const owner = AUTO_REPLY_REPLY_SHARD_RULES.find(([, pattern]) => pattern.test(name))?.[0];
+    groups[`auto-reply-reply-${owner ?? "state-routing"}`].push(file);
   }
 
   return Object.entries(groups)
@@ -1704,68 +1693,23 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
-function resolveAgentCoreShardName(file: string): string {
-  const name = relative("src/agents", file).replaceAll("\\", "/");
-  if (
-    name.includes("auth") ||
-    name.includes("credential") ||
-    name.includes("api-key") ||
-    name.includes("token")
-  ) {
-    return "agentic-agents-core-auth";
-  }
-  if (
-    name.startsWith("model") ||
-    name.includes("provider") ||
-    name.includes("openai") ||
-    name.includes("anthropic") ||
-    name.includes("gemini") ||
-    name.includes("moonshot") ||
-    name.includes("minimax") ||
-    name.includes("xai") ||
-    name.includes("zai") ||
-    name.includes("chutes") ||
-    name.includes("catalog")
-  ) {
-    return "agentic-agents-core-models";
-  }
-  if (
-    name.startsWith("agent-tools") ||
-    name.startsWith("openclaw-tools") ||
-    name.startsWith("bash-tools") ||
-    name.startsWith("tool") ||
-    name.startsWith("apply-patch") ||
-    name.startsWith("exec") ||
-    name.startsWith("sandbox")
-  ) {
-    return "agentic-agents-core-tools";
-  }
-  if (
-    name.startsWith("subagent") ||
-    name.startsWith("spawn") ||
-    name.startsWith("embedded-agent-subscribe")
-  ) {
-    return "agentic-agents-core-subagents";
-  }
+const AGENT_CORE_SHARD_RULES = [
+  ["auth", /auth|credential|api-key|token/u],
+  ["models", /^model|provider|openai|anthropic|gemini|moonshot|minimax|xai|zai|chutes|catalog/u],
+  ["tools", /^(?:agent-tools|openclaw-tools|bash-tools|tool|apply-patch|exec|sandbox)/u],
+  ["subagents", /^(?:subagent|spawn|embedded-agent-subscribe)/u],
   // The former single "core-runner" bucket serialized ~3 minutes of tests in
   // one group; keep these three slices separate so packing can balance them.
-  if (name.startsWith("embedded-agent-runner")) {
-    return "agentic-agents-core-runner-embedded";
-  }
-  if (
-    name.startsWith("agent-command") ||
-    name.startsWith("command") ||
-    name.includes("compaction")
-  ) {
-    return "agentic-agents-core-runner-commands";
-  }
-  if (name.startsWith("cli-runner")) {
-    return "agentic-agents-core-runner-cli";
-  }
-  if (name.includes("session")) {
-    return "agentic-agents-core-runner-sessions";
-  }
-  return "agentic-agents-core-runtime";
+  ["runner-embedded", /^embedded-agent-runner/u],
+  ["runner-commands", /^(?:agent-command|command)|compaction/u],
+  ["runner-cli", /^cli-runner/u],
+  ["runner-sessions", /session/u],
+] as const;
+
+function resolveAgentCoreShardName(file: string): string {
+  const name = relative("src/agents", file).replaceAll("\\", "/");
+  const owner = AGENT_CORE_SHARD_RULES.find(([, pattern]) => pattern.test(name));
+  return `agentic-agents-core-${owner?.[0] ?? "runtime"}`;
 }
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
@@ -1842,74 +1786,28 @@ function resolveGatewayStartupShardName(file: string): string {
   return "agentic-control-plane-startup-core";
 }
 
+const GATEWAY_SERVER_SHARD_RULES = [
+  ["agent-chat", /^server\.(?:agent|chat|sessions)/u],
+  ["auth-node", /auth|device|node|roles|silent|preauth|control-plane-rate-limit/u],
+  ["startup", /^server-(?:startup|restart|runtime)|^server\.(?:lazy|health)/u],
+  ["runtime-cron", /cron/u],
+  ["http-plugin-ws", /plugin|hooks|http|ws-connection/u],
+  ["runtime-server", /^server-/u],
+  ["runtime-config", /^server\.config-patch/u],
+  ["runtime-shared-token", /^server\.shared-token/u],
+  ["runtime-ui-tools", /^server\.(?:control-ui-root|ios-client-id|tools-catalog)/u],
+  ["runtime-state", /^server\./u],
+] as const;
+
 function resolveGatewayServerShardName(file: string): string {
   const name = relative("src/gateway", file).replaceAll("\\", "/");
-  if (
-    isGatewayServerBackedHttpTestFile(file) ||
-    name.startsWith("server.models") ||
-    name.startsWith("server.talk")
-  ) {
+  if (isGatewayServerBackedHttpTestFile(file) || /^server\.(?:models|talk)/u.test(name)) {
     return "agentic-control-plane-http-models";
   }
-  if (
-    name.startsWith("server.agent") ||
-    name.startsWith("server.chat") ||
-    name.startsWith("server.sessions")
-  ) {
-    return "agentic-control-plane-agent-chat";
-  }
-  if (
-    name.includes("auth") ||
-    name.includes("device") ||
-    name.includes("node") ||
-    name.includes("roles") ||
-    name.includes("silent") ||
-    name.includes("preauth") ||
-    name.includes("control-plane-rate-limit")
-  ) {
-    return "agentic-control-plane-auth-node";
-  }
-  if (
-    name.startsWith("server-startup") ||
-    name.startsWith("server-restart") ||
-    name.startsWith("server-runtime") ||
-    name.startsWith("server.lazy") ||
-    name.startsWith("server.health") ||
-    name === "server-close.test.ts"
-  ) {
-    return resolveGatewayStartupShardName(file);
-  }
-  if (name.includes("cron")) {
-    return "agentic-control-plane-runtime-cron";
-  }
-  if (
-    name.includes("plugin") ||
-    name.includes("hooks") ||
-    name.includes("http") ||
-    name.includes("ws-connection")
-  ) {
-    return "agentic-control-plane-http-plugin-ws";
-  }
-  if (name.startsWith("server-")) {
-    return "agentic-control-plane-runtime-server";
-  }
-  if (name.startsWith("server.config-patch")) {
-    return "agentic-control-plane-runtime-config";
-  }
-  if (name.startsWith("server.shared-token")) {
-    return "agentic-control-plane-runtime-shared-token";
-  }
-  if (
-    name.startsWith("server.control-ui-root") ||
-    name.startsWith("server.ios-client-id") ||
-    name.startsWith("server.tools-catalog")
-  ) {
-    return "agentic-control-plane-runtime-ui-tools";
-  }
-  if (name.startsWith("server.")) {
-    return "agentic-control-plane-runtime-state";
-  }
-  return "agentic-control-plane-runtime";
+  const owner = GATEWAY_SERVER_SHARD_RULES.find(([, pattern]) => pattern.test(name))?.[0];
+  return owner === "startup" || name === "server-close.test.ts"
+    ? resolveGatewayStartupShardName(file)
+    : `agentic-control-plane-${owner ?? "runtime"}`;
 }
 
 function createGatewayServerSplitShards(): NodeTestSplitShard[] {

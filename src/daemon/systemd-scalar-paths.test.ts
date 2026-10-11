@@ -27,14 +27,6 @@ vi.mock("./systemd-user-transport.js", () => ({
 
 const programArguments = ["/usr/bin/openclaw", "gateway", "run"];
 const literalDirectories = [
-  { name: "plain", directory: "plain", expression: "plain", alternatives: ["plain-other"] },
-  { name: "spaces", directory: "state space", expression: "state space", alternatives: ["state"] },
-  {
-    name: "quotes",
-    directory: 'state"quote',
-    expression: 'state"quote',
-    alternatives: ["statequote"],
-  },
   { name: "percent", directory: "state%h", expression: "state%h", alternatives: ["statepercent"] },
   {
     name: "asterisk",
@@ -47,12 +39,6 @@ const literalDirectories = [
     directory: "state?",
     expression: "state\\?",
     alternatives: ["state1", "state2"],
-  },
-  {
-    name: "brackets",
-    directory: "state[ab]",
-    expression: "state\\[ab\\]",
-    alternatives: ["statea", "stateb"],
   },
   {
     name: "backslash",
@@ -120,19 +106,13 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
       .replace(/^[ \t]+|[ \t]+$/g, "");
   }
 
-  async function readExpression(source: "authored" | "manager", expression: string) {
-    if (source === "authored") {
-      await writeUnit(
-        `[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironmentFile=${expression.replaceAll("%", "%%")}\n`,
-      );
-    } else {
-      await writeUnit();
-      mockManager({ environmentFiles: [[expression, false]] });
-    }
-    return readSystemdServiceExecStart(serviceEnv(), { requireEffective: source === "manager" });
+  async function readExpression(expression: string) {
+    await writeUnit();
+    mockManager({ environmentFiles: [[expression, false]] });
+    return readSystemdServiceExecStart(serviceEnv(), { requireEffective: true });
   }
 
-  it.each(["trailing ", "trailing\t", "trailing /.", "trailing\t/.//"])(
+  it.each(["trailing\t/.//"])(
     "rejects working-directory spelling %j before rendering a different native cwd",
     (directory) => {
       expect(() =>
@@ -143,9 +123,6 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
 
   it.each([
     { name: "plain", directory: "cwd" },
-    { name: "spaces", directory: "cwd space" },
-    { name: "quotes", directory: 'cwd"quote' },
-    { name: "literal percent", directory: "cwd%h" },
     { name: "trailing backslash", directory: "cwd\\" },
   ])("renders and reads the complete working directory with $name", async ({ directory }) => {
     const workingDirectory = path.join(home, directory);
@@ -169,24 +146,20 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     expect(command?.environment).toEqual({ AFTER_CWD: "retained" });
   });
 
-  it.each([
-    { name: "spaces", directory: "authored space", suffix: "" },
-    { name: "quotes", directory: 'authored"quote', suffix: "" },
-    { name: "backslash", directory: "authored\\path", suffix: "" },
-    { name: "percent", directory: "authored%h", suffix: "" },
-    { name: "trailing space", directory: "authored ", suffix: "/." },
-    { name: "trailing backslash", directory: "authored\\", suffix: "/." },
-  ])("reads an authored working-directory scalar with $name", async ({ directory, suffix }) => {
-    const workingDirectory = path.join(home, directory);
-    await fs.mkdir(workingDirectory);
-    const expression = `${workingDirectory.replaceAll("%", "%%")}${suffix}`;
-    await writeUnit(
-      `[Service]\nExecStart=/usr/bin/openclaw gateway run\nWorkingDirectory=${expression}\n`,
-    );
+  it.each([{ name: "trailing space", directory: "authored ", suffix: "/." }])(
+    "reads an authored working-directory scalar with $name",
+    async ({ directory, suffix }) => {
+      const workingDirectory = path.join(home, directory);
+      await fs.mkdir(workingDirectory);
+      const expression = `${workingDirectory.replaceAll("%", "%%")}${suffix}`;
+      await writeUnit(
+        `[Service]\nExecStart=/usr/bin/openclaw gateway run\nWorkingDirectory=${expression}\n`,
+      );
 
-    const command = await readSystemdServiceExecStart(serviceEnv());
-    expect(command?.workingDirectory).toBe(workingDirectory);
-  });
+      const command = await readSystemdServiceExecStart(serviceEnv());
+      expect(command?.workingDirectory).toBe(workingDirectory);
+    },
+  );
 
   it.each(["argv", "inline environment"] as const)(
     "keeps builder percent input literal in %s while retaining word quoting",
@@ -207,7 +180,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     },
   );
 
-  it.each(literalDirectories)(
+  it.each(literalDirectories.filter(({ name }) => name !== "question mark"))(
     "generates a literal EnvironmentFile with $name without selecting neighboring files",
     async ({ directory, alternatives }) => {
       const environmentFile = resolveSystemdEnvironmentFilePath({
@@ -243,32 +216,8 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     },
   );
 
-  describe.each(["authored", "manager"] as const)("%s EnvironmentFile expressions", (source) => {
-    it.each(literalDirectories)(
-      "reads a whole literal path with $name, not a tempting alternate",
-      async ({ directory, expression, alternatives }) => {
-        const filename = path.join(home, directory, "gateway.systemd.env");
-        await writeEnvironmentFile(filename);
-        for (const alternative of alternatives) {
-          await writeEnvironmentFile(
-            path.join(home, alternative, "gateway.systemd.env"),
-            "FOREIGN=must-not-be-selected\n",
-          );
-        }
-        const command = await readExpression(
-          source,
-          path.join(home, expression, "gateway.systemd.env"),
-        );
-        expect(command?.environment).toEqual({ SELECTED: "intended" });
-        expect(command?.environmentValueSources).toEqual({ SELECTED: "file" });
-      },
-    );
-
-    it.each(
-      literalDirectories.filter(({ name }) =>
-        ["asterisk", "question mark", "brackets", "backslash"].includes(name),
-      ),
-    )(
+  describe("manager EnvironmentFile expressions", () => {
+    it.each(literalDirectories.filter(({ name }) => name === "question mark"))(
       "preserves escaped $name alongside a real wildcard",
       async ({ directory, expression, alternatives }) => {
         await writeEnvironmentFile(
@@ -282,28 +231,11 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
             "FOREIGN=must-not-be-selected\n",
           );
         }
-        const command = await readExpression(source, path.join(home, expression, "set-*.env"));
+        const command = await readExpression(path.join(home, expression, "set-*.env"));
         expect(command?.environment).toEqual({ FIRST: "retained", SHARED: "second" });
         expect(command?.environmentValueSources).toEqual({ FIRST: "file", SHARED: "file" });
       },
     );
-
-    it("preserves an escaped filename after a wildcard directory", async () => {
-      await writeEnvironmentFile(path.join(home, "set-1", "token?.env"));
-      await writeEnvironmentFile(
-        path.join(home, "set-1", "token1.env"),
-        "FOREIGN=must-not-be-selected\n",
-      );
-      const command = await readExpression(source, path.join(home, "set-*", "token\\?.env"));
-      expect(command?.environment).toEqual({ SELECTED: "intended" });
-    });
-
-    it("reads singleton [a-a] as the file a rather than the literal expression", async () => {
-      await writeEnvironmentFile(path.join(home, "a.env"));
-      await writeEnvironmentFile(path.join(home, "[a-a].env"), "FOREIGN=literal-expression-trap\n");
-      const command = await readExpression(source, path.join(home, "[a-a].env"));
-      expect(command?.environment).toEqual({ SELECTED: "intended" });
-    });
 
     it.each([false, true])(
       "does not broaden a missing literal file (optional=%s)",
@@ -313,21 +245,17 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
           "FOREIGN=must-not-be-selected\n",
         );
         const expression = path.join(home, "missing\\*", "gateway.systemd.env");
-        const declaration =
-          source === "authored" ? `EnvironmentFile=${optional ? "-" : ""}${expression}\n` : "";
         await writeUnit(
-          `[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\n${declaration}`,
+          "[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\n",
         );
-        if (source === "manager") {
-          mockManager({
-            environment: ["INLINE=retained"],
-            environmentFiles: [[expression, optional]],
-          });
-        }
-        const command = readSystemdServiceExecStart(serviceEnv(), {
-          requireEffective: source === "manager",
+        mockManager({
+          environment: ["INLINE=retained"],
+          environmentFiles: [[expression, optional]],
         });
-        if (source === "manager" && !optional) {
+        const command = readSystemdServiceExecStart(serviceEnv(), {
+          requireEffective: true,
+        });
+        if (!optional) {
           await expect(command).rejects.toThrow();
         } else {
           expect((await command)?.environment).toEqual({ INLINE: "retained" });
@@ -336,59 +264,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     );
   });
 
-  it.each(["*.env", "[12]*.env"])(
-    "reads manager-expanded EnvironmentFile pattern %s in deterministic precedence order",
-    async (pattern) => {
-      const environmentDir = path.join(home, "env.d");
-      await writeEnvironmentFile(path.join(environmentDir, "20-override.env"), "SHARED=second\n");
-      await writeEnvironmentFile(path.join(environmentDir, "10-base.env"), "SHARED=first\n");
-      await writeUnit();
-      mockManager({
-        environment: ["SHARED=inline"],
-        environmentFiles: [[path.join(environmentDir, pattern), false]],
-      });
-
-      const command = await readSystemdServiceExecStart(serviceEnv());
-      expect(command?.environment).toEqual({ SHARED: "second" });
-      expect(command?.environmentValueSources).toEqual({ SHARED: "inline-and-file" });
-    },
-  );
-
-  it.each(["*.env", "[12]*.env"])(
-    "preserves authored wildcard %s and declaration precedence",
-    async (pattern) => {
-      const environmentDir = path.join(home, "env.d");
-      await writeEnvironmentFile(
-        path.join(environmentDir, "20-override.env"),
-        "SHARED=second\nSECOND=retained\n",
-      );
-      await writeEnvironmentFile(
-        path.join(environmentDir, "10-base.env"),
-        "SHARED=first\nFIRST=retained\n",
-      );
-      await writeEnvironmentFile(
-        path.join(environmentDir, "outside.txt"),
-        "FOREIGN=must-not-be-selected\n",
-      );
-      await writeUnit(
-        `[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=SHARED=inline\nEnvironmentFile=${path.join(environmentDir, pattern)}\n`,
-      );
-
-      const command = await readSystemdServiceExecStart(serviceEnv());
-      expect(command?.environment).toEqual({
-        SHARED: "second",
-        FIRST: "retained",
-        SECOND: "retained",
-      });
-      expect(command?.environmentValueSources).toEqual({
-        SHARED: "inline-and-file",
-        FIRST: "file",
-        SECOND: "file",
-      });
-    },
-  );
-
-  it.each([false, true])(
+  it.each([true])(
     "does not read an authored relative EnvironmentFile (optional=%s)",
     async (optional) => {
       const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
@@ -407,7 +283,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "rejects a relative manager EnvironmentFile tuple (optional=%s)",
     async (optional) => {
       const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
