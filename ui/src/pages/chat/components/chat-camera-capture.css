@@ -1,9 +1,6 @@
-import { css } from "lit";
+openclaw-chat-camera-capture {
+  display: contents;
 
-export const cameraCaptureStyles = css`
-  :host {
-    display: contents;
-  }
   openclaw-modal-dialog {
     --openclaw-modal-width: 640px;
   }
@@ -171,4 +168,4 @@ export const cameraCaptureStyles = css`
       margin-inline: 16px;
     }
   }
-`;
+}

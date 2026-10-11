@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
-import "./chat-question-panel.ts";
-
-type ChatQuestionPanelElement = HTMLElement & {
-  updateComplete: Promise<unknown>;
-};
+import type { QuestionPanelProps } from "./chat-question-card.ts";
+import { ChatQuestionPanel } from "./chat-question-panel.tsx";
 
 function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt {
   return {
@@ -53,14 +52,26 @@ function freeTextQuestion(
   };
 }
 
-async function panelIn(container: HTMLElement): Promise<ChatQuestionPanelElement> {
-  const panel = container.querySelector("openclaw-chat-question-panel") as ChatQuestionPanelElement;
-  await panel.updateComplete;
-  return panel;
+async function panelIn(container: HTMLElement): Promise<HTMLElement> {
+  flush();
+  await waitForSolid(() => expect(container.querySelector(".chat-question-panel")).not.toBeNull());
+  return container.querySelector<HTMLElement>("openclaw-chat-question-panel")!;
 }
 
 describe("shared question panel", () => {
   let container: HTMLDivElement;
+  let mounted: ReturnType<typeof mountSolid> | undefined;
+  let setPanel: ((value: QuestionPanelProps) => void) | undefined;
+  function drawPanel(props: QuestionPanelProps) {
+    if (!mounted) {
+      const [panel, updatePanel] = createSignal(props);
+      setPanel = updatePanel;
+      mounted = mountSolid(() => <ChatQuestionPanel props={panel()} />, { container });
+    } else {
+      setPanel!(props);
+    }
+    flush();
+  }
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -68,6 +79,9 @@ describe("shared question panel", () => {
   });
 
   afterEach(() => {
+    mounted?.unmount();
+    mounted = undefined;
+    setPanel = undefined;
     container.remove();
   });
 
@@ -80,32 +94,24 @@ describe("shared question panel", () => {
   ) {
     let collapsed = false;
     const redraw = () => {
-      render(
-        html`<openclaw-chat-question-panel
-          .props=${createGatewayQuestionPanelProps(prompt, {
-            collapsed,
-            onCollapsedChange: (nextCollapsed) => {
-              collapsed = nextCollapsed;
-              redraw();
-            },
-            onChange: redraw,
-            onSubmit: callbacks.onSubmit ?? vi.fn(),
-            onSkip: callbacks.onSkip ?? vi.fn(),
-          })}
-        ></openclaw-chat-question-panel>`,
-        container,
+      drawPanel(
+        createGatewayQuestionPanelProps(prompt, {
+          collapsed,
+          onCollapsedChange: (nextCollapsed) => {
+            collapsed = nextCollapsed;
+            redraw();
+          },
+          onChange: redraw,
+          onSubmit: callbacks.onSubmit ?? vi.fn(),
+          onSkip: callbacks.onSkip ?? vi.fn(),
+        }),
       );
     };
     redraw();
   }
 
   function drawUncontrolled(options: Parameters<typeof createGatewayQuestionPanelProps>[1]) {
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), options)}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
+    drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), options));
     return panelIn(container);
   }
 
@@ -131,7 +137,7 @@ describe("shared question panel", () => {
     });
     const onSubmit = vi.fn();
     drawGateway(prompt, { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
 
     expect(
       container.querySelector('[role="radio"] .chat-question-panel__option-marker'),
@@ -150,25 +156,26 @@ describe("shared question panel", () => {
     ).toBe("Type your own answer here");
     expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("1/2");
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
-    await panel.updateComplete;
+    flush();
 
     expect(container.querySelector(".chat-question-panel__prompt")?.textContent).toBe(
       "Which extras should I include?",
     );
     expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("2/2");
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__back")?.click();
-    await panel.updateComplete;
+    flush();
     expect(container.querySelector(".chat-question-panel__prompt")?.textContent).toBe(
       "Where should I send it?",
     );
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
-    await panel.updateComplete;
+    flush();
     container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[0]?.click();
     container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[1]?.click();
     const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
     other.value = "Metrics";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
+    flush();
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
 
     expect(onSubmit).toHaveBeenCalledWith({
@@ -202,7 +209,7 @@ describe("shared question panel", () => {
     });
     const onSubmit = vi.fn();
     drawGateway(prompt, { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     expect(container.querySelectorAll(".chat-question-panel__thumbnail")).toHaveLength(2);
     const image = container.querySelector<HTMLImageElement>(".chat-question-panel__thumbnail img");
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
@@ -211,7 +218,7 @@ describe("shared question panel", () => {
     const input = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
     input.value = "custom-spacer\ncustom-gasket";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
+    flush();
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ parts: ["washer", "custom-spacer", "custom-gasket"] });
   });
@@ -262,11 +269,11 @@ describe("shared question panel", () => {
       }),
       { onSubmit },
     );
-    const panel = await panelIn(container);
+    await panelIn(container);
     expect(container.querySelector("textarea")).toBeNull();
     expect(container.querySelector('input[type="file"]')).not.toBeNull();
     container.querySelector<HTMLButtonElement>('[aria-label="Remove Washer"]')?.click();
-    await panel.updateComplete;
+    flush();
     expect(container.querySelector('[data-option-index="0"]')).toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ parts: [] });
@@ -297,7 +304,7 @@ describe("shared question panel", () => {
     });
     const onSubmit = vi.fn();
     drawGateway(prompt, { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     const hosts = container.querySelector<HTMLInputElement>(".chat-question-panel__hosts")!;
     const secret = container.querySelector<HTMLInputElement>('input[type="password"]')!;
 
@@ -317,13 +324,13 @@ describe("shared question panel", () => {
 
     hosts.value = "api.example.test, uploads.example.test";
     hosts.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
+    flush();
     expect(prompt.secretStoreAllowedHostsDraft).toBe("api.example.test, uploads.example.test");
 
     const fakeSecret = "  fake-secret-value-for-ui-test  ";
     secret.value = fakeSecret;
     secret.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
+    flush();
     expect(prompt.drafts.get("api_key")?.freeText).toBe(fakeSecret);
     expect(secret.value).toBe(fakeSecret);
     expect(container.textContent).not.toContain(fakeSecret);
@@ -332,6 +339,40 @@ describe("shared question panel", () => {
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
   });
+
+  it.each([
+    { field: "text answer", selector: "textarea", isSecret: false },
+    { field: "password answer", selector: 'input[type="password"]', isSecret: true },
+    { field: "destination hosts", selector: ".chat-question-panel__hosts", isSecret: true },
+  ])(
+    "preserves focus in $field across controlled draft updates",
+    async ({ selector, isSecret }) => {
+      drawGateway(
+        gatewayPrompt({
+          questions: [
+            freeTextQuestion({
+              isSecret,
+              secretStore: isSecret
+                ? { name: "FAKE_API_KEY", kind: "secret", allowedHosts: [] }
+                : undefined,
+            }),
+          ],
+        }),
+      );
+      await panelIn(container);
+      const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+      input.focus();
+
+      for (const value of ["a", "ab"]) {
+        input.value = value;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        flush();
+
+        expect(document.activeElement).toBe(input);
+        expect(input.value).toBe(value);
+      }
+    },
+  );
 
   it("labels optionless answers when the compact header is empty", async () => {
     drawGateway(
@@ -375,11 +416,11 @@ describe("shared question panel", () => {
   it("supports numeric selection and Enter submission while focused", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     const group = container.querySelector<HTMLElement>(".chat-question-panel")!;
 
     group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
-    await panel.updateComplete;
+    flush();
     expect(
       container.querySelectorAll<HTMLElement>('[role="radio"]')[1]?.getAttribute("aria-checked"),
     ).toBe("true");
@@ -391,11 +432,11 @@ describe("shared question panel", () => {
   it("leaves modified numeric shortcuts to the browser", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     const group = container.querySelector<HTMLElement>(".chat-question-panel")!;
 
     group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
-    await panel.updateComplete;
+    flush();
 
     expect(container.querySelector('[aria-checked="true"]')).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -431,13 +472,13 @@ describe("shared question panel", () => {
         ],
       }),
     );
-    const panel = await panelIn(container);
+    await panelIn(container);
     const radios = container.querySelectorAll<HTMLButtonElement>('[role="radio"]');
 
     expect([...radios].map((radio) => radio.tabIndex)).toEqual([0, -1]);
     radios[0]?.focus();
     radios[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    await panel.updateComplete;
+    flush();
 
     const updated = container.querySelectorAll<HTMLButtonElement>('[role="radio"]');
     expect([...updated].map((radio) => radio.tabIndex)).toEqual([-1, 0]);
@@ -451,11 +492,11 @@ describe("shared question panel", () => {
   it("leaves IME Ctrl+Enter editing to the textarea", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     const other = container.querySelector<HTMLTextAreaElement>("textarea")!;
     other.value = "A draft that is not ready";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
+    flush();
     const event = new KeyboardEvent("keydown", {
       key: "Enter",
       ctrlKey: true,
@@ -472,7 +513,7 @@ describe("shared question panel", () => {
   it("uses Ctrl+Enter in Other to submit a multiline answer", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
 
     other.value = "Markdown table\nInclude the tradeoffs.";
@@ -480,7 +521,7 @@ describe("shared question panel", () => {
     other.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
     );
-    await panel.updateComplete;
+    flush();
 
     expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table\nInclude the tradeoffs."] });
   });
@@ -488,45 +529,59 @@ describe("shared question panel", () => {
   it("collapses without answering and exposes gateway cancellation through Skip", async () => {
     const onSkip = vi.fn();
     drawGateway(gatewayPrompt(), { onSkip });
-    const panel = await panelIn(container);
+    await panelIn(container);
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
-    await panel.updateComplete;
+    flush();
     expect(container.querySelector(".chat-question-panel--collapsed")?.textContent).toContain(
       "Format",
     );
     expect(onSkip).not.toHaveBeenCalled();
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
-    await panel.updateComplete;
+    flush();
     expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")?.click();
     expect(onSkip).toHaveBeenCalledOnce();
   });
 
   it("manages collapse state when no controlled callback is supplied", async () => {
-    const panel = await drawUncontrolled({});
+    await drawUncontrolled({});
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
-    await panel.updateComplete;
+    flush();
     expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull();
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
-    await panel.updateComplete;
+    flush();
     expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
+  });
+
+  it("honors initial autofocus opt-out and focuses the panel when expanded", async () => {
+    const props = createGatewayQuestionPanelProps(gatewayPrompt(), {});
+    drawPanel({ ...props, model: { ...props.model, autoFocus: false } });
+    await panelIn(container);
+    expect(document.activeElement).toBe(document.body);
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")!.click();
+    flush();
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")!.click();
+    flush();
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
   });
 
   it("keeps a typed answer distinct from an identical option across remounts", async () => {
     const prompt = gatewayPrompt();
     const onSubmit = vi.fn();
     drawGateway(prompt, { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
     other.value = "Compact";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
+    flush();
 
-    render(nothing, container);
+    mounted?.unmount();
+    mounted = undefined;
     drawGateway(prompt, { onSubmit });
     await panelIn(container);
 
@@ -544,24 +599,24 @@ describe("shared question panel", () => {
     const onSubmit = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
     const prompt = gatewayPrompt();
     drawGateway(prompt, { onSubmit });
-    const panel = await panelIn(container);
+    await panelIn(container);
     container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
-    await panel.updateComplete;
+    flush();
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
 
     drawGateway(gatewayPrompt({ id: "another-question" }));
-    await panel.updateComplete;
+    flush();
     drawGateway(prompt, { onSubmit });
-    await panel.updateComplete;
+    flush();
     const button = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
     button.click();
-    await panel.updateComplete;
+    flush();
     older.resolve();
     await older.promise;
-    await panel.updateComplete;
+    flush();
     expect(button.disabled).toBe(true);
     newer.resolve();
-    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    await waitForSolid(() => expect(button.disabled).toBe(false));
     expect(onSubmit).toHaveBeenCalledTimes(2);
   });
 });
