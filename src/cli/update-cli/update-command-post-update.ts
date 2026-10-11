@@ -16,7 +16,7 @@ import {
   shouldWaitForRecovery,
   verifyUpdateFailureRecovery,
 } from "./update-command-failure-recovery.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
@@ -66,16 +66,9 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-type FinishUpdateOptions = { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void };
-
 export async function finishUpdate(
   params: FinishUpdateParams,
-  {
-    beforeFinalization,
-    ...options
-  }: FinishUpdateOptions & {
-    beforeFinalization?: () => Promise<void>;
-  } = {},
+  { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
   return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>

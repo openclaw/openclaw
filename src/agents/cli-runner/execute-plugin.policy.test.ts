@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { beginReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -23,6 +26,7 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -37,6 +41,7 @@ import {
   waitUntilAborted,
 } from "./execute-plugin.test-support.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -534,5 +539,256 @@ describe("CLI MCP capture authority", () => {
     expect(await observedRun).toMatchObject(
       liveSession ? { name: "AbortError" } : { reason: "overall-timeout", timedOut: true },
     );
+  });
+});
+
+describe("plugin-owned CLI same-turn input", () => {
+  it("exposes plugin same-turn input to the reply run only while its turn is active", async () => {
+    const { context } = await createExecution();
+    let handle: ReplyBackendHandle | undefined;
+    context.params.replyOperation = {
+      attachBackend: (backend: ReplyBackendHandle) => {
+        handle = backend;
+      },
+      detachBackend: vi.fn(),
+    } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
+    const queued: string[] = [];
+    const injected = createDeferred();
+    const run = runPlugin(context, async function* (execution) {
+      execution.registerMessageInjection?.({
+        isAvailable: () => true,
+        queueMessage: async (text, assertCurrent) => {
+          assertCurrent();
+          queued.push(text);
+          injected.resolve();
+        },
+      });
+      await injected.promise;
+      yield SUCCESS_RESULT;
+    });
+    await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
+    const injection = handle!.messageInjectionV2!;
+
+    await expect(
+      injection.queueMessage(
+        "revoked",
+        undefined,
+        () => {
+          throw new Error("source revoked");
+        },
+        "run",
+      ),
+    ).rejects.toThrow("source revoked");
+    await injection.queueMessage("steer", undefined, () => {}, "run");
+    await run;
+
+    expect(queued).toEqual(["steer"]);
+    expect(injection.isAvailable()).toBe(false);
+  });
+
+  it("records steered input in the session transcript only after the plugin started it", async () => {
+    const { context } = await createExecution();
+    let handle: ReplyBackendHandle | undefined;
+    context.params.replyOperation = {
+      attachBackend: (backend: ReplyBackendHandle) => {
+        handle = backend;
+      },
+      detachBackend: vi.fn(),
+    } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
+    const order: string[] = [];
+    const finish = createDeferred();
+    const run = runPlugin(context, async function* (execution) {
+      execution.registerMessageInjection?.({
+        isAvailable: () => true,
+        queueMessage: async (text, assertCurrent) => {
+          assertCurrent();
+          if (text === "refused") {
+            throw new Error("native refused");
+          }
+          order.push(`started:${text}`);
+        },
+      });
+      await finish.promise;
+      yield SUCCESS_RESULT;
+    });
+    await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
+    const injection = handle!.messageInjectionV2!;
+    const recorder = (label: string, persist: () => Promise<unknown>) => ({
+      hasPersisted: vi.fn(() => false),
+      isBlocked: vi.fn(() => false),
+      resolveMessage: vi.fn(async () => ({ role: "user" })),
+      markBlocked: vi.fn(),
+      persistApproved: vi.fn(async (params?: { cwd?: string }) => {
+        order.push(`persisted:${label}:${params?.cwd === undefined ? "no-cwd" : "cwd"}`);
+        return await persist();
+      }),
+    });
+    const accepted = recorder("steer", async () => ({ message: { role: "user" } }));
+    const refused = recorder("refused", async () => ({ message: { role: "user" } }));
+    const failing = recorder("failing", async () => {
+      throw new Error("transcript store unavailable");
+    });
+    const optionsFor = (value: object, label: string) =>
+      ({
+        userTurnTranscriptRecorder: value,
+        onQueueAccepted: () => order.push(`accepted:${label}`),
+        onQueueSettled: () => order.push(`settled:${label}`),
+      }) as unknown as Parameters<typeof injection.queueMessage>[1];
+
+    await injection.queueMessage("steer", optionsFor(accepted, "steer"), () => {}, "run");
+    await expect(
+      injection.queueMessage("refused", optionsFor(refused, "refused"), () => {}, "run"),
+    ).rejects.toThrow("native refused");
+    // The input already reached the model: a transcript failure must not become a
+    // replay, but it must not pass for a committed one either.
+    await expect(
+      injection.queueMessage("failing", optionsFor(failing, "failing"), () => {}, "run"),
+    ).resolves.toMatchObject({
+      transcriptCommit: "unconfirmed",
+      errorMessage: expect.stringContaining("transcript store unavailable"),
+    });
+    for (const callback of ["onQueueAccepted", "onQueueSettled"] as const) {
+      await expect(
+        injection.queueMessage(
+          callback,
+          {
+            [callback]: () => {
+              throw new Error("observer failed");
+            },
+          },
+          () => {},
+          "run",
+        ),
+      ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    }
+    finish.resolve();
+    await run;
+
+    expect(order).toEqual([
+      "started:steer",
+      "accepted:steer",
+      "persisted:steer:cwd",
+      "settled:steer",
+      "settled:refused",
+      "started:failing",
+      "accepted:failing",
+      "persisted:failing:cwd",
+      "settled:failing",
+      "started:onQueueAccepted",
+      "started:onQueueSettled",
+    ]);
+    expect(refused.persistApproved).not.toHaveBeenCalled();
+    expect(accepted.markBlocked).not.toHaveBeenCalled();
+  });
+
+  it("retains native acceptance when the transcript target cannot be resolved", async () => {
+    const { context } = await createExecution();
+    let handle: ReplyBackendHandle | undefined;
+    context.params.replyOperation = {
+      attachBackend: (backend: ReplyBackendHandle) => {
+        handle = backend;
+      },
+      detachBackend: vi.fn(),
+    } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
+    const finish = createDeferred();
+    let signal: AbortSignal | undefined;
+    const run = runPlugin(context, async function* (execution) {
+      signal = execution.abortSignal;
+      execution.registerMessageInjection?.({
+        isAvailable: () => true,
+        queueMessage: async (_text, assertCurrent) => {
+          assertCurrent();
+        },
+      });
+      await finish.promise;
+      yield SUCCESS_RESULT;
+    });
+    await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
+    const injection = handle!.messageInjectionV2!;
+    // No receipt does not establish rejection: source resolution can return no target.
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "unconfirmed" },
+      target: () => undefined,
+    });
+
+    await expect(
+      injection.queueMessage(
+        "unconfirmed",
+        { userTurnTranscriptRecorder: recorder },
+        () => {},
+        "run",
+      ),
+    ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    expect(signal?.aborted).toBe(false);
+    finish.resolve();
+    await run;
+
+    expect(recorder.isBlocked()).toBe(true);
+    expect(recorder.hasPersisted()).toBe(false);
+  });
+
+  it("admits compatible CLI input and rejects a mismatched delivery surface", async () => {
+    const { context } = await createExecution();
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+    context.params.taskSuggestionDeliveryMode = "gateway";
+    const operation = createReplyOperation({
+      sessionKey: context.params.sessionKey!,
+      sessionId: context.params.sessionId,
+      resetTriggered: false,
+    });
+    context.params.replyOperation = operation;
+    operation.setPhase("running");
+    const ready = createDeferred();
+    const finish = createDeferred();
+    const queued: string[] = [];
+    const run = runPlugin(context, async function* (execution) {
+      execution.registerMessageInjection?.({
+        isAvailable: () => true,
+        queueMessage: async (text, assertCurrent) => {
+          assertCurrent();
+          queued.push(text);
+        },
+      });
+      ready.resolve();
+      await finish.promise;
+      yield SUCCESS_RESULT;
+    });
+    try {
+      await Promise.race([
+        ready.promise,
+        run.then(() => {
+          throw new Error("CLI run ended before injection became ready");
+        }),
+      ]);
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+      if (!target) {
+        throw new Error("running CLI backend did not expose a registry injection target");
+      }
+      const rejected = await beginReplyMessageInjectionTarget(target, "incompatible", {
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: undefined,
+      });
+      await expect(rejected.acceptance).resolves.toBe(false);
+      await expect(rejected.outcome).resolves.toEqual({
+        status: "rejected",
+        reason: "task_suggestion_delivery_mode_mismatch",
+      });
+      expect(queued).toEqual([]);
+      const accepted = await beginReplyMessageInjectionTarget(target, "compatible", {
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: "gateway",
+      });
+      await expect(accepted.acceptance).resolves.toBe(true);
+      await expect(accepted.outcome).resolves.toEqual({ status: "accepted" });
+      expect(queued).toEqual(["compatible"]);
+    } finally {
+      finish.resolve();
+      try {
+        await run;
+      } finally {
+        operation.complete();
+      }
+    }
+    expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toBeUndefined();
   });
 });

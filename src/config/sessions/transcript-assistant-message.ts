@@ -1,6 +1,12 @@
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
+
+export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
+  role: "assistant";
+  [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
+};
 
 export type AssistantBeforeMessageWrite = (params: {
   message: AgentMessage;

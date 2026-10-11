@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 
 export async function startCatalogRecoveryMcpServer(
   label: string,
@@ -19,7 +19,7 @@ export async function startCatalogRecoveryMcpServer(
     response: http.ServerResponse;
     sessionId: string;
   }> = [];
-  const server = http.createServer((request, response) => {
+  const handleRequest: http.RequestListener = (request, response) => {
     if (request.method === "GET") {
       response.writeHead(405).end();
       return;
@@ -127,20 +127,15 @@ export async function startCatalogRecoveryMcpServer(
         recoveryListStarted.resolve();
       }
     });
+  };
+  const {
+    claim: portClaim,
+    listener: server,
+    releaseListener,
+  } = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => http.createServer(handleRequest),
   });
-  const portClaim = await acquireTestPortBlock({ offsets: [0] });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(portClaim.port, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-  } catch (error) {
-    await portClaim.release();
-    throw error;
-  }
   return {
     url: `http://127.0.0.1:${portClaim.port}/mcp`,
     terminationStarted: terminationStarted.promise,
@@ -179,9 +174,7 @@ export async function startCatalogRecoveryMcpServer(
     close: async () => {
       server.closeAllConnections();
       try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await releaseListener();
       } finally {
         await portClaim.release();
       }

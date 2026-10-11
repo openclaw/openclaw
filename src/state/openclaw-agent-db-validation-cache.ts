@@ -40,6 +40,12 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
 } from "./openclaw-agent-db-resources.js";
+import type {
+  ValidationDatabase,
+  CanonicalValidationDatabase,
+  ValidationEntry,
+  ValidationLifetimeBinding,
+} from "./openclaw-agent-db-validation-cache.types.js";
 import {
   agentDatabaseValidationKey,
   readTransferredAgentSchema,
@@ -49,15 +55,6 @@ import {
 export type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-facts.js";
 
 export type OpenClawAgentDatabaseReadValidation = Omit<OpenClawAgentDatabaseValidation, "schema">;
-type ValidationDatabase = { db: DatabaseSync; path: string; agentId: string };
-type CanonicalValidationDatabase = { db: DatabaseSync; path?: string; agentId: string };
-type ValidationEntry = {
-  agentId?: string;
-  validation?: OpenClawAgentDatabaseValidation;
-  integrityVerified: boolean;
-  revoked?: true;
-};
-
 // Ordinary close retains proof. Durable canonical receipts never mint integrity
 // verification; only a successful writable open supplies proof workers can borrow.
 const validatedPaths = resolveGlobalSingleton<Map<string, ValidationEntry>>(
@@ -67,11 +64,7 @@ const validatedPaths = resolveGlobalSingleton<Map<string, ValidationEntry>>(
 );
 const validationBindings = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseValidationBindings"),
-  () =>
-    new WeakMap<
-      DatabaseSync,
-      { validation: OpenClawAgentDatabaseValidation; unregister: () => void }
-    >(),
+  () => new WeakMap<DatabaseSync, ValidationLifetimeBinding>(),
 );
 
 function bindValidationLifetime(

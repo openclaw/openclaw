@@ -7,6 +7,7 @@ import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
+  CliBackendMessageInjection,
   CliBackendPreparedExecution,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -644,6 +645,161 @@ describe("Claude native stdio boundary", () => {
       }
     }
     expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scenario: "steer-merged", results: 1 },
+    { scenario: "steer-after-result", results: 2 },
+    { scenario: "steer-idle-trailer", results: 1 },
+    { scenario: "steer-notification-replay", results: 2 },
+    { scenario: "steer-completed-notification-replay", results: 2 },
+  ])(
+    "delivers same-turn input once native starts it and keeps the turn open ($scenario)",
+    async ({ scenario, results }) => {
+      let injection: CliBackendMessageInjection | undefined;
+      const context = await createContext(scenario, {
+        liveSession: createLiveSession(),
+        promptContext: { prependContext: "current private context" },
+        registerMessageInjection: (value) => {
+          injection = value;
+        },
+      });
+      const running = collect(context);
+      await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+      expect(injection?.isAvailable()).toBe(true);
+      const assertCurrent = vi.fn();
+      const notificationReplay = scenario.includes("notification-replay");
+      const input = notificationReplay
+        ? "<task-notification><task-id>background-agent</task-id></task-notification>"
+        : "steering input";
+      await injection!.queueMessage(input, assertCurrent);
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      const records = await running;
+      const resultRecords = records.filter((record) => record.type === "result");
+      expect(resultRecords).toHaveLength(results);
+      // The host needs one terminal result; answers before the injected turn stay interim.
+      expect(resultRecords.map((record) => record.openclaw_interim_result === true)).toEqual([
+        ...Array.from({ length: results - 1 }, () => true),
+        false,
+      ]);
+      // Private turn context belongs to the admitted prompt, never to injected input.
+      const detail = resultDetail(records);
+      expect(detail.user).toBe(input);
+      if (notificationReplay) {
+        expect(detail.finalBackgroundAnswer).toBe(true);
+      }
+      expect(detail.privateContext).toBe("current private context");
+      expect(detail.injectedContext).toEqual({});
+      expect(injection!.isAvailable()).toBe(false);
+    },
+  );
+
+  it("refuses steering before the admitted prompt submits its private context", async () => {
+    let injection: CliBackendMessageInjection | undefined;
+    const context = await createContext("steer-prompt-pending", {
+      promptContext: { prependContext: "current private context" },
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    });
+    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    try {
+      expect((await iterator.next()).value).toMatchObject({ type: "system", subtype: "init" });
+      expect(injection?.isAvailable()).toBe(false);
+      await expect(injection!.queueMessage(context.prompt, () => {})).rejects.toThrow(
+        "The Claude CLI turn cannot accept more input.",
+      );
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  it("suppresses private context for injected input that repeats the admitted prompt", async () => {
+    let injection: CliBackendMessageInjection | undefined;
+    const context = await createContext("steer-merged", {
+      liveSession: createLiveSession(),
+      promptContext: { prependContext: "current private context" },
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    });
+    const running = collect(context);
+    await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+    expect(injection?.isAvailable()).toBe(true);
+    // Text alone cannot tell the two apart; the admitted prompt already had its
+    // submit, so this one is the injected input and gets no private context.
+    await injection!.queueMessage(context.prompt, vi.fn());
+    const records = await running;
+
+    const detail = resultDetail(records);
+    expect(detail.user).toBe(context.prompt);
+    expect(detail.privateContext).toBe("current private context");
+    expect(detail.injectedContext).toEqual({});
+  });
+
+  it("rejects same-turn input the native process never started", async () => {
+    let injection: CliBackendMessageInjection | undefined;
+    const context = await createContext("steer-exit", {
+      liveSession: createLiveSession(),
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    });
+    const running = collect(context);
+    void running.catch(() => {});
+    await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+    expect(injection?.isAvailable()).toBe(true);
+    await expect(injection!.queueMessage("lost input", () => {})).rejects.toThrow();
+    await expect(running).rejects.toThrow();
+  });
+
+  it.each(["cancelled", "discarded", "refused", "completed"])(
+    "settles %s same-turn input and releases the held result",
+    async (state) => {
+      let injection: CliBackendMessageInjection | undefined;
+      const context = await createContext(`steer-${state}`, {
+        liveSession: createLiveSession(),
+        registerMessageInjection: (value) => {
+          injection = value;
+        },
+      });
+      const running = collect(context);
+      await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+      expect(injection?.isAvailable()).toBe(true);
+      const receipt = injection!.queueMessage("terminal input", () => {});
+      if (state === "completed") {
+        await expect(receipt).resolves.toBeUndefined();
+      } else {
+        await expect(receipt).rejects.toThrow(`Claude CLI ${state} the injected input.`);
+      }
+      // The held result is released as terminal instead of keeping the turn open forever.
+      const records = await running;
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.openclaw_interim_result).toBeUndefined();
+    },
+  );
+
+  it("refuses same-turn input when the admitted authority fails at the write", async () => {
+    let injection: CliBackendMessageInjection | undefined;
+    const context = await createContext("steer-merged", {
+      liveSession: createLiveSession(),
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    });
+    const running = collect(context);
+    void running.catch(() => {});
+    await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+    expect(injection?.isAvailable()).toBe(true);
+    await expect(
+      injection!.queueMessage("revoked input", () => {
+        throw new Error("revoked");
+      }),
+    ).rejects.toThrow("revoked");
+    expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+      "synthetic user input",
+    );
   });
 
   it("rejects an already aborted run before reading its credential or creating a native process", async () => {

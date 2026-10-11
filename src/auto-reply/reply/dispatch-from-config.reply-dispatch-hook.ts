@@ -1,4 +1,6 @@
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
+import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
   admittedSessionSettingsRestrictRuntime,
@@ -78,4 +80,97 @@ export function runReplyDispatchHook(
       );
     });
   return options.isTailDispatch ? run() : state.traceReplyPhase("reply.reply_dispatch_hooks", run);
+}
+
+type BeforeDispatchTakeover = {
+  payload: ReplyPayload;
+  deliveryId: string;
+  recordProcessed: () => void;
+};
+
+export function prepareBeforeDispatchTakeover(state: PrepareDispatchOperationReadyState) {
+  const {
+    getPreDispatchAbortSignal,
+    hookRunner,
+    params,
+    recordProcessed,
+    replyContextAccountId,
+    routeReplyChannel,
+    routeReplyThreadId,
+    routeReplyTo,
+    runWithDispatchLifecycleAdmission,
+    sessionKey,
+    sessionStoreEntry,
+    traceReplyPhase,
+    trackDispatchLifecycleWork,
+  } = state;
+  if (
+    !state.allowInboundHandlers ||
+    admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) ||
+    !hookRunner?.hasHooks("before_dispatch")
+  ) {
+    return undefined;
+  }
+  // This outer lookup key is resolved from the routed context; fields inside
+  // sessionStoreEntry.entry cannot redirect hook or requester lineage.
+  const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const pluginSubagentRequester = createPluginSubagentRequesterContext({
+    sessionKey: beforeDispatchSessionKey,
+    origin: {
+      channel: routeReplyChannel,
+      to: routeReplyTo,
+      accountId: replyContextAccountId,
+      threadId: routeReplyThreadId,
+    },
+  });
+  return traceReplyPhase("reply.before_dispatch_hooks", () =>
+    runWithDispatchLifecycleAdmission(async () => {
+      return await runWithDispatchAbortSignal(
+        getPreDispatchAbortSignal(),
+        () => {
+          const hookContext = state.hookState.hookContext;
+          const replyContext = {
+            messageId: hookContext.messageId,
+            sessionKey: beforeDispatchSessionKey,
+            senderId: hookContext.senderId,
+            replyToId: hookContext.replyToId,
+            replyToIdFull: hookContext.replyToIdFull,
+            replyToBody: hookContext.replyToBody,
+            replyToSender: hookContext.replyToSender,
+            replyToIsQuote: hookContext.replyToIsQuote,
+          };
+          return hookRunner.runBeforeDispatch(
+            {
+              ...replyContext,
+              content: hookContext.content,
+              body: hookContext.bodyForAgent ?? hookContext.body,
+              channel: hookContext.channelId,
+              isGroup: hookContext.isGroup,
+              timestamp: hookContext.timestamp,
+            },
+            withClaimingHookAdmission(
+              {
+                ...replyContext,
+                channelId: hookContext.channelId,
+                accountId: hookContext.accountId,
+                conversationId: state.hookState.inboundClaimContext.conversationId,
+              },
+              { prepare: state.assertCurrentBindingRoute },
+            ),
+            pluginSubagentRequester,
+          );
+        },
+        trackDispatchLifecycleWork,
+      );
+    }),
+  ).then((result): BeforeDispatchTakeover | undefined => {
+    if (!result?.handled) {
+      return undefined;
+    }
+    return {
+      payload: { text: result.text },
+      deliveryId: "before-dispatch",
+      recordProcessed: () => recordProcessed("completed", { reason: "before_dispatch_handled" }),
+    };
+  });
 }

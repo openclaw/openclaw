@@ -1,6 +1,7 @@
 // Disposal settlement owns the last cleanup of bindings left by empty successors.
+import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -74,5 +75,32 @@ it("forgets an empty successor binding after the original idle disposal settles"
         await scheduler.stop();
       }
     }
+  }
+});
+
+it("keeps the MCP fixture reachable after initial listener contention", async () => {
+  const createServer = http.createServer;
+  const serverSpy = vi.spyOn(http, "createServer").mockImplementationOnce((...args) => {
+    const listener = createServer(...args);
+    vi.spyOn(listener, "listen").mockImplementationOnce(() => {
+      queueMicrotask(() =>
+        listener.emit(
+          "error",
+          Object.assign(new Error("listener contention"), { code: "EADDRINUSE" }),
+        ),
+      );
+      return listener;
+    });
+    return listener;
+  });
+  let server: Awaited<ReturnType<typeof startCatalogRecoveryMcpServer>> | undefined;
+  try {
+    server = await startCatalogRecoveryMcpServer("bind-contention");
+    const response = await fetch(server.url);
+    expect(response.status).toBe(405);
+    await response.arrayBuffer();
+  } finally {
+    serverSpy.mockRestore();
+    await server?.close();
   }
 });

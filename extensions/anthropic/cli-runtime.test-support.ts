@@ -19,6 +19,8 @@ let user;
 let privateContext;
 let lateDecision;
 let pendingInputUuid;
+let firstInputUuid;
+let injectedContext;
 const priorResponses = {};
 let credentialProof;
 let shutdownDescendant;
@@ -97,6 +99,36 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (scenario === "mcp-elicitation") {
       request("elicitation", { subtype: "elicitation", mcp_server_name: "fixture",
         message: "Choose a fixture option", requested_schema: { type: "object" } });
+      continue;
+    }
+    if (scenario?.startsWith("steer-")) {
+      if (turn === 1) {
+        firstInputUuid = message.uuid;
+        send({ type: "command_lifecycle", state: "started", command_uuid: message.uuid });
+        send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+        if (scenario === "steer-prompt-pending") continue;
+        request("admitted-context", { subtype: "hook_callback", callback_id: hooks.UserPromptSubmit[0].hookCallbackIds[0],
+          input: { hook_event_name: "UserPromptSubmit", prompt: user } });
+        continue;
+      }
+      pendingInputUuid = message.uuid;
+      if (scenario === "steer-after-result") {
+        result({ interim: true });
+        send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
+      }
+      if (scenario !== "steer-refused") send({ type: "command_lifecycle", state: "queued", command_uuid: message.uuid });
+      if (scenario === "steer-exit") {
+        process.exit(1);
+      }
+      if (["steer-cancelled", "steer-discarded", "steer-refused", "steer-completed"].includes(scenario)) {
+        // Terminal receipts may omit started; only completed proves consumption.
+        result();
+        send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
+        send({ type: "command_lifecycle", state: scenario.slice("steer-".length), command_uuid: message.uuid });
+        continue;
+      }
+      request("injected-context", { subtype: "hook_callback", callback_id: hooks.UserPromptSubmit[0].hookCallbackIds[0],
+        input: { hook_event_name: "UserPromptSubmit", prompt: user } });
       continue;
     }
     if (scenario === "input-lifecycle") {
@@ -253,7 +285,44 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.type === "control_response") {
     assert.equal(message.response.subtype, "success");
     const { request_id: id, response } = message.response;
-    if (id === "background-release") {
+    if (id === "admitted-context") {
+      privateContext = response.hookSpecificOutput?.additionalContext;
+      writeFileSync("turn.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "turn.ready"), "ready");
+    } else if (id === "injected-context") {
+      injectedContext = response;
+      send({ type: "command_lifecycle", state: "started", command_uuid: pendingInputUuid });
+      if (scenario === "steer-after-result") {
+        send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+      }
+      send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "steered" }] } });
+      if (scenario.includes("notification-replay")) {
+        send({ type: "system", subtype: "background_tasks_changed",
+          tasks: [{ task_id: "background-agent", task_type: "local_agent" }] });
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+        send({ type: "system", subtype: "task_notification", task_id: "background-agent", status: "completed" });
+        const completedFirst = scenario === "steer-completed-notification-replay";
+        if (completedFirst) send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
+        // Native replays host input without origin; notification-looking text is still user input.
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: pendingInputUuid,
+          message: { role: "user", content: user } });
+        result({ injectedContext });
+        if (!completedFirst) send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "real-background-receipt",
+          origin: { kind: "task-notification" }, message: { role: "user", content: user } });
+        result({ injectedContext, finalBackgroundAnswer: true });
+      } else if (scenario === "steer-merged") {
+        send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
+        result({ injectedContext });
+        send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
+      } else {
+        result({ injectedContext });
+        if (scenario === "steer-idle-trailer") {
+          send({ type: "system", subtype: "session_state_changed", state: "idle" });
+        }
+        send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
+      }
+    } else if (id === "background-release") {
       if (scenario === "background-agent-subagent-bash") send({ type: "system", subtype: "task_notification", task_id: "subagent-bash",
         tool_use_id: "tool-subagent-bash", status: "completed", output_file: "", summary: "sleep" });
       send({ type: "system", subtype: "background_tasks_changed", tasks: [] });

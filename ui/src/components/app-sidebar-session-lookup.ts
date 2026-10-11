@@ -1,10 +1,17 @@
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { uiConversationMatches } from "../lib/sessions/session-key.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  uiConversationMatches,
+} from "../lib/sessions/session-key.ts";
 import { findCatalogSessionHovercardRow } from "./app-sidebar-session-catalogs.ts";
 import {
   findProjectedSidebarSession,
   findSidebarSessionInTree,
+  resolveLatestSidebarAgentSession,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type {
@@ -28,6 +35,49 @@ type SidebarSessionLookupSource = {
   getSessionNavigationState(): SidebarSessionNavigationState;
   visibleSessionCatalogs(): readonly SessionCatalog[];
 };
+
+export function findSidebarResumeKey(
+  agentId: string,
+  source: {
+    readonly sessionData: Parameters<typeof resolveLatestSidebarAgentSession>[0]["sessionData"];
+    readonly sessionDataContext: ApplicationContext | undefined;
+  },
+  readMainKey: () => string,
+): string {
+  const latest = resolveLatestSidebarAgentSession({
+    agentId,
+    sessionData: source.sessionData,
+    context: source.sessionDataContext,
+  });
+  return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: readMainKey() });
+}
+
+export function findSidebarMainSession(
+  source: {
+    readonly sessionData: Pick<
+      SessionDataController,
+      "sessionsAgentId" | "sessionsResult" | "sessionResultsByAgent" | "activeSessionLineageRoot"
+    >;
+    expandedAgentId(): string;
+    selectedAgentMainSessionKey(agentId: string): string;
+  },
+  agentId: string | undefined,
+  groupedResult: SessionsListResult | null | undefined,
+): GatewaySessionRow | null {
+  const normalized = normalizeAgentId(agentId ?? source.expandedAgentId());
+  const mainKey = source.selectedAgentMainSessionKey(normalized);
+  const rows =
+    groupedResult?.sessions ??
+    (normalized === normalizeAgentId(source.sessionData.sessionsAgentId ?? "")
+      ? (source.sessionData.sessionsResult?.sessions ?? [])
+      : (source.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []));
+  const lineage = source.sessionData.activeSessionLineageRoot;
+  return (
+    (lineage ? [...rows, lineage] : rows).find((row) =>
+      areUiSessionKeysEquivalent(row.key, mainKey),
+    ) ?? null
+  );
+}
 
 export function findActiveSidebarLineageRow(
   sessionData: SidebarSessionLookupData,

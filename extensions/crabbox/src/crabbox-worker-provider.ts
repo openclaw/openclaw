@@ -12,8 +12,8 @@ import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
-  type CrabboxCommandRunner,
   type LeaseCommandContext,
+  resolveCrabboxLeaseContext,
   runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
@@ -41,6 +41,7 @@ import {
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
 import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
+import type { CrabboxWorkerProviderDependencies } from "./crabbox-worker-provider.types.js";
 import {
   createCrabboxProvisionAuthority,
   failProvisionAfterCleanup,
@@ -71,29 +72,10 @@ import {
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
-import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
-import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 // Local pack creation, two seed commands, and upload precede runtime preparation and capture.
 const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
-type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
-
-type LeaseHeartbeatContext = LeaseCommandContext &
-  Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
-
-type CrabboxWorkerProviderDependencies = {
-  isExecutable?: (candidate: string) => boolean;
-  openclawRoot?: string;
-  pathEnv?: string;
-  platform?: NodeJS.Platform;
-  runCommand?: CrabboxCommandRunner;
-  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
-  wallpaperPath: string;
-  state: CrabboxState;
-  warn?: (message: string) => void;
-  warmImagePolicy?: CrabboxWarmImagePolicy;
-};
 
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
@@ -196,23 +178,6 @@ export function createCrabboxWorkerProvider(
       sleep,
     });
     await warmImages.release(context);
-  };
-  const resolveLeaseContext = async (
-    lease: Parameters<WorkerProvider["inspect"]>[0],
-  ): Promise<{ context: LeaseHeartbeatContext; profile: CrabboxProfile }> => {
-    const profile = parseCrabboxProfile(lease.profile);
-    assertCrabboxLeaseId(lease.leaseId);
-    return {
-      context: {
-        binary: await resolveBinary(profile.binary),
-        heartbeatIntervalMs: profile.heartbeatIntervalMs,
-        heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
-        id: lease.leaseId,
-        idleTimeout: profile.idleTimeout,
-        provider: profile.provider,
-      },
-      profile,
-    };
   };
 
   const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, operationId) => ({
@@ -695,7 +660,7 @@ export function createCrabboxWorkerProvider(
       )();
     },
     async inspect(lease): Promise<WorkerLeaseStatus> {
-      const { context } = await resolveLeaseContext(lease);
+      const { context } = await resolveCrabboxLeaseContext(lease, resolveBinary);
       const inspected = await inspectWithContext({
         ...context,
         runCommand,
@@ -713,7 +678,7 @@ export function createCrabboxWorkerProvider(
       assertCrabboxLeaseId(lease.leaseId);
       // Stop renewal before binary acquisition can delay or fail teardown.
       await heartbeats.stop(lease.leaseId);
-      const { context, profile } = await resolveLeaseContext(lease);
+      const { context, profile } = await resolveCrabboxLeaseContext(lease, resolveBinary);
       const captureStarted = Promise.withResolvers<void>();
       let capturing = false;
       const teardown = (async () => {
