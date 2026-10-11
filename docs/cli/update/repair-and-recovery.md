@@ -157,7 +157,10 @@ Keep both names for manual inspection; their presence does not authorize restora
 
 These captures are evidence for manual recovery. Active writers can change state
 during capture; an observed change leaves the capture incomplete and produces a
-warning. The set is not an atomic snapshot across active stores. Missing,
+warning. For databases, the warning names each database that changed after its
+snapshot or had no stable generation during it, followed by the backup's
+database warnings. A running Gateway that writes during capture is enough to
+cause this. The set is not an atomic snapshot across active stores. Missing,
 unreadable, or incomplete captures do not establish a safe
 rollback point. The updater process keeps optional debug-proxy persistence
 disabled because its update history can use an older database schema. Doctor
