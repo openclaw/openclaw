@@ -943,7 +943,7 @@ describe("live-gateway-dist-fence verified test preparation (#1421)", () => {
   ) {
     const location = vi
       .spyOn(systemdFiles, "readSystemdServiceCommandLocation")
-      .mockResolvedValue(undefined);
+      .mockRejectedValue(new Error("synthetic unreadable command location"));
     const discover = vi
       .spyOn(gatewayBindings, "discoverManagedGatewayBindings")
       .mockImplementation(async (env, options) => [
