@@ -26,7 +26,6 @@ import {
 } from "./auth-controller.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
-import { resolveOuterContextTokenMeta } from "./context-token-meta.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveEmbeddedRunEffectiveModel, selectEmbeddedRunHarness } from "./model-harness.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
@@ -512,7 +511,10 @@ export async function prepareEmbeddedRunRuntime(input: {
       contextTokenBudget: resolvedRuntimeModel.contextTokenBudget,
       authoredContextTokenCap: resolvedRuntimeModel.authoredContextTokenCap,
       contextWindowInfo: resolvedRuntimeModel.contextWindowInfo,
-      outerContextTokenMeta: resolveOuterContextTokenMeta(models.runtime, resolvedRuntimeModel),
+      outerContextTokenMeta: {
+        contextTokens: resolvedRuntimeModel.contextTokenBudget,
+        contextTokensSource: resolvedRuntimeModel.contextTokensSource,
+      },
       activePreparedAuthPlan: authState.apiKeyInfo
         ? {
             ...activePreparedAuthPlan,

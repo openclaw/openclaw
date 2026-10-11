@@ -11,9 +11,8 @@ import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
-  resolveConfiguredContextTokenLimits,
+  resolveAuthoredModelContextTokens,
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
-  resolveModelContextTokenProjectionFromCache as resolveModelContextTokenProjection,
 } from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -22,15 +21,12 @@ import {
   resolveConfiguredPrimaryProviderFallback,
 } from "../agents/model-selection-shared.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
-import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
-import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
-import { createStatusModelResolver } from "./status-model-auth.js";
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
@@ -228,18 +224,7 @@ function resolveSessionRuntime(params: {
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
-  const policyId = normalizeOptionalLowercaseString(runtime.id);
-  const id =
-    policyId === "auto"
-      ? resolveEffectiveAgentRuntime({
-          cfg: params.cfg,
-          provider: params.provider,
-          modelId: params.model,
-          agentScope: { kind: "prepared", agentId: params.agentId ?? acpAgentId },
-          sessionKey: acpSessionKey,
-          sessionEntry: params.entry,
-        })
-      : policyId;
+  const id = normalizeOptionalLowercaseString(runtime.id);
   // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
   return {
@@ -254,12 +239,9 @@ function resolveSessionRuntime(params: {
 }
 
 export const statusSummaryRuntime = {
-  getPublishedPreparedModelCatalogOwnerSnapshot,
-  createStatusModelResolver,
   waitForContextWindowCacheLoad,
-  resolveConfiguredContextTokenLimits,
+  resolveAuthoredModelContextTokens,
   resolveContextTokensForModel,
-  resolveModelContextTokenProjection,
   classifySessionKey: classifySessionKind,
   resolveSessionModelRef,
   resolveSessionRuntime,

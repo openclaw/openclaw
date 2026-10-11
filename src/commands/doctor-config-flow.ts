@@ -106,7 +106,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
-  const pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
+  await using pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => pluginMetadataSnapshotState.current,
     env: process.env,
     getDeferredPluginIds: () =>

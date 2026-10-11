@@ -246,7 +246,7 @@ export type PreparedModelCatalogInventory = {
   pluginFingerprint: string;
   nativeSource: string;
   providers: ReadonlyMap<string, PreparedModelCatalogProviderFacts>;
-  discoveryOrigins: NonNullable<ModelCatalogSnapshot["acceptedDiscoveryOrigins"]>;
+  discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 
 export type PreparedModelCatalogAcquisitionKind = "provider" | "native";

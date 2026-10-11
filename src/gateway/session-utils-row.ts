@@ -1,16 +1,22 @@
 import { createHash } from "node:crypto";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   resolveFreshSessionTotalTokens,
+  resolveProjectedSessionContextTokens,
   type InternalSessionEntry,
   type SessionEntry,
   resolveProjectedSessionContextBudgetStatus,
@@ -51,7 +57,6 @@ import {
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { projectSessionProviderReview } from "./session-provider-review-projection.js";
-import { resolveSessionRowContextCapacity } from "./session-row-context-capacity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
@@ -117,19 +122,20 @@ export function readSessionRowInputs(params: {
     params.rowContext ??
     buildSessionListRowMetadataContext({ now, sessionKeys: [key, ...Object.keys(store)] });
   const displayName = resolveGatewaySessionDisplayName(key, entry);
-  const { selectedModel, rowModelIdentity, thinkingProjection } = readSessionRowModelFacts({
-    cfg,
-    key,
-    entry,
-    preparedAcpMeta: params.preparedAcpMeta,
-    preparedRuntimeOwnership: params.preparedRuntimeOwnership,
-    preparedModelMetadata: params.preparedModelMetadata,
-    source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
-    agentId,
-    rowContext,
-    modelCatalog: params.modelCatalog,
-    lightweightListRow: lightweight,
-  });
+  const { selectedModel, rowModelIdentity, thinkingProjection, catalogEntry } =
+    readSessionRowModelFacts({
+      cfg,
+      key,
+      entry,
+      preparedAcpMeta: params.preparedAcpMeta,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
+      preparedModelMetadata: params.preparedModelMetadata,
+      source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
+      agentId,
+      rowContext,
+      modelCatalog: params.modelCatalog,
+      lightweightListRow: lightweight,
+    });
   const freshSessionTotalTokens = resolveFreshSessionTotalTokens(entry);
   const usageByFallbackModel =
     params.skipTranscriptUsageFallback !== true
@@ -183,14 +189,19 @@ export function readSessionRowInputs(params: {
     lastMessagePreview = (params.includeLastMessage && fields.lastMessagePreview) || undefined;
   }
 
-  const { contextWindowProfile, contextTokens } = resolveSessionRowContextCapacity({
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: entry?.contextWindow,
+  });
+  const modelContext = resolveModelContextTokenProjection({
     cfg,
     provider,
     model,
-    entry,
-    runtimeId: thinkingProjection.capacityRuntime,
-    catalogEntry: thinkingProjection.capacityCatalogEntry,
+    modelContextTokens: catalogEntry?.contextTokens,
+    modelContextWindow: contextWindowProfile.contextTokens,
+    allowAsyncLoad: false,
   });
+  const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
@@ -244,7 +255,19 @@ export function readSessionRowInputs(params: {
       hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
       rowModelIdentity,
       selectedModel,
-      contextTokens,
+      contextTokens: resolveProjectedSessionContextTokens({
+        entry,
+        provider,
+        model,
+        agentHarnessId: thinkingProjection.agentRuntime.id,
+        resolvedContextTokens: contextWindowProfile.contextTokens
+          ? Math.min(
+              resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+              contextWindowProfile.contextTokens,
+            )
+          : resolvedModelContextTokens,
+        authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
+      }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
       childLinks:

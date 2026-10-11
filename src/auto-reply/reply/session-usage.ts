@@ -48,7 +48,6 @@ export async function persistSessionUsageUpdate(params: {
   agentHarnessId?: string;
   contextTokensUsed?: number;
   contextTokensSource?: SessionEntry["contextTokensSource"];
-  authProfileId?: string | null;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   promptTokens?: number;
   isHeartbeat?: boolean;
@@ -110,7 +109,6 @@ export async function persistSessionUsageUpdate(params: {
     agentHarnessId: normalizeOptionalString(params.agentHarnessId),
     contextTokensUsed: params.contextTokensUsed,
     contextTokensSource: params.contextTokensSource,
-    authProfileId: params.authProfileId,
     contextBudgetStatus: params.contextBudgetStatus,
     systemPromptReport: params.systemPromptReport,
     promptTokens: params.promptTokens,

@@ -1,6 +1,5 @@
 /** Owns admission and persistence for isolated cron sessions. */
 import { isDeepStrictEqual } from "node:util";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
@@ -8,7 +7,6 @@ import type { LiveSessionModelSelection } from "../../agents/live-model-switch.j
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
@@ -115,9 +113,9 @@ export async function withCronSessionPreparation<T>(
 }
 
 function clearCronContextOwnerState(entry: SessionEntry) {
-  for (const key of Object.keys(SESSION_CONTEXT_CAPACITY_CLEAR_PATCH)) {
-    Reflect.deleteProperty(entry, key);
-  }
+  delete entry.contextTokens;
+  delete entry.contextTokensSource;
+  delete entry.contextBudgetStatus;
 }
 
 /** Resolved cron session plus its mutable backing store and active entry. */
@@ -618,13 +616,6 @@ export function syncCronSessionLiveSelection(params: {
       ? { kind: "set", runtime: params.liveSelection.agentRuntimeOverride }
       : { kind: "clear" },
   );
-  if (
-    params.entry.modelSelectionLocked !== true &&
-    normalizeOptionalString(params.entry.authProfileOverride) !==
-      normalizeOptionalString(params.liveSelection.authProfileId)
-  ) {
-    clearCronContextOwnerState(params.entry);
-  }
   if (params.liveSelection.authProfileId) {
     const source =
       params.liveSelection.authProfileIdSource ??

@@ -256,6 +256,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextWindowInfo).toEqual({ source: "default", tokens: 200_000 });
+    expect(result.contextTokensSource).toBeUndefined();
   });
 
   it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
@@ -346,6 +347,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
         nativeModelOwned: false,
       });
       expect(inference.contextTokenBudget).toBe(contextTokens);
+      expect(inference.contextTokensSource).toBe("resolved-v1");
       expect(inference.effectiveModel.contextWindow).toBe(contextTokens);
       expect(inference.effectiveModel.maxTokens).toBe(128_000);
       expect(runtimeModel.contextWindow).toBe(1_000_000);
@@ -377,6 +379,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "modelsConfig",
       tokens: 1_000_000,
     });
+    expect(result.contextTokensSource).toBeUndefined();
     expect(result.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -404,6 +407,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "model",
       tokens: 272_000,
     });
+    expect(result.contextTokensSource).toBe("resolved-v1");
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 
@@ -440,10 +444,12 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const selected = resolve("200k");
     expect(selected.contextTokenBudget).toBe(200_000);
+    expect(selected.contextTokensSource).toBeUndefined();
     expect(selected.effectiveModel.contextWindow).toBe(200_000);
 
     const unselected = resolve(undefined);
     expect(unselected.contextTokenBudget).toBe(1_000_000);
+    expect(unselected.contextTokensSource).toBeUndefined();
     expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -482,6 +488,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const discovered = resolve({ contextWindow: "200k" });
     expect(discovered.contextTokenBudget).toBe(200_000);
+    expect(discovered.contextTokensSource).toBeUndefined();
     expect(discovered.effectiveModel.contextWindow).toBe(200_000);
 
     const configured = resolve({
@@ -498,6 +505,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       } satisfies OpenClawConfig,
     });
     expect(configured.contextTokenBudget).toBe(200_000);
+    expect(configured.contextTokensSource).toBeUndefined();
     expect(configured.effectiveModel.contextWindow).toBe(200_000);
 
     // Without a selection the declared default resolves to the wider option, so
@@ -507,59 +515,30 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(unselected.effectiveModel.contextWindow).toBe(272_000);
   });
 
-  it.each([
-    {
-      name: "metadata window without an authored cap",
-      model: { contextWindow: 200_000, contextTokens: undefined },
-      budget: 200_000,
-      cap: undefined,
-    },
-    {
-      name: "authored cap above a metadata window",
-      model: { contextWindow: 16_000, contextTokens: 32_000 },
-      budget: 16_000,
-      cap: 32_000,
-    },
-    {
-      name: "authored cap below a metadata window",
-      model: { contextWindow: 1_050_000, contextTokens: 32_000 },
-      budget: 32_000,
-      cap: 32_000,
-    },
-    { name: "no configured model", model: undefined, budget: 272_000, cap: undefined },
-  ])("keeps the transport cap authored-only with $name (#124702)", ({ model, budget, cap }) => {
-    const result = resolveEmbeddedRunEffectiveModel({
-      runParams: {
-        sessionId: "native-cap-session",
-        workspaceDir: hookContext.workspaceDir,
-        prompt: "hello",
-        runId: "native-cap-run",
-        timeoutMs: 5_000,
-        config: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                models: model ? [createConfiguredModel(model)] : [],
-              },
-            },
+  it("preserves the effective budget and adds an authored cap for plugin transports (#124702)", () => {
+    const resolve = (models: ModelDefinitionConfig[]) =>
+      resolveEmbeddedRunEffectiveModel({
+        runParams: {
+          config: {
+            models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models } } },
           },
-        },
-      },
-      provider: "openai",
-      modelConfigProvider: "openai",
-      modelId: "gpt-5.5",
-      agentHarnessId: "claude-cli",
-      runtimeModel: createRuntimeModel(),
-      nativeModelOwned: false,
-    });
+        } as never,
+        provider: "openai",
+        modelConfigProvider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessId: "claude-cli",
+        runtimeModel: createRuntimeModel(),
+        nativeModelOwned: false,
+      });
 
-    expect(result.contextTokenBudget).toBe(budget);
-    if (cap === undefined) {
-      expect(result).not.toHaveProperty("authoredContextTokenCap");
-    } else {
-      expect(result.authoredContextTokenCap).toBe(cap);
-    }
+    const capped = resolve([createConfiguredModel({ contextTokens: 32_000 })]);
+    expect(capped.contextTokenBudget).toBe(32_000);
+    expect(capped.contextTokensSource).toBeUndefined();
+    expect(capped.authoredContextTokenCap).toBe(32_000);
+
+    const discovered = resolve([]);
+    expect(discovered.contextTokenBudget).toBe(272_000);
+    expect(discovered).not.toHaveProperty("authoredContextTokenCap");
   });
 
   it("caps the effective attempt budget with the caller limit", () => {
@@ -581,6 +560,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextTokenBudget).toBe(32_000);
+    expect(result.contextTokensSource).toBeUndefined();
     expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 32_000,
@@ -648,29 +628,4 @@ describe("native model-owned harness policy", () => {
 
     expect(result).toEqual({ effectiveModel: runtimeModel });
   });
-});
-
-describe("actual setup native prompt coherence", () => {
-  it.each([
-    [undefined, 777_000, 128_000],
-    ["synthetic", 777_000, 777_000],
-    ["synthetic", undefined, 128_000],
-  ] as const)(
-    "budgets native source %s with reported prompt %s",
-    (contextWindowSource, contextTokens, expected) => {
-      const result = resolveEmbeddedRuntimeModelPolicy({
-        cfg: {},
-        provider: "openai",
-        modelId: "gpt-5.5",
-        nativeModelOwned: false,
-        runtimeModel: {
-          ...createRuntimeModel(),
-          contextWindow: 128_000,
-          contextTokens,
-          contextWindowSource,
-        },
-      });
-      expect(result.contextTokenBudget).toBe(expected);
-    },
-  );
 });

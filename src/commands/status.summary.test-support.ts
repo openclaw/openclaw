@@ -62,34 +62,6 @@ export function registerStatusSummarySessionRowCases(params: {
       });
     });
 
-    it("retains the legacy host API fallback when offline metadata is unavailable", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveConfiguredStatusModelRef).mockReturnValue({
-        provider: "fixture",
-        model: "unreported",
-      });
-      vi.mocked(params.getStatusSummaryRuntime().resolveSessionModelRef).mockReturnValue({
-        provider: "fixture",
-        model: "unreported",
-      });
-      params.setSessions({
-        "agent:main:main": {
-          sessionId: "offline-api",
-          updatedAt: 1,
-          modelProvider: "fixture",
-          model: "unreported",
-          totalTokens: 45_000,
-          totalTokensFresh: true,
-          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        },
-      });
-      const summary = await params.getStatusSummary();
-      expect(summary.sessions.recent[0]).toMatchObject({
-        contextTokens: 200_000,
-        remainingTokens: 155_000,
-        percentUsed: 23,
-      });
-    });
-
     it("rejects a stale runtime window after a same-model harness change", async () => {
       vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
         1_000_000,
@@ -117,8 +89,8 @@ export function registerStatusSummarySessionRowCases(params: {
 
       expect(summary.sessions.recent[0]).toMatchObject({
         runtime: "OpenAI Codex",
-        contextTokens: null,
-        remainingTokens: null,
+        contextTokens: 1_000_000,
+        remainingTokens: 999_989,
       });
     });
   });

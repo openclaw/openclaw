@@ -1,7 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import * as transcriptReaders from "../gateway/session-transcript-usage.js";
@@ -140,38 +138,46 @@ describe("buildStatusMessageParts presentation", () => {
     expect(JSON.stringify(parts)).not.toContain("https://");
   });
 
-  it("shows a context meter and a pressure warning when the window runs hot", () => {
-    const parts = buildStatusMessageParts({
-      ...displayParams,
-      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
-      now: 1_751_529_600_000,
-      config: { agents: { defaults: { userTimezone: "UTC" } } },
-      agent: { model: "anthropic/claude-haiku-4-5" },
-      runtimeContextTokens: 100_000,
-      sessionEntry: {
-        sessionId: "status-meter-session",
-        totalTokens: 87_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        compactionCount: 2,
-        updatedAt: 1_751_529_500_000,
-      },
-      queue: { mode: "steer", depth: 3 },
-    });
+  it.each([undefined, true] as const)(
+    "shows context pressure and persisted compaction degradation (%s)",
+    (compactionQualityDegraded) => {
+      const parts = buildStatusMessageParts({
+        ...displayParams,
+        modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+        now: 1_751_529_600_000,
+        config: { agents: { defaults: { userTimezone: "UTC" } } },
+        agent: { model: "anthropic/claude-haiku-4-5" },
+        runtimeContextTokens: 100_000,
+        sessionEntry: {
+          sessionId: "status-meter-session",
+          totalTokens: 87_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          compactionCount: 2,
+          compactionQualityDegraded,
+          updatedAt: 1_751_529_500_000,
+        },
+        queue: { mode: "steer", depth: 3 },
+      });
 
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-    if (table?.type !== "table") {
-      throw new Error("expected table block");
-    }
-    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
-    expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
-    expect(rows.get("🧹 Compactions")).toBe("2");
-    expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
-    const warning = parts.presentation.blocks.find(
-      (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
-    );
-    expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
-  });
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      if (table?.type !== "table") {
+        throw new Error("expected table block");
+      }
+      const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+      expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
+      const compactions = compactionQualityDegraded
+        ? "2 · degraded history (details may be lost)"
+        : "2";
+      expect(rows.get("🧹 Compactions")).toBe(compactions);
+      expect(parts.text).toContain(`🧹 Compactions: ${compactions}`);
+      expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
+      const warning = parts.presentation.blocks.find(
+        (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
+      );
+      expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
+    },
+  );
 });
 
 describe("buildStatusMessage cost snapshot", () => {
@@ -314,226 +320,6 @@ describe("buildStatusMessage context window", () => {
     totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
   };
 
-  it.each(["small", undefined])(
-    "respects declared status context choice %s on a fixed-window model",
-    (contextWindow) => {
-      const provider = "anthropic";
-      const model = "claude-opus-5";
-      const text = buildStatusMessage({
-        ...displayParams,
-        modelRefs: statusModelRefs({ provider, model }),
-        agent: { model: `${provider}/${model}` },
-        resolvedHarness: "openclaw",
-        selectedContextWindow: 1_000_000,
-        sessionEntry: {
-          sessionId: "selected-status-context",
-          updatedAt: 0,
-          contextWindow,
-          ...tokenUsage,
-        },
-        thinkingCatalog: [
-          {
-            provider,
-            id: model,
-            contextWindow: 1_000_000,
-            contextWindows: [{ id: "small", label: "Small", contextWindow: 200_000 }],
-            contextWindowDefault: "small",
-          },
-        ],
-      });
-      expect(text).toContain("Context: 11/200k");
-    },
-  );
-
-  it.each([
-    { runtime: "openclaw", expected: "200k" },
-    { runtime: "codex", expected: "?" },
-  ])("keeps unavailable $runtime capacity scoped to its owner", ({ runtime, expected }) => {
-    const parts = buildStatusMessageParts({
-      ...displayParams,
-      modelRefs: statusModelRefs({ provider: "fixture-provider", model: "unreported" }),
-      agent: { model: "fixture-provider/unreported" },
-      resolvedHarness: runtime,
-      sessionEntry: { sessionId: "unreported", updatedAt: 0, ...tokenUsage },
-    });
-    expect(parts.text).toContain(`Context: 11/${expected}`);
-  });
-
-  describe("published model limits", () => {
-    const provider = "github-copilot";
-    const model = "status-context-fixture";
-    const cacheKey = providerContextTokenCacheKey(provider, model);
-
-    beforeEach(() => {
-      const caches = getContextWindowCaches();
-      caches.discoveredTokenCache.set(cacheKey, 128_000);
-      caches.contextWindowCache.set(cacheKey, 128_000);
-    });
-
-    afterEach(() => {
-      const caches = getContextWindowCaches();
-      caches.discoveredTokenCache.delete(cacheKey);
-      caches.contextWindowCache.delete(cacheKey);
-    });
-
-    function render(overrides: Partial<Parameters<typeof buildStatusMessageParts>[0]> = {}) {
-      return buildStatusMessageParts({
-        ...displayParams,
-        modelRefs: statusModelRefs({ provider, model }),
-        agent: { model: `${provider}/${model}` },
-        modelAuth: "token",
-        activeModelAuth: "token",
-        runtimeContextTokens: 1_050_000,
-        sessionEntry: { sessionId: "published-context", updatedAt: 0, ...tokenUsage },
-        ...overrides,
-      });
-    }
-
-    it.each([
-      {
-        name: "native and prompt",
-        contextWindow: 1_050_000,
-        contextTokens: 1_050_000,
-        label: "1.1m",
-      },
-      {
-        name: "lower prompt budget",
-        contextWindow: 1_050_000,
-        contextTokens: 922_000,
-        label: "922k",
-      },
-      { name: "native only", contextWindow: 1_050_000, contextTokens: undefined, label: "1.1m" },
-      { name: "prompt only", contextWindow: undefined, contextTokens: 1_050_000, label: "1.1m" },
-      {
-        name: "genuine smaller window",
-        contextWindow: 64_000,
-        contextTokens: 64_000,
-        label: "64k",
-      },
-    ])(
-      "uses published $name instead of a stale cache",
-      ({ contextWindow, contextTokens, label }) => {
-        const parts = render({
-          runtimeContextTokens: undefined,
-          thinkingCatalog: [{ provider, id: model, contextWindow, contextTokens }],
-        });
-
-        expect(parts.text).toContain(`Context: 11/${label}`);
-        const table = parts.presentation.blocks.find((block) => block.type === "table");
-        expect(
-          table?.type === "table" && table.rows.find((row) => row[0] === "📚 Context")?.[1],
-        ).toContain(`11/${label}`);
-      },
-    );
-
-    it("uses supplied runtime limits without changing the execution resolver or cache", () => {
-      expect(render().text).toContain("Context: 11/1.1m");
-      expect(
-        resolveContextTokensForModel({
-          cfg: {},
-          provider,
-          model,
-          modelContextTokens: 1_050_000,
-          allowAsyncLoad: false,
-        }),
-      ).toBe(128_000);
-      expect(getContextWindowCaches().discoveredTokenCache.get(cacheKey)).toBe(128_000);
-      expect(getContextWindowCaches().contextWindowCache.get(cacheKey)).toBe(128_000);
-    });
-
-    it("uses the newly selected model's published limits before its first run", () => {
-      const parts = render({
-        modelRefs: statusModelRefs(
-          { provider, model },
-          { provider: "previous-provider", model: "previous-model" },
-        ),
-        selectedContextWindow: 1_050_000,
-        selectedContextTokens: 922_000,
-        runtimeContextTokens: 64_000,
-      });
-
-      expect(parts.text).toContain("Context: 11/922k");
-    });
-
-    it.each([
-      { contextWindow: 64_000, contextTokens: undefined, label: "64k" },
-      { contextWindow: 1_050_000, contextTokens: 64_000, label: "64k" },
-      { contextWindow: 1_050_000, contextTokens: 1_200_000, label: "1.1m" },
-    ])(
-      "preserves configured limits $contextWindow/$contextTokens",
-      ({ contextWindow, contextTokens, label }) => {
-        const parts = render({
-          config: {
-            models: {
-              providers: {
-                [provider]: {
-                  baseUrl: "https://provider.example.invalid",
-                  models: [
-                    { ...statusTestModel(model, "Context fixture", contextWindow), contextTokens },
-                  ],
-                },
-              },
-            },
-          },
-        });
-
-        expect(parts.text).toContain(`Context: 11/${label}`);
-      },
-    );
-
-    it("does not inflate trusted lower runtime telemetry to the catalog window", () => {
-      const parts = render({
-        resolvedHarness: "openclaw",
-        sessionEntry: {
-          sessionId: "lower-runtime-context",
-          updatedAt: 0,
-          modelProvider: provider,
-          model,
-          agentHarnessId: "openclaw",
-          contextTokens: 64_000,
-          contextTokensSource: "runtime",
-          ...tokenUsage,
-        },
-      });
-
-      expect(parts.text).toContain("Context: 11/64k");
-    });
-
-    it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-      "keeps cache fallback when supplied limits are unavailable (%s)",
-      (runtimeContextTokens) => {
-        expect(render({ runtimeContextTokens }).text).toContain("Context: 11/128k");
-      },
-    );
-
-    it("uses the active fallback's own catalog entry, not the selected model's window", () => {
-      const activeProvider = "fallback-provider";
-      const parts = render({
-        modelRefs: statusModelRefs({ provider, model }, { provider: activeProvider, model }),
-        thinkingCatalog: [
-          { provider, id: model, contextWindow: 1_050_000 },
-          { provider: activeProvider, id: model, contextWindow: 64_000 },
-        ],
-        sessionEntry: {
-          sessionId: "fallback-context",
-          updatedAt: 0,
-          modelProvider: activeProvider,
-          model,
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: `${provider}/${model}`,
-            activeModel: `${activeProvider}/${model}`,
-            reason: "selected model unavailable",
-          },
-          ...tokenUsage,
-        },
-      });
-
-      expect(parts.text).toContain(`Fallback: ${activeProvider}/${model}`);
-      expect(parts.text).toContain("Context: 11/64k");
-    });
-  });
-
   it("rejects a stale runtime window after a same-model harness change", () => {
     const text = buildStatusMessage({
       ...displayParams,
@@ -636,37 +422,6 @@ describe("buildStatusMessage context window", () => {
 
     expect(text).toContain("Context: 11/1.0m");
     expect(text).not.toContain("Context: 11/272k");
-  });
-
-  it("does not clamp a retained model-owned window to a synthetic status estimate", () => {
-    const text = buildStatusMessage({
-      ...displayParams,
-      modelRefs: statusModelRefs({ provider: "fixture-provider", model: "estimated" }),
-      agent: { model: "fixture-provider/estimated" },
-      selectedContextWindow: 128_000,
-      selectedContextWindowSource: "synthetic",
-      runtimeContextTokens: 128_000,
-      thinkingCatalog: [
-        {
-          provider: "fixture-provider",
-          id: "estimated",
-          contextWindow: 128_000,
-          contextWindowSource: "synthetic",
-        },
-      ],
-      resolvedHarness: "openclaw",
-      sessionEntry: {
-        sessionId: "retained-model-window",
-        updatedAt: 0,
-        modelProvider: "fixture-provider",
-        model: "estimated",
-        agentHarnessId: "openclaw",
-        contextTokens: 272_000,
-        contextTokensSource: "resolved-v1",
-        ...tokenUsage,
-      },
-    });
-    expect(text).toContain("Context: 11/272k");
   });
 
   it("caps matching unlocked runtime telemetry to the lower current window", () => {

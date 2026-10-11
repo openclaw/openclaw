@@ -514,8 +514,6 @@ describe("sessions tool", () => {
           modelOverrideFallbackOriginModel: undefined,
           authProfileOverride: "bad-profile",
           authProfileOverrideSource: "user",
-          contextTokens: 64000,
-          contextTokensSource: "resolved-v1",
           thinkingLevel: "low",
           modelFallback: {
             prevModel: "good",
@@ -611,8 +609,6 @@ describe("sessions tool", () => {
       thinkingLevel: "high",
     });
     expect(loadSessionEntry(sessionScope)).not.toHaveProperty("modelFallback");
-    expect(loadSessionEntry(sessionScope)?.contextTokens).toBeUndefined();
-    expect(loadSessionEntry(sessionScope)?.contextTokensSource).toBeUndefined();
     const events = await loadTranscriptEvents(transcriptScope);
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -641,8 +637,6 @@ describe("sessions tool", () => {
       {
         sessionId: "session-main",
         updatedAt: 1,
-        contextTokens: 64000,
-        contextTokensSource: "resolved-v1",
         modelFallback: {
           prevModel: "good",
           prevProvider: "openai",
@@ -659,10 +653,6 @@ describe("sessions tool", () => {
       storePath,
     });
     await guard.finish(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      contextTokens: 64000,
-      contextTokensSource: "resolved-v1",
-    });
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
       "modelFallback",
     );
@@ -689,67 +679,51 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "changed account", previous: "openai:previous", locked: false, clears: true },
-    { name: "same account", previous: "openai:current", locked: false, clears: false },
-    { name: "locked native account", previous: "openai:previous", locked: true, clears: false },
-  ])(
-    "reverts a failed patched model with $name after fallback completion",
-    async ({ previous, locked, clears }) => {
-      const dir = sessionDirs.make();
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:main";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          model: "good",
-          modelProvider: "openai",
-          authProfileOverride: "openai:current",
-          authProfileOverrideSource: "user",
-          modelSelectionLocked: locked,
-          contextTokens: 64000,
-          contextTokensSource: "resolved-v1",
-          modelOverride: "bad",
-          providerOverride: "broken",
-          modelFallback: {
-            prevModel: "good",
-            prevProvider: "openai",
-            prevAuthProfileOverride: previous,
-            prevAuthProfileOverrideSource: "user",
-            ts: 1,
-            source: "agent-patch",
-          },
+  it("reverts when the patched model fails but a fallback completes the run", async () => {
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "session-main",
+        updatedAt: 1,
+        model: "bad",
+        modelProvider: "broken",
+        modelOverride: "bad",
+        providerOverride: "broken",
+        modelFallback: {
+          prevModel: "good",
+          prevProvider: "openai",
+          ts: 1,
+          source: "agent-patch",
         },
-      );
-      const runGuard = await createAgentPatchedSessionModelRunGuard({
-        cfg: {},
-        agentId: "main",
-        sessionKey,
-        storePath,
-      });
+      },
+    );
+    const runGuard = await createAgentPatchedSessionModelRunGuard({
+      cfg: {},
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
-      const needsRevert = runGuard.captureFallbackFailure([
-        {
-          error: "No endpoints found for broken/bad.",
-          reason: "model_not_found",
-        },
-        { error: "Fallback context overflow.", reason: "context_overflow" },
-      ]);
-      await runGuard.finish(!needsRevert);
+    const needsRevert = runGuard.captureFallbackFailure([
+      {
+        error: "No endpoints found for broken/bad.",
+        reason: "model_not_found",
+      },
+      { error: "Fallback context overflow.", reason: "context_overflow" },
+    ]);
+    await runGuard.finish(!needsRevert);
 
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-        model: "good",
-        modelProvider: "openai",
-      });
-      const restored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-      expect(restored?.authProfileOverride).toBe(previous);
-      expect(restored?.contextTokens).toBe(clears ? undefined : 64000);
-      expect(restored?.contextTokensSource).toBe(clears ? undefined : "resolved-v1");
-      expect(restored).not.toHaveProperty("modelFallback");
-    },
-  );
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      model: "good",
+      modelProvider: "openai",
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
+      "modelFallback",
+    );
+  });
 
   it("promotes the newest validated model across overlapping patches", async () => {
     const dir = sessionDirs.make();

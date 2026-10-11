@@ -191,8 +191,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
           modelId: params.model,
         }),
         resolvedContextTokens: params.contextTokenProjection?.contextTokens,
-        resolvedContextTokensSource: params.contextTokenProjection?.contextTokensSource,
-        configuredContextTokenLimits: params.contextTokenProjection?.configuredContextTokenLimits,
+        authoredContextTokens: params.contextTokenProjection?.authoredContextTokens,
       }) ??
       params.contextTokens ??
       null,

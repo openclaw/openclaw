@@ -201,26 +201,18 @@ export function mergeProviderModels(
       baseUrl: _baseUrl,
       headers: _headers,
       maxTokensSource: _maxTokensSource,
-      contextWindowSource: implicitContextWindowSource,
       ...implicitMetadata
     } = implicitModel;
-    const explicitWindow = asPositiveFiniteNumber(explicitModel.contextWindow);
-    const contextWindowSource =
-      explicitWindow !== undefined
-        ? explicitModel.contextWindowSource
-        : implicitContextWindowSource;
-    const { contextWindowSource: _explicitContextWindowSource, ...explicitFields } = explicitModel;
     return Object.assign(
       {},
       implicitMetadata,
-      explicitFields,
+      explicitModel,
       {
         input,
         cost,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
-      contextWindowSource === "synthetic" ? { contextWindowSource } : {},
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },

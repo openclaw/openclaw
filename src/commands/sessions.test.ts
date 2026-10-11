@@ -181,7 +181,7 @@ describe("sessionsCommand", () => {
       "1m ago",
       "claude-opus-4-7",
       "Claude CLI",
-      "unknown/? (?%)",
+      "unknown/200k (?%)",
       "visibility:shared id:main-session",
     ]);
   });
@@ -231,20 +231,7 @@ describe("sessionsCommand", () => {
     expect(row).toContain("11/1.0m (0%)");
   });
 
-  it.each([
-    { runtimeId: "claude-cli", tokens: "unknown/? (?%)" },
-    { runtimeId: "openclaw", tokens: "unknown/200k (?%)" },
-  ])("shows missing-token placeholders for $runtimeId", async ({ runtimeId, tokens }) => {
-    setMockSessionsConfig(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "fixture/uncataloged-model" },
-          models: {
-            "fixture/uncataloged-model": { agentRuntime: { id: runtimeId } },
-          },
-        },
-      },
-    }));
+  it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeStore({
       "agent:main:quietchat:group:demo": {
         sessionId: "xyz",
@@ -260,7 +247,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
-    expect(row).toContain(tokens);
+    expect(row).toContain("unknown/200k (?%)");
     expect(row).toContain("think:high");
   });
 

@@ -48,59 +48,6 @@ describe("models-config merge", () => {
     expect(merged.models).toEqual([{ ...authored, input: ["text"] }]);
   });
 
-  it.each([
-    {
-      name: "authored prompt cap beside an implicit estimate",
-      implicit: { id: "model", contextWindow: 128_000, contextWindowSource: "synthetic" as const },
-      explicit: { id: "model", contextTokens: 200_000 },
-      window: 128_000,
-      prompt: 200_000,
-      source: "synthetic",
-    },
-    {
-      name: "generated estimate with independently reported prompt cap",
-      implicit: { id: "model", contextWindow: 128_000, contextWindowSource: "synthetic" as const },
-      explicit: {
-        id: "model",
-        contextWindow: 128_000,
-        contextWindowSource: "synthetic" as const,
-        contextTokens: 777_000,
-      },
-      window: 128_000,
-      prompt: 777_000,
-      source: "synthetic",
-    },
-    {
-      name: "generated estimate replacing a genuine catalog window",
-      implicit: { id: "model", contextWindow: 1_000_000 },
-      explicit: {
-        id: "model",
-        contextWindow: 128_000,
-        contextWindowSource: "synthetic" as const,
-        contextTokens: 777_000,
-      },
-      window: 128_000,
-      prompt: 777_000,
-      source: "synthetic",
-    },
-    {
-      name: "authored native window replacing an estimate",
-      implicit: { id: "model", contextWindow: 128_000, contextWindowSource: "synthetic" as const },
-      explicit: { id: "model", contextWindow: 200_000 },
-      window: 200_000,
-      prompt: undefined,
-      source: undefined,
-    },
-  ])("preserves sizing provenance for $name", ({ implicit, explicit, window, prompt, source }) => {
-    const merged = mergeProviderModels<ProviderModelCatalog>(
-      { models: [implicit] },
-      { models: [explicit] },
-    );
-    expect(merged.models?.[0]?.contextWindow).toBe(window);
-    expect(merged.models?.[0]?.contextTokens).toBe(prompt);
-    expect(merged.models?.[0]?.contextWindowSource).toBe(source);
-  });
-
   it.each(["http://127.0.0.1:9000/v1"])(
     "uses compat from the owner of the configured route %s",
     (baseUrl) => {

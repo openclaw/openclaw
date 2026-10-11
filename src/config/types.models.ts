@@ -52,11 +52,6 @@ export type ModelDefinitionConfig = Omit<
   compat?: ModelCompatConfig;
   /** Media input limits used by routing and preflight compression. */
   mediaInput?: ModelMediaInputConfig;
-  /**
-   * Provider-owned marker: `contextWindow` is an unknown-model estimate, not a reported
-   * native limit. Internal only; config authoring cannot set it (strict schema).
-   */
-  contextWindowSource?: "synthetic";
 };
 
 export type ModelProviderConfig = Omit<

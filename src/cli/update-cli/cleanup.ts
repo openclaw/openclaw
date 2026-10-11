@@ -6,7 +6,7 @@ import {
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
 import { readSourceConfigBestEffort } from "../../config/io.js";
-import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime, ExitError, writeRuntimeJson } from "../../runtime.js";
 
 function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(`Recovery cleanup: ${report.stateDir}`);
@@ -91,6 +91,10 @@ export async function updateCleanupCommand(options: {
       defaultRuntime.exit(1);
     }
   } catch (error) {
+    // Refusal and blocked outcomes were already rendered above.
+    if (error instanceof ExitError) {
+      throw error;
+    }
     if (options.json) {
       writeRuntimeJson(defaultRuntime, { ...report, status: "blocked", error: String(error) });
     } else {

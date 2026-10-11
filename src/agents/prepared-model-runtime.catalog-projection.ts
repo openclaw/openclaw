@@ -1,6 +1,7 @@
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type {
@@ -9,10 +10,7 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
-import type {
-  PreparedModelRuntimePluginGeneration,
-  PreparedModelCatalogInventory,
-} from "./prepared-model-runtime.types.js";
+import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
 
 /** Composes retained discovery with current configured metadata and runtime capabilities. */
 export function createPreparedModelCatalogProjection(params: {
@@ -22,11 +20,9 @@ export function createPreparedModelCatalogProjection(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   return (
-    inventory: Pick<PreparedModelCatalogInventory, "catalog"> &
-      Partial<Pick<PreparedModelCatalogInventory, "discoveryOrigins">>,
-    configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
+    catalog: ModelCatalogSnapshot,
+    configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"],
   ) => {
-    const { catalog, discoveryOrigins = [] } = inventory;
     const configured = prepareConfiguredRuntimeFacts({
       agentFacts: params.agentFacts,
       workspaceFacts: params.pluginGeneration,
@@ -47,9 +43,7 @@ export function createPreparedModelCatalogProjection(params: {
       nativeCatalog,
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
-      new Set(discoveryOrigins.map(({ provider }) => params.normalizeProvider(provider))),
     );
-    projected.acceptedDiscoveryOrigins = discoveryOrigins;
     // Native discovery cannot replace the authentication facts of an API provider.
     const apiProviders = new Set(
       projected.providerOutcomes?.map(({ provider }) => params.normalizeProvider(provider)),

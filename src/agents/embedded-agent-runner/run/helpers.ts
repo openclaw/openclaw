@@ -11,7 +11,6 @@ import {
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
-import type { OuterContextTokenMeta } from "./context-token-meta.js";
 
 export type RuntimeAuthState = {
   generation: number;
@@ -141,8 +140,7 @@ export function buildErrorAgentMeta(params: {
   model: string;
   credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
-  /** Failed/cancelled attempts keep estimate provenance so it cannot become trusted. */
-  contextTokensSource?: OuterContextTokenMeta["contextTokensSource"];
+  contextTokensSource?: "resolved-v1";
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: NormalizedUsage | undefined;
   currentAttemptAssistant?: { api?: string; usage?: unknown } | null;

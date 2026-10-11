@@ -6,7 +6,6 @@ import {
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
-import { resolveModelContextTokenProjectionFromCache } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
@@ -64,24 +63,17 @@ type ThinkingProviderPolicySource = NonNullable<
 function resolveGatewaySessionThinkingLevel(
   params: Pick<
     GatewayModelThinkingParams,
-    | "provider"
-    | "model"
-    | "modelCatalog"
-    | "catalogResolver"
-    | "providerPolicySource"
-    | "rowContext"
+    "provider" | "model" | "modelCatalog" | "providerPolicySource" | "rowContext"
   >,
   thinkingProfile: ReturnType<typeof resolveThinkingProfile>,
   level: NonNullable<ReturnType<typeof normalizeThinkLevel>>,
 ) {
-  const catalogEntry = params.catalogResolver
-    ? params.catalogResolver({ provider: params.provider, model: params.model })
-    : params.modelCatalog
-      ? (params.rowContext?.findModelCatalogEntry ?? findModelCatalogEntry)(params.modelCatalog, {
-          provider: params.provider,
-          modelId: params.model,
-        })
-      : undefined;
+  const catalogEntry = params.modelCatalog
+    ? (params.rowContext?.findModelCatalogEntry ?? findModelCatalogEntry)(params.modelCatalog, {
+        provider: params.provider,
+        modelId: params.model,
+      })
+    : undefined;
   // Lightweight projections can omit the catalog or carry identity-only entries.
   // Runtime/model patches normalize persisted state with authoritative metadata;
   // projections must not reinterpret an already-validated level without it.
@@ -227,26 +219,8 @@ export function resolveGatewaySessionThinkingProjectionInternal(
           runtimeId: thinkingRuntime,
         }).entry
       : logicalEntry;
-  const capacityEntry =
-    logicalEntry && params.modelCatalog
-      ? (params.rowContext?.selectModelCatalogRuntimeEntry ?? selectModelCatalogRuntimeEntry)({
-          entry: logicalEntry,
-          routeVariants: params.modelCatalogRouteVariants ?? params.modelCatalog,
-          runtimeId: thinkingRuntime,
-        }).entry
-      : undefined;
-  // The shared runtime projection may retain API metadata for thinking, but native
-  // capacity must come from that runtime's own donor, including admitted absence.
-  const capacityCatalogEntry =
-    capacityEntry &&
-    (thinkingRuntime === "openclaw"
-      ? !capacityEntry.nativeRuntime
-      : capacityEntry.nativeRuntime === thinkingRuntime)
-      ? capacityEntry
-      : undefined;
   const runtimeCatalog =
     catalogEntry && params.modelCatalogRouteVariants ? [catalogEntry] : params.modelCatalog;
-  const catalogResolver: ThinkingCatalogResolver = () => catalogEntry;
   const { metadata, profile: thinkingProfile } = resolveGatewayModelThinkingFacts({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -254,14 +228,13 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     model: params.model,
     agentRuntime: thinkingRuntime,
     modelCatalog: runtimeCatalog,
-    catalogResolver,
     rowContext: params.rowContext,
     providerPolicySource: params.providerPolicySource,
   });
   const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
   const thinkingLevel = storedThinkingLevel
     ? resolveGatewaySessionThinkingLevel(
-        { ...params, modelCatalog: runtimeCatalog, catalogResolver },
+        { ...params, modelCatalog: runtimeCatalog },
         thinkingProfile,
         storedThinkingLevel,
       )
@@ -269,8 +242,6 @@ export function resolveGatewaySessionThinkingProjectionInternal(
   return {
     acpMeta,
     catalogEntry,
-    capacityCatalogEntry,
-    capacityRuntime: thinkingRuntime,
     agentRuntime,
     runtimeSelectionLocked,
     thinkingLevel,
@@ -322,6 +293,25 @@ export function getSessionDefaults(
     model: resolved.model,
     metadataSnapshot: options?.metadataSnapshot,
   });
+  const catalogEntry = modelCatalog
+    ? findModelCatalogEntry(modelCatalog, {
+        provider: resolved.provider,
+        modelId: resolved.model,
+      })
+    : undefined;
+  const contextWindowProfile = resolveModelContextWindowProfile({ catalogEntry });
+  const resolvedContextTokens =
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: contextWindowProfile.contextTokens,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const contextTokens = contextWindowProfile.contextTokens
+    ? Math.min(resolvedContextTokens, contextWindowProfile.contextTokens)
+    : resolvedContextTokens;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const agentRuntime = projectWorkerPlacementAgentRuntime(
     resolveModelAgentRuntimeMetadata({
@@ -333,51 +323,6 @@ export function getSessionDefaults(
       acpRuntime: false,
     }),
   );
-  const nativeRuntime =
-    agentRuntime.id === "auto"
-      ? resolveEffectiveAgentRuntime({
-          cfg,
-          provider: resolved.provider,
-          modelId: resolved.model,
-          agentScope: { kind: "prepared", agentId },
-          sessionKey,
-        })
-      : agentRuntime.id;
-  const catalogEntry = modelCatalog
-    ? findModelCatalogEntry(
-        modelCatalog.filter((entry) =>
-          nativeRuntime === "openclaw"
-            ? !entry.nativeRuntime
-            : entry.nativeRuntime === nativeRuntime,
-        ),
-        { provider: resolved.provider, modelId: resolved.model },
-      )
-    : undefined;
-  const contextWindowProfile = resolveModelContextWindowProfile({ catalogEntry });
-  const contextParams = {
-    cfg,
-    provider: resolved.provider,
-    model: resolved.model,
-    nativeRuntime,
-    modelContextTokens: catalogEntry?.contextTokens,
-    modelContextWindow: contextWindowProfile.contextTokens,
-    modelContextWindowSource: contextWindowProfile.contextWindow
-      ? undefined
-      : catalogEntry?.contextWindowSource,
-    allowAsyncLoad: false,
-  };
-  const resolvedContextTokens =
-    (catalogEntry
-      ? resolveModelContextTokenProjectionFromCache(
-          contextParams,
-          () => undefined,
-          () => undefined,
-        ).contextTokens
-      : resolveContextTokensForModel(contextParams)) ?? DEFAULT_CONTEXT_TOKENS;
-  const contextTokens =
-    contextWindowProfile.contextWindow && contextWindowProfile.contextTokens
-      ? Math.min(resolvedContextTokens, contextWindowProfile.contextTokens)
-      : resolvedContextTokens;
   const thinkingProfile = resolveGatewayModelThinkingProfile({
     cfg,
     provider: resolved.provider,
@@ -673,7 +618,7 @@ export function projectSessionPatchResult(params: {
     modelCatalogRouteVariants: params.modelCatalogRouteVariants,
   });
   const contextWindow = resolveModelContextWindowProfile({
-    catalogEntry: thinking.capacityCatalogEntry,
+    catalogEntry: thinking.catalogEntry,
     selected: params.entry.contextWindow,
   });
   const entry = projectPublicSessionEntry(params.entry);

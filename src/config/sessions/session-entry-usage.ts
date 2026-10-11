@@ -1,5 +1,4 @@
 import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
-import { qualifySessionContextTokenSource } from "./context-token-provenance.js";
 import { accountSessionGoalUsage } from "./goals-transitions.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "./types.js";
 
@@ -10,7 +9,6 @@ export type SessionEntryUsageUpdate = {
   agentHarnessId?: string;
   contextTokensUsed?: number;
   contextTokensSource?: SessionEntry["contextTokensSource"];
-  authProfileId?: string | null;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   systemPromptReport?: SessionEntry["systemPromptReport"];
   promptTokens?: number;
@@ -55,11 +53,7 @@ export function projectSessionEntryUsageUpdate(
     ...(!update.preserveSessionModelState
       ? {
           agentHarnessId: update.agentHarnessId,
-          contextTokensSource: qualifySessionContextTokenSource({
-            entry,
-            authProfileId: update.authProfileId,
-            source: update.contextTokensSource,
-          }),
+          contextTokensSource: update.contextTokensSource,
           contextBudgetStatus: update.contextBudgetStatus,
         }
       : {}),

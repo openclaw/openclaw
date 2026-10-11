@@ -1,8 +1,6 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "../../config/sessions/context-token-provenance.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -75,36 +73,25 @@ function profileAuthRequirement(params: {
   );
 }
 
-function projectSessionAuthProfileOverrideState(
-  entry: SessionEntry,
-  state: SessionAuthProfileOverrideState,
-  updatedAt: number,
-) {
-  return {
-    ...state,
-    ...(entry.modelSelectionLocked !== true &&
-    normalizeOptionalString(entry.authProfileOverride) !==
-      normalizeOptionalString(state.authProfileOverride)
-      ? SESSION_CONTEXT_CAPACITY_CLEAR_PATCH
-      : {}),
-    updatedAt: Math.max(entry.updatedAt ?? 0, updatedAt),
-  };
-}
-
 function applySessionAuthProfileOverrideState(
   entry: SessionEntry,
   state: SessionAuthProfileOverrideState,
   updatedAt: number,
 ): void {
-  for (const [key, value] of Object.entries(
-    projectSessionAuthProfileOverrideState(entry, state, updatedAt),
-  )) {
+  const apply = <K extends keyof SessionAuthProfileOverrideState>(
+    key: K,
+    value: SessionAuthProfileOverrideState[K],
+  ) => {
     if (value === undefined) {
-      Reflect.deleteProperty(entry, key);
+      delete entry[key];
     } else {
-      Reflect.set(entry, key, value);
+      entry[key] = value;
     }
-  }
+  };
+  apply("authProfileOverride", state.authProfileOverride);
+  apply("authProfileOverrideSource", state.authProfileOverrideSource);
+  apply("authProfileOverrideCompactionCount", state.authProfileOverrideCompactionCount);
+  entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
 function matchesSessionAuthProfileOverrideSnapshot(
@@ -175,7 +162,10 @@ async function persistSessionAuthProfileOverrideState(params: {
       ) {
         return null;
       }
-      return projectSessionAuthProfileOverrideState(current, state, updatedAt);
+      return {
+        ...state,
+        updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
+      };
     },
     {
       ...(expectedSnapshot ? {} : { fallbackEntry: sessionEntry }),

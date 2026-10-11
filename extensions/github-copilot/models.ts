@@ -62,8 +62,6 @@ export function resolveCopilotForwardCompatModel(
     input: staticOverride?.input ?? ["text", "image"],
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-    // Only the unknown-model estimate is replaceable; curated static sizing stays authoritative.
-    ...(staticOverride?.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
     ...(staticOverride?.contextTokens !== undefined
       ? { contextTokens: staticOverride.contextTokens }
       : {}),
@@ -255,13 +253,9 @@ function mapCopilotApiModelToDefinition(
   const supportsVision = supports?.vision === true;
   const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
 
-  const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
-  // A missing/invalid native window is unknown, not a reported 128k ceiling. Keep the
-  // estimate for sizing but mark it replaceable; a real prompt limit remains separate.
+  const contextWindow =
+    asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
-  // The native window is never smaller than the prompt it admits, so the estimate
-  // must not clamp a real, larger prompt limit. Below 128k the historic estimate stands.
-  const contextWindow = nativeContextWindow ?? Math.max(contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const api = resolveCopilotListedApi(entry, id);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
@@ -289,7 +283,6 @@ function mapCopilotApiModelToDefinition(
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
-    ...(nativeContextWindow === undefined ? { contextWindowSource: "synthetic" as const } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),

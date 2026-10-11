@@ -4,10 +4,13 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import {
+  type FastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
@@ -21,13 +24,24 @@ import {
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveFreshSessionTotalTokens,
+  resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
+  type SessionScope,
 } from "../config/sessions.js";
 import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
@@ -62,9 +76,61 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { resolveStatusContextCapacity } from "./status-context-capacity.js";
-import type { QueueStatus, StatusArgs } from "./status-message.types.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
+
+type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+type AgentConfig = Partial<AgentDefaults> & {
+  model?: AgentDefaults["model"] | string;
+};
+
+type QueueStatus = {
+  mode?: string;
+  depth?: number;
+  debounceMs?: number;
+  cap?: number;
+  dropPolicy?: string;
+  showDetails?: boolean;
+};
+
+type StatusArgs = {
+  config: OpenClawConfig;
+  modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
+  agent: AgentConfig;
+  agentId?: string;
+  configuredDefaultModelLabel?: string;
+  selectedContextWindow?: number;
+  selectedContextTokens?: number;
+  thinkingCatalog?: ThinkingCatalogEntry[];
+  runtimeContextProvider?: string;
+  runtimeContextTokens?: number;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  parentSessionKey?: string;
+  sessionScope?: SessionScope;
+  sessionStorePath?: string;
+  sessionStartedAt?: number;
+  groupActivation?: "mention" | "always";
+  resolvedThink?: ThinkLevel;
+  resolvedFast?: FastMode;
+  resolvedHarness?: string;
+  resolvedVerbose?: VerboseLevel;
+  resolvedReasoning?: ReasoningLevel;
+  resolvedElevated?: ElevatedLevel;
+  modelAuth?: string;
+  selectedEndpoint?: string;
+  activeModelAuth?: string;
+  activeModel?: { modelProvider: string; model: string };
+  usageLine?: string;
+  timeLine?: string;
+  uptimeValue?: string;
+  queue?: QueueStatus;
+  mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
+  subagentsLine?: string;
+  pluginHealthLine?: string;
+  channelFeatureLine?: string;
+  includeTranscriptUsage?: boolean;
+  now?: number;
+};
 
 function normalizeAuthMode(value?: string) {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -148,7 +214,8 @@ const formatEstimatedContextBudgetTokens = (
     return null;
   }
   const estimatedPromptTokens = Math.floor(estimate);
-  const ctx = asPositiveFiniteNumber(contextTokens);
+  const ctx =
+    asPositiveFiniteNumber(contextTokens) ?? asPositiveFiniteNumber(status.contextTokenBudget);
   const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
@@ -571,12 +638,40 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const activeModelProvider = runtimeAliasModelEquivalent
     ? selectedLookupProvider
     : contextLookupProvider;
-  const { selectedContextTokens, projectedActiveContextTokens } = resolveStatusContextCapacity({
-    args,
-    contextConfig,
-    contextLookupProvider,
-    contextLookupModel,
-    activeModelProvider,
+  const selectedContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
+    modelContextWindow: args.selectedContextWindow,
+    modelContextTokens: args.selectedContextTokens,
+    allowAsyncLoad: false,
+  });
+  const activeCatalogEntry = contextLookupProvider
+    ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
+    : undefined;
+  const activeModelMatchesPreparedIdentity =
+    normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.active.provider) &&
+    normalizeLowercaseStringOrEmpty(contextLookupModel) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.active.model);
+  const activeContextProvider =
+    contextLookupProvider &&
+    normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.active.provider)
+      ? (args.runtimeContextProvider ?? contextLookupProvider)
+      : contextLookupProvider;
+  const activeContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    ...(activeContextProvider ? { provider: activeContextProvider } : {}),
+    modelProvider: contextLookupProvider,
+    model: contextLookupModel,
+    modelContextWindow: activeCatalogEntry?.contextWindow,
+    modelContextTokens:
+      activeCatalogEntry?.contextTokens ??
+      (activeCatalogEntry || activeModelMatchesPreparedIdentity
+        ? args.runtimeContextTokens
+        : undefined),
+    allowAsyncLoad: false,
   });
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
@@ -584,6 +679,19 @@ export function buildStatusMessageParts(args: StatusArgs) {
     selectedProvider: selectedLookupProvider,
     selectedModel: selectedLookupModel,
     parentSessionKey: args.parentSessionKey,
+  });
+  const projectedActiveContextTokens = resolveProjectedSessionContextTokens({
+    entry,
+    provider: contextLookupProvider,
+    model: contextLookupModel,
+    agentHarnessId: args.resolvedHarness,
+    resolvedContextTokens: activeContextTokens,
+    authoredContextTokens: resolveAuthoredModelContextTokens({
+      cfg: contextConfig,
+      provider: contextLookupProvider,
+      modelProvider: activeModelProvider,
+      model: contextLookupModel,
+    }),
   });
   const runtimeSnapshotHasFallbackProvenance =
     initialFallbackState.active ||
@@ -596,20 +704,9 @@ export function buildStatusMessageParts(args: StatusArgs) {
     entry?.modelSelectionLocked !== true &&
     runtimeDiffersFromSelected &&
     !runtimeSnapshotHasFallbackProvenance;
-  // A run that budgeted against a synthetic estimate is not evidence of any window.
-  // If the displayed session's own owner cannot answer, render unknown ("?") rather
-  // than restoring the estimate or substituting a generic default.
-  const syntheticOwnerUnknown =
-    entry?.contextTokensSource === "synthetic" &&
-    args.resolveOwnerContextCapacity !== undefined &&
-    projectedActiveContextTokens === undefined;
-  const defaultContextTokens =
-    args.resolvedHarness && args.resolvedHarness !== "openclaw" ? 0 : DEFAULT_CONTEXT_TOKENS;
   const contextTokens = useSelectedContext
-    ? (selectedContextTokens ?? defaultContextTokens)
-    : syntheticOwnerUnknown
-      ? 0
-      : (projectedActiveContextTokens ?? defaultContextTokens);
+    ? (selectedContextTokens ?? DEFAULT_CONTEXT_TOKENS)
+    : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
@@ -826,21 +923,16 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
   const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
-  // Depth 0 is the boring default; the queue row keeps details only when the
-  // queue is non-empty or the session carries queue overrides.
+  // Show queue details only for a nonempty queue or explicit overrides.
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
-  const compactionCount = entry?.compactionCount ?? 0;
+  const compactionValue = formatCompactionStatus(entry);
   const contextPct =
     typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
+  const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));
   const contextMeter =
-    contextPct !== null
-      ? (() => {
-          const filled = Math.min(10, Math.max(0, Math.round(contextPct / 10)));
-          return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
-        })()
-      : "";
+    contextPct === null ? "" : `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
@@ -858,7 +950,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
       costLine,
       cacheLine,
       `📚 Context: ${contextUsageLabel}`,
-      compactionCount > 0 ? `🧹 Compactions: ${compactionCount}` : null,
+      compactionValue ? `🧹 Compactions: ${compactionValue}` : null,
       mediaLine,
       args.usageLine,
     ],
@@ -897,7 +989,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   pushStatusRow("💵 Cost", costLabel);
   pushStatusRow("🗄️ Cache", cacheValue);
   pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
-  pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
+  pushStatusRow("🧹 Compactions", compactionValue);
   pushStatusRow("🧵 Session", sessionValue);
   pushStatusRow("⚙️ Execution", execution);
   pushStatusRow("Runtime", agentRuntimeLabel);

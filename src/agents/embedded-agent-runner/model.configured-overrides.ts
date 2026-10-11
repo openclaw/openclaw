@@ -525,13 +525,6 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
-  // An authored native window replaces its provenance; a prompt cap does not.
-  const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
-    discoveredModel;
-  const discoveredSizing =
-    metadataOverrideModel?.contextWindow !== undefined
-      ? discoveredWithoutSizeSource
-      : discoveredModel;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -595,7 +588,7 @@ export function applyConfiguredProviderOverrides(params: {
     attachModelProviderLocalService(
       attachModelProviderRequestTransport(
         {
-          ...discoveredSizing,
+          ...discoveredModel,
           provider: params.provider,
           api: requestConfig.api ?? "openai-responses",
           baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
