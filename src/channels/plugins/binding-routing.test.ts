@@ -265,6 +265,80 @@ describe("runtime conversation binding route", () => {
     ]);
   });
 
+  it("rewrites the route and touches only the owning channel account's binding", () => {
+    const binding = createBinding();
+    const { resolveByConversation, touch } = registerAdapter(binding);
+    const siblingTouches = [
+      { channel: "other", accountId: "default" },
+      { channel: "demo", accountId: "other" },
+    ].map(
+      (scope) =>
+        registerAdapter(createBinding({ conversation: { ...binding.conversation, ...scope } }))
+          .touch,
+    );
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route: createRoute(),
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(resolveByConversation).toHaveBeenCalledWith({
+      channel: "demo",
+      accountId: "default",
+      conversationId: "room-1",
+    });
+    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    for (const siblingTouch of siblingTouches) {
+      expect(siblingTouch).not.toHaveBeenCalled();
+    }
+    expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
+    expect(result.boundAgentId).toBe("review");
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual({
+      agentId: "review",
+      accountId: "default",
+      channel: "demo",
+      sessionKey: "agent:review:acp:session-1",
+      mainSessionKey: "agent:review:main",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.channel",
+      // Free ACP harness keys keep the pre-rewrite channel agent as dispatch owner (#146365).
+      ownerAgentId: "main",
+    });
+  });
+
+  it("touches plugin-owned bindings without rewriting the channel route", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo-plugin",
+        pluginRoot: "/tmp/demo-plugin",
+      },
+    });
+    const { touch } = registerAdapter(binding);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.boundSessionKey).toBeUndefined();
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("plugin");
+  });
+
   it.each([
     { name: "agent session", binding: createBinding(), kind: "agent", agentId: "review" },
     {
@@ -338,6 +412,9 @@ describe("runtime conversation binding route", () => {
               mainSessionKey: `agent:${agentId}:main`,
               lastRoutePolicy: "session",
               matchedBy: "binding.channel",
+              // Free ACP harness keys keep the pre-rewrite channel agent
+              // as dispatch owner (#146365).
+              ...(binding.targetSessionKey === "global" ? {} : { ownerAgentId: "main" }),
             }
           : route,
       );
@@ -384,5 +461,36 @@ describe("ensureConfiguredBindingRouteReady", () => {
       ok: false,
       error: "Configured binding route ready check timed out",
     });
+  });
+
+  it("keeps the configured route agent as dispatch owner for free ACP harness bindings", () => {
+    // Regression for openclaw/openclaw#146365: with explicit ownership the harness id
+    // (e.g. claude) is not a configured agent, so dispatch must use the channel owner.
+    const harnessKey = "agent:claude:acp:11111111-2222-4333-8555-666666666666";
+    const result = inspectRuntimeConversationBindingRoute({
+      route: createRoute(),
+      inspection: {
+        status: "available",
+        binding: createBinding({ targetSessionKey: harnessKey }),
+      },
+    });
+
+    expect(result.route.sessionKey).toBe(harnessKey);
+    expect(result.route.agentId).toBe("claude");
+    expect(result.route).toMatchObject({ ownerAgentId: "main" });
+  });
+
+  it("does not set a dispatch owner for configured acp:binding keys", () => {
+    const bindingKey = "agent:main:acp:binding:discord:default:9373ab192b2317f4";
+    const result = inspectRuntimeConversationBindingRoute({
+      route: createRoute(),
+      inspection: {
+        status: "available",
+        binding: createBinding({ targetSessionKey: bindingKey }),
+      },
+    });
+
+    expect(result.route.sessionKey).toBe(bindingKey);
+    expect(result.route.ownerAgentId).toBeUndefined();
   });
 });

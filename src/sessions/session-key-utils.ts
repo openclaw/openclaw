@@ -111,6 +111,19 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return hasSessionKeyPrefix(sessionKey, "acp:");
 }
 
+/**
+ * Free ACP session keys (`agent:<harness>:acp:<id>`) name an external harness namespace, not a
+ * configured agent. Configured binding keys (`agent:<owner>:acp:binding:...`) stay owner-scoped.
+ */
+export function isFreeAcpSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const rest = normalizeOptionalLowercaseString(parseAgentSessionKey(raw)?.rest);
+  return rest?.startsWith("acp:") === true && !rest.startsWith("acp:binding:");
+}
+
 /** Stored ACP bindings and stale ACP keys both belong to ACP dispatch, never local fallback. */
 export function resolveSessionDispatchKind(
   sessionKey: string | undefined | null,

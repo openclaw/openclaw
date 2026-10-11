@@ -11,11 +11,13 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { DEFAULT_RESET_TRIGGERS, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { isFreeAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
   FinalizedRuntimeMsgContext as MsgContext,
@@ -83,7 +85,14 @@ export async function initFastReplySessionState(params: {
   const sessionKey =
     resolveCommandTurnTargetSessionKey(ctx) ||
     resolveSessionKey(sessionScope, ctx, cfg.session?.mainKey, agentId);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  // Free ACP harness sessions persist under the harness key's agent scope; only the
+  // published dispatch runtime uses the configured owner (#146365).
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const initAgentId =
+    isFreeAcpSessionKey(sessionKey) && sessionKeyAgentId
+      ? normalizeAgentId(sessionKeyAgentId)
+      : agentId;
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: initAgentId });
   const relatedSessionKeys = [
     ctx.ParentSessionKey,
     ctx.ModelParentSessionKey,
@@ -91,7 +100,7 @@ export async function initFastReplySessionState(params: {
     resolveSessionParentSessionKey(sessionKey),
   ].filter((key): key is string => typeof key === "string");
   const snapshot = await loadReplySessionInitializationSnapshot({
-    agentId,
+    agentId: initAgentId,
     storePath,
     sessionKey,
     relatedSessionKeys,

@@ -1,4 +1,5 @@
 // Optional utility preprocessing keeps its runtime loaders lazy and cancellation explicit.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -6,6 +7,8 @@ import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { isFreeAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
@@ -90,12 +93,28 @@ export async function resolveReplyAgentScope(params: { cfg: OpenClawConfig; ctx:
     await assertPreparedConversationBindingRouteCurrent(ctx);
   }
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
+  // Free ACP harness keys name an execution target, not a configured owner. When channel
+  // routing preserved the pre-rewrite owner, scope the reply to it so the prepared dispatch
+  // runtime and the agent scope agree (#146365).
+  const routeOwnerAgentId = (() => {
+    if (!isFreeAcpSessionKey(agentSessionKey)) {
+      return undefined;
+    }
+    const trimmed = normalizeOptionalString(ctx.RouteOwnerAgentId);
+    if (!trimmed) {
+      return undefined;
+    }
+    const normalized = normalizeAgentIdStrict(trimmed);
+    return normalized.ok ? normalized.value : undefined;
+  })();
   return {
     agentSessionKey,
-    agentId: resolveSessionAgentId({
-      sessionKey: agentSessionKey,
-      config: cfg,
-      fallbackAgentId: ctx.AgentId,
-    }),
+    agentId:
+      routeOwnerAgentId ??
+      resolveSessionAgentId({
+        sessionKey: agentSessionKey,
+        config: cfg,
+        fallbackAgentId: ctx.AgentId,
+      }),
   };
 }

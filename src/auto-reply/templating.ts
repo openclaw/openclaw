@@ -153,6 +153,12 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /**
+   * Configured agent that owns reply dispatch when SessionKey is a free ACP harness key
+   * (`agent:<harness>:acp:<id>`) bound to this conversation. Channel routing names it because
+   * the harness id is not a configured agent; session storage keeps the key's agent scope.
+   */
+  RouteOwnerAgentId?: string;
   /** Participant mention facts prepared once from the physical inbound message. */
   GroupThread?: GroupThreadMentionFacts;
   /** Effective routed DM scope, including binding overrides. */
