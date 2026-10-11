@@ -355,6 +355,17 @@ it("queues captured outcomes off-thread and claims once per run until the next h
   expect(await alreadyClaimed).toBeUndefined();
   expect(await claimedSecond).toMatchObject({ summary: "second" });
   expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "third-run" })).toBeUndefined();
+  db.prepare("UPDATE heartbeat_outcomes SET context_claimed_at = 123 WHERE session_key = ?").run(
+    target.sessionKey,
+  );
+  expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "second-run" })).toMatchObject({
+    summary: "second",
+  });
+  expect(
+    db
+      .prepare("SELECT context_claimed_at FROM heartbeat_outcomes WHERE session_key = ?")
+      .get(target.sessionKey),
+  ).toEqual({ context_claimed_at: 123 });
 });
 
 it("rechecks a queued claim's captured authority and leaves the outcome unclaimed", async () => {

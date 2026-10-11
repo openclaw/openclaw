@@ -4,11 +4,11 @@ import { html } from "lit";
 
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
 
-const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
+export const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
 const COMMAND_OP_CHARS = new Set(["|", ";", "&", "<", ">"]);
 
 /** Small shell-ish tokenizer for display colors only; never used for execution. */
-function tokenizeCommand(command: string): CommandToken[] {
+export function tokenizeCommand(command: string): CommandToken[] {
   const tokens: CommandToken[] = [];
   let index = 0;
   let expectName = true;

@@ -3,11 +3,14 @@ import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
+  enqueueConfigAuditRecord,
   finalizeConfigWriteAuditRecord,
   readRecentConfigAuditRecords,
   resolveLegacyConfigAuditLogPath,
@@ -144,7 +147,7 @@ describe("config io audit helpers", () => {
     expect(auditPath.startsWith(path.resolve("undefined"))).toBe(false);
   });
 
-  it("reads a bounded newest-first audit window for Doctor provenance", async () => {
+  it("drains queued observations without main-thread SQL and reads the newest audit record", async () => {
     const home = await suiteRootTracker.make("recent");
     const first = createRenameAuditRecord(home);
     const second = {
@@ -154,7 +157,15 @@ describe("config io audit helpers", () => {
       nextHash: "newest-hash",
     };
     await appendConfigAuditRecord({ env: {}, homedir: () => home, record: first });
-    await appendConfigAuditRecord({ env: {}, homedir: () => home, record: second });
+    const work = new AsyncWorkScope();
+    const sql = observeMainThreadSql();
+    try {
+      work.run(() => enqueueConfigAuditRecord({ env: {}, homedir: () => home, record: second }));
+      await work.drain();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
 
     const recent = readRecentConfigAuditRecords({ env: {}, homedir: () => home, limit: 1 });
 
