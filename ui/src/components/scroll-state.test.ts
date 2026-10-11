@@ -70,7 +70,13 @@ describe("scroll state observation", () => {
     expect(order).toEqual([]);
     vi.advanceTimersToNextFrame();
     expect(order).toEqual(["read-0", "read-1", ...Array<string>(6).fill("write")]);
-    expect(elements.map((element) => ({ ...element.dataset }))).toEqual([
+    expect(
+      elements.map((element) => ({
+        scrollable: element.dataset.scrollable,
+        atStart: element.dataset.atStart,
+        atEnd: element.dataset.atEnd,
+      })),
+    ).toEqual([
       { scrollable: "true", atStart: "true", atEnd: "false" },
       { scrollable: "true", atStart: "true", atEnd: "false" },
     ]);

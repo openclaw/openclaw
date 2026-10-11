@@ -655,7 +655,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     scheduleLayout(this, () => {
       const shell = this.parentElement;
       if (!this.isConnected || !shell) {
-        return;
+        return undefined;
       }
       const panel = shell.querySelector<HTMLElement>(
         ".sidebar-region__right-runtime > .side-panel",

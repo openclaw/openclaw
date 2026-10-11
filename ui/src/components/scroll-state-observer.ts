@@ -13,7 +13,7 @@ function schedule(element: HTMLElement): void {
   scheduleLayout(element, () => {
     const entries = observations.get(element);
     if (!entries || !element.isConnected) {
-      return;
+      return undefined;
     }
     const states = new Map<boolean, ScrollState>();
     const updates = [...entries].map((entry) => {
