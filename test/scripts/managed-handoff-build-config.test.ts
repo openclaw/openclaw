@@ -27,7 +27,6 @@ import { packageActivationRuntimeForTest } from "../../src/infra/package-update-
 import { createPackageIntegrityReader } from "../../src/infra/package-update-integrity.js";
 import { createPackageSwapFixture } from "../../src/infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
-import { stageFreeBsdManagedHandoffNativeRuntime } from "../../src/infra/update-managed-service-handoff-native.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../src/infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../src/infra/update-managed-service-handoff-runtime.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -276,12 +275,22 @@ it.each(
       mkdirSync(base, { mode: 0o700 });
       prepareNext = async () => {
         const fixture = await createPackageSwapFixture(base);
-        // npm nests the FreeBSD identity dependency inside the installed package.
+        // npm nests proc-safe and its FreeBSD addon inside the installed package.
         const nativeModules = path.join(fixture.packageRoot, "node_modules");
         if (process.platform === "freebsd" && !existsSync(nativeModules)) {
-          const native = tempDirs.make("openclaw-package-native-");
-          stageFreeBsdManagedHandoffNativeRuntime(native);
-          cpSync(path.join(native, "runtime", "node_modules"), nativeModules, { recursive: true });
+          const procSafe = realpathSync(
+            path.dirname(
+              createRequire(import.meta.url).resolve("@openclaw/proc-safe/package.json"),
+            ),
+          );
+          const platformName = `@openclaw/proc-safe-freebsd-${process.arch}`;
+          const addon = path.dirname(
+            createRequire(path.join(procSafe, "package.json")).resolve(
+              `${platformName}/package.json`,
+            ),
+          );
+          cpSync(procSafe, path.join(nativeModules, "@openclaw", "proc-safe"), { recursive: true });
+          cpSync(realpathSync(addon), path.join(nativeModules, platformName), { recursive: true });
         }
         return withUpdateCommandExecutor(randomUUID(), async (executor) =>
           preparePackageActivationJournal({
