@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderDeclarationConfig } from "../config/types.js";
 import {
   copyArrayEntries,
   copyRecordEntries,
@@ -28,7 +28,7 @@ const MODEL_PROVIDER_CONFIG_KEYS = [
   "headers",
   "authHeader",
   "request",
-] as const satisfies readonly (keyof ModelProviderConfig)[];
+] as const satisfies readonly (keyof ModelProviderDeclarationConfig)[];
 
 const MODEL_DEFINITION_CONFIG_KEYS = [
   "api",
@@ -38,6 +38,8 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
   "cost",
   "contextWindow",
   "contextWindowSource",
+  "contextWindows",
+  "contextWindowDefault",
   "contextTokens",
   "maxTokens",
   "thinkingLevelMap",
@@ -47,12 +49,12 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
   "compat",
   "mediaInput",
   "metadataSource",
-] as const satisfies readonly (keyof ModelDefinitionConfig)[];
+] as const satisfies readonly (keyof ModelProviderDeclarationConfig["models"][number])[];
 
 /** Projection of a provider catalog result into provider config entries. */
 type ProviderCatalogResultProjection =
-  | { kind: "provider"; provider: ModelProviderConfig }
-  | { kind: "providers"; providers: Array<[string, ModelProviderConfig]> }
+  | { kind: "provider"; provider: ModelProviderDeclarationConfig }
+  | { kind: "providers"; providers: Array<[string, ModelProviderDeclarationConfig]> }
   | { kind: "empty" };
 
 /** Copies provider config data out of a provider catalog result. */
@@ -64,11 +66,11 @@ export function copyProviderCatalogResultProjection(
     return { kind: "provider", provider };
   }
 
-  const providers = copyRecordEntries<ModelProviderConfig>(
+  const providers = copyRecordEntries<ModelProviderDeclarationConfig>(
     readRecordValue(result, "providers"),
   ).flatMap(([providerId, providerConfig]) => {
     const copied = copyProviderCatalogProviderConfig(providerConfig);
-    return copied ? [[providerId, copied] as [string, ModelProviderConfig]] : [];
+    return copied ? [[providerId, copied] as [string, ModelProviderDeclarationConfig]] : [];
   });
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
@@ -167,7 +169,7 @@ export function copyProviderCatalogOutcomes(
 export function copyProviderCatalogResultEntries(params: {
   providerId: string;
   result: ProviderCatalogResult;
-}): Array<[string, ModelProviderConfig]> {
+}): Array<[string, ModelProviderDeclarationConfig]> {
   const projection = copyProviderCatalogResultProjection(params.result);
   if (projection.kind === "provider") {
     return [[params.providerId, projection.provider]];
@@ -175,7 +177,9 @@ export function copyProviderCatalogResultEntries(params: {
   return projection.kind === "providers" ? projection.providers : [];
 }
 
-function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
+function copyProviderCatalogModel(
+  model: unknown,
+): ModelProviderDeclarationConfig["models"][number] | undefined {
   if (!isRecordWithoutThrowing(model)) {
     return undefined;
   }
@@ -185,7 +189,7 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
     return undefined;
   }
 
-  const copied: Partial<ModelDefinitionConfig> = {
+  const copied: Partial<ModelProviderDeclarationConfig["models"][number]> = {
     id,
     name: typeof name === "string" ? name : id,
   };
@@ -195,13 +199,13 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
       (copied as Record<string, unknown>)[key] = value;
     }
   }
-  return copied as ModelDefinitionConfig;
+  return copied as ModelProviderDeclarationConfig["models"][number];
 }
 
 /** Copies the supported provider config fields from a provider catalog result. */
 function copyProviderCatalogProviderConfig(
   providerConfig: unknown,
-): ModelProviderConfig | undefined {
+): ModelProviderDeclarationConfig | undefined {
   if (!isRecordWithoutThrowing(providerConfig)) {
     return undefined;
   }
@@ -211,7 +215,7 @@ function copyProviderCatalogProviderConfig(
     return undefined;
   }
 
-  const copied: Partial<ModelProviderConfig> = {
+  const copied: Partial<ModelProviderDeclarationConfig> = {
     baseUrl,
     models: copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
       const model = copyProviderCatalogModel(entry);
@@ -224,5 +228,5 @@ function copyProviderCatalogProviderConfig(
       (copied as Record<string, unknown>)[key] = value;
     }
   }
-  return copied as ModelProviderConfig;
+  return copied as ModelProviderDeclarationConfig;
 }

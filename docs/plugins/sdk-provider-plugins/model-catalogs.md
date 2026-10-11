@@ -126,6 +126,11 @@ exact model ID, and transport API (and endpoint, when the fallback binds one).
 Do not mark curated static limits or authored caps as synthetic. Failed discovery
 keeps the estimate unless the catalog owner can retain the same account's inventory.
 
+Catalog model declarations may include `contextWindows` choices and a
+`contextWindowDefault` choice ID. Live and static hooks preserve these fields,
+just as manifest catalogs do. They are catalog metadata; the authored
+`models.providers.*.models` configuration schema does not accept them.
+
 For compatibility, nonempty rows returned by a legacy catalog hook without an
 outcome survive provider-wide failures under the same credentials. This does not
 establish a successful discovery origin or retain unrelated configured and

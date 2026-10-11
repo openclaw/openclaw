@@ -298,24 +298,32 @@ export async function resolveSessionForkMaxTokens(params: {
   const childCatalog = params.loadGatewayModelCatalogSnapshot
     ? await params.loadGatewayModelCatalogSnapshot()
     : undefined;
+  const childRuntime = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: childModel.provider,
+    modelId: childModel.model,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+  });
   const childLogicalEntry = findModelCatalogEntry(childCatalog?.entries ?? [], {
     provider: childModel.provider,
     modelId: childModel.model,
   });
-  const childCatalogEntry =
+  const childRuntimeEntry =
     childLogicalEntry && childCatalog
       ? selectModelCatalogRuntimeEntry({
           entry: childLogicalEntry,
           routeVariants: childCatalog.routeVariants,
-          runtimeId: resolveEffectiveAgentRuntime({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            provider: childModel.provider,
-            modelId: childModel.model,
-            sessionKey: params.sessionKey,
-            sessionEntry: params.entry,
-          }),
+          runtimeId: childRuntime,
         }).entry
+      : undefined;
+  const childCatalogEntry =
+    childRuntimeEntry &&
+    (childRuntime === "openclaw"
+      ? !childRuntimeEntry.nativeRuntime
+      : childRuntimeEntry.nativeRuntime === childRuntime)
+      ? childRuntimeEntry
       : undefined;
   const childContextWindow = resolveModelContextWindowProfile({
     catalogEntry: childCatalogEntry,
@@ -325,12 +333,16 @@ export async function resolveSessionForkMaxTokens(params: {
     cfg: params.cfg,
     provider: childModel.provider,
     model: childModel.model,
+    nativeRuntime: childRuntime,
     modelContextTokens: childCatalogEntry?.contextTokens,
     modelContextWindow: childContextWindow.contextTokens,
+    modelContextWindowSource: childContextWindow.contextWindow
+      ? undefined
+      : childCatalogEntry?.contextWindowSource,
     allowAsyncLoad: false,
     allowUnscopedModelLookup: false,
   });
-  return childContextWindow.contextTokens
+  return childContextWindow.contextWindow && childContextWindow.contextTokens
     ? Math.min(
         resolvedForkMaxTokens ?? childContextWindow.contextTokens,
         childContextWindow.contextTokens,

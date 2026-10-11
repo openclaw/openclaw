@@ -309,6 +309,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             result = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
+              candidateAgentRuntime,
               lifecycleGeneration: params.state.lifecycleGeneration,
             });
           } else {

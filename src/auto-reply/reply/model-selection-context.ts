@@ -7,7 +7,9 @@ export function resolveContextTokens(params: {
   provider: string;
   model: string;
   modelContextWindow?: number;
+  modelContextWindowSource?: "synthetic";
   modelContextTokens?: number;
+  nativeRuntime?: string;
 }): number {
   return (
     resolveContextTokensForModel({

@@ -1,7 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import { resolveSessionForkMaxTokens } from "./session-create-model-selection.js";
 
 const forkableClaudeCliBackend = {
   id: "claude-cli",
@@ -14,7 +20,12 @@ const forkableClaudeCliBackend = {
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
 >[number];
 
+beforeEach(() => {
+  resetContextWindowCacheForTest();
+});
+
 afterEach(() => {
+  resetContextWindowCacheForTest();
   cliBackendsTesting.resetDepsForTest();
 });
 
@@ -151,6 +162,114 @@ describe("buildForkedGatewaySessionEntry", () => {
 
       // Both capabilities and a recorded checkpoint are required for an isolated stable branch.
       expect(forked.cliSessionBindings).toBeUndefined();
+    },
+  );
+});
+
+describe("Gateway fork capacity", () => {
+  it.each([
+    {
+      name: "native synthetic window",
+      runtime: "codex",
+      window: 128_000,
+      synthetic: true,
+      prompt: undefined,
+      expected: 128_000,
+    },
+    {
+      name: "native genuine window",
+      runtime: "codex",
+      window: 64_000,
+      synthetic: false,
+      prompt: undefined,
+      expected: 64_000,
+    },
+    {
+      name: "native reported prompt beside synthetic window",
+      runtime: "codex",
+      window: 128_000,
+      synthetic: true,
+      prompt: 777_000,
+      expected: 777_000,
+    },
+    {
+      name: "missing native capacity beside API inventory",
+      runtime: "codex",
+      window: undefined,
+      synthetic: false,
+      prompt: undefined,
+      expected: undefined,
+    },
+    {
+      name: "API capacity",
+      runtime: "openclaw",
+      window: undefined,
+      synthetic: false,
+      prompt: undefined,
+      expected: 1_000_000,
+    },
+  ])(
+    "uses $name without borrowing a warm API budget",
+    async ({ runtime, window, synthetic, prompt, expected }) => {
+      const provider = "openai";
+      const model = "fork-capacity-fixture";
+      const entry: SessionEntry = {
+        sessionId: "fork-capacity-child",
+        updatedAt: 1,
+        modelProvider: provider,
+        model,
+        providerOverride: provider,
+        modelOverride: model,
+        agentRuntimeOverride: runtime,
+        agentHarnessId: "previous-native-runtime",
+      };
+      const api: ModelCatalogEntry = {
+        provider,
+        id: model,
+        name: "Fork fixture",
+        contextWindow: 1_000_000,
+      };
+      const native: ModelCatalogEntry | undefined =
+        window === undefined
+          ? undefined
+          : {
+              provider,
+              id: model,
+              name: "Native fork fixture",
+              nativeRuntime: "codex",
+              contextWindow: window,
+              ...(synthetic ? { contextWindowSource: "synthetic" } : {}),
+              ...(prompt === undefined ? {} : { contextTokens: prompt }),
+            };
+      const cfg = {};
+      const sessionKey = "agent:main:fork-capacity";
+      expect(resolveSessionModelRef(cfg, entry, "main")).toEqual({ provider, model });
+      expect(
+        resolveEffectiveAgentRuntime({
+          cfg,
+          agentId: "main",
+          provider,
+          modelId: model,
+          sessionKey,
+          sessionEntry: entry,
+        }),
+      ).toBe(runtime);
+      getContextWindowCaches().discoveredTokenCache.set(
+        providerContextTokenCacheKey(provider, model),
+        1_000_000,
+      );
+      expect(
+        await resolveSessionForkMaxTokens({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          entry,
+          loadGatewayModelCatalogSnapshot: async () => ({
+            entries: [api],
+            routeVariants: native ? [api, native] : [api],
+          }),
+        }),
+      ).toBe(expected);
     },
   );
 });
