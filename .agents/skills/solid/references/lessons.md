@@ -56,3 +56,5 @@ The [rc.14 changelog](https://github.com/solidjs/solid/blob/8d23a5a13b23f8bfd5f0
 - **Ports grow unless you push back.** First drafts came in 7% to nearly 3x larger than the Lit they replaced (formatter-expanded JSX, wrapper layers, defensive branches). Ask for net LOC at or below the original and explain any growth.
 - **Attribute, don't stop.** A failing check gets rerun on the merge base. The same failure there means it's inherited: record it and continue.
 - **Startup bytes vary by machine.** Compare the merge base and the head on the same host before blaming a change.
+
+- Plugin fallback templates can contain nested Solid directives. Restore the fallback component owner when its effect commits the opaque Lit template; a raw `render` call otherwise creates nested roots in rc.14's ownerless effect phase.
