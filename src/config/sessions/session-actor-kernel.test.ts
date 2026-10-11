@@ -445,8 +445,15 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         initialWriterRunId: "first-run",
       },
     };
-    const retainedReads = trackSqliteStatementExecutions(database.db, ["entry"], (query) =>
-      query.toLowerCase().includes('from "session_nodes"') ? "entry" : null,
+    const retainedReads = trackSqliteStatementExecutions(
+      database.db,
+      ["entry", "newer"],
+      (query) =>
+        query.toLowerCase().includes('from "session_nodes"')
+          ? "entry"
+          : query.includes('"serialized_bytes"') && query.includes('"identity"."seq" >')
+            ? "newer"
+            : null,
     );
     const committed = (() => {
       try {
@@ -462,6 +469,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       }
     })();
     expect(retainedReads.counts.entry).toBe(0);
+    expect(retainedReads.counts.newer).toBe(0);
     expect(committed.kind).toBe("metadata");
     if (committed.kind !== "metadata") {
       throw new Error("Expected prepared metadata append");

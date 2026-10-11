@@ -71,6 +71,16 @@ export function canRebasePreparedAssistantInTransaction(
   if (admittedUserId && !admitted) {
     return false;
   }
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  const admittedIsNewer = admitted !== undefined && admitted.seq > (preparedParent?.seq ?? -1);
+  if (
+    actor &&
+    ![...actor.transcript.identities.values()].some(
+      (identity) => identity.event_type === "message" && identity.seq > (preparedParent?.seq ?? -1),
+    )
+  ) {
+    return !admittedIsNewer;
+  }
   const newerMessageMetadata = Array.from(
     iterateSqliteQuerySync(
       database.db,
@@ -101,7 +111,6 @@ export function canRebasePreparedAssistantInTransaction(
   ) {
     return false;
   }
-  const admittedIsNewer = admitted !== undefined && admitted.seq > (preparedParent?.seq ?? -1);
   if (admittedIsNewer && !newerMessageMetadata.some((row) => row.event_id === admittedUserId)) {
     return false;
   }

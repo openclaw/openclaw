@@ -4396,8 +4396,10 @@ read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
 Gateway main thread; no-op planning still avoids that preparation entirely.
-A publication during preparation revokes the capture instead of starting another
-read; the automatic maintenance owner retains its existing bounded retry policy.
+Committed registry publications update the retained capture before the final host
+maintenance grant, without another candidate read or worker-side registry digest.
+Protection published after that grant is ordered after the admitted maintenance
+operation; outside writers must hold exclusive ownership while the Gateway is stopped.
 Slow native transaction diagnostics identify the executing worker; metadata
 requests do not log caller-side elapsed time as reclamation execution time.
 Commit receipts publish archived-entry facts before releasing
@@ -5059,7 +5061,8 @@ and lifecycle authority; the worker compares the durable descendant rows after
 that grant and before committing. Registry preparation preserves unpublished
 intent and current live objects without treating a stale resident snapshot as
 fresh durable state. Reaper maintenance uses the existing compact subagent
-projection, with a fresh protection check at the worker commit boundary.
+projection and owner-published changes at its final host grant. It does not repeat
+the registry scan inside the session worker.
 The batch keeps one synchronous transaction and the existing archive,
 publication, rollback, and uncertain-outcome owners. Native harness mutation
 objects remain with their process-held owner. No cross-database atomicity,
