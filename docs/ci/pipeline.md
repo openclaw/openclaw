@@ -340,14 +340,20 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
-`cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
-WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
-`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
-byte sizes, and releases inspector snapshot metadata when sessions close.
-It retains the previous worker heap-cap, module-resolution, test-deadline,
-GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
+The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
+`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
+`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a`.
+This build shares source buffers on `node:vm` cache hits, refactors module
+resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
+enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
+and external strings across Workers, releases Worker-local event-name state,
+and skips the preliminary full collection at Worker shutdown. WebKit fixes
+stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
+fixes Linux foreign-stack suspension deadlocks.
+It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
+inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
+test-deadline, GC cadence, and idle-worker fixes. The release publishes the four
+Darwin/Linux targets; Darwin executables are Developer ID signed and notarized.
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
