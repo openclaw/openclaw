@@ -45,21 +45,43 @@ enum OpenClawConfigFile {
     #endif
 
     static func loadDict() -> [String: Any] {
+        self.loadDictIfReadable() ?? [:]
+    }
+
+    /// A missing file is an empty config; an existing unreadable or invalid file is not.
+    static func loadDictIfReadable() -> [String: Any]? {
         self.fileLock.withLock {
             let url = OpenClawPaths.configURL
-            guard FileManager().fileExists(atPath: url.path) else { return [:] }
+            var info = stat()
+            if lstat(url.path, &info) != 0 {
+                return errno == ENOENT ? [:] : nil
+            }
             do {
                 let data = try Data(contentsOf: url)
                 guard let root = self.parseConfigData(data) else {
                     self.observeConfigRead(data: data, root: nil, configURL: url)
                     self.logger.warning("config JSON root invalid")
-                    return [:]
+                    return nil
                 }
                 self.observeConfigRead(data: data, root: root, configURL: url)
                 return root
             } catch {
                 self.logger.warning("config read failed: \(error.localizedDescription)")
-                return [:]
+                return nil
+            }
+        }
+    }
+
+    static func ensureAppHostedGatewayAuth(environment: [String: String]) throws {
+        try self.fileLock.withLock {
+            let root = self.loadDictIfReadable()
+            let decision = AppHostedGatewayAuth.decision(root: root, environment: environment)
+            guard decision == .persist else { return }
+            let token = try AppHostedGatewayAuth.generateToken()
+            let output = AppHostedGatewayAuth.persisting(token: token, in: root ?? [:])
+            guard self.saveDict(output, preserveExistingKeys: true, allowGatewayAuthMutation: true) else {
+                throw GatewayHostingError(message: "Could not save the local Gateway authentication token. " +
+                    "Check that \(OpenClawPaths.configURL.path) is writable, then retry setup.")
             }
         }
     }

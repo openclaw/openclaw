@@ -28,9 +28,16 @@ duplicated. Existing independently managed installations keep their current
 lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
 their always-on service.
 
+Before launching an app-hosted Gateway, the app saves a local authentication
+token when neither configuration nor the child environment supplies credentials
+and token authentication is selected or implicit. Existing credentials, secret
+references, and other authentication modes are preserved. If the token cannot
+be saved, setup stops with a retryable error. This also applies to a local
+Gateway hosted alongside a remote primary connection.
+
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
-`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use APFS
-clone-on-write when available and are published atomically after provenance and
+`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
+directory clone when available, falling back to a file copy, and are published atomically after provenance and
 Bun checks succeed. The child and app-managed Bun service use the concrete
 build directory so each process keeps its matching package and SQLite library.
 The `runtime/current` symlink selects the runtime for the terminal CLI shim.
