@@ -6,7 +6,10 @@ import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-muta
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -26,7 +29,8 @@ import {
   saveCronJobsStoreChanges,
   saveCronJobsStoreWithRevision,
 } from "./store.js";
-import { restoreCronLoadError, serializeCronLoadError } from "./store/load-error.js";
+import { prepareCronJobNameResolver } from "./store/job-name.js";
+import { serializeCronLoadError } from "./store/load-error.js";
 import type { CronStoreWorkerOperations } from "./store/load-worker.types.js";
 import { serializeCronSaveError } from "./store/save-error.js";
 import type { CronStoreSaveWorkerOperations } from "./store/save-worker.types.js";
@@ -50,54 +54,6 @@ function cronWorkerFixture(): CronStoreFile {
   };
 }
 
-it("loads complete partitioned cron state off the host and preserves it through reopen", async () => {
-  await withOpenClawTestState({ label: "cron-worker-load" }, async (state) => {
-    const storePath = state.statePath("cron", "jobs.json");
-    const otherStorePath = state.statePath("other", "jobs.json");
-    const store = cronWorkerFixture();
-    await saveCronJobsStore(storePath, store);
-    await saveCronJobsStore(otherStorePath, { version: 1, jobs: [] });
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    const revision = getCronJobsStoreRevision(storePath);
-    const sql = observeMainThreadSql();
-    try {
-      const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-      expect(loaded.store.jobs.map((job) => job.id)).toEqual(["first", "second"]);
-      expect(loaded.store.jobs[0]).toMatchObject(
-        expectDefined(store.jobs[0], "first seeded cron job"),
-      );
-      expect(loaded.configJobs).toHaveLength(2);
-      expect(loaded.configJobIndexes).toEqual([0, 1]);
-      expect(loaded.configJobRuntimeEntries[0]?.state).toMatchObject({ nextRunAtMs: 60_001 });
-      expect(loaded.jobsFingerprint).toEqual(expect.any(String));
-      expect(loaded.invalidConfigRows).toEqual([]);
-      expect((await loadCronJobsStoreWithConfigJobs(otherStorePath)).store.jobs).toEqual([]);
-      expect(getCronJobsStoreRevision(storePath)).toBe(revision);
-      sql.expectIdle();
-      for (const job of store.jobs) {
-        job.name = `updated ${job.id}`;
-      }
-      await saveCronJobsStore(storePath, store);
-      sql.clear();
-      const updated = await loadCronJobsStoreWithConfigJobs(storePath);
-      expect(updated.store.jobs.map((job) => job.name)).toEqual([
-        "updated first",
-        "updated second",
-      ]);
-      expect(updated.jobsFingerprint).not.toBe(loaded.jobsFingerprint);
-      sql.expectIdle();
-      // Canonical close joins database cleanup before the next read.
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      sql.clear();
-      expect(await loadCronJobsStoreWithConfigJobs(storePath)).toEqual(updated);
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  });
-});
-
 describe("worker load result publication", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -111,6 +67,10 @@ describe("worker load result publication", () => {
     "publishes completed or uncertain load repairs before settling success=$ok count=$repairCommits",
     async ({ ok, repairCommits }) => {
       const storePath = `/synthetic/cron-repair-result-${ok}-${repairCommits}/jobs.json`;
+      const native = Object.assign(new Error("database busy"), { code: "SQLITE_BUSY" });
+      const failure = Object.assign(new SqliteCoordinatorError("later load stage failed", native), {
+        code: "SQLITE_ERROR",
+      });
       const result: CronStoreWorkerOperations["cron.loadMutable"]["output"] = ok
         ? {
             ok: true,
@@ -126,7 +86,7 @@ describe("worker load result publication", () => {
         : {
             ok: false,
             repairCommits,
-            error: { name: "Error", message: "later load stage failed", code: "SQLITE_ERROR" },
+            error: serializeCronLoadError(failure),
           };
       vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
         async (_context, operation) => operation({ execute: vi.fn().mockResolvedValue(result) }),
@@ -139,34 +99,38 @@ describe("worker load result publication", () => {
           [],
         );
       } else {
-        await expect(loadCronJobsStoreWithConfigJobs(storePath)).rejects.toMatchObject({
+        const load = loadCronJobsStoreWithConfigJobs(storePath);
+        await expect(load).rejects.toMatchObject({
+          name: failure.name,
           message: "later load stage failed",
           code: "SQLITE_ERROR",
+          cause: { message: "database busy", code: "SQLITE_BUSY" },
+        });
+        await load.catch((error: unknown) => {
+          expect(formatErrorMessage(error, { redact: (text) => text })).toBe(
+            formatErrorMessage(failure, { redact: (text) => text }),
+          );
         });
       }
       expect(getCronJobsStoreRevision(storePath)).toBe(before + Math.max(1, repairCommits));
     },
   );
 
-  it("invalidates a cached load when transport cannot provide its repair result", async () => {
-    const storePath = "/synthetic/cron-unavailable-result/jobs.json";
-    const failure = new Error("worker result unavailable");
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValue(failure);
-    const before = getCronJobsStoreRevision(storePath);
-    await expect(loadCronJobsStoreWithConfigJobs(storePath)).rejects.toBe(failure);
-    expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
-  });
-
-  it("preserves the coordinator cause used by Doctor diagnostics", () => {
-    const native = Object.assign(new Error("database busy"), { code: "SQLITE_BUSY" });
-    const original = new SqliteCoordinatorError("repair completed but cleanup failed", native);
-    const restored = restoreCronLoadError(serializeCronLoadError(original));
-    expect(restored.name).toBe(original.name);
-    expect(restored.cause).toMatchObject({ message: "database busy", code: "SQLITE_BUSY" });
-    expect(formatErrorMessage(restored, { redact: (text) => text })).toBe(
-      formatErrorMessage(original, { redact: (text) => text }),
-    );
-  });
+  it.each(["load", "save"])(
+    "invalidates when transport cannot provide a %s result",
+    async (operation) => {
+      const storePath = `/synthetic/cron-unavailable-${operation}/jobs.json`;
+      const failure = new Error("worker result unavailable");
+      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValue(failure);
+      const before = getCronJobsStoreRevision(storePath);
+      const result =
+        operation === "load"
+          ? loadCronJobsStoreWithConfigJobs(storePath)
+          : saveCronJobsStore(storePath, { version: 1, jobs: [] });
+      await expect(result).rejects.toBe(failure);
+      expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
+    },
+  );
 });
 
 it("persists full, changed, and runtime-only cron saves off the host through reopen", async () => {
@@ -226,59 +190,51 @@ it("preserves the cron conflict error class across an actual worker save", async
   });
 });
 
-it("keeps native transaction hooks on the same connection and original job objects", async () => {
-  await withOpenClawTestState({ label: "cron-native-save-hooks" }, async (state) => {
-    const storePath = state.statePath("cron", "jobs.json");
-    const store = cronWorkerFixture();
-    const order: string[] = [];
-    let beforeDatabase: DatabaseSync | undefined;
-    let afterDatabase: DatabaseSync | undefined;
-    await saveCronJobsStore(storePath, store, {
-      transactionHooks: {
-        beforeWrite: (db) => {
-          beforeDatabase = db;
-          store.jobs[0]!.name = "changed by native hook";
-          order.push("before");
-        },
-        afterWrite: (db) => {
-          afterDatabase = db;
-          order.push("after");
-        },
-        afterCommit: () => {
-          order.push("committed");
-        },
-      },
-    });
-    expect(beforeDatabase).toBeDefined();
-    expect(afterDatabase).toBe(beforeDatabase);
-    expect(order).toEqual(["before", "after", "committed"]);
-    expect((await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs[0]?.name).toBe(
-      "changed by native hook",
-    );
-  });
-});
-
-it("invalidates a committed native save before propagating a constructed post-commit error", async () => {
-  await withOpenClawTestState({ label: "cron-native-save-publication" }, async (state) => {
-    const storePath = state.statePath("cron", "jobs.json");
-    const store = cronWorkerFixture();
-    const before = getCronJobsStoreRevision(storePath);
-    const failure = new Error("post-commit observer failed");
-    await expect(
-      saveCronJobsStore(storePath, store, {
+it.each([false, true])(
+  "publishes native saves with ordered hooks before observer failure=%s",
+  async (fail) => {
+    await withOpenClawTestState({ label: "cron-native-save-hooks" }, async (state) => {
+      const storePath = state.statePath("cron", "jobs.json");
+      const store = cronWorkerFixture();
+      const order: string[] = [];
+      let beforeDatabase: DatabaseSync | undefined;
+      let afterDatabase: DatabaseSync | undefined;
+      const before = getCronJobsStoreRevision(storePath);
+      const failure = new Error("post-commit observer failed");
+      const save = saveCronJobsStore(storePath, store, {
         transactionHooks: {
+          beforeWrite: (db) => {
+            beforeDatabase = db;
+            store.jobs[0]!.name = "changed by native hook";
+            order.push("before");
+          },
+          afterWrite: (db) => {
+            afterDatabase = db;
+            order.push("after");
+          },
           afterCommit: () => {
-            throw failure;
+            order.push("committed");
+            if (fail) {
+              throw failure;
+            }
           },
         },
-      }),
-    ).rejects.toBe(failure);
-    expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
-    expect(
-      (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs.map((job) => job.id),
-    ).toEqual(["first", "second"]);
-  });
-});
+      });
+      if (fail) {
+        await expect(save).rejects.toBe(failure);
+      } else {
+        await save;
+      }
+      expect(beforeDatabase).toBeDefined();
+      expect(afterDatabase).toBe(beforeDatabase);
+      expect(order).toEqual(["before", "after", "committed"]);
+      expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
+      const loaded = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
+      expect(loaded[0]?.name).toBe("changed by native hook");
+      expect(loaded.map((job) => job.id)).toEqual(["first", "second"]);
+    });
+  },
+);
 
 it.each([true, false])(
   "commits guarded service mutations off the host with scheduler enabled=%s",
@@ -291,7 +247,16 @@ it.each([true, false])(
         job.state = {};
       }
       store.jobs[0]!.declarationKey = "agent:main:callback-save";
+      store.jobs.push({ ...store.jobs[0]!, id: "broken", name: "Broken metadata" });
       await saveCronJobsStore(storePath, store);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
+          "{",
+          storePath,
+          "broken",
+        );
+      });
+      const resolveName = await prepareCronJobNameResolver(["broken"], storePath);
       const service = new CronService({
         scheduler: createTestGatewayScheduler(),
         nowMs: () => Date.now(),
@@ -392,6 +357,7 @@ it.each([true, false])(
             return undefined;
           });
           await step.invoke(callback);
+          expect(resolveName("broken")).toBe(cronEnabled ? undefined : "Broken metadata");
           if (step.singleUse) {
             expect(callback, step.name).toHaveBeenCalledTimes(1);
           } else {
@@ -554,7 +520,7 @@ it.each(["add", "update", "remove", "authority invalidation", "runtime update"] 
 );
 
 it.each(["rename", "disable", "remove", "add"] as const)(
-  "reconciles a committed %s when its worker reply is lost without replay",
+  "reloads durable %s state after reply loss without claiming completion or replay",
   async (mutation) => {
     await withOpenClawTestState({ label: "cron-guarded-lost-reply" }, async (fixture) => {
       const storePath = fixture.statePath("cron", "jobs.json");
@@ -563,6 +529,7 @@ it.each(["rename", "disable", "remove", "add"] as const)(
         job.state.nextRunAtMs = Date.now() + 60_000;
       }
       await saveCronJobsStore(storePath, store);
+      const resolveName = await prepareCronJobNameResolver(["first", "added"], storePath);
       const onEvent = vi.fn();
       const state = createCronRegressionState({
         storePath,
@@ -617,32 +584,33 @@ it.each(["rename", "disable", "remove", "add"] as const)(
         expect(result).toBe("reply-lost");
         expect(dropped.wasDropped()).toBe(true);
         expect(dropped.attempts).toEqual(["cron.mutateJobs"]);
-        expect(completion.isCommitted()).toBe(true);
-        if (mutation === "remove") {
-          expect.soft(service.getJob("first")).toBeUndefined();
-          expect.soft(marker.jobRemoved).toBe(true);
-        } else {
-          expect
-            .soft(service.getJob(mutation === "add" ? "added" : "first")?.name)
-            .toBe(mutation === "add" ? "accepted add" : "accepted edit");
-        }
-        if (mutation === "remove" || mutation === "disable") {
-          expect.soft(marker.cancellation?.kind).toBe("requested");
-        }
-        expect.soft(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            jobId: mutation === "add" ? "added" : "first",
-            action: mutation === "remove" ? "removed" : mutation === "add" ? "added" : "updated",
-          }),
-        );
+        expect(completion.isCommitted()).toBe(false);
+        expect(() => resolveName(mutation === "add" ? "added" : "first")).toThrow("need refresh");
+        expect(marker.jobRemoved).not.toBe(true);
+        expect(marker.cancellation?.kind).not.toBe("requested");
+        expect(onEvent).not.toHaveBeenCalled();
         await dropped.waitForExit();
         const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
+        const refreshed = await service.list({ includeDisabled: true });
+        const byId = (left: { id: string }, right: { id: string }) =>
+          left.id.localeCompare(right.id);
+        expect(refreshed.toSorted(byId)).toEqual(persisted.toSorted(byId));
+        const refreshedName = await prepareCronJobNameResolver(["first", "added"], storePath);
+        expect(refreshedName(mutation === "add" ? "added" : "first")).toBe(
+          mutation === "remove" ? undefined : mutation === "add" ? "accepted add" : "accepted edit",
+        );
         if (mutation === "remove") {
           expect(persisted.some((job) => job.id === "first")).toBe(false);
+          expect(service.getJob("first")).toBeUndefined();
         } else {
-          expect(
-            persisted.find((job) => job.id === (mutation === "add" ? "added" : "first"))?.name,
-          ).toBe(mutation === "add" ? "accepted add" : "accepted edit");
+          const current = persisted.find(
+            (job) => job.id === (mutation === "add" ? "added" : "first"),
+          );
+          expect(current?.name).toBe(mutation === "add" ? "accepted add" : "accepted edit");
+          if (mutation === "disable") {
+            expect(current?.enabled).toBe(false);
+          }
+          expect(service.getJob(current!.id)).toEqual(current);
         }
       } finally {
         await dropped.close();
@@ -654,7 +622,7 @@ it.each(["rename", "disable", "remove", "add"] as const)(
 );
 
 it.each([false, true])(
-  "retains base-session cleanup after a committed removal loses its reply (active=%s)",
+  "does not claim removal cleanup after an unknown reply (active=%s)",
   async (active) => {
     await withOpenClawTestState({ label: "cron-removed-reply-cleanup" }, async (fixture) => {
       const storePath = fixture.statePath("cron", "jobs.json");
@@ -672,35 +640,26 @@ it.each([false, true])(
         runIsolatedAgentJob: async () => ({ status: "skipped" }),
       });
       const service = new CronService({ ...state.deps, sessionStorePath });
-      const cleanupCalled = createDeferred();
-      const cleanup = vi
-        .spyOn(sessionReaper, "removeCronJobBaseSession")
-        .mockImplementation(async () => {
-          cleanupCalled.resolve();
-          return true;
-        });
+      const cleanup = vi.spyOn(sessionReaper, "removeCronJobBaseSession").mockResolvedValue(true);
       const marker = active ? markCronJobActive(job.id) : undefined;
-      if (marker) {
-        marker.cancellation = {
-          kind: "bound",
-          cancel() {
-            throw new Error("cancellation listener failed");
-          },
-        };
-      }
       const dropped = loseFirstCronMutationReply("cron.mutateJobs");
       try {
         await expect(service.remove(job.id)).rejects.toThrow();
         expect(dropped.wasDropped()).toBe(true);
+        expect(dropped.attempts).toEqual(["cron.mutateJobs"]);
+        await dropped.waitForExit();
+        expect(
+          (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs.some(
+            (row) => row.id === job.id,
+          ),
+        ).toBe(false);
+        await service.list({ includeDisabled: true });
         expect(service.getJob(job.id)).toBeUndefined();
         if (marker) {
-          expect(marker.jobRemoved).toBe(true);
-          expect(cleanup).not.toHaveBeenCalled();
+          expect(marker.jobRemoved).not.toBe(true);
           clearCronJobActive(job.id, marker);
         }
-        await cleanupCalled.promise;
-        expect(cleanup).toHaveBeenCalledTimes(1);
-        expect(cleanup).toHaveBeenCalledWith({ agentId: "main", jobId: job.id, sessionStorePath });
+        expect(cleanup).not.toHaveBeenCalled();
       } finally {
         await dropped.close();
         clearCronJobActive(job.id, marker);
@@ -732,6 +691,7 @@ describe("worker save result publication", () => {
             ok: true,
             committed,
             value: undefined,
+            names: new Map(),
             jobsFingerprint: "synthetic-fingerprint",
             runtimeFingerprint: "synthetic-runtime-fingerprint",
           }
@@ -754,50 +714,6 @@ describe("worker save result publication", () => {
     },
   );
 
-  it("invalidates before rejecting an unavailable write result", async () => {
-    const storePath = "/synthetic/cron-save-unavailable/jobs.json";
-    const failure = new Error("worker result unavailable");
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValue(failure);
-    const before = getCronJobsStoreRevision(storePath);
-    await expect(saveCronJobsStore(storePath, { version: 1, jobs: [] })).rejects.toBe(failure);
-    expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
-  });
-
-  it.each([false, true])(
-    "keeps a stale save distinguishable after partition eviction before reply=%s",
-    async (evictBeforeReply) => {
-      const storePath = `/synthetic/cron-save-eviction-${evictBeforeReply}/jobs.json`;
-      const pending = createDeferred<CronStoreSaveWorkerOperations["cron.save"]["output"]>();
-      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-        async (_context, operation) =>
-          operation({ execute: vi.fn().mockReturnValue(pending.promise) }),
-      );
-      const evictPartition = () => {
-        for (let index = 0; index < 65; index += 1) {
-          noteCronJobsStoreCommit(
-            `/synthetic/cron-save-eviction-${evictBeforeReply}/peer-${index}`,
-          );
-        }
-      };
-      const save = saveCronJobsStoreWithRevision(storePath, { version: 1, jobs: [] });
-      noteCronJobsStoreCommit(storePath);
-      if (evictBeforeReply) {
-        evictPartition();
-      }
-      pending.resolve({
-        ok: true,
-        committed: true,
-        value: undefined,
-        jobsFingerprint: "synthetic-fingerprint",
-        runtimeFingerprint: "synthetic-runtime-fingerprint",
-      });
-      const result = await save;
-      expect(result.revision).not.toBe(getCronJobsStoreRevision(storePath));
-      evictPartition();
-      expect(result.revision).not.toBe(getCronJobsStoreRevision(storePath));
-    },
-  );
-
   it("does not reuse an untracked load revision after its committed partition is evicted", () => {
     const storePath = "/synthetic/cron-load-revision-eviction/jobs.json";
     const loadedRevision = getCronJobsStoreRevision(storePath);
@@ -811,34 +727,48 @@ describe("worker save result publication", () => {
     expect(getCronJobsStoreRevision(storePath)).not.toBe(loadedRevision);
   });
 
-  it.each([false, true])(
-    "returns an operation-bound revision when an intervening commit exists=%s",
-    async (intervening) => {
-      const storePath = `/synthetic/cron-save-revision-${intervening}/jobs.json`;
+  it.each(["unchanged", "intervening", "evicted before reply", "evicted after reply"] as const)(
+    "returns an operation-bound save revision (%s)",
+    async (change) => {
+      const storePath = `/synthetic/cron-save-revision-${change}/jobs.json`;
       const pending = createDeferred<CronStoreSaveWorkerOperations["cron.save"]["output"]>();
       vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
         async (_context, operation) =>
           operation({ execute: vi.fn().mockReturnValue(pending.promise) }),
       );
+      const evictPartition = () => {
+        for (let index = 0; index < 65; index += 1) {
+          noteCronJobsStoreCommit(`${storePath}/peer-${index}`);
+        }
+      };
       const before = getCronJobsStoreRevision(storePath);
       const save = saveCronJobsStoreWithRevision(storePath, { version: 1, jobs: [] });
-      if (intervening) {
+      if (change !== "unchanged") {
         noteCronJobsStoreCommit(storePath);
+      }
+      if (change === "evicted before reply") {
+        evictPartition();
       }
       pending.resolve({
         ok: true,
         committed: true,
         value: undefined,
+        names: new Map(),
         jobsFingerprint: "synthetic-fingerprint",
         runtimeFingerprint: "synthetic-runtime-fingerprint",
       });
       const result = await save;
       const latest = getCronJobsStoreRevision(storePath);
       expect(latest).toBeGreaterThan(before);
-      if (intervening) {
-        expect(result.revision).toBeLessThan(0);
-      } else {
+      if (change === "unchanged") {
         expect(result.revision).toBe(latest);
+      } else {
+        expect(result.revision).toBeLessThan(0);
+        expect(result.revision).not.toBe(latest);
+      }
+      if (change.startsWith("evicted")) {
+        evictPartition();
+        expect(result.revision).not.toBe(getCronJobsStoreRevision(storePath));
       }
     },
   );

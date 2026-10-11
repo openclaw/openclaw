@@ -6,7 +6,7 @@ import {
   checkClientVoiceToolConfirmationPolicy,
 } from "../../../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceAgentConsultRunner,
@@ -19,8 +19,8 @@ import {
 import type { TalkAgentConsultLifecycleMethods } from "../client-agent-consult.types.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession, stopTalkRealtimeRelaySession } from "./index.js";
-import { closeRelaySession } from "./operations.js";
+import { closeRelaySession, stopTalkRealtimeRelaySession } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn(), steer: vi.fn() }));
@@ -59,7 +59,7 @@ describe("native relay confirmation transcript admission", () => {
   });
 
   function createHarness(challenge = true) {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     let request: RealtimeVoiceBridgeCreateRequest | undefined;
     const session = createTalkRealtimeRelaySession({
       cfg,

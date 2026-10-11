@@ -82,7 +82,7 @@ Remote `imsg` v0.13.4 has two narrow RPC limits: poll votes must use `pollOption
    openclaw channels status --probe
    ```
 
-   The iMessage account should report `works`; with `--json`, the probe payload includes `privateApi.available: true`. If it reports `false`, fix that first — see [Capability detection](/channels/imessage#private-api-actions). Probing needs a reachable Gateway (the CLI falls back to config-only output otherwise) and only probes configured, enabled accounts.
+   The iMessage account should report `works`; with `--json`, the check payload includes `privateApi.available: true`. If it reports `false`, fix that first — see [Capability detection](/channels/imessage#private-api-actions). Checking needs a reachable Gateway (the CLI falls back to config-only output otherwise) and only checks configured, enabled accounts.
 
 5. Snapshot your config:
 
@@ -107,7 +107,7 @@ iMessage and BlueBubbles share most channel-level behavior keys. What changes is
 | `channels.bluebubbles.groupPolicy`                         | `channels.imessage.groupPolicy`           | Same values (`allowlist` / `open` / `disabled`); default `allowlist`.                                                                                                                                                                                                                                  |
 | `channels.bluebubbles.groupAllowFrom`                      | `channels.imessage.groupAllowFrom`        | Same. When unset, iMessage falls back to `allowFrom`; an explicitly empty `groupAllowFrom: []` blocks all groups under `groupPolicy: "allowlist"`.                                                                                                                                                     |
 | `channels.bluebubbles.groups`                              | `channels.imessage.groups`                | Copy the `"*"` wildcard entry verbatim; re-key per-group entries by numeric iMessage `chat_id` — see "Group registry footgun". `requireMention`, `tools`, `toolsBySender`, `systemPrompt` carry over.                                                                                                  |
-| `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. This only fires when the private API probe is up.                                                                                                                                                                                                                                      |
+| `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. This only fires when the private API check is up.                                                                                                                                                                                                                                      |
 | `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same shape, same off-by-default. If attachments flowed on BlueBubbles, set this explicitly — inbound photos/media are silently dropped (no `Inbound message` log line) until you do.                                                                                                                   |
 | `channels.bluebubbles.attachmentRoots`                     | `channels.imessage.attachmentRoots`       | Local roots; same wildcard rules.                                                                                                                                                                                                                                                                      |
 | _(N/A)_                                                    | `channels.imessage.remoteAttachmentRoots` | Only used when `remoteHost` is set for SCP fetches.                                                                                                                                                                                                                                                    |
@@ -174,13 +174,13 @@ This admits the configured senders in any group. Add `groups` entries to scope a
    }
    ```
 
-2. **Cut over and probe.** Set `channels.imessage.enabled: true`, let [hot reload](/gateway/configuration/hot-reload) apply the change, and confirm the channel reports healthy:
+2. **Cut over and check.** Set `channels.imessage.enabled: true`, let [hot reload](/gateway/configuration/hot-reload) apply the change, and confirm the channel reports healthy:
 
    ```bash
    openclaw channels status --probe --channel imessage   # expect "works"; --json shows privateApi.available: true
    ```
 
-   The probe requires a reachable Gateway and only probes configured, enabled accounts. Use the direct `imsg` commands in [Before you start](#before-you-start) to validate the Mac itself.
+   The check requires a reachable Gateway and only checks configured, enabled accounts. Use the direct `imsg` commands in [Before you start](#before-you-start) to validate the Mac itself.
 
 3. **Verify DMs.** Send the agent a direct message; confirm the reply lands.
 
@@ -204,7 +204,7 @@ This admits the configured senders in any group. Add `groups` entries to scope a
 | Native Messages polls (create and vote)             | ❌                 | ✅ (`actions.polls`; recipients need iOS/macOS 26+ for native rendering)      |
 | Rename group / set group icon                       | ✅                 | ✅                                                                            |
 | Add / remove participant, leave group               | ✅                 | ✅                                                                            |
-| Read receipts and typing indicator                  | ✅                 | ✅ (gated on private API probe)                                               |
+| Read receipts and typing indicator                  | ✅                 | ✅ (gated on private API check)                                               |
 | Apple URL-preview split-send coalescing             | ✅                 | ✅ (handled upstream by `imsg` 0.13.1 and newer; no OpenClaw setting)         |
 | Inbound recovery after a restart                    | ✅                 | ✅ (automatic: `since_rowid` replay + GUID dedupe; wider window on local)     |
 

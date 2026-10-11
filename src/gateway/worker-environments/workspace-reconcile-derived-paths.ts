@@ -8,6 +8,7 @@ import {
 } from "../../media/staged-inputs.js";
 import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export function reconciliationEntries(
@@ -83,11 +84,8 @@ async function removeDerivedWorkspaceEntry(
 }
 
 async function hasWorkspaceSymlinkAncestor(root: string, relativePath: string): Promise<boolean> {
-  const segments = relativePath.split("/");
-  for (let index = 1; index < segments.length; index += 1) {
-    const stats = await fs
-      .lstat(path.join(root, ...segments.slice(0, index)))
-      .catch(() => undefined);
+  for (const ancestor of workspacePathAncestors(relativePath)) {
+    const stats = await fs.lstat(path.join(root, ancestor)).catch(() => undefined);
     if (stats?.isSymbolicLink()) {
       return true;
     }

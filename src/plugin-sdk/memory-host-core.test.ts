@@ -17,7 +17,7 @@ async function createFixtureRoot(prefix: string): Promise<string> {
 }
 
 function workspaceConfig(workspaceDir: string) {
-  return { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+  return { agents: { entries: { main: { workspace: workspaceDir } } } };
 }
 
 function recallEvent(query: string, timestamp = "2026-05-18T12:00:00.000Z") {
@@ -399,7 +399,7 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       const workspaceDir = path.join(fixtureRoot, "workspace");
-      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
       await fs.mkdir(workspaceDir);
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
       expect(

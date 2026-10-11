@@ -24,7 +24,7 @@ const manageMocks = vi.hoisted(() => {
     browser
       .command("doctor")
       .description("Check browser plugin readiness")
-      .option("--deep", "Run a live snapshot probe")
+      .option("--deep", "Run a live snapshot check")
       .action(doctorAction);
   });
   return {

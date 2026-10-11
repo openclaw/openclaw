@@ -115,7 +115,8 @@ export function registerRestartOutcomeTests(
         await expect(activation).rejects.toThrow("Original update owner revoked");
         expect(mocks.restart).not.toHaveBeenCalled();
         expect(onVerified).not.toHaveBeenCalled();
-        expect(result.steps).toEqual([]);
+        // The completed install child keeps its timing; nothing after revocation is recorded.
+        expect(result.steps.map(({ name }) => name)).toEqual(["managed-service-install"]);
       } else {
         await expect(activation).resolves.toBe("ok");
         expect(mocks.restart).toHaveBeenCalledOnce();
@@ -305,6 +306,7 @@ export function registerRestartOutcomeTests(
           .mockRejectedValueOnce(new Error("later native refusal"));
       }
       mocks.health.mockResolvedValue({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids:
           scenario === "retry refusal" || scenario === "writable retry health" ? [4242] : [],
@@ -314,6 +316,7 @@ export function registerRestartOutcomeTests(
       if (progressing) {
         const health = {
           ...readyRecoveryHealth(19305, true),
+          outcome: "starting" as const,
           healthy: false,
           waitOutcome: "still-starting" as const,
           elapsedMs: 300_000,

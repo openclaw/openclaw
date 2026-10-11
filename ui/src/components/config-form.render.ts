@@ -47,6 +47,8 @@ type ConfigFormProps = {
    *  section must stay silent there instead of claiming the page is empty. */
   embedded?: boolean;
   revealSensitive?: boolean;
+  /** Render sensitive strings as editable password inputs instead of redacted read-only text. */
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
@@ -226,6 +228,7 @@ export function renderConfigForm(props: ConfigFormProps) {
         showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
+        maskSensitive: props.maskSensitive,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -8,7 +9,10 @@ import {
   mergeSkillLibrarySupportFiles,
   type SkillLibraryAuthoringCapability,
 } from "../skills/library/authoring.js";
-import { SkillLibraryError } from "../skills/library/errors.js";
+import {
+  prepareSkillLibrarySession,
+  type PreparedSkillLibrarySession,
+} from "../skills/library/selection.js";
 import {
   listSkillLibrary,
   resolveSkillLibraryPresentation,
@@ -17,6 +21,7 @@ import {
   mutateSkillLibrary,
 } from "../skills/library/service.js";
 import { resolveSkillLibraryActor } from "../skills/library/store.js";
+import { SkillLibraryError } from "../skills/skill-library-error.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
 import {
@@ -46,28 +51,76 @@ export function invalidateSkillAuthoringForOtherRequester(
   }
 }
 
+function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn: boolean) {
+  const client = options.client;
+  return Boolean(
+    isHumanTurn &&
+    client?.authenticatedUserProfile &&
+    !client.internal?.syntheticClient &&
+    !client.internal?.agentRuntimeIdentity &&
+    !client.internal?.senderAttribution &&
+    !client.internal?.pluginRuntimeOwnerId &&
+    !client.internal?.approvalRuntime &&
+    !client.internal?.cronRunContinuation &&
+    !client.internal?.delegatedToolPolicyHandoffId,
+  );
+}
+
+async function prepareGatewaySkillLibrarySession(
+  options: SkillLibraryRequestOwner,
+  isHumanTurn: boolean,
+): Promise<PreparedSkillLibrarySession | undefined> {
+  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
+    return undefined;
+  }
+  const client = options.client;
+  const authority = libraryAuthority(options);
+  const scopes = [...authority.scopes];
+  return prepareSkillLibrarySession({
+    ...authority,
+    assertCurrent() {
+      authority.assertCurrent();
+      if (
+        options.client !== client ||
+        client?.authenticatedUserProfile?.profileId !== authority.profileId ||
+        !isDeepStrictEqual(client?.connect.scopes ?? [], scopes)
+      ) {
+        throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library requester changed. Retry.");
+      }
+    },
+  });
+}
+
+export async function prepareGatewaySkillLibraryTurn(
+  request: { owner: SkillLibraryRequestOwner; isHumanTurn: boolean; sessionKey: string },
+  prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
+  onAuthoring: () => void,
+): Promise<SkillLibraryAuthoringCapability | undefined> {
+  const prepared = await prepareGatewaySkillLibrarySession(request.owner, request.isHumanTurn);
+  await prepareSessionCreation(prepared);
+  onAuthoring();
+  return prepareGatewaySkillAuthoring(
+    request.owner,
+    request.sessionKey,
+    request.isHumanTurn,
+    prepared,
+  );
+}
+
 /** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */
-export function prepareGatewaySkillAuthoring(
+export async function prepareGatewaySkillAuthoring(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
   isHumanTurn: boolean,
-): SkillLibraryAuthoringCapability | undefined {
-  const client = options.client;
-  if (
-    !isHumanTurn ||
-    !client?.authenticatedUserProfile ||
-    client.internal?.syntheticClient ||
-    client.internal?.agentRuntimeIdentity ||
-    client.internal?.senderAttribution ||
-    client.internal?.pluginRuntimeOwnerId ||
-    client.internal?.approvalRuntime ||
-    client.internal?.cronRunContinuation ||
-    client.internal?.delegatedToolPolicyHandoffId
-  ) {
+  prepared?: PreparedSkillLibrarySession,
+): Promise<SkillLibraryAuthoringCapability | undefined> {
+  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
     return undefined;
   }
   const authority = libraryAuthority(options);
-  const library = resolveSkillLibraryPresentation(authority);
+  const library = prepared?.presentation ?? (await resolveSkillLibraryPresentation(authority));
+  prepared?.assertCurrent();
+  authority.assertCurrent();
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
   }

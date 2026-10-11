@@ -3,6 +3,7 @@ import path from "node:path";
 import { isPathInside } from "../../infra/fs-safe.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
@@ -54,9 +55,8 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     const transferable = await readWorkspaceTransferPaths(transferList, params.signal);
     const manifestPaths = new Set(transferable);
     for (const relative of transferable) {
-      const segments = relative.split("/");
-      for (let index = 1; index < segments.length; index += 1) {
-        manifestPaths.add(segments.slice(0, index).join("/"));
+      for (const ancestor of workspacePathAncestors(relative)) {
+        manifestPaths.add(ancestor);
       }
     }
     includePaths = manifestPaths;

@@ -210,20 +210,14 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       const inspected = await inspectServing(state.command);
       const serving = inspected?.serving;
       const disjoint = inspected?.disjoint ?? false;
-      if (
-        !inspected &&
-        (state.command ||
-          state.installed ||
-          state.loadState.status !== "not-loaded" ||
-          !state.runtime?.missingUnit)
-      ) {
-        refuse();
-      }
       const absent =
         !state.command &&
         !state.installed &&
         state.loadState.status === "not-loaded" &&
         state.runtime?.missingUnit === true;
+      if (!inspected && !absent) {
+        refuse();
+      }
       if (
         !disjoint &&
         (state.running ||
@@ -267,7 +261,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           return consumer ? !consumer.disjoint : null;
         },
       });
-      return { state, disjoint, parents, destinations, database, nativeIdentity, serving };
+      return { disjoint, parents, destinations, database, nativeIdentity, serving };
     };
     const inspect = () => readInspection().catch(inspectionFailed);
     const before = await inspect();
@@ -343,18 +337,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     } catch (error) {
       publicationFailures.push(error);
     }
-    try {
-      await maintenance?.close();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
-      }
-    }
-    try {
-      processOwner?.release();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
+    for (const close of [() => maintenance?.close(), () => processOwner?.release()]) {
+      try {
+        await close();
+      } catch (error) {
+        if (!publicationFailures.includes(error)) {
+          publicationFailures.push(error);
+        }
       }
     }
     throwSqliteLifecycleErrors(

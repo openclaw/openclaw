@@ -18,8 +18,8 @@ import {
   renderComposer,
   resetComposerTestFixtures,
 } from "./composer.test-support.ts";
+import { renderNewSessionComposer } from "./composer.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 function composerTextarea(composer: HTMLElement): HTMLTextAreaElement {
@@ -59,7 +59,7 @@ describe("new-session submission preview", () => {
     composer.dispatchEvent(drop);
     expect(drop.defaultPrevented).toBe(true);
     expect(attachmentDraft.attachments).toEqual([]);
-    expect(attachmentDraft.pendingReads).toBe(0);
+    expect(attachmentDraft.reads.pendingReads).toBe(0);
   });
 
   it.each([
@@ -401,7 +401,10 @@ describe("new-session composer keyboard submission", () => {
 
   it.each([
     { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
-    { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
+    { label: "Ctrl+Enter in Enter mode", requiresModifier: false, ctrlKey: true, metaKey: false },
+    { label: "Meta+Enter in Enter mode", requiresModifier: false, ctrlKey: false, metaKey: true },
+    { label: "Ctrl+Enter in modifier mode", requiresModifier: true, ctrlKey: true, metaKey: false },
+    { label: "Meta+Enter in modifier mode", requiresModifier: true, ctrlKey: false, metaKey: true },
   ])("submits once with $label when starting a session is enabled", (testCase) => {
     const onSubmit = vi.fn();
     const onBackgroundSubmit = vi.fn();
@@ -427,13 +430,43 @@ describe("new-session composer keyboard submission", () => {
     expect(onBackgroundSubmit).not.toHaveBeenCalled();
   });
 
+  it("keeps an IME confirmation Enter from starting a session", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ message: "日本語の入力", onSubmit });
+    const textarea = composerTextarea(composer);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+    textarea.dispatchEvent(compositionEnd);
+    const confirmingEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      keyCode: 13,
+    });
+    Object.defineProperty(confirmingEnter, "timeStamp", { value: compositionEnd.timeStamp - 1 });
+    textarea.dispatchEvent(confirmingEnter);
+
+    expect(confirmingEnter.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    textarea.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+    const deliberateEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    textarea.dispatchEvent(deliberateEnter);
+    expect(deliberateEnter.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
-      label: "Meta+Enter in Enter mode",
+      label: "Meta+Shift+Enter in Enter mode",
       ctrlKey: false,
       metaKey: true,
       requiresModifier: false,
-      shiftKey: false,
+      shiftKey: true,
     },
     {
       label: "Ctrl+Shift+Enter in modifier mode",
@@ -617,7 +650,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(onInput).toHaveBeenCalledWith("typed");
     const readsAfterInput = scrollHeightReads;
     render(
-      renderNewSessionDraftComposer({
+      renderNewSessionComposer({
         agentId: "main",
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,
@@ -643,7 +676,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(scrollHeightReads).toBe(readsAfterInput);
 
     render(
-      renderNewSessionDraftComposer({
+      renderNewSessionComposer({
         agentId: "main",
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,

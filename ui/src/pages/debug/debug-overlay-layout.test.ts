@@ -193,10 +193,14 @@ describe("System busyness frame layout", () => {
     expect(panel.style.left).toBe("200px");
   });
 
-  it("animates mode changes for 160ms, but not mounting or reduced motion", async () => {
+  it("coalesces mode changes into one 160ms animation, except with reduced motion", async () => {
     await mount();
     expect(animate).not.toHaveBeenCalled();
-    await mount("expanded");
+    await mount("expanded", false);
+    await mount("expanded", false);
+    expect(frames.size).toBe(1);
+    flushFrame();
+    expect(animate).toHaveBeenCalledTimes(1);
     expect(animate).toHaveBeenCalledWith(
       expect.any(Array),
       expect.objectContaining({ duration: 160 }),
@@ -205,14 +209,5 @@ describe("System busyness frame layout", () => {
     reducedMotion = true;
     await mount("minimized");
     expect(animate).not.toHaveBeenCalled();
-  });
-
-  it("keeps a queued transition across same-mode content renders", async () => {
-    await mount();
-    await mount("expanded", false);
-    await mount("expanded", false);
-    expect(frames.size).toBe(1);
-    flushFrame();
-    expect(animate).toHaveBeenCalledTimes(1);
   });
 });

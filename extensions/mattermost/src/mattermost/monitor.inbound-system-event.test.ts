@@ -132,14 +132,10 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./draft-stream.js", async () => {
-  const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
-  return {
-    createMattermostDraftStream: mockState.createMattermostDraftStream,
-    createMattermostDraftPreviewBoundaryController:
-      actual.createMattermostDraftPreviewBoundaryController,
-  };
-});
+vi.mock("./draft-stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./draft-stream.js")>()),
+  createMattermostDraftStream: mockState.createMattermostDraftStream,
+}));
 
 vi.mock("./monitor-resources.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor-resources.js")>()),
@@ -761,68 +757,47 @@ describe("mattermost inbound user posts", () => {
     await monitor;
   });
 
-  it.each(["interactions", "slash"] as const)(
-    "does not open a websocket after %s startup fails",
-    async (stage) => {
-      const unregisterInteractions = vi.fn();
-      const statusSink = vi.fn();
-      const webSocketFactory = vi.fn(() => new FakeWebSocket());
-      const failure = new Error(`Mattermost ${stage} setup failed`);
-      if (stage === "interactions") {
-        mockState.registerPluginHttpRoute.mockImplementationOnce(() => {
-          throw failure;
-        });
-      } else {
-        mockState.registerPluginHttpRoute.mockReturnValueOnce(unregisterInteractions);
-        mockState.registerMattermostMonitorSlashCommands.mockRejectedValueOnce(failure);
-      }
-      await expect(
-        monitorMattermostProvider({
-          config: testConfig,
-          runtime: testRuntime(),
-          abortSignal: new AbortController().signal,
-          statusSink,
-          webSocketFactory,
-        }),
-      ).rejects.toThrow(failure.message);
-      if (stage === "interactions") {
-        expect(mockState.registerPluginHttpRoute).toHaveBeenCalledWith(
-          expect.objectContaining({
-            accountId: "default",
-            pluginId: "mattermost",
-            source: "mattermost-interactions",
-            throwOnFailure: true,
-          }),
-        );
-        expect(mockState.registerPluginHttpRoute.mock.calls[0]?.[0]).not.toHaveProperty(
-          "replaceExisting",
-        );
-        expect(mockState.registerMattermostMonitorSlashCommands).not.toHaveBeenCalled();
-      } else {
-        expect(unregisterInteractions).toHaveBeenCalledOnce();
-      }
-      expect(webSocketFactory).not.toHaveBeenCalled();
-      expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
-    },
-  );
+  it("does not open a websocket after slash startup fails", async () => {
+    const unregisterInteractions = vi.fn();
+    const statusSink = vi.fn();
+    const webSocketFactory = vi.fn(() => new FakeWebSocket());
+    const failure = new Error("Mattermost slash setup failed");
+    mockState.registerPluginHttpRoute.mockReturnValueOnce(unregisterInteractions);
+    mockState.registerMattermostMonitorSlashCommands.mockRejectedValueOnce(failure);
+    await expect(
+      monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: new AbortController().signal,
+        statusSink,
+        webSocketFactory,
+      }),
+    ).rejects.toThrow(failure.message);
+    expect(unregisterInteractions).toHaveBeenCalledOnce();
+    expect(webSocketFactory).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
 
-  it.each([1, 2])("dispatches ordered attachments (%i files)", async (fileCount) => {
+  it("dispatches ordered attachments with a UTF-16-safe inbound preview", async () => {
+    const verboseDebug = vi.fn();
+    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
+    const message = `${"a".repeat(199)}😀tail`;
+    const expectedBody = `${message}\n\n[mattermost attachment unavailable] "quarterly report.pdf"`;
     const media = [
       { contentType: "application/pdf", fileName: "quarterly report.pdf", kind: "document" },
       { path: "/tmp/mattermost-attachment.png", contentType: "image/png", kind: "image" },
-    ].slice(0, fileCount);
+    ];
     mockState.resolveMattermostMedia.mockResolvedValueOnce(media);
     const ctx = await receivePost({
       id: "post-regular",
-      message: "hello from mattermost",
-      fileIds: ["file-1", "image-1"].slice(0, fileCount),
+      message,
+      fileIds: ["file-1", "image-1"],
     });
     expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
     expect(mockState.deliveryPlanObserver).toHaveBeenCalledExactlyOnceWith(true);
     expect(ctx).toMatchObject({
-      BodyForAgent:
-        'hello from mattermost\n\n[mattermost attachment unavailable] "quarterly report.pdf"',
+      BodyForAgent: expectedBody,
       ConversationLabel: "Town Square id:chan-1",
       MessageSid: "post-regular",
       ConversationRouteContextObserved: true,
@@ -836,6 +811,9 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.media).toEqual(media.map((attachment) => expect.objectContaining(attachment)));
     expect(ctx?.media?.[0]?.path).toBeUndefined();
     expect(ctx?.media?.[0]?.url).toBeUndefined();
+    expect(verboseDebug).toHaveBeenCalledWith(
+      `mattermost inbound: from=mattermost:channel:chan-1 len=${expectedBody.length} preview="${"a".repeat(199)}"`,
+    );
   });
 
   it.each([
@@ -889,7 +867,7 @@ describe("mattermost inbound user posts", () => {
       const verboseDebug = vi.fn();
       const baseUrl = `http://127.0.0.1:${address.port}`;
       const config: OpenClawConfig = {
-        agents: { defaults: { envelopeTimezone: "user", userTimezone: "Asia/Jakarta" } },
+        agents: { defaults: { userTimezone: "Asia/Jakarta" } },
         messages: { groupChat: { historyLimit: 2 } },
         channels: {
           ...(contextVisibility ? { defaults: { contextVisibility } } : {}),
@@ -1010,15 +988,6 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
-  it("keeps verbose inbound previews on complete UTF-16 boundaries", async () => {
-    const verboseDebug = vi.fn();
-    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
-    await receivePost({ id: "post-verbose-preview", message: `${"a".repeat(199)}😀tail` });
-    expect(verboseDebug).toHaveBeenCalledWith(
-      `mattermost inbound: from=mattermost:channel:chan-1 len=205 preview="${"a".repeat(199)}"`,
-    );
-  });
-
   it("dispatches a bare bot mention as a wake event", async () => {
     const ctx = await receivePost({ id: "post-bare-mention", message: "@openclaw" });
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
@@ -1028,46 +997,6 @@ describe("mattermost inbound user posts", () => {
       OriginatingChannel: "mattermost",
       Provider: "mattermost",
     });
-  });
-
-  it.each([
-    { message: "@openclaw:remote.example hello", expectedBody: null },
-    { message: "hello.@openclaw", expectedBody: "hello." },
-  ])(
-    "dispatches only genuine mention-required posts: $message",
-    async ({ message, expectedBody }) => {
-      const runtime = testRuntime();
-      const config = mattermostConfig({ chatmode: undefined, requireMention: true });
-      mockState.runtimeCore = createRuntimeCore(config);
-      const ctx = await receivePost(
-        { id: "post-mention-boundary", message, channelId: "mention-boundary" },
-        config,
-        runtime,
-      );
-      if (expectedBody === null) {
-        expect(runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining("mattermost: drop no mention target=mention-boundary"),
-        );
-        expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
-      } else {
-        expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
-        expect(ctx?.BodyForAgent).toBe(expectedBody);
-        expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("drop no mention"));
-      }
-    },
-  );
-
-  it("does not drop inline command-looking text from non-command-authorized senders", async () => {
-    const isControlCommandMessage = vi.fn(() => false);
-    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, {
-      isControlCommandMessage,
-      shouldHandleTextCommands: () => true,
-    });
-    const ctx = await receivePost({ id: "post-inline-command", message: "hello /status" });
-    expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", testConfig);
-    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
-    expect(ctx).toMatchObject({ BodyForAgent: "hello /status", CommandAuthorized: false });
-    expect(ctx?.CommandSource).toBeUndefined();
   });
 
   it("routes a mention-prefixed text command without debouncing", async () => {

@@ -1,8 +1,10 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { SESSION_COMMUNICATION_MODES } from "../../packages/gateway-protocol/src/session-communication.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
+import { ChannelThreadBindingsSchema } from "./zod-schema.channel-messaging-common.js";
 
 const SessionResetConfigSchema = z.strictObject({
   mode: z.union([z.literal("none"), z.literal("daily"), z.literal("idle")]).optional(),
@@ -53,15 +55,13 @@ export const SessionSchema = z
     store: z.string().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
-    threadBindings: z
+    communication: z
       .strictObject({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
+        send: z.enum(SESSION_COMMUNICATION_MODES).optional(),
+        receive: z.enum(SESSION_COMMUNICATION_MODES).optional(),
       })
       .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     sharing: z
       .strictObject({
         readOnly: z.boolean().optional(),

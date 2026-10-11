@@ -2,7 +2,10 @@
 
 This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
-complete until `main` carries the actual shipped release state.
+complete until `main` carries the actual shipped release state and the handoff
+records the exact merged closeout commit. Publication from the release branch
+and closeout on `main` are separate state transitions; never imply that
+publishing stable also advanced `main`.
 
 Closeout requires the original strict stable/full publication evidence with
 soak, blocking performance, and successful selected validation lanes. Historical
@@ -21,9 +24,9 @@ new evidence. Invalid or mismatched assets remain blocking.
    train. For late closeout, do not downgrade an already-started later stable
    train; retain the validator's exact shipped-note and version checks. Run
    `pnpm release:prep` after any root version change, then
-   `pnpm deps:npm-lock:check`. `release:prep` requires npm `latest` and `beta`
-   in `scripts/lib/update-compat-inventory.json`. Record the shipped tarball
-   first, following [older updater checks](validation.md#older-updater-checks)
+   `pnpm deps:npm-lock:check`. Record the shipped tarball in
+   `scripts/lib/update-compat-inventory.json` so first-hop update lanes cover
+   it, following [older updater checks](validation.md#older-updater-checks)
    (integrity-verified download, `pnpm update:compat:gen`). Expect recorder or
    bridge-writer failures when the release added post-swap updater imports or a
    nested bundle directory. Reproduce them with `pnpm build` before pushing.
@@ -52,9 +55,21 @@ new evidence. Invalid or mismatched assets remain blocking.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
-   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
-   contains the exact shipped notes and the validator-accepted shipped-or-later
-   stable version before calling the stable release done.
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, resolve the closeout PR's exact
+   merged commit as `mainCloseoutSha`, fetch `origin/main` once, and require
+   `git merge-base --is-ancestor "$mainCloseoutSha" origin/main` to succeed. Do
+   not require equality with the branch tip or wait for a quiet `main`; later
+   commits are expected and do not invalidate the merged closeout commit. Read
+   the changelog and `package.json` from `mainCloseoutSha` itself; require the
+   exact shipped notes and the validator-accepted shipped-or-later stable
+   version, then record that version as `mainCloseoutVersion`. Use
+   `mainCloseoutSha`, not the moving branch name or tip, for the release's
+   main-source handoff. A deployment that intentionally wants newer `main`
+   resolves the branch once to `deploymentSha`, then binds its version checks,
+   configured-plugin checks, build, and launch to that same commit. It never
+   expects `origin/main` to remain equal to either recorded SHA and never
+   resamples merely because the branch advanced. Do not call the stable release
+   done until the exact closeout SHA and version are recorded.
 6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
    `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
    `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the

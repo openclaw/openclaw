@@ -70,27 +70,28 @@ describe("queued collector native admission", () => {
             currentControl.preparePublication,
             "native publication preparation",
           );
-          const publish = expectDefined(params.onResult, "native cancellation publication");
-          return kill(
-            {
-              ...params,
-              onResult: (result) => {
-                publish(result);
+          const publishSnapshot = expectDefined(
+            preparation.publishSnapshot,
+            "native cancellation snapshot publication",
+          );
+          return kill(params, {
+            ...currentControl,
+            preparePublication: {
+              ...preparation,
+              publishSnapshot: (result) => {
+                publishSnapshot(result);
                 order.push("published");
               },
-            },
-            {
-              ...currentControl,
-              preparePublication: async (publishPrepared) => {
+              prepare: async (publishPrepared) => {
                 publicationEntered.resolve();
                 await releasePublication.promise;
                 if (publicationFailure) {
                   throw new Error("publication preparation failed");
                 }
-                return await preparation(publishPrepared);
+                return await preparation.prepare(publishPrepared);
               },
             },
-          );
+          });
         });
       const runtimeGate = vi
         .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")

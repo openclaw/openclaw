@@ -24,10 +24,7 @@ async function createStateDir(): Promise<string> {
 
 async function createHtmlDocument(html: string, cspSandbox?: "scripts") {
   const stateDir = await createStateDir();
-  const document = await createCanvasDocument(
-    { id: "widget-1", kind: "html_bundle", entrypoint: { type: "html", value: html }, cspSandbox },
-    { stateDir },
-  );
+  const document = await createCanvasDocument({ id: "widget-1", html, cspSandbox }, { stateDir });
   return { stateDir, document };
 }
 
@@ -68,10 +65,7 @@ describe("core canvas document host", () => {
     ],
   ])("preserves document-approved renderer sources for %s documents", async (_, html) => {
     const stateDir = await createStateDir();
-    const document = await createCanvasDocument(
-      { kind: "html_bundle", entrypoint: { type: "html", value: html }, cspSandbox: "scripts" },
-      { stateDir },
-    );
+    const document = await createCanvasDocument({ html, cspSandbox: "scripts" }, { stateDir });
     const response = await capture(document.entryUrl);
     const policy = String(response.headers["content-security-policy"]);
     const scripts = policy

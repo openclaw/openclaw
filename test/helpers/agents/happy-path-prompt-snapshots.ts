@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
@@ -83,6 +83,7 @@ type CodexDynamicToolFunctionSpec = {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  deferLoading?: boolean;
 };
 
 type CodexDynamicToolNamespaceSpec = {
@@ -301,14 +302,18 @@ const baseConfig: OpenClawConfig = {
         every: "30m",
       },
     },
-    entries: { main: { default: true } },
+    entries: { main: {} },
   },
 };
 
 const dynamicToolsConfig: OpenClawConfig = {
   ...baseConfig,
-  // Exclude optional media factories before they inspect ambient provider credentials.
-  tools: { deny: ["image_generate", "video_generate", "music_generate", "pdf"] },
+  tools: {
+    // Exclude optional media factories before they inspect ambient provider credentials.
+    deny: ["image_generate", "video_generate", "music_generate", "pdf"],
+    // This happy-path catalog includes search regardless of ambient credentials.
+    web: { search: { provider: "duckduckgo" } },
+  },
   plugins: {
     enabled: true,
     slots: {
@@ -620,7 +625,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: telegramDirectCtx,
-        chatContext: buildDirectChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: telegramDirectCtx,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -668,7 +673,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       prompt: createPrompt(heartbeatCtx, heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? ""),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: heartbeatCtx,
-        chatContext: buildDirectChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: heartbeatCtx,
           sourceReplyDeliveryMode: "message_tool_only",
         }),

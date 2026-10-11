@@ -1,16 +1,24 @@
 // Setup finalize tests cover writing final onboarding config and artifacts.
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import * as programArgs from "../daemon/program-args.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createFinalizeArgs,
+  createLaterPrompter,
+  createRuntime,
+  type FinalizeArgs,
+  type FinalizeArgsOverrides,
+} from "./setup.finalize.fixtures.test-support.js";
 import {
   createRuntimeProbeResult,
   expectNoteContains,
@@ -33,10 +41,6 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
-const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
-const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
-const cancelProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn());
-const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
@@ -256,12 +260,8 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
-vi.mock("../tui/tui.js", () => ({
-  cancelProcessExitAfterTuiReturn,
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-}));
+// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph.
+vi.mock("../tui/tui.js", () => ({ runTui }));
 
 vi.mock("../commands/auth-choice.model-check.js", () => ({
   resolveDefaultModelCatalogFacts,
@@ -287,14 +287,6 @@ vi.mock("./setup.completion.js", () => ({
 
 import { ensureGatewayServiceForOnboarding, finalizeSetupWizard } from "./setup.finalize.js";
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
 function createWebSearchProviderEntry(
   provider: Pick<PluginWebSearchProviderEntry, "id" | "label" | "envVars"> &
     Partial<Pick<PluginWebSearchProviderEntry, "authProviderId" | "requiresCredential">>,
@@ -310,17 +302,6 @@ function createWebSearchProviderEntry(
     createTool: () => null,
     ...provider,
   };
-}
-
-type FinalizeArgs = Parameters<typeof finalizeSetupWizard>[0];
-
-type FinalizeArgsOverrides = Omit<Partial<FinalizeArgs>, "flow" | "opts" | "settings"> & {
-  opts?: Partial<FinalizeArgs["opts"]>;
-  settings?: Partial<FinalizeArgs["settings"]>;
-};
-
-function createLaterPrompter() {
-  return buildWizardPrompter(undefined, { defaultSelect: "later" });
 }
 
 function createServiceSetupArgs(
@@ -341,37 +322,6 @@ function createSearchConfig(provider = "firecrawl"): OpenClawConfig {
   return { tools: { web: { search: { provider, enabled: true } } } };
 }
 
-function createFinalizeArgs(
-  flow: FinalizeArgs["flow"],
-  overrides: FinalizeArgsOverrides = {},
-): FinalizeArgs {
-  const { opts, settings, ...rest } = overrides;
-  return {
-    flow,
-    opts: {
-      acceptRisk: true,
-      authChoice: "skip",
-      installDaemon: false,
-      skipHealth: true,
-      skipUi: flow === "advanced",
-      ...opts,
-    },
-    baseConfig: {},
-    nextConfig: {},
-    workspaceDir: "/tmp",
-    settings: {
-      port: 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: undefined,
-      ...settings,
-    },
-    prompter: createLaterPrompter(),
-    runtime: createRuntime(),
-    ...rest,
-  };
-}
-
 function finalize(flow: FinalizeArgs["flow"], overrides: FinalizeArgsOverrides = {}) {
   return finalizeSetupWizard(createFinalizeArgs(flow, overrides));
 }
@@ -389,10 +339,6 @@ describe("finalizeSetupWizard", () => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
     runTui.mockClear();
-    setupCleanupExitTimer.unref.mockClear();
-    scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);
-    cancelProcessExitAfterTuiReturn.mockClear();
-    resolveTuiShutdownHardExitMs.mockClear();
     restoreTerminalState.mockClear();
     probeGatewayReachable.mockReset().mockResolvedValue({ ok: false, detail: "offline" });
     waitForGatewayReachable.mockReset().mockResolvedValue({ ok: true });
@@ -707,7 +653,7 @@ describe("finalizeSetupWizard", () => {
     const nextConfig = {
       agents: {
         defaults: { model: "openai/gpt-5.4-nano" },
-        list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        entries: { main: { agentDir: "/tmp/custom-agent" } },
       },
     } satisfies OpenClawConfig;
 
@@ -743,7 +689,7 @@ describe("finalizeSetupWizard", () => {
       prompter,
       nextConfig: {
         agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
       },
     });
@@ -752,7 +698,7 @@ describe("finalizeSetupWizard", () => {
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
       }),
       { agentDir: "/tmp/custom-agent" },
@@ -996,16 +942,15 @@ describe("finalizeSetupWizard", () => {
           return;
         }
         const managedStartup = action !== "reused";
+        const startupTiming = resolveGatewayStartupTiming(platform);
         expect(waitForGatewayReachable).toHaveBeenCalledOnce();
         const timing = requireMockArg(waitForGatewayReachable) as {
           deadlineMs?: number;
           probeTimeoutMs?: number;
         };
-        expect(timing.deadlineMs).toBe(
-          managedStartup ? (platform === "win32" ? 90_000 : 45_000) : 15_000,
-        );
+        expect(timing.deadlineMs).toBe(managedStartup ? startupTiming.deadlineMs : 15_000);
         expect(timing.probeTimeoutMs ?? 1_500).toBe(
-          managedStartup ? (platform === "win32" ? 15_000 : 10_000) : 1_500,
+          managedStartup ? startupTiming.probeTimeoutMs : 1_500,
         );
       });
     },
@@ -1603,88 +1548,105 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
 
-  it("starts a session gateway and launches gateway-backed TUI in containers without systemd", async () => {
-    await withPlatform("linux", async () => {
-      isSystemdUserServiceAvailable.mockResolvedValue(false);
-      isContainerEnvironment.mockReturnValue(true);
-      waitForGatewayReachable.mockResolvedValue({ ok: true });
-      probeGatewayReachable.mockResolvedValue({ ok: true });
-      let resolveClose: (() => void) | undefined;
-      const sessionGateway = {
-        close: vi.fn(
-          async () =>
-            await new Promise<void>((resolve) => {
-              resolveClose = resolve;
-            }),
-        ),
-      };
-      startGatewayServer.mockResolvedValueOnce(sessionGateway);
-      const prompter = createLaterPrompter();
+  it.each(["return", "reject"] as const)(
+    "joins the temporary Gateway after TUI %s in containers without systemd",
+    async (outcome) => {
+      await withPlatform("linux", async () => {
+        isSystemdUserServiceAvailable.mockResolvedValue(false);
+        isContainerEnvironment.mockReturnValue(true);
+        waitForGatewayReachable.mockResolvedValue({ ok: true });
+        probeGatewayReachable.mockResolvedValue({ ok: true });
+        const closeStarted = createDeferred();
+        const allowClose = createDeferred();
+        const sessionGateway = {
+          close: vi.fn(async () => {
+            closeStarted.resolve();
+            await allowClose.promise;
+          }),
+        };
+        const tuiFailure = new Error("TUI failed");
+        if (outcome === "reject") {
+          runTui.mockRejectedValueOnce(tuiFailure);
+        }
+        startGatewayServer.mockResolvedValueOnce(sessionGateway);
+        const prompter = createLaterPrompter();
 
-      const finalizing = finalizeSetupWizard(
-        createFinalizeArgs("quickstart", {
-          opts: { installDaemon: undefined, skipHealth: false },
-          settings: { gatewayToken: "test-token" },
-          nextConfig: {
-            gateway: {
-              auth: {
-                mode: "token",
-                token: "test-token",
+        const finalizing = finalizeSetupWizard(
+          createFinalizeArgs("quickstart", {
+            opts: { installDaemon: undefined, skipHealth: false },
+            settings: { gatewayToken: "test-token" },
+            nextConfig: {
+              gateway: {
+                auth: {
+                  mode: "token",
+                  token: "test-token",
+                },
               },
             },
-          },
-          prompter,
-        }),
-      );
-
-      await vi.waitFor(() => expect(sessionGateway.close).toHaveBeenCalledOnce());
-      expect(resolveTuiShutdownHardExitMs).toHaveBeenCalledWith({ localMode: true });
-      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledOnce();
-      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenNthCalledWith(1, {
-        delayMs: 122_000,
-      });
-      expect(cancelProcessExitAfterTuiReturn).not.toHaveBeenCalled();
-      resolveClose?.();
-      await finalizing;
-
-      expect(startGatewayServer).toHaveBeenCalledWith(
-        18789,
-        expect.objectContaining({
-          bind: "loopback",
-          auth: expect.objectContaining({
-            mode: "token",
-            token: "test-token",
+            prompter,
           }),
-        }),
-      );
-      expect(runTui).toHaveBeenCalledWith(
-        expect.objectContaining({
-          boundGateway: {
-            url: "ws://127.0.0.1:18789",
-            token: "test-token",
+        );
+
+        let finalized = false;
+        const settled = finalizing.then(
+          () => {
+            finalized = true;
           },
-          deliver: false,
-          message: undefined,
-          initialMessageTimeoutMs: 300_000,
-        }),
-      );
-      expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
-      expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
-      expect(cancelProcessExitAfterTuiReturn).toHaveBeenCalledWith(setupCleanupExitTimer);
-      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledTimes(2);
-      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenNthCalledWith(2);
-      expect(cancelProcessExitAfterTuiReturn.mock.invocationCallOrder[0]).toBeLessThan(
-        scheduleProcessExitAfterTuiReturn.mock.invocationCallOrder[1]!,
-      );
-      expectNoteContains(
-        prompter,
-        "Systemd user services are not available inside this container.",
-        "Container runtime",
-      );
-      expectNoteTitleNotCalled(prompter, "Systemd");
-      expect(gatewayServiceInstall).not.toHaveBeenCalled();
-    });
-  });
+          () => {
+            finalized = true;
+          },
+        );
+        try {
+          await awaitGateBeforeSettlement(
+            closeStarted.promise,
+            finalizing,
+            "wizard returned before closing its temporary Gateway",
+          );
+          expect(finalized).toBe(false);
+        } finally {
+          allowClose.resolve();
+          await settled;
+        }
+        if (outcome === "reject") {
+          await expect(finalizing).rejects.toBe(tuiFailure);
+        } else {
+          await expect(finalizing).resolves.toEqual({ launchedTui: true });
+        }
+
+        expect(startGatewayServer).toHaveBeenCalledWith(
+          18789,
+          expect.objectContaining({
+            bind: "loopback",
+            auth: expect.objectContaining({
+              mode: "token",
+              token: "test-token",
+            }),
+          }),
+        );
+        expect(runTui).toHaveBeenCalledWith(
+          expect.objectContaining({
+            boundGateway: {
+              url: "ws://127.0.0.1:18789",
+              token: "test-token",
+            },
+            deliver: false,
+            message: undefined,
+            initialMessageTimeoutMs: 300_000,
+          }),
+        );
+        expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
+        expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
+        expect(sessionGateway.close).toHaveBeenCalledOnce();
+        expectNoteContains(
+          prompter,
+          "Systemd user services are not available inside this container.",
+          "Container runtime",
+        );
+        expectNoteTitleNotCalled(prompter, "Systemd");
+        expect(gatewayServiceInstall).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("closes a session gateway when finalize fails before TUI launch", async () => {
     await withPlatform("linux", async () => {

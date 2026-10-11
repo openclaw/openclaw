@@ -55,39 +55,37 @@ describe("reply model level cancellation", () => {
     },
   );
 
-  it("does not start discovery for an already aborted reply", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const modelState = {
-      resolveDefaultThinkingLevel: vi.fn(async (): Promise<ThinkLevel> => "off"),
-      resolveDefaultReasoningLevel: vi.fn(async () => "on" as const),
-    };
-    const resolver = createReplyModelLevelResolver({
-      selection,
-      modelState,
-      abortSignal: controller.signal,
-    });
-    await expect(resolver()).rejects.toMatchObject({ name: "AbortError" });
-    expect(modelState.resolveDefaultThinkingLevel).not.toHaveBeenCalled();
-    expect(modelState.resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("rejects cached levels when the reply was aborted after a previous read", async () => {
-    const controller = new AbortController();
-    const resolver = createReplyModelLevelResolver({
-      selection,
-      modelState: {
-        resolveDefaultThinkingLevel: async () => "low",
-        resolveDefaultReasoningLevel: async () => "off",
-      },
-      abortSignal: controller.signal,
-    });
-    await expect(resolver()).resolves.toEqual({
-      resolvedThinkLevel: "low",
-      resolvedReasoningLevel: "off",
-    });
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-    controller.abort();
-    await expect(resolver()).rejects.toMatchObject({ name: "AbortError" });
-  });
+  it.each([false, true])(
+    "rejects aborted reads without starting discovery (cached=%s)",
+    async (cached) => {
+      const controller = new AbortController();
+      const modelState = {
+        resolveDefaultThinkingLevel: vi.fn(async (): Promise<ThinkLevel> =>
+          cached ? "low" : "off",
+        ),
+        resolveDefaultReasoningLevel: vi.fn(async () =>
+          cached ? ("off" as const) : ("on" as const),
+        ),
+      };
+      if (!cached) {
+        controller.abort();
+      }
+      const resolver = createReplyModelLevelResolver({
+        selection,
+        modelState,
+        abortSignal: controller.signal,
+      });
+      if (cached) {
+        await expect(resolver()).resolves.toEqual({
+          resolvedThinkLevel: "low",
+          resolvedReasoningLevel: "off",
+        });
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+        controller.abort();
+      }
+      await expect(resolver()).rejects.toMatchObject({ name: "AbortError" });
+      expect(modelState.resolveDefaultThinkingLevel).toHaveBeenCalledTimes(cached ? 1 : 0);
+      expect(modelState.resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+    },
+  );
 });

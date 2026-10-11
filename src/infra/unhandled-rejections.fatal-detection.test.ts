@@ -1,5 +1,6 @@
 import process from "node:process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForCliSignalExit } from "../cli/signal-exit-barrier.js";
 
 const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../runtime.js", () => ({
@@ -14,6 +15,7 @@ import {
 } from "./unhandled-rejections.js";
 
 describe("process error handlers", () => {
+  let originalExitCode: typeof process.exitCode;
   let exitCalls: Array<string | number | null>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -31,6 +33,8 @@ describe("process error handlers", () => {
     rejectionListener = installed;
   });
   beforeEach(() => {
+    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     exitCalls = [];
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
@@ -41,7 +45,9 @@ describe("process error handlers", () => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForCliSignalExit();
+    process.exitCode = originalExitCode;
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
@@ -56,21 +62,26 @@ describe("process error handlers", () => {
     ["INVALID_CONFIG", 78, "configuration error", "CONFIGURATION ERROR - requires fix:"],
     ["MISSING_API_KEY", 1, "configuration error", "CONFIGURATION ERROR - requires fix:"],
     [undefined, 1, "unhandled rejection", "Unhandled promise rejection:"],
-  ] as const)("restores the terminal and exits for code %s", (code, exitCode, reason, label) => {
-    emitUnhandled(Object.assign(new Error("expected failure"), { code }));
-    expect(exitCalls).toEqual([exitCode]);
-    expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(reason, {
-      resumeStdinIfPaused: false,
-    });
-    expect(errorSpy).toHaveBeenCalledWith(
-      `[openclaw] ${label}`,
-      expect.stringContaining("expected failure"),
-    );
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
+  ] as const)(
+    "restores the terminal and records natural exit for code %s",
+    async (code, exitCode, reason, label) => {
+      emitUnhandled(Object.assign(new Error("expected failure"), { code }));
+      expect(await waitForCliSignalExit()).toBe(exitCode);
+      expect(process.exitCode).toBe(exitCode);
+      expect(exitCalls).toEqual([]);
+      expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(reason, {
+        resumeStdinIfPaused: false,
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        `[openclaw] ${label}`,
+        expect.stringContaining("expected failure"),
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),
+    Object.assign(new TypeError("request failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),
     Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" }),
   ])("warns without exiting for transient rejection %#", (error) => {
     emitUnhandled(error);
@@ -112,7 +123,9 @@ describe("process error handlers", () => {
       rejectionListener(error, Promise.resolve());
       expect(handler).toHaveBeenCalledTimes(1);
       expect(other).not.toHaveBeenCalled();
-      expect(exitCalls).toEqual([1]);
+      expect(await waitForCliSignalExit()).toBe(1);
+      expect(process.exitCode).toBe(1);
+      expect(exitCalls).toEqual([]);
     } finally {
       dispose();
       duplicateDispose();

@@ -32,17 +32,13 @@ type LegacyCommitmentsSnapshot = LegacyMigrationSourceSnapshot & {
   recordCount: number;
 };
 
-function resolveLegacyCommitmentsPath(stateDir: string): string {
-  return path.join(stateDir, LEGACY_COMMITMENTS_PATH);
-}
-
 /** Detect the exact retired store only when an explicit Doctor flow opts in. */
 export async function detectLegacyCommitments(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): Promise<NonNullable<LegacyStateDetection["commitments"]>> {
-  const sourcePath = resolveLegacyCommitmentsPath(params.stateDir);
+  const sourcePath = path.join(params.stateDir, LEGACY_COMMITMENTS_PATH);
   let hasPendingReceipt = false;
   if (
     params.doctorOnlyStateMigrations === true &&

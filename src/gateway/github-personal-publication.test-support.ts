@@ -7,8 +7,9 @@ import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.j
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { updateUserGitHubConnection } from "../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createPersonalGitHubOAuthLifecycle,
@@ -236,6 +237,7 @@ export async function restartPersonalPublicationFixture(
 ) {
   const previous = fixture.placements;
   resetGatewayWorkAdmission();
+  await closeOpenClawAgentDatabasesAsync();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
   fixture.placements.clearLocalTurnClaimsAfterRestart();

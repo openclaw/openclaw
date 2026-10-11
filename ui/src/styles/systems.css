@@ -56,11 +56,13 @@ openclaw-systems-page {
 }
 .systems-icon-button:focus-visible,
 .systems-machine:focus-visible,
-.systems-text-button:focus-visible {
+.systems-text-button:focus-visible,
+.systems-backups__check:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.systems-icon-button:disabled {
+.systems-icon-button:disabled,
+.systems-backups__check:disabled {
   opacity: 0.45;
 }
 .systems-icon-button svg {
@@ -222,13 +224,6 @@ openclaw-systems-page {
   background: transparent;
   color: var(--text);
   font-size: 11px;
-}
-.systems-backups__check:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.systems-backups__check:disabled {
-  opacity: 0.45;
 }
 .systems-body {
   display: flex;
@@ -638,9 +633,7 @@ openclaw-systems-page {
     width: min(300px, 90%);
     box-shadow: var(--shadow-lg);
   }
-  .systems-metrics {
-    padding: 8px 10px;
-  }
+  .systems-metrics,
   .systems-backups {
     padding: 8px 10px;
   }

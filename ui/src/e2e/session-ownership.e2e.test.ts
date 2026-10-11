@@ -180,6 +180,11 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // This scenario intentionally compares sessions beyond the current human's Mine scope.
+    await currentPage
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -309,6 +314,9 @@ suite.define(() => {
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
+        "config.get": { config: {}, hash: "owner-filter-fixture" },
+        "users.prefs.get": { status: "ok", entries: { "ui.navigationScope": "mine" } },
+        "users.prefs.set": { status: "ok" },
         "sessions.list": {
           cases: [
             {
@@ -328,7 +336,18 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // This scenario intentionally compares sessions beyond the current human's Mine scope.
+    await currentPage
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+    const scopeWrite = await gateway.waitForRequest("users.prefs.set");
+    expect(scopeWrite.params).toMatchObject({ entries: { "ui.navigationScope": "all" } });
+    await gateway.setMethodResponse("users.prefs.get", {
+      status: "ok",
+      entries: { "ui.navigationScope": "all" },
+    });
     await chooseSidebarOwner(currentPage, "involving-me");
     await closeSidebarMenu(currentPage);
     await expect
@@ -412,6 +431,9 @@ suite.define(() => {
     });
     await currentPage.clock.install();
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // All preserves attribution; Mine intentionally omits the redundant self avatar.
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const row = currentPage.locator('[data-session-key="agent:main:ada"]');
     await expectBrowser(row).toBeVisible();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
@@ -490,7 +512,7 @@ suite.define(() => {
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
-    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort" });
+    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort", exact: true });
     await filterAndSort.focus();
     await currentPage.keyboard.press("Enter");
 
@@ -525,6 +547,11 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // This scenario intentionally compares sessions beyond the current human's Mine scope.
+    await currentPage
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -750,7 +777,7 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("scrolls and pages high-volume sharing through one compact menu", async () => {
+  it("scrolls the complete sharing directory through one compact menu", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -936,7 +963,7 @@ suite.define(() => {
     expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(20);
+    ).toHaveCount(30);
     await expect
       .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
       .toBe(longMemberLabel);
@@ -945,13 +972,12 @@ suite.define(() => {
       .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
-    await dropdown.getByRole("button", { name: "Next", exact: true }).click();
-    await expectBrowser(
-      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(10);
-    // The final page retains both non-human icons; owner-chip presentation is human-only.
+    // All identities share one list; owner-chip presentation remains human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
+    await expectBrowser(
+      dropdown.getByRole("button", { name: "Previous", exact: true }),
+    ).toHaveCount(0);
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {

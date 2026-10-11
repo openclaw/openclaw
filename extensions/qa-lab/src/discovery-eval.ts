@@ -1,22 +1,16 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
-function readRequiredDiscoveryRefs() {
-  const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
-    | { requiredFiles?: string[] }
-    | undefined;
-  return (
-    config?.requiredFiles ?? [
-      "repo/qa/scenarios/index.yaml",
-      "repo/extensions/qa-lab/src/suite.ts",
-      "repo/docs/help/testing.md",
-    ]
-  );
-}
-
-const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
-
-const REQUIRED_DISCOVERY_REFS_LOWER = REQUIRED_DISCOVERY_REFS.map(normalizeLowercaseStringOrEmpty);
+const discoveryConfig = readQaScenarioExecutionConfig("source-docs-discovery-report") as
+  | { requiredFiles?: string[] }
+  | undefined;
+const REQUIRED_DISCOVERY_REFS_LOWER = (
+  discoveryConfig?.requiredFiles ?? [
+    "repo/qa/scenarios/index.yaml",
+    "repo/extensions/qa-lab/src/suite.ts",
+    "repo/docs/help/testing.md",
+  ]
+).map(normalizeLowercaseStringOrEmpty);
 
 const DISCOVERY_SCOPE_LEAK_PHRASES = [
   "all mandatory scenarios",
@@ -26,13 +20,6 @@ const DISCOVERY_SCOPE_LEAK_PHRASES = [
   "scenario: `subagent-handoff`",
   "scenario: subagent-handoff",
 ] as const;
-
-function confirmsDiscoveryFileRead(text: string) {
-  const lower = normalizeLowercaseStringOrEmpty(text);
-  const mentionsAllRefs = REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref));
-  const mentionsReadVerb = /(?:read|retrieved|inspected|loaded|accessed|digested)/.test(lower);
-  return mentionsAllRefs && mentionsReadVerb;
-}
 
 export function hasDiscoveryLabels(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
@@ -46,7 +33,10 @@ export function hasDiscoveryLabels(text: string) {
 
 export function reportsMissingDiscoveryFiles(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
-  if (confirmsDiscoveryFileRead(text)) {
+  if (
+    REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref)) &&
+    /(?:read|retrieved|inspected|loaded|accessed|digested)/.test(lower)
+  ) {
     return false;
   }
   return (

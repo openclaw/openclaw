@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   isEmbeddedAgentRunHandleActive,
@@ -7,6 +7,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -22,6 +23,7 @@ import {
   startGatewayDiagnosticHeartbeat,
   stopGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
@@ -46,9 +48,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("cloud worker run ownership", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { cancellation: "user", firstToolDelayMs: 0 },
@@ -287,9 +291,11 @@ describe("cloud worker run ownership", () => {
           sessionKey: SESSION_KEY,
           embeddedRunToolAuthorityBinding: () => {
             assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            const project = (_overlay: ReplyToolAuthorityOverlay) => "worker-turn-authority";
             return {
               source: "reply",
-              project: () => "worker-turn-authority",
+              project,
+              projectAsync: async (overlay) => project(overlay),
               assertActive: () => {},
             };
           },

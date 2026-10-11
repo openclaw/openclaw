@@ -131,9 +131,10 @@ type LegacyTask = {
   runId: string;
   nativeTurnId?: string;
   owner?: CodexNativeSubagentHistoryOwner;
-  status?: "running" | "succeeded";
+  status?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   deliveryStatus?: "pending" | "delivered";
   result?: string;
+  error?: string;
   ownerKey?: string;
   scopeKind?: string;
 };
@@ -180,9 +181,9 @@ async function createFixture() {
     INSERT INTO task_runs (
       task_id, runtime, task_kind, source_id, requester_session_key, owner_key,
       scope_kind, agent_id, requester_agent_id, run_id, task, status,
-      delivery_status, notify_policy, created_at, ended_at, terminal_summary, detail_json
+      delivery_status, notify_policy, created_at, ended_at, terminal_summary, error, detail_json
     ) VALUES (?, 'subagent', 'codex-native', ?, ?, ?, ?, 'main', 'main', ?,
-      'Synthetic released native work', ?, ?, 'silent', 100, ?, ?, ?)
+      'Synthetic released native work', ?, ?, 'silent', 100, ?, ?, ?, ?)
   `);
   return {
     params,
@@ -202,6 +203,7 @@ async function createFixture() {
         task.deliveryStatus ?? "pending",
         task.result === undefined ? null : 200,
         task.result ?? null,
+        task.error ?? null,
         JSON.stringify({
           ...(task.owner ? { nativeHistory: task.owner } : {}),
           ...(task.nativeTurnId ? { nativeTurnId: task.nativeTurnId } : {}),
@@ -219,6 +221,138 @@ async function createFixture() {
 }
 
 describe("Codex native Task assignment upgrade", () => {
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "settles an unbindable %s delivery as retained history and converges",
+    async (status) => {
+      const fixture = await createFixture();
+      fixture.seed({
+        id: "historical-task",
+        runId: "codex-thread:historical-child:turn:historical-turn",
+        owner: fixture.owner,
+        status,
+        result: "Historical result remains inspectable",
+        error: "Original execution diagnostic",
+      });
+      await fixture.store.delete(bindingKey);
+      const [original] = fixture.rows();
+      const migration = registeredMigration();
+      expect(await migration.detectLegacyState(fixture.params)).not.toBeNull();
+
+      const result = await migration.migrateLegacyState(fixture.params);
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes.join("\n")).toContain("undeliverable historical delivery");
+      const settled = fixture.rows();
+      expect(settled).toEqual([
+        {
+          ...original,
+          delivery_status: "failed",
+          error: expect.stringContaining(
+            "Original execution diagnostic\nUndeliverable historical delivery: original requester binding is unavailable",
+          ),
+        },
+      ]);
+      await expect(fixture.store.lookup(bindingKey)).resolves.toBeUndefined();
+      await expect(migration.detectLegacyState(fixture.params)).resolves.toBeNull();
+      await expect(migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+        changes: [],
+        warnings: [],
+      });
+      expect(fixture.rows()).toEqual(settled);
+    },
+  );
+
+  it("settles terminal ownership mismatches without importing into the current parent", async () => {
+    const fixture = await createFixture();
+    for (const mismatch of ["session", "lifecycle", "connection"]) {
+      fixture.seed({
+        id: mismatch,
+        runId: `codex-thread:${mismatch}`,
+        status: "succeeded",
+        result: `Retained ${mismatch} result`,
+        owner: {
+          ...fixture.owner,
+          ...(mismatch === "session" ? { sessionId: "previous-session" } : {}),
+          ...(mismatch === "lifecycle" ? { lifecycleRevision: "previous-revision" } : {}),
+          ...(mismatch === "connection" ? { connectionFingerprint: "0".repeat(64) } : {}),
+        },
+      });
+    }
+    const original = fixture.rows();
+    const migration = registeredMigration();
+
+    const result = await migration.migrateLegacyState(fixture.params);
+
+    expect(result.warnings).toEqual([]);
+    expect(fixture.rows()).toEqual(
+      original.map((row) =>
+        Object.assign({}, row, {
+          delivery_status: "failed",
+          error: expect.stringContaining("ownership no longer matches"),
+        }),
+      ),
+    );
+    await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(fixture.stored);
+    await expect(migration.detectLegacyState(fixture.params)).resolves.toBeNull();
+  });
+
+  it("preserves a terminal task if its binding returns after observation", async () => {
+    const fixture = await createFixture();
+    fixture.seed({
+      id: "race",
+      runId: "codex-thread:race",
+      owner: fixture.owner,
+      status: "succeeded",
+    });
+    await fixture.store.delete(bindingKey);
+    const original = fixture.rows();
+    const context: PluginDoctorStateMigrationContext = {
+      openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+        const store = fixture.params.context.openPluginStateKeyedStore<T>(options);
+        const observe = store.observe;
+        assert(observe);
+        return {
+          ...store,
+          async observe(key) {
+            const observation = await observe(key);
+            await fixture.store.register(bindingKey, fixture.stored);
+            return observation;
+          },
+        };
+      },
+    };
+
+    const result = await registeredMigration().migrateLegacyState({ ...fixture.params, context });
+
+    expect(result.warnings.join("\n")).toContain("binding changed during settlement");
+    expect(result.changes).toEqual([]);
+    expect(fixture.rows()).toEqual(original);
+    await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(fixture.stored);
+  });
+
+  it.each(["queued", "running"] as const)(
+    "keeps an unbindable %s task pending for recovery",
+    async (status) => {
+      const fixture = await createFixture();
+      fixture.seed({
+        id: "active-task",
+        runId: "codex-thread:active",
+        owner: fixture.owner,
+        status,
+      });
+      await fixture.store.delete(bindingKey);
+      const original = fixture.rows();
+      const migration = registeredMigration();
+
+      const result = await migration.migrateLegacyState(fixture.params);
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("original requester binding is unavailable");
+      expect(fixture.rows()).toEqual(original);
+      expect(await migration.detectLegacyState(fixture.params)).not.toBeNull();
+    },
+  );
+
   it("imports released initial and promoted follow-up work once across native rotation and clear", async () => {
     const fixture = await createFixture();
     fixture.seed({
@@ -251,7 +385,10 @@ describe("Codex native Task assignment upgrade", () => {
     expect(imported.warnings).toEqual([]);
     expect(imported.changes.length).toBeGreaterThan(0);
     const currentOwner = { ...fixture.owner, parentThreadId: binding.threadId };
-    const assignments = fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner);
+    const assignments = await fixture.runtime.readNativeSubagentAssignments!(
+      identity,
+      currentOwner,
+    );
     expect(assignments).toEqual(
       expect.arrayContaining([
         {
@@ -277,12 +414,13 @@ describe("Codex native Task assignment upgrade", () => {
       ]),
     );
     expect(assignments).toHaveLength(2);
+    const importMarker = {
+      version: 1,
+      taskIds: expect.arrayContaining(["legacy-initial", "legacy-followup"]),
+    };
     const importedState = await fixture.store.lookup(bindingKey);
     expect(importedState).toMatchObject({
-      nativeSubagentTaskImport: {
-        version: 1,
-        taskIds: expect.arrayContaining(["legacy-initial", "legacy-followup"]),
-      },
+      nativeSubagentTaskImport: importMarker,
     });
     await withEnvAsync({ OPENCLAW_STATE_DIR: fixture.params.stateDir }, async () => {
       const deliver = vi.fn(defaultNativeSubagentMonitorRuntime.deliverAgentHarnessCompletion);
@@ -374,50 +512,31 @@ describe("Codex native Task assignment upgrade", () => {
       }
     });
     await migration.migrateLegacyState(fixture.params);
-    expect(fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual([]);
+    expect(await fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual(
+      [],
+    );
 
-    await expect(fixture.runtime.mutate(identity, { kind: "clear" })).resolves.toBe(true);
-    const cleared = (await fixture.store.entries()).find((entry) => entry.key === bindingKey);
-    expect(cleared).toMatchObject({
-      value: {
-        state: "cleared",
-        nativeSubagentTaskImport: {
-          version: 1,
-          taskIds: expect.arrayContaining(["legacy-initial", "legacy-followup"]),
-        },
-      },
-    });
-    expect(cleared?.expiresAt).toBeUndefined();
-    await fixture.runtime.withLease(identity, async () => undefined);
-    await expect(fixture.store.lookup(bindingKey)).resolves.toMatchObject({
-      nativeSubagentTaskImport: {
-        version: 1,
-        taskIds: expect.arrayContaining(["legacy-initial", "legacy-followup"]),
-      },
-    });
-    await expect(fixture.runtime.mutate(identity, { kind: "set", binding })).resolves.toBe(true);
-    await migration.migrateLegacyState(fixture.params);
-    expect(fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual([]);
-    await expect(fixture.runtime.resetSessionGeneration(identity)).resolves.toBe("applied");
-    const reset = (await fixture.store.entries()).find((entry) => entry.key === bindingKey);
-    expect(reset?.value).toMatchObject({
-      state: "cleared",
-      nativeSubagentTaskImport: {
-        version: 1,
-        taskIds: expect.arrayContaining(["legacy-initial", "legacy-followup"]),
-      },
-    });
-    expect(reset?.expiresAt).toBeUndefined();
-    await fixture.runtime.withLease(identity, async () => undefined);
-    await expect(fixture.store.lookup(bindingKey)).resolves.toMatchObject({
-      nativeSubagentTaskImport: {
-        version: 1,
-        taskIds: expect.arrayContaining(["legacy-initial", "legacy-followup"]),
-      },
-    });
-    await expect(fixture.runtime.mutate(identity, { kind: "set", binding })).resolves.toBe(true);
-    await migration.migrateLegacyState(fixture.params);
-    expect(fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual([]);
+    for (const operation of ["clear", "reset"] as const) {
+      if (operation === "clear") {
+        await expect(fixture.runtime.mutate(identity, { kind: "clear" })).resolves.toBe(true);
+      } else {
+        await expect(fixture.runtime.resetSessionGeneration(identity)).resolves.toBe("applied");
+      }
+      const cleared = (await fixture.store.entries()).find((entry) => entry.key === bindingKey);
+      expect(cleared).toMatchObject({
+        value: { state: "cleared", nativeSubagentTaskImport: importMarker },
+      });
+      expect(cleared?.expiresAt).toBeUndefined();
+      await fixture.runtime.withLease(identity, async () => undefined);
+      await expect(fixture.store.lookup(bindingKey)).resolves.toMatchObject({
+        nativeSubagentTaskImport: importMarker,
+      });
+      await expect(fixture.runtime.mutate(identity, { kind: "set", binding })).resolves.toBe(true);
+      await migration.migrateLegacyState(fixture.params);
+      expect(await fixture.runtime.readNativeSubagentAssignments!(identity, currentOwner)).toEqual(
+        [],
+      );
+    }
     expect(fixture.rows()).toEqual(sourceRows);
   });
 
@@ -441,6 +560,9 @@ describe("Codex native Task assignment upgrade", () => {
         ...(mismatch === "missing" ? {} : { owner }),
         ...(mismatch === "owner-key" ? { ownerKey: "agent:main:other" } : {}),
         ...(mismatch === "scope" ? { scopeKind: "system" } : {}),
+        ...(["missing", "owner-key", "scope"].includes(mismatch)
+          ? { status: "succeeded" as const }
+          : {}),
       });
       const rows = fixture.rows();
       const session = getSessionEntry(fixture.sessionScope);

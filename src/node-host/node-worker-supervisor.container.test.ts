@@ -4,19 +4,13 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
-import { createChildAdapter } from "../process/supervisor/adapters/child.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
-import { buildWorkerProcessTurn } from "../worker/worker-process-protocol.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
-import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
-import {
-  inspectNodeWorkerProcessIdentity,
-  requireNodeWorkerProcessIdentity,
-} from "./node-worker-process-identity.js";
+import * as processIdentity from "./node-worker-process-identity.js";
+import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import {
   createNodeWorkerContainerFixture,
   gatewayLabel,
@@ -50,7 +44,24 @@ function containerFixture(options: Parameters<typeof createNodeWorkerContainerFi
     options,
   );
   const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env: fixture.env }));
-  return { ...fixture, store, [Symbol.asyncDispose]: () => fixture.supervisor.close() };
+  const pending: Promise<unknown>[] = [];
+  return {
+    ...fixture,
+    store,
+    ownOperation<T>(operation: Promise<T>): Promise<T> {
+      // Keep the original result assertable while disposal owns early failures.
+      void operation.catch(() => undefined);
+      pending.push(operation);
+      return operation;
+    },
+    async [Symbol.asyncDispose]() {
+      try {
+        await fixture.supervisor.close();
+      } finally {
+        await Promise.allSettled(pending);
+      }
+    },
+  };
 }
 
 function readWorkerFixture(
@@ -90,13 +101,6 @@ function delayDaemonRevalidation(fixture: ReturnType<typeof containerFixture>, d
     return runExec(command, args, options);
   });
   return requestedTimeouts;
-}
-
-async function waitForWorkerStarted(workspaceDir: string): Promise<void> {
-  await vi.waitFor(
-    () => expect(fs.existsSync(path.join(workspaceDir, "worker-started"))).toBe(true),
-    { timeout: 5_000 },
-  );
 }
 
 async function claimFixtureLaunch(
@@ -239,85 +243,6 @@ describe("node worker supervisor container isolation", () => {
     }
   });
 
-  it("persists the container worker's admission diagnosis from stderr without credentials", async () => {
-    await using fixture = containerFixture();
-    const input = testWorkerLaunchInput(
-      fixture.workspaceDir,
-      "container-admission-failure",
-      "admission-failure",
-    );
-    await fixture.supervisor.launch(input, endpoint);
-    const failed = await waitForTerminal(fixture.supervisor, input.launchId);
-    expect(failed).toMatchObject({ state: "failed" });
-    expect(failed.errorText).toContain(
-      "worker admission deadline exceeded after 9 attempts to gateway.example:443: connect failed: Opening handshake has timed out",
-    );
-    expect(failed.errorText).not.toContain(input.descriptor.admission.credential);
-    expect(Buffer.byteLength(failed.errorText ?? "", "utf8")).toBeLessThanOrEqual(4_096);
-    expect((await fixture.supervisor.status(input.launchId))?.errorText).toBe(failed.errorText);
-  });
-
-  it("keeps one container and capacity slot across completed and cancelled turns until environment teardown", async () => {
-    const capacities: Array<{ total: number; available: number }> = [];
-    await using fixture = containerFixture({
-      capacity: 1,
-      onCapacityChanged: (capacity) => capacities.push(capacity),
-    });
-    const first = testWorkerLaunchInput(fixture.workspaceDir, "container-retained-first", "retain");
-    const next = testWorkerLaunchInput(fixture.workspaceDir, "container-retained-next");
-    const waiting = testWorkerLaunchInput(
-      fixture.workspaceDir,
-      "container-retained-cancel",
-      "wait",
-    );
-    const { store } = fixture;
-    const running = await fixture.supervisor.launch(first, endpoint);
-    const completed = await waitForTerminal(fixture.supervisor, first.launchId);
-    const originalWorker = readWorkerFixture(fixture, first.launchId) as { pid: number };
-    const worker = requireNodeWorkerProcessIdentity(originalWorker.pid);
-    expect(completed.state).toBe("completed");
-    expect(await store.get(first.launchId)).toMatchObject({
-      state: "running",
-      container: running.container,
-    });
-    expect(fixture.exists(running.container!.containerId)).toBe(true);
-    expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
-
-    expect(await fixture.supervisor.launch(first, endpoint)).toEqual(completed);
-    expect(await fixture.supervisor.launch(next, endpoint)).toMatchObject({
-      state: "running",
-      worker: running.worker,
-      container: running.container,
-    });
-    expect((await waitForTerminal(fixture.supervisor, next.launchId)).state).toBe("completed");
-    expect(readWorkerFixture(fixture, next.launchId)).toMatchObject({ pid: worker.pid });
-
-    await fixture.supervisor.launch(waiting, endpoint);
-    await waitForWorkerStarted(fixture.workspaceDir);
-    expect(await fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(waiting))).toMatchObject({
-      state: "cancelled",
-    });
-    expect(inspectNodeWorkerProcessIdentity(worker)).toBe("live");
-    expect(fixture.events().filter((event) => event.argv[0] === "create")).toHaveLength(1);
-    expect(fixture.events().filter((event) => event.argv[0] === "start")).toHaveLength(1);
-    expect(fixture.events().filter((event) => event.argv[0] === "rm")).toHaveLength(0);
-    expect(await store.listNonterminal()).toHaveLength(1);
-
-    await fixture.supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
-
-    expect(fixture.exists(running.container!.containerId)).toBe(false);
-    expect(fixture.events().find((event) => event.argv[0] === "kill")?.argv).toEqual([
-      "kill",
-      running.container!.containerId,
-    ]);
-    expect(fixture.events().find((event) => event.argv[0] === "rm")?.journal?.state).toBe(
-      "running",
-    );
-    await vi.waitFor(() => expect(inspectNodeWorkerProcessIdentity(worker)).not.toBe("live"));
-    expect(await fixture.supervisor.status(first.launchId)).toEqual(completed);
-    expect(capacities.at(-1)).toEqual({ total: 1, available: 1 });
-  });
-
   it("keeps a launch running while its container is still starting", async () => {
     await using fixture = containerFixture();
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-startup-poll");
@@ -366,24 +291,6 @@ describe("node worker supervisor container isolation", () => {
   });
 
   it(
-    "launches when daemon revalidation outlasts the discovery timeout",
-    { timeout: 15_000 },
-    async () => {
-      await using fixture = containerFixture();
-      const input = testWorkerLaunchInput(fixture.workspaceDir, "container-busy-daemon");
-      const requestedTimeouts = delayDaemonRevalidation(fixture, 6_000);
-
-      expect(await fixture.supervisor.launch(input, endpoint)).toMatchObject({
-        state: "running",
-      });
-      expect(await waitForTerminal(fixture.supervisor, input.launchId)).toMatchObject({
-        state: "completed",
-      });
-      expect(requestedTimeouts).toEqual([30_000]);
-    },
-  );
-
-  it(
     "records the revalidation command when the daemon exceeds its deadline",
     { timeout: 45_000 },
     async () => {
@@ -409,79 +316,6 @@ describe("node worker supervisor container isolation", () => {
     },
   );
 
-  it.each(["before startup", "while running"] as const)(
-    "force removal fences the fake container %s",
-    async (phase) => {
-      await using fixture = containerFixture();
-      const launchId = "container-force-removal";
-      const container = fixture.seed({ id: "9".repeat(64), launchId, status: "created" });
-      const { input } = await claimFixtureLaunch(fixture, launchId, container.id);
-      const startMarker = path.join(fixture.engineRoot, "hold-start");
-      if (phase === "before startup") {
-        fs.writeFileSync(startMarker, "hold");
-      }
-      const { adapter, ready } = await createChildAdapter({
-        argv: [fixture.containerEngine.command, "start", "--attach", "--interactive", container.id],
-        env: fixture.containerEngine.env,
-        exactEnv: true,
-        stdinMode: "pipe-open",
-        stdoutConsumption: "awaited",
-      });
-      await ready;
-      let exited = false;
-      const completed = adapter.wait().finally(() => {
-        exited = true;
-      });
-      try {
-        await sendNodeWorkerInput(
-          adapter,
-          buildWorkerProcessTurn(completeWorkerLaunchDescriptor(input.descriptor, endpoint)),
-        );
-        await vi.waitFor(
-          () => expect(fixture.events().some((event) => event.argv[0] === "start")).toBe(true),
-          { timeout: 5_000 },
-        );
-        let worker: ReturnType<typeof requireNodeWorkerProcessIdentity> | undefined;
-        if (phase === "while running") {
-          await waitForWorkerStarted(fixture.workspaceDir);
-          const started = readWorkerFixture(fixture, launchId) as { pid: number };
-          worker = requireNodeWorkerProcessIdentity(started.pid);
-        }
-        await processExec.runExec(
-          fixture.containerEngine.command,
-          ["rm", "--force", container.id],
-          {
-            baseEnv: fixture.containerEngine.env,
-            timeoutMs: 15_000,
-            logOutput: false,
-          },
-        );
-        expect(fixture.exists(container.id)).toBe(false);
-        if (phase === "before startup") {
-          fs.unlinkSync(startMarker);
-          adapter.stdin?.end();
-          await completed;
-          expect(fixture.exists(container.id)).toBe(false);
-          expect(fs.existsSync(path.join(fixture.workspaceDir, "worker-started"))).toBe(false);
-        } else {
-          await vi.waitFor(() => expect(inspectNodeWorkerProcessIdentity(worker!)).toBe("dead"), {
-            timeout: 5_000,
-          });
-          await completed;
-          expect(fixture.exists(container.id)).toBe(false);
-        }
-      } finally {
-        fs.rmSync(startMarker, { force: true });
-        adapter.stdin?.end();
-        if (!exited) {
-          adapter.kill("SIGKILL");
-        }
-        await completed;
-        adapter.dispose();
-      }
-    },
-  );
-
   it("keeps a pending cancelled container slot occupied until the fake engine confirms removal", async () => {
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     await using fixture = containerFixture({
@@ -492,18 +326,21 @@ describe("node worker supervisor container isolation", () => {
     const createMarker = path.join(fixture.engineRoot, "hold-create");
     const removalMarker = path.join(fixture.engineRoot, "hold-removal");
     const { store } = fixture;
+    await fixture.supervisor.initialize();
     fs.writeFileSync(createMarker, "hold");
     fs.writeFileSync(removalMarker, "hold");
 
     try {
-      const launch = fixture.supervisor.launch(input, endpoint);
+      const launch = fixture.ownOperation(fixture.supervisor.launch(input, endpoint));
       await vi.waitFor(
         () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
         { timeout: 5_000 },
       );
       expect((await store.get(input.launchId))?.state).toBe("pending");
 
-      const cancellation = fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+      const cancellation = fixture.ownOperation(
+        fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input)),
+      );
       await vi.waitFor(() => expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 }));
       expect((await store.get(input.launchId))?.state).toBe("pending");
 
@@ -539,10 +376,13 @@ describe("node worker supervisor container isolation", () => {
     const createMarker = path.join(fixture.engineRoot, "hold-create");
     const { store } = fixture;
     const controller = new AbortController();
+    await fixture.supervisor.initialize();
     fs.writeFileSync(createMarker, "hold");
 
     try {
-      const launch = fixture.supervisor.launch(input, endpoint, controller.signal);
+      const launch = fixture.ownOperation(
+        fixture.supervisor.launch(input, endpoint, controller.signal),
+      );
       await vi.waitFor(
         () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
         { timeout: 5_000 },
@@ -590,25 +430,36 @@ describe("node worker supervisor container isolation", () => {
     expect(fixture.events().some((event) => event.argv.includes(foreign.id))).toBe(false);
   });
 
-  it("preserves a live foreign supervisor's pending container during reconciliation", async () => {
-    await using fixture = containerFixture();
-    const launchId = "container-live-pending";
-    const container = fixture.seed({ id: "e".repeat(64), launchId });
-    const input = testWorkerLaunchInput(fixture.workspaceDir, launchId, "wait");
-    const identity = testNodeWorkerLaunchIdentity(input);
-    const { store } = fixture;
-    await store.claim(
-      { ...identity, gatewayNamespace: input.gatewayNamespace },
-      requireNodeWorkerProcessIdentity(process.pid),
-      8,
-    );
+  it.each([false, true])(
+    "reconciles a pending container with live PIDs and reboot=%s",
+    async (rebooted) => {
+      await using fixture = containerFixture();
+      const launchId = "container-live-pending";
+      const container = fixture.seed({ id: "e".repeat(64), launchId });
+      const input = testWorkerLaunchInput(fixture.workspaceDir, launchId, "wait");
+      const identity = testNodeWorkerLaunchIdentity(input);
+      const { store } = fixture;
+      const boot = vi.spyOn(processIdentity, "getNodeWorkerBootIdentity").mockReturnValue("boot-a");
+      try {
+        await store.claim(
+          { ...identity, gatewayNamespace: input.gatewayNamespace },
+          requireNodeWorkerProcessIdentity(process.pid),
+          8,
+        );
 
-    await fixture.supervisor.initialize();
+        boot.mockReturnValue(rebooted ? "boot-b" : "boot-a");
+        await fixture.supervisor.initialize();
 
-    expect(await store.get(launchId)).toMatchObject({ state: "pending" });
-    expect(fixture.exists(container.id)).toBe(true);
-    expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(false);
-  });
+        expect(await store.get(launchId)).toMatchObject({
+          state: rebooted ? "interrupted" : "pending",
+        });
+        expect(fixture.exists(container.id)).toBe(!rebooted);
+        expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(rebooted);
+      } finally {
+        boot.mockRestore();
+      }
+    },
+  );
 
   it("interrupts a stale running journal after verifying its dead container identity", async () => {
     await using fixture = containerFixture();

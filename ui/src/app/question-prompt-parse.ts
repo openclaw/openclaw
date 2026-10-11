@@ -80,12 +80,8 @@ export function parseQuestion(value: unknown): Question | null {
     if (!url || !hasHttpUrlPrefix(url)) {
       return null;
     }
-    try {
-      const parsed = new URL(url);
-      if (parsed.username || parsed.password) {
-        return null;
-      }
-    } catch {
+    const parsed = URL.parse(url);
+    if (!parsed || parsed.username || parsed.password) {
       return null;
     }
   }

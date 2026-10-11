@@ -1,5 +1,4 @@
 import type { CronAgentScope } from "../types-shared.js";
-
 export type CronRunReceiptStatus =
   | "running"
   | "ok"

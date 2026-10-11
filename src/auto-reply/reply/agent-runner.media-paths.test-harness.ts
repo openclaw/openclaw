@@ -167,10 +167,6 @@ vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
 }));
 
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: async () => undefined,
-}));
-
 vi.mock("./agent-runner-memory.js", () => ({
   runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
     sessionEntry,
@@ -194,20 +190,19 @@ vi.mock("../../media/outbound-attachment.js", () => ({
     resolveOutboundAttachmentFromUrlMock(...args),
 }));
 
-// Spy on the .runtime import path used by agent-runner-execution.ts so we can assert
-// that the fix prevents a second media context from being created inside executeAgentTurn.
-vi.mock("./reply-media-paths.runtime.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("./reply-media-paths.runtime.js")>();
+// Observe initial preparation and execution through their shared media-context owner.
+vi.mock("./reply-media-paths.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./reply-media-paths.js")>();
   return {
+    ...mod,
     createReplyMediaContext: (...args: Parameters<typeof mod.createReplyMediaContext>) => {
       createReplyMediaContextRuntimeMock(...args);
       return mod.createReplyMediaContext(...args);
     },
-    createReplyMediaPathNormalizer: mod.createReplyMediaPathNormalizer,
   };
 });
 
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0]) {
   const followupRun = createMockFollowupRun(overrides);

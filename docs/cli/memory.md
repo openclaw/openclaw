@@ -13,9 +13,41 @@ doc-schema-version: 1
 
 Manage semantic memory indexing, search, promotion into `MEMORY.md`, and
 provenance-based deletion.
-Provided by the bundled `memory-core` plugin, available when
-`plugins.slots.memory` selects `memory-core` (the default). Other memory
-plugins expose their own CLI namespaces.
+Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
+`memory-core` by default. Other memory plugins expose their own CLI namespaces.
+
+`search` and `session-backfill` route through the local Gateway when it is
+running. Search preserves its result limits, session scope, and recall recording.
+When dreaming is enabled, those recalls feed the requested agent's workspace
+just as they do when searching offline.
+Backfill preview, apply, and rollback retain their existing output. Apply keeps
+its bounded batch loop and requires the same Gateway owner throughout; a failed
+request is never replayed locally. Update an
+older Gateway if it does not support this routing.
+
+Other commands, and session backfill with `--rem` or `--archive-files`, require
+the local Gateway to be stopped. Diagnostics and previews can initialize writable
+stores. Stop the Gateway through its service
+owner, run the command, then restart it. Commands refuse before opening those
+stores when a Gateway owns the state directory; offline execution retains
+exclusive ownership through manager and worker cleanup. The provider health
+returned by `memory.status` RPC is different from the CLI's aggregate index,
+source, embedding, and dreaming diagnostics and repair options.
+
+When another plugin owns the memory slot and `memory-core` runs only as the
+dreaming consolidation sidecar:
+
+- `memory status` reports the selected provider's id and health (opened with
+  host status authority) and the dreaming state instead of Memory Core's own
+  index. `--json` returns
+  `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
+  `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
+  Memory Core's own index.
+- `memory search` exits with code 1 and names the slot owner instead of
+  searching the sidecar index.
+- `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
+  Memory Core's sidecar index and print a notice saying so (on stderr with
+  `--json`).
 
 Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
@@ -48,13 +80,13 @@ openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--ver
 Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
-| Flag        | Effect                                                                                                                                                                                                                                                                           |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not probed. |
-| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                 |
-| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                      |
-| `--json`    | Print JSON.                                                                                                                                                                                                                                                                      |
-| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                    |
+| Flag        | Effect                                                                                                                                                                                                                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--deep`    | Check vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not checked. |
+| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                  |
+| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                       |
+| `--json`    | Print JSON.                                                                                                                                                                                                                                                                       |
+| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                     |
 
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
@@ -111,6 +143,13 @@ up to five attempts. Retries honor valid provider cooldown hints, capped at
 budget. Permanent quota errors without a cooldown hint stop that operation.
 The verbose output shows each retry wait.
 
+For OpenAI and OpenAI-compatible embeddings, set
+`OPENCLAW_DEBUG_MEMORY_EMBEDDINGS=1` to log remote request counts, HTTP status,
+response sizes when provided, and vector shape. These diagnostics omit headers,
+URLs, input text, and vector contents. Validation errors identify the provider,
+model, batch size, and rejected condition. A rejected batch still aborts indexing;
+full rebuilds publish only a complete index.
+
 Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller
 interrupts its retry wait.
@@ -141,7 +180,7 @@ Both repair commands replace the derived memory index while preserving other age
 state. Use `--agent` to limit the repair to the affected agent.
 
 <Warning>
-The default `openclaw-agent.sqlite` database also contains canonical sessions,
+The default `openclaw-agent.sqlite` database also contains stored sessions,
 transcripts, and other durable agent state. Never delete it or its `-wal`,
 `-shm`, or `-journal` sidecars to reset a memory index. Use `memory index --force`
 to rebuild, or [`memory reset`](/cli/memory#memory-reset) to clear the derived index and
@@ -489,16 +528,16 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 | `--to YYYY-MM-DD`           | none         | Include messages on or before this day in the dreaming timezone.                                              |
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
 | `--archive-files <path...>` | none         | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
-| `--rem`                     | off          | Write deterministic grounded per-day previews to `DREAMS.md` and retain their source-origin records.          |
+| `--rem`                     | off          | Write rule-based grounded per-day previews to `DREAMS.md` and retain their source-origin records.             |
 | `--apply`                   | preview only | Drain all bounded batches, stage trusted candidates, and write reversible `DREAMS.md` diary blocks.           |
 | `--rollback`                | off          | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
 | `--json`                    | off          | Print machine-readable per-day counts and top candidates.                                                     |
 
-The command reads the selected agent's canonical session store, including
+The command reads the selected agent's session store, including
 retained SQLite transcript identities from session rotation. It uses the same
 tracked message hashes and per-run caps as live session ingestion, so repeated
 `--apply` runs skip already ingested messages. Owner and agent lines from the
-canonical store are eligible; tool output, web or non-owner input, and turns
+session store are eligible; tool output, web or non-owner input, and turns
 without trustworthy owner provenance are excluded. Foreign archive files have
 no authenticated owner-provenance contract, so their embedded ownership fields
 remain untrusted and cannot be staged. Sessions previously purged with

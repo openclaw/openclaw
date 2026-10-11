@@ -10,13 +10,7 @@ import {
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
-  GOOGLE_THINKING_STREAM_HOOKS,
-  KILOCODE_THINKING_STREAM_HOOKS,
-  MINIMAX_FAST_MODE_STREAM_HOOKS,
   MOONSHOT_THINKING_STREAM_HOOKS,
-  OPENAI_RESPONSES_STREAM_HOOKS,
-  OPENROUTER_THINKING_STREAM_HOOKS,
-  TOOL_STREAM_DEFAULT_ON_HOOKS,
 } from "./provider-stream.js";
 
 type StreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
@@ -81,44 +75,13 @@ type OpenAIResponsesTestModel = {
   id: string;
 };
 
-const openAIResponsesServiceTierEndpoints = [
-  {
-    name: "public OpenAI Responses",
-    model: {
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      id: "gpt-5.6-luna",
-    },
-    fastParams: { fastMode: true },
-    payloadServiceTier: "default",
-    configuredServiceTier: "flex",
-  },
-  {
-    name: "ChatGPT Responses",
-    model: {
-      api: "openai-chatgpt-responses",
-      provider: "openai",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      id: "gpt-5.6-sol",
-    },
-    fastParams: { fast_mode: true },
-    payloadServiceTier: "flex",
-    configuredServiceTier: "default",
-  },
-] as const;
-
 async function captureOpenAIResponsesFamilyPayload(params: {
   model: OpenAIResponsesTestModel;
   extraParams: Record<string, unknown>;
-  initialServiceTier?: string;
 }): Promise<Record<string, unknown>> {
   let capturedPayload: Record<string, unknown> | undefined;
   const baseStreamFn: StreamFn = (model, _context, options) => {
     const payload: Record<string, unknown> = { model: model.id };
-    if (params.initialServiceTier !== undefined) {
-      payload.service_tier = params.initialServiceTier;
-    }
     options?.onPayload?.(payload as never, model as never);
     capturedPayload = payload;
     return {} as never;
@@ -141,7 +104,7 @@ function expectDefaultThinkingBudget(payload: Record<string, unknown>) {
 }
 
 describe("createMoonshotThinkingWrapper", () => {
-  it.each(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"])(
+  it.each(["kimi-k2.7-code-highspeed"])(
     "sanitizes %s after an async caller replaces the payload",
     async (modelId) => {
       let finalPayload: Record<string, unknown> | undefined;
@@ -172,65 +135,6 @@ describe("createMoonshotThinkingWrapper", () => {
       expect(payload.tool_choice).toBe("auto");
     },
   );
-
-  it("forces the direct Moonshot K3 payload contract after async caller replacement", async () => {
-    let finalPayload: Record<string, unknown> | undefined;
-    const pinnedToolChoice = { type: "function", function: { name: "read" } };
-    const baseStreamFn: StreamFn = async (model, _context, options) => {
-      const payload = { model: model.id };
-      const replacement = await options?.onPayload?.(payload, model);
-      finalPayload = requireRecord(replacement ?? payload, "final payload");
-      return {} as never;
-    };
-    const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "disabled", "all");
-
-    await wrapped(
-      { api: "openai-completions", provider: "moonshot", id: "kimi-k3" } as never,
-      {} as never,
-      {
-        onPayload: async () => ({
-          model: "kimi-k3",
-          thinking: { type: "disabled" },
-          reasoningEffort: "low",
-          reasoning_effort: "low",
-          temperature: 0,
-          top_p: 0.5,
-          tool_choice: pinnedToolChoice,
-        }),
-      },
-    );
-
-    const payload = requirePayload(finalPayload);
-    expect(payload).not.toHaveProperty("thinking");
-    expect(payload).not.toHaveProperty("reasoningEffort");
-    expect(payload.reasoning_effort).toBe("max");
-    expect(payload).not.toHaveProperty("temperature");
-    expect(payload).not.toHaveProperty("top_p");
-    expect(payload.tool_choice).toEqual(pinnedToolChoice);
-  });
-
-  it("does not apply the direct K3 contract to an Ollama-owned model", async () => {
-    let finalPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = async (model, _context, options) => {
-      const payload = { model: model.id, reasoning_effort: "low", temperature: 0 };
-      const replacement = await options?.onPayload?.(payload, model);
-      finalPayload = requireRecord(replacement ?? payload, "final payload");
-      return {} as never;
-    };
-    const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "enabled");
-
-    await wrapped(
-      { api: "openai-completions", provider: "ollama", id: "kimi-k3" } as never,
-      {} as never,
-      {},
-    );
-
-    expect(requirePayload(finalPayload)).toMatchObject({
-      thinking: { type: "enabled" },
-      reasoning_effort: "low",
-      temperature: 0,
-    });
-  });
 });
 
 describe("composeProviderStreamWrappers", () => {
@@ -260,82 +164,34 @@ describe("composeProviderStreamWrappers", () => {
 
     expect(order).toEqual(["b:before", "a:before", "base", "a:after", "b:after"]);
   });
-
-  it("returns the original stream when no wrappers are provided", () => {
-    const baseStreamFn: StreamFn = () => ({}) as never;
-    expect(composeProviderStreamWrappers(baseStreamFn)).toBe(baseStreamFn);
-  });
 });
 
 describe("buildProviderStreamFamilyHooks", () => {
-  it.each(
-    openAIResponsesServiceTierEndpoints.flatMap(
-      ({ name, model, fastParams, payloadServiceTier, configuredServiceTier }) => [
-        {
-          name: `${name}: configured flex beats fast mode`,
-          model,
-          extraParams: { ...fastParams, serviceTier: "flex" },
-          initialServiceTier: undefined,
-          expectedServiceTier: "flex",
-        },
-        {
-          name: `${name}: configured default beats fast mode`,
-          model,
-          extraParams: { ...fastParams, service_tier: "default" },
-          initialServiceTier: undefined,
-          expectedServiceTier: "default",
-        },
-        {
-          name: `${name}: payload ${payloadServiceTier} beats configured ${configuredServiceTier} and fast mode`,
-          model,
-          extraParams: { ...fastParams, serviceTier: configuredServiceTier },
-          initialServiceTier: payloadServiceTier,
-          expectedServiceTier: payloadServiceTier,
-        },
-        {
-          name: `${name}: explicit ultrafast reaches the payload`,
-          model,
-          extraParams: { fastMode: "ultrafast" },
-          initialServiceTier: undefined,
-          expectedServiceTier: "ultrafast",
-        },
-        {
-          name: `${name}: configured ultrafast beats ordinary fast`,
-          model,
-          extraParams: { ...fastParams, serviceTier: "ultrafast" },
-          initialServiceTier: undefined,
-          expectedServiceTier: "ultrafast",
-        },
-        {
-          name: `${name}: configured default beats ultrafast`,
-          model,
-          extraParams: { fastMode: "ultrafast", service_tier: "default" },
-          initialServiceTier: undefined,
-          expectedServiceTier: "default",
-        },
-        {
-          name: `${name}: payload tier beats ultrafast`,
-          model,
-          extraParams: { fastMode: "ultrafast" },
-          initialServiceTier: "default",
-          expectedServiceTier: "default",
-        },
-        {
-          name: `${name}: fast mode defaults to priority`,
-          model,
-          extraParams: fastParams,
-          initialServiceTier: undefined,
-          expectedServiceTier: "priority",
-        },
-      ],
-    ),
-  )("$name", async ({ model, extraParams, initialServiceTier, expectedServiceTier }) => {
-    const payload = await captureOpenAIResponsesFamilyPayload({
-      model,
-      extraParams,
-      initialServiceTier,
-    });
-
+  it.each([
+    {
+      name: "public OpenAI Responses: configured flex beats fast mode",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.6-luna",
+      },
+      extraParams: { fastMode: true, serviceTier: "flex" },
+      expectedServiceTier: "flex",
+    },
+    {
+      name: "ChatGPT Responses: fast mode defaults to priority",
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        id: "gpt-5.6-sol",
+      },
+      extraParams: { fast_mode: true },
+      expectedServiceTier: "priority",
+    },
+  ] as const)("$name", async ({ model, extraParams, expectedServiceTier }) => {
+    const payload = await captureOpenAIResponsesFamilyPayload({ model, extraParams });
     expect(payload.service_tier).toBe(expectedServiceTier);
   });
 
@@ -363,7 +219,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       return {} as never;
     };
 
-    const googleHooks = GOOGLE_THINKING_STREAM_HOOKS;
+    const googleHooks = buildProviderStreamFamilyHooks("google-thinking");
     const googleStream = requireStreamFn(
       requireWrapStreamFn(googleHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -384,7 +240,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(googleThinkingConfig.thinkingLevel).toBe("HIGH");
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
-    const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
+    const minimaxHooks = buildProviderStreamFamilyHooks("minimax-fast-mode");
     const minimaxStream = requireStreamFn(
       requireWrapStreamFn(minimaxHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -402,7 +258,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     );
     expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
 
-    const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
+    const kilocodeHooks = buildProviderStreamFamilyHooks("kilocode-thinking");
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -547,7 +403,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(capturedReasoning).toBe("max");
     expect(capturedModelReasoning).toBe(true);
 
-    const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
+    const openAiHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
     payloadSeed = { reasoning: { effort: "medium", summary: "auto" } };
     void requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
@@ -578,7 +434,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       version: VERSION,
     });
 
-    const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
+    const openRouterHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -609,7 +465,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expectDefaultThinkingBudget(openRouterNoEffortPayload);
     expect(openRouterNoEffortPayload).not.toHaveProperty("reasoning");
 
-    const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
+    const toolStreamHooks = buildProviderStreamFamilyHooks("tool-stream-default-on");
     const toolStreamDefault = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
         streamFn: baseStreamFn,

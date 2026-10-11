@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
-  uniqueStrings,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -252,18 +252,6 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   return merged;
 }
 
-function mergeContractLists(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): string[] | undefined {
-  const merged = uniqueStrings(
-    [...(left ?? []), ...(right ?? [])]
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
-  return merged.length > 0 ? merged : undefined;
-}
-
 function mergeManifestContracts(
   manifestContracts: PluginManifestContracts | undefined,
   catalogContracts: PluginManifestContracts | undefined,
@@ -273,8 +261,11 @@ function mergeManifestContracts(
   }
   const contracts: PluginManifestContracts = {};
   for (const key of PLUGIN_MANIFEST_CONTRACT_KEYS) {
-    const merged = mergeContractLists(manifestContracts?.[key], catalogContracts[key]);
-    if (merged) {
+    const merged = normalizeUniqueTrimmedStringList([
+      ...(manifestContracts?.[key] ?? []),
+      ...(catalogContracts[key] ?? []),
+    ]);
+    if (merged.length > 0) {
       contracts[key] = merged;
     }
   }
@@ -297,36 +288,25 @@ function mergeCatalogChannelConfigs(params: {
   for (const [key, value] of Object.entries(params.manifestChannelConfigs ?? {})) {
     if (!isBlockedObjectKey(key)) {
       const catalogValue = merged[key];
-      merged[key] = catalogValue
-        ? {
-            ...catalogValue,
-            ...value,
-            schema: value.schema ?? catalogValue.schema,
-            ...(catalogValue.uiHints || value.uiHints
-              ? {
-                  uiHints: {
-                    ...catalogValue.uiHints,
-                    ...value.uiHints,
-                  },
-                }
-              : {}),
-            ...((value.runtime ?? catalogValue.runtime)
-              ? { runtime: value.runtime ?? catalogValue.runtime }
-              : {}),
-            ...((value.label ?? catalogValue.label)
-              ? { label: value.label ?? catalogValue.label }
-              : {}),
-            ...((value.description ?? catalogValue.description)
-              ? { description: value.description ?? catalogValue.description }
-              : {}),
-            ...((value.preferOver ?? catalogValue.preferOver)
-              ? { preferOver: value.preferOver ?? catalogValue.preferOver }
-              : {}),
-            ...((value.commands ?? catalogValue.commands)
-              ? { commands: value.commands ?? catalogValue.commands }
-              : {}),
-          }
-        : value;
+      if (!catalogValue) {
+        merged[key] = value;
+        continue;
+      }
+      const config: PluginManifestChannelConfig = {
+        ...catalogValue,
+        ...value,
+        schema: value.schema ?? catalogValue.schema,
+      };
+      if (catalogValue.uiHints || value.uiHints) {
+        config.uiHints = { ...catalogValue.uiHints, ...value.uiHints };
+      }
+      for (const field of ["runtime", "label", "description", "preferOver", "commands"] as const) {
+        const fallback = value[field] ?? catalogValue[field];
+        if (fallback) {
+          Object.assign(config, { [field]: fallback });
+        }
+      }
+      merged[key] = config;
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -76,11 +77,11 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       await captureUiProof(suite, page, "agent-archive-after.png");
 
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
       await row.waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Active");
       await closeSidebarMenu(page);
       await row.waitFor({ state: "detached" });
@@ -121,7 +122,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
 
@@ -304,8 +305,16 @@ suite.define(() => {
       await row.getByRole("button", { name: "Open session menu" }).click();
       const archiveItem = menuHost.getByRole("menuitem", { name: "Archive session" });
       expect(await archiveItem.isDisabled()).toBe(false);
+      await menuHost.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       expect(await menuHost.getByRole("menuitem", { name: "Delete…" }).isDisabled()).toBe(true);
+      await page.keyboard.press("ArrowLeft");
       await activateSelfRemovingControl(archiveItem);
+      const dialog = await waitForConfirmModal(page);
+      await dialog
+        .getByText("Active work in this session will be stopped.", { exact: false })
+        .waitFor();
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      await dialog.getByRole("button", { name: "Archive session", exact: true }).click();
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -508,7 +517,8 @@ suite.define(() => {
       const retainedReply = activePane
         .locator(".chat-group")
         .filter({ hasText: "Reply retained in the transcript." });
-      const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
+      const progressCard = activePane.locator('[data-progress-card-placement="details"]');
+      await openChatDetails(activePane);
       await retainedReply.waitFor({ state: "visible" });
       expect(await retainedReply.locator(".chat-reply-attribution").count()).toBe(0);
       await progressCard.waitFor({ state: "visible" });
@@ -723,6 +733,7 @@ suite.define(() => {
       await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
       await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await openChatDetails(activePane);
       await progressCard.waitFor({ state: "visible" });
       await expect
         .poll(() =>
@@ -943,6 +954,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       await row.getByRole("button", { name: "Open session menu" }).click();
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );

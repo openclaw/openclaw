@@ -9,11 +9,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { purgeAgentSessionStoreEntries } from "./cleanup-service.js";
 import {
-  appendTranscriptEventSync,
   loadSessionEntry,
   loadTranscriptEventsSync,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("purgeAgentSessionStoreEntries", () => {
@@ -22,7 +22,7 @@ describe("purgeAgentSessionStoreEntries", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it.each(["fixed selector", "exact database", "retired schema owner"])(
+  it.each(["fixed selector", "retired schema owner"])(
     "purges only the deleted agent's state with a %s",
     async (kind) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {

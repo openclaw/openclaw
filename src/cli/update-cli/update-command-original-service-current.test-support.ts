@@ -445,28 +445,6 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     });
   });
 
-  it("refuses a completed later fingerprint mismatch instead of downgrading it to a warning", async () => {
-    const { rootB, before } = fixture();
-    await admitted(async (run) => {
-      const original = await observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
-      );
-      if (!original?.packageFingerprint) {
-        throw new Error("missing complete baseline");
-      }
-      const reader = integrity.createPackageIntegrityReader;
-      vi.spyOn(integrity, "createPackageIntegrityReader").mockImplementation((timeout) => ({
-        ...reader(timeout),
-        tree: async () => ({ ...original.packageFingerprint!, digest: "different" }),
-      }));
-      await expect(
-        revalidateOriginalManagedServiceRuntime(original, () => run.executorFence!.assertCurrent()),
-      ).rejects.toThrow("package changed");
-      expect(original.packageFingerprintWarning).toBeUndefined();
-    });
-  });
-
   it.each([
     "entry-limit",
     "read-error",

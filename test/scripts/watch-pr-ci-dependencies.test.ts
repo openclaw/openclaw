@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { toolingDependencyOptions } from "../../scripts/lib/tooling-dependencies.mjs";
@@ -151,13 +159,20 @@ it("checks fallback versions before loading through the watcher child and preser
       dependencies: { "fixture-pkg": "1.0.0" },
       devDependencies: { "dev-pkg": "1.0.0" },
       optionalDependencies: { "@fixture/scoped": "1.0.0" },
+      imports: { "#source": "./scripts/local-source.mjs" },
     }),
   );
-  for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts", "tooling-dependencies.mjs"]) {
+  for (const file of [
+    "tsx-cli-shim.mjs",
+    "local-check-runtime.mts",
+    "tooling-dependencies.mjs",
+    "managed-cleanup-handoff.mts",
+  ]) {
     copyFileSync(resolve("scripts/lib", file), join(lib, file));
   }
   copyFileSync(resolve("scripts/watch-pr-ci.mjs"), join(checkout, "scripts/watch-pr-ci.mjs"));
   writePackage(tooling, "fixture-pkg", "tooling");
+  writePackage(root, "fixture-pkg", "stale ancestor", "0.0.0-stale");
   writePackage(tooling, "dev-pkg", "dev");
   writePackage(tooling, "@fixture/scoped", "scoped");
   writeFileSync(
@@ -176,6 +191,7 @@ it("checks fallback versions before loading through the watcher child and preser
   );
   writePackage(join(checkout, "scripts"), "local-pkg", "local");
   writeFileSync(join(tooling, "relative.mjs"), 'export default "wrong";\n');
+  writeFileSync(join(checkout, "scripts/local-source.mjs"), 'export default "source";\n');
   writeFileSync(
     join(checkout, "scripts/watch-pr-ci.mts"),
     `import assert from "node:assert/strict";
@@ -183,10 +199,12 @@ import missing from "fixture-pkg";
 import dev from "dev-pkg";
 import scoped from "@fixture/scoped/subpath";
 import local from "local-pkg";
+import source from "#source";
 assert.equal(missing, "tooling");
 assert.equal(dev, "dev");
 assert.equal(scoped, "scoped");
 assert.equal(local, "local");
+assert.equal(source, "source");
 for (const specifier of ["./relative.mjs", new URL("./relative.mjs", import.meta.url).href]) {
   await assert.rejects(import(specifier), { code: "ERR_MODULE_NOT_FOUND" });
 }
@@ -228,7 +246,11 @@ console.log("fallback and local resolution OK");
   );
   for (const required of ["1.0.0", "undeclared"]) {
     if (required === "undeclared") {
-      writeFileSync(join(checkout, "package.json"), "{}");
+      const manifestPath = join(checkout, "package.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      delete manifest.dependencies["fixture-pkg"];
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      rmSync(join(root, "node_modules/fixture-pkg"), { recursive: true });
     }
     const rejected = run();
     expect(rejected.status, rejected.stderr).toBe(1);

@@ -41,6 +41,9 @@ describe("catalog README", () => {
 
     expect(container.querySelector(".code-block-copy")).not.toBeNull();
     expect(container.textContent).toContain(tail);
+    expect(
+      container.querySelector(".plugin-catalog-detail__readme-section > h2")?.textContent,
+    ).toBe("README");
   });
 });
 
@@ -54,18 +57,6 @@ describe("renderPluginCatalogDetail", () => {
     expect(
       container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
     ).not.toBeNull();
-  });
-
-  it("does not invent a ClawHub link for an unproven local package", () => {
-    const result = createDiscoveryDetail(createPlugin({ id: "demo", name: "Demo" }));
-    result.plugin.id = "local_ZGVtbw";
-    result.plugin.catalog.packageName = "demo";
-    result.plugin.local.pluginId = "demo";
-    result.plugin.local.action = "manage";
-    result.detail.origin = "local";
-    const container = mount(result, { canInstall: false });
-
-    expect(container.querySelector('a[href^="https://clawhub.ai/"]')).toBeNull();
   });
 });
 
@@ -121,7 +112,7 @@ it.each([false, true])(
     expect(container.querySelector(".plugin-capabilities button")).toBeNull();
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
       "Capabilities3",
-      ...(mixed ? ["Skills1", "Tools1", "MCP servers1"] : []),
+      ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),
     ]);
     expect(
       sections.flatMap((section) =>

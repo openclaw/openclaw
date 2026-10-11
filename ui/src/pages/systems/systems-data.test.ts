@@ -4,7 +4,6 @@ import type {
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
@@ -180,7 +179,6 @@ describe("Systems inventory loading", () => {
     const controller = new AbortController();
     expect(
       await loadSystemsInventory(gateway(client), {
-        isCurrent: () => true,
         signal: controller.signal,
       }),
     ).toEqual({ ...inventory, gatewaySampledAtMs: expect.any(Number) });
@@ -199,7 +197,7 @@ describe("Systems inventory loading", () => {
       .mockResolvedValueOnce({ environments })
       .mockRejectedValueOnce(new Error("Node inventory denied"))
       .mockRejectedValueOnce(new Error("System info unavailable"));
-    const result = await loadSystemsInventory(gateway(client), { isCurrent: () => true });
+    const result = await loadSystemsInventory(gateway(client), {});
     expect(result).toMatchObject({ environments, nodes: [], gatewaySystemInfo: null });
     expect(result?.errors.nodes).toContain("Node inventory denied");
     expect(result?.errors.systemInfo).toContain("System info unavailable");
@@ -212,39 +210,6 @@ describe("Systems inventory loading", () => {
       .mockRejectedValueOnce(failure)
       .mockResolvedValueOnce({ nodes: inventory.nodes })
       .mockResolvedValueOnce(systemInfo);
-    await expect(loadSystemsInventory(gateway(client), { isCurrent: () => true })).rejects.toBe(
-      failure,
-    );
-  });
-
-  it.each(["replacement", "abort"] as const)("discards a late result after %s", async (change) => {
-    const delayed = createDeferred<{ environments: EnvironmentSummary[] }>();
-    const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-    vi.spyOn(client, "request")
-      .mockReturnValueOnce(delayed.promise)
-      .mockResolvedValueOnce({ nodes: inventory.nodes })
-      .mockResolvedValueOnce(systemInfo);
-    let current = true;
-    const controller = new AbortController();
-    const result = loadSystemsInventory(gateway(client), {
-      isCurrent: () => current,
-      signal: controller.signal,
-    });
-    if (change === "replacement") {
-      current = false;
-    } else {
-      controller.abort();
-    }
-    delayed.resolve({ environments });
-    await expect(result).resolves.toBeUndefined();
-  });
-
-  it("does not dispatch an already invalidated load", async () => {
-    const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-    const request = vi.spyOn(client, "request");
-    await expect(
-      loadSystemsInventory(gateway(client), { isCurrent: () => false }),
-    ).resolves.toBeUndefined();
-    expect(request).not.toHaveBeenCalled();
+    await expect(loadSystemsInventory(gateway(client), {})).rejects.toBe(failure);
   });
 });

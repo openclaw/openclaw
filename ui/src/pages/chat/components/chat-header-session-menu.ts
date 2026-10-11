@@ -23,6 +23,7 @@ import {
 import type { SessionCreatedActor } from "../../../components/session-owner-chip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import {
   canManageChatSessionSharing,
   renderChatSessionSharing,
@@ -74,7 +75,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) compact = false;
-  @property({ attribute: false }) navigationAllowed = false;
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
   @property({
@@ -82,7 +82,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     hasChanged: (next: UiSettings, previous?: UiSettings) =>
       next?.chatShowThinking !== previous?.chatShowThinking ||
       next?.chatShowToolCalls !== previous?.chatShowToolCalls ||
-      next?.chatPersistCommentary !== previous?.chatPersistCommentary,
+      next?.chatPersistCommentary !== previous?.chatPersistCommentary ||
+      next?.chatBubbleSessionKeys !== previous?.chatBubbleSessionKeys,
   })
   settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
@@ -116,7 +117,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       session: this.session,
       selectionCount: 1,
       compact: this.compact,
-      navigationAllowed: this.navigationAllowed,
+      navigationAllowed: true,
       copyMarkdownAllowed: this.copyMarkdownAllowed,
       splitAllowed: this.splitAllowed,
       renderOpenInExtra: (inline) => this.renderTerminalAction(inline),
@@ -194,6 +195,15 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
         this.onSettingsChange({
           chatPersistCommentary: this.settings.chatPersistCommentary === false,
         });
+      } else if (setting === "speech-bubbles" && this.session.target?.key) {
+        const sessionKey = this.session.target.key;
+        this.onSettingsChange(
+          setChatBubbleMode(
+            this.settings,
+            sessionKey,
+            !isChatBubbleMode(this.settings, sessionKey),
+          ),
+        );
       }
       return;
     }
@@ -262,12 +272,20 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     });
   }
 
-  private renderQuickActions(group: "panels" | "layout", actions: HeaderMenuQuickAction[]) {
-    if (actions.length === 0) {
+  private renderSubmenu(group: "panels" | "layout" | "view") {
+    const actions = group === "panels" ? this.panelActions : this.layoutActions;
+    if (group !== "view" && actions.length === 0) {
       return nothing;
     }
-    const label = t(group === "panels" ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout");
-    const icon = group === "panels" ? icons.panelRightOpen : icons.columns2;
+    const label = t(
+      group === "view"
+        ? "chat.view.menu"
+        : group === "panels"
+          ? "chat.sessionHeader.panels"
+          : "chat.sessionHeader.layout",
+    );
+    const icon =
+      group === "view" ? icons.eye : group === "panels" ? icons.panelRightOpen : icons.columns2;
     if (this.compact) {
       return renderCompactSessionMenuNavigationItem({
         value: `compact:open-${group}`,
@@ -279,7 +297,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       <wa-dropdown-item class="session-menu__item">
         <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
         <span class="session-menu__text">${label}</span>
-        ${this.renderQuickActionItems(group, actions)}
+        ${group === "view" ? this.renderViewSubmenu() : this.renderQuickActionItems(group, actions)}
       </wa-dropdown-item>
     `;
   }
@@ -306,6 +324,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${item("reasoning", t("chat.view.reasoning"), showThinking)}
       ${item("tool-calls", t("chat.view.toolCalls"), showToolCalls)}
       ${item("commentary", t("chat.view.commentary"), persistCommentary)}
+      ${item(
+        "speech-bubbles",
+        t("chat.view.speechBubbles"),
+        isChatBubbleMode(this.settings, this.session.target?.key ?? ""),
+      )}
       ${
         this.preferencesBrowserOnly
           ? html`<div slot=${inline ? nothing : "submenu"} class="session-menu__info" role="note">
@@ -323,7 +346,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.compactView === "copy" ||
       this.compactView === "assign-owner" ||
       this.compactView === "icon" ||
-      this.compactView === "group"
+      this.compactView === "group" ||
+      this.compactView === "snooze" ||
+      this.compactView === "advanced" ||
+      this.compactView === "archive"
     ) {
       return this.managementActions.renderCompactView(this.compactView);
     }
@@ -375,8 +401,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
             `
           : nothing
       }
-      ${this.renderQuickActions("panels", this.panelActions)}
-      ${this.renderQuickActions("layout", this.layoutActions)}
+      ${this.renderSubmenu("panels")} ${this.renderSubmenu("layout")}
       ${
         this.compact && this.sharing?.session && canManageChatSessionSharing(this.sharing.session)
           ? renderCompactSessionMenuNavigationItem({
@@ -387,28 +412,14 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
             })
           : nothing
       }
-      ${
-        this.compact
-          ? renderCompactSessionMenuNavigationItem({
-              value: "compact:open-view",
-              label: t("chat.view.menu"),
-              icon: icons.eye,
-            })
-          : html`<wa-dropdown-item class="session-menu__item">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.eye}</span>
-              <span class="session-menu__text">${t("chat.view.menu")}</span>
-              ${this.renderViewSubmenu()}
-            </wa-dropdown-item>`
-      }
+      ${this.renderSubmenu("view")}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderPrimaryActions()}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderOrganizationActions()}
       ${this.renderQuickActionItems("session", this.sessionActions, true)}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderTransferActions()}
-      <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderDeleteAction()}
+      ${this.managementActions.renderAdvancedAction()}
     `;
   }
 
@@ -435,7 +446,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     const menuLabel = t("chat.sidebar.sessionMenu", { session: this.session.label });
     return html`
       <wa-dropdown
-        class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+        class=${`session-menu chat-header-session-menu${this.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
         placement="bottom-end"
         aria-label=${menuLabel}
         @keydown=${(event: KeyboardEvent) => {
@@ -444,6 +455,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           }
         }}
         @wa-show=${this.handleShow}
+        @wa-after-hide=${this.managementActions.advanced.close}
         @wa-select=${this.handleSelect}
       >
         <button

@@ -14,7 +14,6 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
-import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
@@ -22,7 +21,8 @@ import {
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
 import {
-  bindSubagentRunRuntimeKey,
+  copySubagentRunRuntimeOwner,
+  currentSubagentRunOrObserved,
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
@@ -39,6 +39,19 @@ type WakeCommitFailureRetention =
   | boolean
   | ((error: unknown, pending: PendingRequesterSettleWakeCommit) => boolean);
 
+/** Release only the fence slots this episode still owns; a newer episode keeps its own. */
+function releasePendingWakeKeys(
+  context: SubagentLifecycleWakeContext,
+  pending: PendingRequesterSettleWakeCommit,
+): void {
+  for (const entry of pending.entries) {
+    const key = getSubagentRunRuntimeKey(entry);
+    if (context.pendingRequesterSettleWakeCommits.get(key) === pending) {
+      context.pendingRequesterSettleWakeCommits.delete(key);
+    }
+  }
+}
+
 function clearPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
@@ -47,13 +60,7 @@ function clearPendingWakeCommit(
   if (pending.initialTransfer?.blocked) {
     return;
   }
-  for (const entry of pending.entries) {
-    if (
-      context.pendingRequesterSettleWakeCommits.get(getSubagentRunRuntimeKey(entry)) === pending
-    ) {
-      context.pendingRequesterSettleWakeCommits.delete(getSubagentRunRuntimeKey(entry));
-    }
-  }
+  releasePendingWakeKeys(context, pending);
   const suppressed = pending.suppressedFailureLogs ?? 0;
   if (suppressed > 0) {
     // Closing the episode accounts for what it withheld, so a log that went
@@ -174,27 +181,21 @@ export function commitRequesterInitialTransfer(
   const identities = new Map(
     entries.map((entry) => [entry.runId, captureRequesterSettleRunIdentity(entry)]),
   );
-  const cancelled = new Map(
-    entries.map((entry) => [
-      entry.runId,
-      {
-        killIntent: entry.killIntent,
-        killReconciliation: entry.killReconciliation,
-        suppressed: entry.suppressCompletionDelivery,
-      },
-    ]),
-  );
+  const cancellation = (entry: SubagentRunRecord) => ({
+    killIntent: entry.killIntent,
+    killReconciliation: entry.killReconciliation,
+    suppressed: entry.suppressCompletionDelivery,
+  });
+  const cancelled = new Map(entries.map((entry) => [entry.runId, cancellation(entry)]));
   const retiredRunIds = new Set<string>();
   let writeFailure: SubagentRegistryWriteError | undefined;
   let retired = false;
   let prepared = false;
   let promoted = false;
   let released = !params.release;
-  const currentEntries = () =>
-    entries.map((entry) => {
-      const current = context.options.runs.get(entry.runId);
-      return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-    });
+  const currentOf = (entry: SubagentRunRecord) =>
+    currentSubagentRunOrObserved(context.options.runs, entry);
+  const currentEntries = () => entries.map(currentOf);
   const initialTransfer = {
     kind: params.kind,
     completion: completion.promise,
@@ -213,12 +214,7 @@ export function commitRequesterInitialTransfer(
       const finishRetirement = () => {
         initialTransfer.blocked = retainsOutcome();
         if (!initialTransfer.blocked) {
-          for (const entry of entries) {
-            const key = getSubagentRunRuntimeKey(entry);
-            if (context.pendingRequesterSettleWakeCommits.get(key) === pending) {
-              context.pendingRequesterSettleWakeCommits.delete(key);
-            }
-          }
+          releasePendingWakeKeys(context, pending);
         }
         if (!initialTransfer.completed) {
           const failure = writeFailure;
@@ -269,14 +265,7 @@ export function commitRequesterInitialTransfer(
               captureRequesterSettleRunIdentity(current),
               identities.get(expected.runId),
             ) ||
-            !isDeepStrictEqual(
-              {
-                killIntent: current.killIntent,
-                killReconciliation: current.killReconciliation,
-                suppressed: current.suppressCompletionDelivery,
-              },
-              cancelled.get(expected.runId),
-            )
+            !isDeepStrictEqual(cancellation(current), cancelled.get(expected.runId))
       ) {
         throw new SubagentRegistryMutationRejectedError(
           "Initial requester handoff lost its recorded cohort",
@@ -300,6 +289,12 @@ export function commitRequesterInitialTransfer(
     mutate: (drafts: SubagentRunRecord[]) => ReadonlySet<string> | void,
     releasing = false,
   ) {
+    const adoptWritten = (drafts: readonly SubagentRunRecord[]) => {
+      if (releasing) {
+        released = true;
+      }
+      adoptPublished(drafts.map(currentOf));
+    };
     try {
       let publicationObserved = false;
       const result = await mutateSubagentRuns(
@@ -311,9 +306,7 @@ export function commitRequesterInitialTransfer(
           }
           const drafts = entries.map((entry) => {
             const current = rows.get(entry.runId) ?? entry;
-            const draft = structuredClone(current);
-            bindSubagentRunRuntimeKey(draft, getSubagentRunRuntimeKey(current));
-            return draft;
+            return copySubagentRunRuntimeOwner(current, structuredClone(current));
           });
           const retiring = mutate(drafts);
           const postimages = new Map<string, SubagentRunRecord | null>();
@@ -336,28 +329,12 @@ export function commitRequesterInitialTransfer(
             for (const runId of value.retiring ?? []) {
               retiredRunIds.add(runId);
             }
-            if (releasing) {
-              released = true;
-            }
-            adoptPublished(
-              value.drafts.map((entry) => {
-                const current = context.options.runs.get(entry.runId);
-                return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-              }),
-            );
+            adoptWritten(value.drafts);
           },
         },
       );
       if (!publicationObserved) {
-        if (releasing) {
-          released = true;
-        }
-        adoptPublished(
-          result.drafts.map((entry) => {
-            const current = context.options.runs.get(entry.runId);
-            return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-          }),
-        );
+        adoptWritten(result.drafts);
       }
       writeFailure = undefined;
     } catch (error) {
@@ -607,14 +584,8 @@ export function commitRequesterWake(
         if (acknowledgedReceipt !== pending.committedWake) {
           acknowledgedReceipt = pending.committedWake;
           acknowledgedProgress.clear();
-          for (const { row } of acknowledgedReceipt.result.records) {
-            const intended = rowToSubagentRunRecord(row);
-            if (intended) {
-              acknowledgedProgress.set(
-                intended.runId,
-                captureRequesterSettleWakeProgress(intended),
-              );
-            }
+          for (const { subagent } of acknowledgedReceipt.result.records) {
+            acknowledgedProgress.set(subagent.runId, captureRequesterSettleWakeProgress(subagent));
           }
         }
         if (

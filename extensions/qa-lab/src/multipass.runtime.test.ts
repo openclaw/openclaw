@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   return { ...actual, sleep: sleepMock };
 });
 
+import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 
 const generatedPaths: string[] = [];
@@ -234,7 +235,7 @@ describe("qa multipass runtime", () => {
         ).rejects.toThrow("Multipass is not installed on this host.");
 
         const script = fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
-        expect(script).toContain("'--output-dir' '/workspace/openclaw-host/..qa-artifacts'");
+        expect(script).toContain("'--output-dir' '..qa-artifacts'");
       },
     );
   });
@@ -336,7 +337,12 @@ describe("qa multipass runtime", () => {
             'import { registerHooks } from "node:module";',
             'import { pathToFileURL } from "node:url";',
             'Object.defineProperty(process.versions, "node", { value: fs.readFileSync(process.env.QA_TEST_NODE_VERSION, "utf8").trim() });',
+            "let versionProbe = false;",
+            'process.once("beforeExit", (code) => {',
+            '  if (versionProbe) fs.appendFileSync(process.env.QA_TEST_NODE_PROBE_EXITS, JSON.stringify({ version: process.versions.node, code }) + "\\n");',
+            "});",
             "registerHooks({ resolve(specifier, context, next) {",
+            '  if (specifier === "file:///workspace/openclaw-host/node-version.mjs") versionProbe = true;',
             '  return next(specifier === "file:///workspace/openclaw-host/node-version.mjs"',
             '    ? pathToFileURL(process.env.QA_TEST_REPO_ROOT + "/node-version.mjs").href : specifier, context);',
             "} });",
@@ -360,7 +366,7 @@ describe("qa multipass runtime", () => {
             "}",
             "sudo() {",
             '  case "$1" in',
-            "    -E|mkdir|rm|tar) return 0 ;;",
+            "    -E|mkdir|mount|rm|tar) return 0 ;;",
             "    ln)",
             '      if [[ "$4" == /usr/local/bin/node ]]; then',
             '        printf "%s" "$3" | sed -E "s|.*/node-v([^-]+)-.*|\\1|" > "$QA_TEST_NODE_VERSION"',
@@ -384,6 +390,7 @@ describe("qa multipass runtime", () => {
             'rm() { [[ "$*" == *"/workspace/openclaw"* ]] || builtin command rm "$@"; }',
             'cd() { if [[ "$1" == /workspace/openclaw ]]; then builtin cd "$QA_TEST_REPO_ROOT"; else builtin cd "$@"; fi; }',
             "pnpm() {",
+            '  if [[ "$1" == openclaw ]]; then printf "%s\\0" "$@" > "$QA_TEST_SUITE_ARGS"; fi',
             '  [[ -f "$QA_TEST_PNPM_SPEC" ]] || return 1',
             '  node --input-type=commonjs -e \'const pkg = require("./package.json"); if (!require("semver").satisfies(process.versions.node, pkg.engines.node)) throw new Error("unsupported guest Node " + process.versions.node)\' || return',
             '  printf "%s:%s\\n" "$1" "$(<"$QA_TEST_NODE_VERSION")" >> "$QA_TEST_COMMANDS"',
@@ -392,6 +399,8 @@ describe("qa multipass runtime", () => {
         );
         const pnpmSpecPath = workspace.path("pnpm-spec");
         const commandsPath = workspace.path("commands");
+        const suiteArgsPath = workspace.path("suite-args");
+        const probeExitsPath = workspace.path("node-probe-exits.jsonl");
         const result = spawnSync("bash", [scriptPath], {
           encoding: "utf8",
           timeout: 10_000,
@@ -405,12 +414,29 @@ describe("qa multipass runtime", () => {
             QA_TEST_NODE_VERSION: versionPath,
             QA_TEST_PNPM_SPEC: pnpmSpecPath,
             QA_TEST_COMMANDS: commandsPath,
+            QA_TEST_SUITE_ARGS: suiteArgsPath,
+            QA_TEST_NODE_PROBE_EXITS: probeExitsPath,
           },
         });
         expect(result.status, result.stderr).toBe(0);
+        const probeExits = fs
+          .readFileSync(probeExitsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(probeExits).toEqual([
+          ...(["22.99.0", "24.15.0"].includes(version) ? [{ version, code: 1 }] : []),
+          { version: expectedVersion, code: 0 },
+        ]);
         expect(fs.readFileSync(commandsPath, "utf8").trim().split("\n")).toEqual(
           ["install", "build", "openclaw"].map((command) => command + ":" + expectedVersion),
         );
+        const suiteArgs = fs.readFileSync(suiteArgsPath, "utf8").split("\0");
+        const outputFlagIndex = suiteArgs.indexOf("--output-dir");
+        expect(outputFlagIndex).toBeGreaterThan(-1);
+        expect(
+          resolveRepoRelativeOutputDir("/workspace/openclaw", suiteArgs[outputFlagIndex + 1]),
+        ).toBe(`/workspace/openclaw/.artifacts/qa-e2e/multipass-node-${version}`);
         const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
           packageManager: string;
         };

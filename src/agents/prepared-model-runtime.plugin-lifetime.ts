@@ -20,6 +20,7 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
+  aggregatePluginRuntimeCloseErrors,
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
 } from "../plugins/runtime-close-error.js";
@@ -191,7 +192,7 @@ export function ownPreparedPluginGeneration(
         result.status === "rejected" ? [result.reason] : [],
       );
       if (failures.length) {
-        throw new AggregateError(
+        throw aggregatePluginRuntimeCloseErrors(
           [...acquisitionFailures, ...failures],
           "Prepared plugin generation cleanup failed",
         );
@@ -225,6 +226,11 @@ export function retainPreparedPluginGeneration(
   };
 }
 
+// Only configured publication grants fresh-admission authority. Parent-derived and run-owned
+// generations stay confined to their exact selections after a newer configured publication.
+export const configuredPreparedPluginGenerations =
+  new WeakSet<PreparedModelRuntimePluginGeneration>();
+
 /** Publishing replaces one reference, while admitted leases retain their exact generation. */
 export function publishPreparedPluginGeneration(
   owner: PreparedModelRuntimeOwner,
@@ -247,6 +253,9 @@ export function publishPreparedPluginGeneration(
     );
   }
   const release = ownPreparedPluginGeneration(generation).retain();
+  if (owner.provenance === "configured") {
+    configuredPreparedPluginGenerations.add(generation);
+  }
   const version = owner.generation;
   const gatewayLenders = new Set<PluginRegistry>();
   let signal: AbortSignal | undefined;
@@ -264,12 +273,10 @@ export function publishPreparedPluginGeneration(
           "Prepared model runtime plugin generation retired",
         );
         owner.pluginGeneration = undefined;
-        const retiredGatewayLoan = [...instances].some(
-          (instance) =>
-            !instance.acceptingCalls &&
-            instance.owner !== undefined &&
-            gatewayLenders.has(instance.owner.registry),
-        );
+        const retiredGatewayLoan = [...instances].some((instance) => {
+          const registry = instance.owner?.registry;
+          return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
+        });
         log.debug(
           `Prepared plugin publication retired: metadataCacheRetired=${cacheSignal.aborted}, provenance=${owner.provenance}, pending=${Boolean(owner.pending)}, gatewayLoan=${retiredGatewayLoan}`,
         );

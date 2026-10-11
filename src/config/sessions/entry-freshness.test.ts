@@ -6,7 +6,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
+import {
+  resolveSessionEntryResetFreshness,
+  resolveSessionEntryResetFreshnessAsync,
+} from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
   replaceSessionEntry,
@@ -33,26 +36,29 @@ describe("resolveSessionEntryResetFreshness", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it("returns missing state with a resolved reset policy for absent entries", () => {
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey: "agent:main:missing:thread:100.000",
-      storePath,
-      sessionCfg: {},
-      resetType: "thread",
-      now: new Date("2026-01-02T12:00:00Z").getTime(),
-    });
+  it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
+    "returns missing state with a resolved reset policy for absent entries (%s)",
+    async (resolveFreshness) => {
+      const result = await resolveFreshness({
+        sessionKey: "agent:main:missing:thread:100.000",
+        storePath,
+        sessionCfg: {},
+        resetType: "thread",
+        now: new Date("2026-01-02T12:00:00Z").getTime(),
+      });
 
-    expect(result).toMatchObject({
-      state: "missing",
-      entry: undefined,
-      freshness: undefined,
-      resetType: "thread",
-      resetPolicy: {
-        mode: "none",
-        atHour: 4,
-      },
-    });
-  });
+      expect(result).toMatchObject({
+        state: "missing",
+        entry: undefined,
+        freshness: undefined,
+        resetType: "thread",
+        resetPolicy: {
+          mode: "none",
+          atHour: 4,
+        },
+      });
+    },
+  );
 
   it("uses the configured default agent for an unqualified session key", async () => {
     const sessionKey = "global";
@@ -237,32 +243,35 @@ describe("resolveSessionEntryResetFreshness", () => {
     });
   });
 
-  it("uses the SQLite transcript header when lifecycle metadata is missing", async () => {
-    const sessionKey = "agent:main:main:thread:header";
-    const sessionId = "session-header-fallback";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
-    const target = { agentId: "main", sessionId, sessionKey, storePath };
-    const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
-    expect(entry?.sessionStartedAt).toBeUndefined();
-    await appendTranscriptEvent(target, {
-      type: "session",
-      version: 3,
-      id: sessionId,
-      timestamp: headerTimestamp,
-      cwd: tempDir,
-    });
+  it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
+    "uses the SQLite transcript header when lifecycle metadata is missing (%s)",
+    async (resolveFreshness) => {
+      const sessionKey = "agent:main:main:thread:header";
+      const sessionId = "session-header-fallback";
+      const now = new Date("2026-01-02T12:00:00Z").getTime();
+      const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
+      const target = { agentId: "main", sessionId, sessionKey, storePath };
+      const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
+      expect(entry?.sessionStartedAt).toBeUndefined();
+      await appendTranscriptEvent(target, {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: headerTimestamp,
+        cwd: tempDir,
+      });
 
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetType: "thread",
-      now,
-    });
+      const result = await resolveFreshness({
+        sessionKey,
+        storePath,
+        sessionCfg: { reset: { mode: "daily" } },
+        resetType: "thread",
+        now,
+      });
 
-    expect(result.state).toBe("stale");
-    expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
-    expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
-  });
+      expect(result.state).toBe("stale");
+      expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
+    },
+  );
 });

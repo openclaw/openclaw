@@ -159,6 +159,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   }
 
   function makeOpenAiCompatibleReasoningModel(
@@ -426,6 +427,39 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
+  it("limits OpenAI prompt updates to native Responses routes across cached policy reads", () => {
+    const config = {} as OpenClawConfig;
+    for (const [provider, api, baseUrl, expected] of [
+      ["openai", "openai-responses", "https://api.openai.com/v1", true],
+      ["openai", "openai-responses", "https://proxy.example.test/v1", false],
+      ["openai", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", false],
+      ["openai", "azure-openai-responses", "https://api.openai.com/v1", false],
+      ["openai", "openai-completions", "https://api.openai.com/v1", false],
+      ["custom-openai", "openai-responses", "https://api.openai.com/v1", false],
+      ["openai", "openai-responses", "https://api.openai.com/v1", true],
+    ] as const) {
+      const model = makeOpenAiCompatibleReasoningModel({ provider, api, baseUrl });
+      const policy = resolveTranscriptPolicy({
+        config,
+        provider,
+        modelApi: api,
+        modelId: model.id,
+        model,
+        runtimeHandle: {
+          provider,
+          plugin: {
+            id: provider,
+            label: provider,
+            auth: [],
+            buildReplayPolicy: () => ({ inHistorySystemUpdates: true }),
+          },
+        },
+      });
+      expect(policy.inHistorySystemUpdates).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+    }
+  });
+
   it.each([false, true])(
     "constrains explicit plugin updates to host route eligibility (direct API key=%s)",
     (directApiKey) => {
@@ -529,7 +563,7 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "ollama",
     });
     expect(policy.preserveSignatures).toBe(false);
-    expect(policy.appendOnlyRuntimeContext).toBe(false);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   });
 
   it.each([

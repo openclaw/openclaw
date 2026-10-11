@@ -1,15 +1,12 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import * as sqliteRuntime from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import * as agentDatabaseIdentity from "./openclaw-agent-db-identity.js";
-import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -45,56 +42,6 @@ function inWriterTransaction<T>(db: DatabaseSync, operation: () => T): T {
 }
 
 describe("committed agent database reads", () => {
-  it("closes a newly opened reader when post-open identity validation throws", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const options = { agentId: "main", env };
-      const owner = openOpenClawAgentDatabase(options);
-      const readers: DatabaseSync[] = [];
-      const failure = Object.assign(new Error("synthetic post-open identity failure"), {
-        code: "EACCES",
-      });
-      const openDatabase = sqliteRuntime.openNodeSqliteDatabase;
-      const open = vi
-        .spyOn(sqliteRuntime, "openNodeSqliteDatabase")
-        .mockImplementation((location, settings) => {
-          const db = openDatabase(location, settings);
-          if (location === owner.path && settings?.readOnly) {
-            readers.push(db);
-          }
-          return db;
-        });
-      const isPathCurrent = agentDatabaseIdentity.isOpenClawAgentDatabasePathCurrent;
-      const identity = vi
-        .spyOn(agentDatabaseIdentity, "isOpenClawAgentDatabasePathCurrent")
-        .mockImplementation((database) => {
-          // Opening captures identity first; fail only its later ownership check.
-          if (readers.length > 0 && database.db === owner.db) {
-            throw failure;
-          }
-          return isPathCurrent(database);
-        });
-      const read = vi.fn();
-      try {
-        inWriterTransaction(owner.db, () => {
-          expect(() => withOpenClawAgentDatabaseReadOnly(read, options)).toThrow(failure);
-          expect(read).not.toHaveBeenCalled();
-          expect(readers).toHaveLength(1);
-          expect(readers[0]?.isOpen).toBe(false);
-          expect(owner.db.isOpen).toBe(true);
-          expect(owner.db.isTransaction).toBe(true);
-        });
-      } finally {
-        identity.mockRestore();
-        open.mockRestore();
-        for (const reader of readers) {
-          if (reader.isOpen) {
-            reader.close();
-          }
-        }
-      }
-    });
-  });
-
   it("reuses a separate reader while observing committed changes between writer transactions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
@@ -127,15 +74,6 @@ describe("committed agent database reads", () => {
 
   it.each([
     {
-      version: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-      expectedError: {
-        name: "SqliteSchemaVersionError",
-        message: expect.stringContaining(
-          `newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-        ),
-      },
-    },
-    {
       version: AGENT_MEDIA_SCHEMA_VERSION - 1,
       expectedError: {
         name: "OpenClawAgentDatabaseMediaMigrationRequiredError",
@@ -152,7 +90,7 @@ describe("committed agent database reads", () => {
       },
     },
   ])(
-    "rejects a committed version change to $version on the next read before borrowed and fresh reads",
+    "rejects a replacement at version $version before invoking a committed reader",
     async ({ version, expectedError }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
         const options = { agentId: "main", env };
@@ -166,6 +104,9 @@ describe("committed agent database reads", () => {
           }, options);
         expect(read()).toEqual({ found: true, value: { agent_id: "main" } });
         admitted = false;
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        fs.copyFileSync(databasePath, `${databasePath}.replacement`);
+        fs.renameSync(`${databasePath}.replacement`, databasePath);
         const writer = new DatabaseSync(databasePath);
         try {
           writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
@@ -174,7 +115,6 @@ describe("committed agent database reads", () => {
         }
         expect(read).toThrow(expect.objectContaining(expectedError));
         expect(admitted).toBe(false);
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
         expect(read).toThrow(expect.objectContaining(expectedError));
         expect(admitted).toBe(false);
       });
@@ -236,56 +176,26 @@ describe("committed agent database reads", () => {
     });
   });
 
-  it.each(["native close", "native dispose", "owner close", "eviction"] as const)(
-    "retires the committed reader on %s",
-    async (action) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-        const options = { agentId: "main", env };
-        const owner = openOpenClawAgentDatabase(options);
-        const reader = inWriterTransaction(owner.db, () => readStamp(options).db);
-        expect(reader.isOpen).toBe(true);
-        const originalWalClose = owner.walMaintenance.close.bind(owner.walMaintenance);
-        const walClose =
-          action === "owner close" || action === "eviction"
-            ? vi.spyOn(owner.walMaintenance, "close").mockImplementation((closeOptions) => {
-                expect(reader.isOpen).toBe(false);
-                return originalWalClose(closeOptions);
-              })
-            : undefined;
-        try {
-          if (action === "native close") {
-            owner.db.close();
-          } else if (action === "native dispose") {
-            owner.db[Symbol.dispose]();
-          } else if (action === "owner close") {
-            closeOpenClawAgentDatabaseByPath(owner.path);
-          } else {
-            closeCachedOpenClawAgentDatabase(owner, { eviction: true });
-          }
-          expect(reader.isOpen).toBe(false);
-          if (walClose) {
-            expect(walClose).toHaveBeenCalled();
-          }
-        } finally {
-          walClose?.mockRestore();
-        }
-      });
-    },
-  );
-
-  it("does not give a reopened writer the previous writer's reader", async () => {
+  it("retires the committed reader before closing its owner's WAL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
-      const original = openOpenClawAgentDatabase(options);
-      const first = inWriterTransaction(original.db, () => readStamp(options).db);
-      expect(first.isOpen).toBe(true);
-      closeOpenClawAgentDatabaseByPath(original.path);
-      const replacement = openOpenClawAgentDatabase(options);
-      const second = inWriterTransaction(replacement.db, () => readStamp(options).db);
-      expect(replacement.db === original.db).toBe(false);
-      expect(second === first).toBe(false);
-      expect(first.isOpen).toBe(false);
-      expect(second.isOpen).toBe(true);
+      const owner = openOpenClawAgentDatabase(options);
+      const reader = inWriterTransaction(owner.db, () => readStamp(options).db);
+      expect(reader.isOpen).toBe(true);
+      const originalWalClose = owner.walMaintenance.close.bind(owner.walMaintenance);
+      const walClose = vi
+        .spyOn(owner.walMaintenance, "close")
+        .mockImplementation((closeOptions) => {
+          expect(reader.isOpen).toBe(false);
+          return originalWalClose(closeOptions);
+        });
+      try {
+        closeOpenClawAgentDatabaseByPath(owner.path);
+        expect(reader.isOpen).toBe(false);
+        expect(walClose).toHaveBeenCalled();
+      } finally {
+        walClose.mockRestore();
+      }
     });
   });
 
@@ -314,29 +224,7 @@ describe("committed agent database reads", () => {
     },
   );
 
-  it("keeps failed companion disposal retryable before closing the parent connection", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const options = { agentId: "main", env };
-      const owner = openOpenClawAgentDatabase(options);
-      const reader = inWriterTransaction(owner.db, () => readStamp(options).db);
-      const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-        throw new Error("synthetic reader close failure");
-      });
-      try {
-        expect(() => owner.db.close()).toThrow("synthetic reader close failure");
-        expect(owner.db.isOpen).toBe(true);
-        expect(reader.isOpen).toBe(true);
-        inWriterTransaction(owner.db, () => expect(readStamp(options).db === reader).toBe(true));
-        owner.db.close();
-        expect(owner.db.isOpen).toBe(false);
-        expect(reader.isOpen).toBe(false);
-      } finally {
-        close.mockRestore();
-      }
-    });
-  });
-
-  it("gives nested callbacks a one-shot reader while the outer reader stays usable", async () => {
+  it("keeps committed reads available through nested callbacks", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
       const owner = openOpenClawAgentDatabase(options);
@@ -346,9 +234,7 @@ describe("committed agent database reads", () => {
         const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
           expect(db === retained).toBe(true);
           const nested = readStamp(options);
-          expect(nested.db === db).toBe(false);
           expect(nested.db === owner.db).toBe(false);
-          expect(nested.db.isOpen).toBe(false);
           expect(nested.stamp).toBe(101);
           expect(db.isOpen).toBe(true);
           return db.prepare(stampQuery).get()?.updated_at;

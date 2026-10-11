@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginService } from "../../extensions/workboard/api.js";
+import type { OpenClawPluginApi } from "../../extensions/workboard/api.js";
 import plugin from "../../extensions/workboard/index.js";
 import {
   createOperationalRunInstanceRef,
@@ -50,8 +50,9 @@ describe("Workboard terminal hook automation ownership", () => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
     });
+    const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
+      scheduler,
       nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
@@ -71,7 +72,7 @@ describe("Workboard terminal hook automation ownership", () => {
       payload: { kind: "systemEvent", text: "categorize board" },
     });
     const settled = finished.waitForOk(job.id);
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     let agentEnd: PluginHookHandlerMap["agent_end"] | undefined;
     let subagentEnded: PluginHookHandlerMap["subagent_ended"] | undefined;
     const methods: GatewayMethodDescriptorInput[] = [];
@@ -110,22 +111,36 @@ describe("Workboard terminal hook automation ownership", () => {
         });
       },
     });
-    const service = services.find((entry) => entry.id === "workboard-automation-nudge")!;
     const warn = vi.fn();
     const registry = createEmptyPluginRegistry();
     bindGatewayContextResolver(captured.api.runtime, () => gatewayContext);
     bindPluginRegistryRuntime(registry, captured.api.runtime);
-    registry.services.push({
-      pluginId: "workboard",
-      origin: "bundled",
-      source: "test",
-      id: service.id,
-      service: {
-        ...service,
-        start: (ctx) => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
-      },
-    });
+    for (const service of services.filter((entry) =>
+      ["workboard-automation-nudge", "workboard-lifecycle-sync"].includes(entry.id),
+    )) {
+      registry.services.push({
+        pluginId: "workboard",
+        origin: "bundled",
+        source: "test",
+        id: service.id,
+        service: {
+          ...service,
+          apiVersion: 2,
+          start: (ctx) =>
+            withPluginRuntimeGatewayRequestScope(
+              {
+                pluginId: "workboard",
+                pluginOrigin: "bundled",
+                context: gatewayContext,
+                isWebchatConnect: () => false,
+              },
+              () => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
+            ),
+        },
+      });
+    }
     const handle = await startPluginServices({
+      scheduler,
       registry,
       config: {},
       getCronService: () => cron,
@@ -133,9 +148,26 @@ describe("Workboard terminal hook automation ownership", () => {
     const enqueue = vi.spyOn(cron, "enqueueRun");
     const dispatch: GatewayRequestHandler = async ({ respond }) =>
       respond(true, await cron.enqueueRun(job.id, "if-enabled"));
+    const describeSession: GatewayRequestHandler = ({ respond }) => {
+      expect(getGatewayToolCallerIdentity()).toBeUndefined();
+      respond(true, {
+        session: {
+          key: sessionKey,
+          status: "done",
+          hasActiveRun: false,
+          updatedAt: Date.now(),
+        },
+      });
+    };
     gatewayContext.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry([
         ...methods,
+        {
+          name: "sessions.describe",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: describeSession,
+        },
         {
           name: "cron.run",
           scope: "operator.admin",
@@ -239,6 +271,7 @@ describe("Workboard terminal hook automation ownership", () => {
       admission.close();
       await handle.stop();
       cron.stop();
+      await scheduler.stop();
       for (const lifecycle of captured.runtimeLifecycles) {
         await lifecycle.dispose?.();
       }

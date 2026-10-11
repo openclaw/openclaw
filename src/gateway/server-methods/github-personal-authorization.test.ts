@@ -7,6 +7,7 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSession: vi.fn<typeof import("../session-utils.js").loadGatewaySessionEntryReadOnly>(),
+  roleScopes: undefined as string[] | undefined,
 }));
 
 vi.mock("../session-utils.js", () => ({
@@ -15,8 +16,9 @@ vi.mock("../session-utils.js", () => ({
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
+// mock-isolation: Exercise request permissions without opening profile storage.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
-  prepareUserProfileRoleAuthority: async (profileId: string) => ({
+  prepareUserProfileRolePolicyAuthority: async (profileId: string) => ({
     profileId,
     isCurrent: () => true,
   }),
@@ -25,9 +27,11 @@ vi.mock("../../state/user-github-connections.js", () => ({
   resolvePersonalGitHubOwner: (profile: string) => profile,
 }));
 vi.mock("../operator-role-policy.js", () => ({
-  resolveOperatorRolePolicy: () => null,
-  resolveOperatorRolePolicyForProfile: () => null,
-  resolveOperatorRolePolicyForAssignment: () => null,
+  resolveOperatorRolePolicy: () => (mocks.roleScopes ? { scopes: mocks.roleScopes } : null),
+  resolveOperatorRolePolicyForProfile: () =>
+    mocks.roleScopes ? { scopes: mocks.roleScopes } : null,
+  resolveOperatorRolePolicyForAssignment: () =>
+    mocks.roleScopes ? { scopes: mocks.roleScopes } : null,
 }));
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
@@ -78,8 +82,27 @@ function sessionRead(agentId = "main") {
 
 describe("GitHub publication request discovery", () => {
   beforeEach(() => {
+    mocks.roleScopes = undefined;
     mocks.loadSession.mockReset();
     mocks.loadSession.mockReturnValue(sessionRead());
+  });
+
+  it.each([
+    ["operator.read", "operator.sessions.write"],
+    ["operator.sessions.write", "operator.read"],
+  ])("retains shared session-read permission for %s capped by %s", async (grant, ceiling) => {
+    const request = createRequest();
+    request.client.connect.scopes = [grant];
+    mocks.roleScopes = [ceiling];
+
+    const read = await prepareGitHubPublicationOptionsRead(request, { sessionKey: "main" });
+    expect(read.currentSession()).toEqual(read.session);
+    expect(read.personal.kind).toBe("ineligible");
+
+    mocks.roleScopes = ["operator.approvals"];
+    expect(() => read.currentSession()).toThrow(
+      "GitHub requires current operator.sessions.read permission.",
+    );
   });
 
   it("shares store discovery while re-reading publication options live", async () => {

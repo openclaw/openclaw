@@ -2,6 +2,8 @@
 export type PluginInstanceLifecycle = {
   readonly signal: AbortSignal;
   onDispose: (dispose: () => void | Promise<void>) => () => void;
+  /** Detach caller context while retaining this instance's current registry and host resources. */
+  runInBackgroundContext: <T>(run: () => T) => T;
 };
 
 /** Execution and host cleanup retain the same instance admission. */
@@ -34,15 +36,6 @@ export type PluginInstanceConsumer = {
 export type PluginInstanceCallLease = {
   token: object;
   release: () => void | Promise<unknown>;
-};
-
-/** An iterator keeps the admission that owns its pending protocol operations. */
-export type PluginIteratorAdmission = {
-  readonly done: boolean;
-  readonly active: boolean;
-  invoke: <T>(run: () => T) => T;
-  close: () => void;
-  call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
 };
 
 /** Inventory custody owns retirement without depending on registry contributions. */

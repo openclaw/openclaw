@@ -6,7 +6,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { promoteToPopoverTopLayer, renderMenuTrigger } from "./menu-surface.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
@@ -44,6 +44,7 @@ export type PluginSessionMenuAction = { id: string; label: string; disabled?: bo
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION_MENU_DATA;
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) involvingMeContext = false;
   @property({ attribute: false }) navigationAllowed = false;
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
@@ -152,6 +153,7 @@ class SessionMenu extends OpenClawLightDomElement {
   private readonly handleAfterHide = (event: Event) => {
     // A keyed replacement can finish hiding after its successor opens.
     if (event.currentTarget instanceof Node && event.currentTarget.isConnected) {
+      this.managementActions.advanced.close();
       this.onClose();
     }
   };
@@ -202,14 +204,7 @@ class SessionMenu extends OpenClawLightDomElement {
         @wa-select=${this.handleSelect}
         @wa-after-hide=${this.handleAfterHide}
       >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${menuLabel}
-          style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
+        ${renderMenuTrigger({ x: clampedX, y: clampedY }, menuLabel)}
         ${
           this.compact && this.compactView !== "root"
             ? this.managementActions.renderCompactView(this.compactView)
@@ -244,11 +239,11 @@ class SessionMenu extends OpenClawLightDomElement {
                     : nothing
                 }
                 ${
-                  batch
+                  batch || !this.work?.pullRequestUrl
                     ? nothing
                     : html`
                         <div class="session-menu__separator" role="separator"></div>
-                        ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
+                        ${this.renderWorkItems()}
                       `
                 }
                 <div class="session-menu__separator" role="separator"></div>
@@ -272,7 +267,7 @@ class SessionMenu extends OpenClawLightDomElement {
                       `
                     : nothing
                 }
-                ${this.managementActions.renderDeleteAction()}
+                ${batch ? this.managementActions.renderDeleteAction() : this.managementActions.renderAdvancedAction()}
               `
         }
       </wa-dropdown>`,
@@ -282,4 +277,10 @@ class SessionMenu extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-session-menu")) {
   customElements.define("openclaw-session-menu", SessionMenu);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-session-menu": SessionMenu;
+  }
 }

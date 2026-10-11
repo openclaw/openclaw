@@ -166,7 +166,6 @@ describe("current attachments in an active remote placement", () => {
               environmentId: ENVIRONMENT_ID,
               ownerEpoch: OWNER_EPOCH,
               sessionId: SESSION_ID,
-              generation: 1,
               localPath: local,
               isAuthorized: request.isAuthorized,
             });
@@ -208,7 +207,7 @@ describe("current attachments in an active remote placement", () => {
               content: [{ type: "text", text: "Read both" }],
               api: "openai-responses",
               provider: "openai",
-              model: "gpt-test",
+              model: "gpt-5.6-luna",
               usage: {
                 input: 1,
                 output: 1,

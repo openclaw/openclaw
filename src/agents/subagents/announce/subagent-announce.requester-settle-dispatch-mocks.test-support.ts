@@ -19,6 +19,17 @@ vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
 
 const startTurn = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
+const loadRequester = vi.hoisted(() =>
+  vi.fn<
+    (
+      ...args: Parameters<
+        typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
+      >
+    ) => Awaited<
+      ReturnType<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>
+    >
+  >(),
+);
 const registryRead = vi.hoisted(() => ({
   countPendingDescendantRuns: vi.fn<typeof countPendingDescendantRuns>(
     async (_key, assertCurrent) => {
@@ -37,13 +48,16 @@ const registryRead = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../gateway/server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
   createRequestGatewayMethodRegistry: () => ({ isControlPlaneWrite: () => false }),
   runWithGatewayRequestEnvelope: async (
     _method: string,
     _client: unknown,
     run: () => Promise<unknown>,
   ) => await run(),
+}));
+
+vi.mock("../../../gateway/server-methods/request-authorization.js", () => ({
+  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
 }));
 
 vi.mock("../../../gateway/agent-turn/agent-request-preflight.js", () => ({
@@ -59,13 +73,10 @@ vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
     sessionKey.split(":subagent:").length - 1,
 }));
-vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
+// mock-isolation: Dispatch fixtures select the delivery boundary and requester store explicitly.
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (...args: unknown[]) => deliver(...args),
-  loadRequesterSessionEntry: () => ({
-    canonicalKey: "agent:main:main",
-    entry: { sessionId: "requester-session" },
-  }),
+  loadRequesterSessionEntry: (...args: Parameters<typeof loadRequester>) => loadRequester(...args),
 }));
 
-export { readDescendantFacts, startTurn, deliver, registryRead };
+export { readDescendantFacts, startTurn, deliver, registryRead, loadRequester };

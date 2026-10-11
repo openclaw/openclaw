@@ -1,16 +1,31 @@
-import { DatabaseSync } from "node:sqlite";
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
+import {
+  SESSION_KEY,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+} from "./github-publication.test-support.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
   patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { readUserGitHubConnection } from "../state/user-github-connections.js";
@@ -20,26 +35,7 @@ import {
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
 } from "./github-personal-publication.test-support.js";
-import {
-  SESSION_KEY,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-} from "./github-publication.test-support.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
-
-const mocks = githubPublicationTestMocks();
-
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
 
 function holdReceiptDeletion(afterPreparation?: () => Promise<void>) {
   const waiting = createDeferredCore();
@@ -78,6 +74,17 @@ function holdReceiptDeletion(afterPreparation?: () => Promise<void>) {
   return { waiting, release, restore: () => holdReceipt.mockRestore() };
 }
 
+async function waitForReceiptDeletion(waiting: Promise<void>, deletion: Promise<unknown>) {
+  await Promise.race([
+    waiting,
+    deletion.then((outcome) => {
+      throw new Error("Session deletion settled before receipt cleanup reached its worker", {
+        cause: outcome,
+      });
+    }),
+  ]);
+}
+
 describe("personal publication session lifecycle", () => {
   installGitHubPublicationTestHarness();
   let fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
@@ -99,7 +106,7 @@ describe("personal publication session lifecycle", () => {
       params,
     );
 
-  it("preserves repository receipts when a session is recreated before receipt deletion admission", async () => {
+  async function publishReceipt() {
     const { owner, client, context, coordinator } = fixture;
     const session = await persistPublicationTestSession();
     const action = preparePersonalGitHubSessionAction(
@@ -110,7 +117,18 @@ describe("personal publication session lifecycle", () => {
     const receipt = readPersonalGitHubPublication(owner, { requestId: published.requestId });
     expect(receipt?.status).toBe("published");
     const binding = { publicationKind: "personal" as const, requestId: published.requestId };
-    const lifecycle = readGitHubPublicationSessionLifecycle(binding);
+    return {
+      session,
+      published,
+      receipt,
+      binding,
+      lifecycle: readGitHubPublicationSessionLifecycle(binding),
+    };
+  }
+
+  it("preserves repository receipts when a session is recreated before receipt deletion admission", async () => {
+    const { owner } = fixture;
+    const { session, published, receipt, binding, lifecycle } = await publishReceipt();
     const repositories = getSessionRepositoryWorkspaceStore();
     const workspace = await repositories.create({
       agentId: "main",
@@ -131,14 +149,7 @@ describe("personal publication session lifecycle", () => {
       (error: unknown) => ({ ok: false as const, error }),
     );
     try {
-      await Promise.race([
-        waiting.promise,
-        deletion.then((outcome) => {
-          throw new Error("Session deletion settled before receipt cleanup reached its worker", {
-            cause: outcome,
-          });
-        }),
-      ]);
+      await waitForReceiptDeletion(waiting.promise, deletion);
       expect(session.read()).toBeUndefined();
       expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
         receipt,
@@ -173,18 +184,9 @@ describe("personal publication session lifecycle", () => {
     }
   });
 
-  it("preserves receipts and repository ownership when a foreign write crosses the native receipt grant", async () => {
-    const { owner, client, context, coordinator } = fixture;
-    const session = await persistPublicationTestSession();
-    const action = preparePersonalGitHubSessionAction(
-      { client, context },
-      { sessionKey: SESSION_KEY },
-    );
-    const published = await coordinator.requestPersonalForSession(request(), action);
-    const receipt = readPersonalGitHubPublication(owner, { requestId: published.requestId });
-    expect(receipt?.status).toBe("published");
-    const binding = { publicationKind: "personal" as const, requestId: published.requestId };
-    const lifecycle = readGitHubPublicationSessionLifecycle(binding);
+  it("preserves receipts and repository ownership when an owner write crosses the native receipt grant", async () => {
+    const { owner } = fixture;
+    const { session, published, receipt, binding, lifecycle } = await publishReceipt();
     expect(lifecycle).toBeDefined();
     const repositories = getSessionRepositoryWorkspaceStore();
     const workspace = await repositories.create({
@@ -196,73 +198,49 @@ describe("personal publication session lifecycle", () => {
     const original = session.read();
     const successor = {
       ...original,
-      sessionId: "foreign-receipt-successor",
-      lifecycleRevision: "foreign-receipt-generation",
+      sessionId: "receipt-successor",
+      lifecycleRevision: "receipt-successor-generation",
       updatedAt: Date.now(),
     };
-    const databasePath = resolveSqliteTargetFromSessionStorePath(session.storePath, {
+    // Admit the competing agent writer before receipt cleanup locks the shared-state database.
+    const database = openOpenClawAgentDatabase({
       agentId: "main",
-    }).path;
-    if (!databasePath) {
-      throw new Error("Receipt fixture has no physical session database");
-    }
-    const peer = new DatabaseSync(databasePath);
+      path: resolveSqliteTargetFromSessionStorePath(session.storePath, { agentId: "main" }).path,
+    });
     let injected = false;
     let receiptAdmitted = false;
     let nativeAbsent = false;
+    // A competing writer must not inherit the guarded reader's artifact-preserving context.
+    const inWriterContext = AsyncLocalStorage.snapshot();
     const held = holdReceiptDeletion();
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((nativeRequest, grant) => {
-          const facts = nativeRequest.facts;
-          if (
-            !injected &&
-            receiptAdmitted &&
-            nativeRequest.stage === "commit" &&
-            (facts === undefined ||
-              (isRecord(facts) &&
-                facts.kind === "session-entry-current" &&
-                facts.domainFacts === undefined &&
-                isRecord(facts.source) &&
-                facts.source.sessionKey === SESSION_KEY))
-          ) {
-            nativeAbsent = isRecord(facts) && facts.entry === undefined;
-            admit(nativeRequest, () => {
-              expect(
-                peer
-                  .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-                  .get(SESSION_KEY),
-              ).toBeUndefined();
-              peer.exec("BEGIN IMMEDIATE");
-              try {
-                peer
-                  .prepare(
-                    "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-                  )
-                  .run(
-                    SESSION_KEY,
-                    successor.sessionId,
-                    JSON.stringify(successor),
-                    successor.updatedAt,
-                  );
-                peer
-                  .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-                  .run(SESSION_KEY);
-                peer.exec("COMMIT");
-              } catch (error) {
-                peer.exec("ROLLBACK");
-                throw error;
-              }
-              injected = true;
-              return grant();
-            });
-            return;
-          }
-          admit(nativeRequest, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (nativeRequest, grant, admit) => {
+      const facts = nativeRequest.facts;
+      if (
+        !injected &&
+        receiptAdmitted &&
+        nativeRequest.stage === "commit" &&
+        (facts === undefined ||
+          (isRecord(facts) &&
+            facts.kind === "session-entry-current" &&
+            facts.domainFacts === undefined &&
+            isRecord(facts.source) &&
+            facts.source.sessionKey === SESSION_KEY))
+      ) {
+        nativeAbsent = isRecord(facts) && facts.entry === undefined;
+        admit(nativeRequest, () => {
+          inWriterContext(() => {
+            expect(readExactSessionEntryRow(database, SESSION_KEY)).toBeUndefined();
+            runSqliteImmediateTransactionSync(database.db, () =>
+              writeSessionEntry(database, SESSION_KEY, successor),
+            );
+          });
+          injected = true;
+          return grant();
+        });
+        return;
+      }
+      admit(nativeRequest, grant);
+    });
     const deletion = applySessionEntryLifecycleMutation({
       agentId: "main",
       storePath: session.storePath,
@@ -273,19 +251,12 @@ describe("personal publication session lifecycle", () => {
       (error: unknown) => ({ value: undefined, error }),
     );
     try {
-      await Promise.race([
-        held.waiting.promise,
-        deletion.then((outcome) => {
-          throw new Error("Session deletion settled before its receipt grant", { cause: outcome });
-        }),
-      ]);
+      await waitForReceiptDeletion(held.waiting.promise, deletion);
       receiptAdmitted = true;
       held.release.resolve();
       const outcome = await deletion;
-      expect(injected).toBe(true);
-      expect(
-        peer.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(SESSION_KEY),
-      ).toEqual({ entry_json: JSON.stringify(successor) });
+      expect(injected, String(outcome.error)).toBe(true);
+      expect(session.read()).toEqual(successor);
       expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
       expect(readPersonalGitHubPublication(owner, { requestId: published.requestId })).toEqual(
         receipt,
@@ -302,22 +273,18 @@ describe("personal publication session lifecycle", () => {
       await deletion;
       held.restore();
       admission.mockRestore();
-      peer.close();
     }
   });
 
   it("preserves a same-key successor receipt while direct deletion removes historical receipts", async () => {
     const { owner, client, context, coordinator, placements } = fixture;
-    const session = await persistPublicationTestSession();
-    const action = preparePersonalGitHubSessionAction(
-      { client, context },
-      { sessionKey: SESSION_KEY },
-    );
-    const historical = await coordinator.requestPersonalForSession(request(), action);
-    const oldReceipt = readPersonalGitHubPublication(owner, { requestId: historical.requestId });
-    expect(oldReceipt?.status).toBe("published");
-    const oldBinding = { publicationKind: "personal" as const, requestId: historical.requestId };
-    const oldLifecycle = readGitHubPublicationSessionLifecycle(oldBinding);
+    const {
+      session,
+      published: historical,
+      receipt: oldReceipt,
+      binding: oldBinding,
+      lifecycle: oldLifecycle,
+    } = await publishReceipt();
     await session.reset(placements);
     const original = session.read();
     expect(readPersonalGitHubPublication(owner, { requestId: historical.requestId })).toEqual(
@@ -363,14 +330,7 @@ describe("personal publication session lifecycle", () => {
       (error: unknown) => ({ ok: false as const, error }),
     );
     try {
-      await Promise.race([
-        waiting.promise,
-        deletion.then((outcome) => {
-          throw new Error("Direct deletion settled before receipt cleanup reached its worker", {
-            cause: outcome,
-          });
-        }),
-      ]);
+      await waitForReceiptDeletion(waiting.promise, deletion);
       const lateRequestId = await lateReceipt.promise;
       expect(session.read()).toBeUndefined();
       const successor = {
@@ -423,17 +383,33 @@ describe("personal publication session lifecycle", () => {
   });
 
   it("retains logical-session receipts across archive and reset, then removes them through permanent deletion", async () => {
-    const { owner, client, context, coordinator, generation, placements } = fixture;
-    const session = await persistPublicationTestSession();
-    const action = preparePersonalGitHubSessionAction(
-      { client, context },
-      { sessionKey: SESSION_KEY },
+    const { owner, generation, placements } = fixture;
+    const installed = new Map<string, unknown>();
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
+        if (change.kind === "committed") {
+          for (const [key, fact] of change.receipt.facts) {
+            installed.set(key, fact);
+          }
+        }
+      }),
     );
-    const result = await coordinator.requestPersonalForSession(request(), action);
-    const receipt = readPersonalGitHubPublication(owner, { requestId: result.requestId });
-    expect(receipt?.status).toBe("published");
-    const binding = { publicationKind: "personal" as const, requestId: result.requestId };
-    const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
+    const {
+      session,
+      published: result,
+      receipt,
+      binding,
+      lifecycle: originalLifecycle,
+    } = await publishReceipt();
+    const { title: _title, body: _body, next_action: _nextAction, ...authority } = receipt!;
+    expect(installed.get(JSON.stringify(["personal", result.requestId]))).toEqual({
+      kind: "postimage",
+      value: authority,
+    });
+    expect(installed.get(JSON.stringify(["personal-lifecycle", result.requestId]))).toEqual({
+      kind: "postimage",
+      value: { ...originalLifecycle, publication_kind: "personal", request_id: result.requestId },
+    });
     const lifecycle_revision = session.read().lifecycleRevision;
     expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
     await session.reset(placements);
@@ -453,14 +429,30 @@ describe("personal publication session lifecycle", () => {
     const target = { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] };
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
     expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(originalLifecycle);
-    await deleteSessionEntryLifecycle({
-      agentId: "main",
-      storePath,
-      target,
-      archiveTranscript: false,
+    const lostReply = probe.command(stateWorker, async (command, options, scope) => {
+      const outcome = await scope.execute(command, options);
+      if (command.type === "githubPublication.deleteSessionReceipts") {
+        throw new Error("committed receipt cleanup reply lost");
+      }
+      return outcome;
     });
+    await expect(
+      deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target,
+        archiveTranscript: false,
+      }),
+    ).rejects.toThrow("committed receipt cleanup reply lost");
+    lostReply.mockRestore();
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toBeUndefined();
     expect(readGitHubPublicationSessionLifecycle(binding)).toBeUndefined();
+    expect(installed.get(JSON.stringify(["personal", result.requestId]))).toEqual({
+      kind: "absent",
+    });
+    expect(installed.get(JSON.stringify(["personal-lifecycle", result.requestId]))).toEqual({
+      kind: "absent",
+    });
     expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
   });
 });

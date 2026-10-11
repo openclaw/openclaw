@@ -27,18 +27,18 @@ const log = createSubsystemLogger("auto-reply/commands-approve");
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
-const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
-  allow: "allow-once",
-  once: "allow-once",
-  "allow-once": "allow-once",
-  allowonce: "allow-once",
-  always: "allow-always",
-  "allow-always": "allow-always",
-  allowalways: "allow-always",
-  deny: "deny",
-  reject: "deny",
-  block: "deny",
-};
+const DECISION_ALIASES = new Map<string, "allow-once" | "allow-always" | "deny">([
+  ["allow", "allow-once"],
+  ["once", "allow-once"],
+  ["allow-once", "allow-once"],
+  ["allowonce", "allow-once"],
+  ["always", "allow-always"],
+  ["allow-always", "allow-always"],
+  ["allowalways", "allow-always"],
+  ["deny", "deny"],
+  ["reject", "deny"],
+  ["block", "deny"],
+]);
 
 type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
@@ -57,10 +57,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return null;
   }
   const rest = trimmed.slice(commandMatch[0].length).trim();
-  if (!rest) {
-    return { ok: false, error: APPROVE_USAGE_TEXT };
-  }
-  const tokens = rest.split(/\s+/).filter(Boolean);
+  const tokens = rest.split(/\s+/);
   if (tokens.length < 2) {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
@@ -68,26 +65,13 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const first = normalizeLowercaseStringOrEmpty(tokens[0]);
   const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
-  // Decision tokens are chat-supplied, so inherited keys such as "constructor"
-  // or "__proto__" must not read through to Object.prototype.
-  const firstDecision = Object.hasOwn(DECISION_ALIASES, first)
-    ? DECISION_ALIASES[first]
-    : undefined;
-  if (firstDecision) {
+  const firstDecision = DECISION_ALIASES.get(first);
+  const decision = firstDecision ?? DECISION_ALIASES.get(second);
+  if (decision) {
     return {
       ok: true,
-      decision: firstDecision,
-      id: tokens.slice(1).join(" ").trim(),
-    };
-  }
-  const secondDecision = Object.hasOwn(DECISION_ALIASES, second)
-    ? DECISION_ALIASES[second]
-    : undefined;
-  if (secondDecision) {
-    return {
-      ok: true,
-      decision: secondDecision,
-      id: expectDefined(tokens[0], "tokens entry at 0"),
+      decision,
+      id: firstDecision ? tokens.slice(1).join(" ") : expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
   return { ok: false, error: APPROVE_USAGE_TEXT };
@@ -191,7 +175,7 @@ export async function handleApproveCommandFromContext(
     if (Array.from(commandBehaviors.values()).some((behavior) => behavior?.kind === "ignore")) {
       return { shouldContinue: false };
     }
-    return null;
+    return systemAgentRefusedForOwner ? ownerOnlyResult : null;
   };
 
   const resolvedBy = `${params.command.channel}:${params.command.senderId ?? "unknown"}`;
@@ -209,42 +193,35 @@ export async function handleApproveCommandFromContext(
           }
         : {};
     const clientDisplayName = `Chat approval (${resolvedBy})`;
-    if (approvalKind !== "system-agent") {
-      await resolveApprovalOverGateway({
+    if (approvalKind === "system-agent") {
+      // Canonical resolution denies an approval addressed with the wrong owner,
+      // so confirm the owner before submitting the decision.
+      const isSystemAgentApproval = await isPendingSystemAgentApprovalOverGateway({
         cfg: params.cfg,
         approvalId: parsed.id,
-        decision: parsed.decision,
-        ...reviewer,
-        resolveMethod: approvalKind,
         clientDisplayName,
       });
-      return;
-    }
-    // Canonical resolution denies an approval addressed with the wrong owner,
-    // so confirm the owner before submitting the decision.
-    const isSystemAgentApproval = await isPendingSystemAgentApprovalOverGateway({
-      cfg: params.cfg,
-      approvalId: parsed.id,
-      clientDisplayName,
-    });
-    if (!isSystemAgentApproval) {
-      throw new Error("unknown or expired approval id");
-    }
-    if (systemAgentNeedsOwner) {
-      try {
-        params.command.assertOwnerCurrent?.();
-      } catch {
-        throw new Error("your owner authority changed; send /approve again");
+      if (!isSystemAgentApproval) {
+        throw new Error("unknown or expired approval id");
+      }
+      if (systemAgentNeedsOwner) {
+        try {
+          params.command.assertOwnerCurrent?.();
+        } catch {
+          throw new Error("your owner authority changed; send /approve again");
+        }
       }
     }
-    await resolveApprovalOverGateway({
+    const request = {
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
       ...reviewer,
-      approvalKind,
       clientDisplayName,
-    });
+    };
+    await (approvalKind === "system-agent"
+      ? resolveApprovalOverGateway({ ...request, approvalKind })
+      : resolveApprovalOverGateway({ ...request, resolveMethod: approvalKind }));
   };
 
   const systemAgentRefusedForOwner =
@@ -266,9 +243,6 @@ export async function handleApproveCommandFromContext(
     if (blocked) {
       return blocked;
     }
-    if (systemAgentRefusedForOwner) {
-      return ownerOnlyResult;
-    }
     return commandReply(
       Object.values(authorizations).find((authorization) => authorization.reason)?.reason ??
         "❌ You are not authorized to approve this request.",
@@ -288,10 +262,6 @@ export async function handleApproveCommandFromContext(
         if (blocked) {
           return blocked;
         }
-        // Not an exec or plugin approval; it may be a change only the owner can decide.
-        if (systemAgentRefusedForOwner) {
-          return ownerOnlyResult;
-        }
         return commandReply(
           "That approval is no longer available. Check the request in the Control UI.",
         );
@@ -305,5 +275,3 @@ export async function handleApproveCommandFromContext(
 
   return commandReply(`✅ Approval ${parsed.decision} submitted for ${parsed.id}.`);
 }
-
-export const handleApproveCommand: CommandHandler = handleApproveCommandFromContext;

@@ -4,13 +4,14 @@ import { createProcessAdapterEvents } from "../../process/supervisor/adapters/pr
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
+import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   setCliRunnerExecuteTestDeps,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
-import { buildCliSupervisorScopeKey } from "./helpers.js";
+import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
@@ -131,7 +132,7 @@ function createRunContext(params: {
   };
 }
 
-describe("local CLI pending process cancellation", () => {
+describe("CLI execution cancellation", () => {
   const restoreProcessSupervisor = executeDeps.getProcessSupervisor;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
 
@@ -144,6 +145,92 @@ describe("local CLI pending process cancellation", () => {
   afterEach(() => {
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
+  });
+
+  it.each([true, false])(
+    "marks only rejected protocol on interruption (protocol=%s)",
+    async (protocol) => {
+      const controller = new AbortController();
+      const context = createRunContext({ runId: "interrupted-output", signal: controller.signal });
+      context.preparedBackend.backend.command = process.execPath;
+      context.preparedBackend.backend.output = "jsonl";
+      context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+      context.backendResolved.parseJsonlEvent = (line) => {
+        if (JSON.parse(line).type === "parser-failure") {
+          throw new Error("Unrelated parser failure");
+        }
+        return null;
+      };
+      context.executionTarget = {
+        kind: "plugin",
+        async *execute() {
+          yield {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              stop_reason: null,
+              content: [
+                {
+                  type: "text",
+                  text: protocol ? '<invoke name="Read">' : "Ordinary partial prose",
+                },
+              ],
+            },
+          };
+          if (!protocol) {
+            yield { type: "parser-failure" };
+          }
+          controller.abort();
+          throw new Error("Interrupted fixture");
+        },
+      };
+
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject(
+        protocol
+          ? { code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE }
+          : { name: "AbortError", message: "CLI run aborted" },
+      );
+    },
+  );
+
+  it("does not start approval after a node response races with cancellation", async () => {
+    const controller = new AbortController();
+    const invokeNode = vi
+      .spyOn(executeDeps, "invokeNodeClaudeCliRun")
+      .mockImplementation(async () => {
+        controller.abort();
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            approvalRequired: true,
+            systemRunPlan: { argv: ["/trusted/claude", "-p"], commandText: "/trusted/claude -p" },
+            security: "allowlist",
+            ask: "on-miss",
+          }),
+        };
+      });
+    const registerApproval = vi
+      .spyOn(executeDeps, "registerExecApprovalRequestForHostOrThrow")
+      .mockRejectedValue(new Error("approval registration failed after cancellation"));
+    const resolveApproval = vi
+      .spyOn(executeDeps, "resolveRegisteredExecApprovalDecision")
+      .mockResolvedValue("deny");
+    const context = createRunContext({
+      runId: "run-node-cancelled-approval",
+      signal: controller.signal,
+    });
+    context.executionTarget = { kind: "node", placement: { nodeId: "node-a" } };
+    context.backendResolved.id = "claude-cli";
+    context.params.provider = "claude-cli";
+    context.preparedBackend.backend.command = "claude";
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      name: "AbortError",
+      message: "CLI run aborted",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(registerApproval).not.toHaveBeenCalled();
+    expect(resolveApproval).not.toHaveBeenCalled();
   });
 
   it("rejects expired authority after preparation before plugin execution", async () => {
@@ -414,7 +501,7 @@ describe("local CLI pending process cancellation", () => {
     expect(coerce).not.toHaveBeenCalled();
   });
 
-  it.each(["rejected option", "abort", "terminal", "observed activity"] as const)(
+  it.each(["terminal", "observed activity"] as const)(
     "preserves plugin checkpoint failure ownership: %s",
     async (kind) => {
       const message = "unknown option '--checkpoint'";
@@ -425,9 +512,6 @@ describe("local CLI pending process cancellation", () => {
               code: "cli_max_turns",
             })
           : new Error(message);
-      if (kind === "abort") {
-        failure.name = "AbortError";
-      }
       const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
         throw new Error("provider coercion was consulted");
       });
@@ -457,15 +541,7 @@ describe("local CLI pending process cancellation", () => {
       };
 
       const result = executePreparedCliRun(context, "resume-1");
-      if (kind === "rejected option") {
-        await expect(result).rejects.toMatchObject({
-          reason: "session_expired",
-          code: "cli_resume_at_unsupported",
-          cause: failure,
-        });
-      } else {
-        await expect(result).rejects.toBe(failure);
-      }
+      await expect(result).rejects.toBe(failure);
       expect(coerce).not.toHaveBeenCalled();
       expect(createChildAdapterMock).not.toHaveBeenCalled();
     },

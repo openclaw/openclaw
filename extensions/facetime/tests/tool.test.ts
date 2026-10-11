@@ -5,8 +5,8 @@ function resultDetails(result: unknown): Record<string, unknown> {
   return (result as { details: Record<string, unknown> }).details;
 }
 
-function createRuntime() {
-  return {
+function createTool() {
+  const runtime = {
     status: vi.fn(async () => ({
       enabled: true as const,
       helperConnected: true,
@@ -47,25 +47,17 @@ function createRuntime() {
     })),
     hangup: vi.fn(async () => ({ callUUID: "call-1" })),
   };
+  const ensureRuntime = vi.fn(async () => runtime);
+  const tool = createFaceTimeCallTool({
+    ensureRuntime,
+    getStatus: async () => await runtime.status(),
+  });
+  return { runtime, ensureRuntime, tool };
 }
 
 describe("FaceTime agent tool", () => {
-  it("publishes a flat provider-compatible action schema", () => {
-    const runtime = createRuntime();
-    const tool = createFaceTimeCallTool({
-      ensureRuntime: async () => runtime,
-      getStatus: async () => await runtime.status(),
-    });
-    expect(JSON.stringify(tool.parameters)).not.toContain('"anyOf"');
-  });
-
   it("returns a compact runtime status", async () => {
-    const runtime = createRuntime();
-    const ensureRuntime = vi.fn(async () => runtime);
-    const tool = createFaceTimeCallTool({
-      ensureRuntime,
-      getStatus: async () => await runtime.status(),
-    });
+    const { tool, ensureRuntime } = createTool();
 
     const result = resultDetails(await tool.execute("tool-1", { action: "get_status" }));
 
@@ -101,11 +93,7 @@ describe("FaceTime agent tool", () => {
   });
 
   it("dials an authorized owner target without exposing helper internals", async () => {
-    const runtime = createRuntime();
-    const tool = createFaceTimeCallTool({
-      ensureRuntime: async () => runtime,
-      getStatus: async () => await runtime.status(),
-    });
+    const { runtime, tool } = createTool();
 
     const result = resultDetails(
       await tool.execute("tool-1", {
@@ -130,11 +118,7 @@ describe("FaceTime agent tool", () => {
   });
 
   it("checks readiness and ends the current call", async () => {
-    const runtime = createRuntime();
-    const tool = createFaceTimeCallTool({
-      ensureRuntime: async () => runtime,
-      getStatus: async () => await runtime.status(),
-    });
+    const { runtime, tool } = createTool();
 
     const readiness = resultDetails(await tool.execute("tool-1", { action: "check_readiness" }));
     const ended = resultDetails(

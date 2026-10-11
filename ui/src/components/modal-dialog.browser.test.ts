@@ -1,3 +1,4 @@
+import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import "./modal-dialog.ts";
@@ -5,6 +6,55 @@ import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
+
+type Modal = HTMLElementTagNameMap["openclaw-modal-dialog"];
+type ModalPhase = "opening" | "opened" | "closing" | "closed";
+const modalEvents = {
+  opening: "wa-show",
+  opened: "wa-after-show",
+  closing: "wa-hide",
+  closed: "wa-after-hide",
+} as const;
+
+function useAnimatedModal(modal: Modal) {
+  modal.style.setProperty("--wa-transition-normal", "150ms");
+}
+
+function modalSurface(modal: Modal) {
+  return modal.shadowRoot!.querySelector("wa-dialog")!;
+}
+
+function modalDialog(modal: Modal) {
+  return modalSurface(modal).shadowRoot!.querySelector("dialog")!;
+}
+
+function afterModalPhase(modal: Modal, phase: ModalPhase) {
+  return new Promise<void>((resolve) => {
+    modalSurface(modal).addEventListener(modalEvents[phase], () => resolve(), { once: true });
+  });
+}
+
+function motionAtModalPhase(modal: Modal, phase: "opening" | "closing") {
+  // Lifecycle dispatch finishes before the continuation inspects native animations.
+  return afterModalPhase(modal, phase).then(() =>
+    modalDialog(modal)
+      .getAnimations({ subtree: true })
+      .map((animation) => Number(animation.effect?.getComputedTiming().activeDuration ?? 0))
+      .filter((duration) => duration > 0),
+  );
+}
+
+function finishModalOpening(modal: Modal) {
+  modalSurface(modal).dispatchEvent(new CustomEvent(modalEvents.opened, { bubbles: true }));
+}
+
+function commitTooltip(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
+  return tooltip.updateComplete;
+}
+
+function tooltipIsOpen(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
+  return tooltip.shadowRoot!.querySelector("wa-tooltip")!.open;
+}
 
 beforeEach(() => {
   container = document.createElement("div");
@@ -19,7 +69,7 @@ async function mountModal(host = container, variant = "", autofocus = true) {
   const modal = document.createElement("openclaw-modal-dialog");
   modal.label = "Edit details";
   modal.className = variant;
-  modal.style.setProperty("--wa-transition-normal", "150ms");
+  useAnimatedModal(modal);
   const name = document.createElement("input");
   name.autofocus = autofocus;
   name.value = "Original name";
@@ -35,10 +85,114 @@ async function mountModal(host = container, variant = "", autofocus = true) {
   host.append(modal);
   const rendered = await getRenderedModalDialog(host);
   await Promise.all(rendered.dialog.getAnimations().map((animation) => animation.finished));
-  return { ...rendered, name, notes };
+  return { modal, dialog: rendered.dialog, name, notes };
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it.each(
+    [false, true].flatMap((moved) => ["light", "shadow", "slot"].map((tree) => ({ moved, tree }))),
+  )(
+    "returns focus after background inertness clears without replacing new focus ($tree, moved=$moved)",
+    async ({ moved, tree }) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      const nextTarget = document.createElement("button");
+      if (tree === "light") {
+        background.append(trigger, nextTarget);
+        container.append(background);
+      } else if (tree === "shadow") {
+        background.attachShadow({ mode: "open" }).append(trigger, nextTarget);
+        container.append(background);
+      } else {
+        const host = document.createElement("div");
+        host.attachShadow({ mode: "open" }).append(background);
+        container.append(host);
+        background.append(document.createElement("slot"));
+        host.append(trigger, nextTarget);
+      }
+      trigger.focus();
+      const { modal } = await mountModal();
+      modal.setReturnFocusTarget(trigger);
+
+      background.inert = true;
+      modal.remove();
+      expect(trigger.matches(":focus")).toBe(false);
+      background.inert = false;
+      if (moved) {
+        nextTarget.focus();
+      }
+
+      await expect.poll(() => (moved ? nextTarget : trigger).matches(":focus")).toBe(true);
+    },
+  );
+
+  it.each(["inert", "reconnected", "removed"])(
+    "drops deferred focus restoration after cancellation (%s)",
+    async (state) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      background.append(trigger);
+      container.append(background);
+      trigger.focus();
+      const { modal } = await mountModal();
+      let restored = false;
+      trigger.addEventListener("openclaw:restore-focus", () => {
+        restored = true;
+      });
+
+      background.inert = true;
+      modal.remove();
+      if (state === "reconnected") {
+        background.inert = false;
+        container.append(modal);
+      } else if (state === "removed") {
+        background.remove();
+      }
+      await Promise.resolve();
+
+      expect(restored).toBe(false);
+      expect(document.activeElement).not.toBe(trigger);
+    },
+  );
+
+  it.each(["standard", "drawer"])(
+    "honors reduced motion when opening and closing (%s)",
+    async (variant) => {
+      const { cdp } = await import("vitest/browser");
+      const session: CDPSession = cdp();
+      await session.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      });
+      try {
+        expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+        const modal = document.createElement("openclaw-modal-dialog");
+        modal.manual = true;
+        modal.className = variant === "drawer" ? "drawer" : "";
+        modal.label = "Motion preference";
+        useAnimatedModal(modal);
+        modal.textContent = "Settings";
+        container.append(modal);
+        const { dialog } = await getRenderedModalDialog(container);
+        expect(dialog.open).toBe(false);
+        const opening = motionAtModalPhase(modal, "opening");
+        const shown = afterModalPhase(modal, "opened");
+        modal.show();
+        expect(await opening).toEqual([]);
+        await shown;
+        expect(dialog.open).toBe(true);
+
+        const closing = motionAtModalPhase(modal, "closing");
+        const hidden = afterModalPhase(modal, "closed");
+        modal.hide();
+        expect(await closing).toEqual([]);
+        await hidden;
+        expect(dialog.open).toBe(false);
+      } finally {
+        await session.send("Emulation.setEmulatedMedia", { features: [] });
+      }
+    },
+  );
+
   it.each(["drawer", "viewport-edge-to-edge"])(
     "keeps the bottom action reachable in scrollable viewport content (%s)",
     async (variant) => {
@@ -77,15 +231,14 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     tooltip.content = "Draft editing help";
     tooltip.anchor = notes;
     modal.append(tooltip);
-    await tooltip.updateComplete;
+    await commitTooltip(tooltip);
     notes.focus();
-    await tooltip.updateComplete;
-    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
-    await expect.poll(() => popup.open).toBe(true);
+    await commitTooltip(tooltip);
+    await expect.poll(() => tooltipIsOpen(tooltip)).toBe(true);
 
     await userEvent.keyboard("{Escape}");
 
-    await expect.poll(() => popup.open).toBe(false);
+    await expect.poll(() => tooltipIsOpen(tooltip)).toBe(false);
     expect(dialog.open).toBe(true);
     expect(modal.open).toBe(true);
     expect(notes.value).toBe("Unsaved draft");
@@ -107,7 +260,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       expect(document.activeElement).toBe(name);
 
       notes.focus();
-      // Web Awesome's opening frame calls this real native method. It must not
+      // The opening frame calls this real native method. It must not
       // redirect text after the operator has already selected slotted content.
       dialog.focus();
       expect(document.activeElement).toBe(notes);
@@ -129,9 +282,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       await userEvent.keyboard(" continued");
       expect(notes.value).toBe("First draft continued");
       expect(name.value).toBe("Original name");
-      expect(
-        modal.shadowRoot?.querySelector("wa-dialog")?.shadowRoot?.querySelector("dialog"),
-      ).toBe(dialog);
+      expect(modalDialog(modal)).toBe(dialog);
     },
   );
 
@@ -164,13 +315,13 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     const shadow = container.attachShadow({ mode: "open" });
     const host = document.createElement("div");
     shadow.append(host);
-    const { dialog, webAwesomeDialog, name, notes } = await mountModal(host);
+    const { modal, dialog, name, notes } = await mountModal(host);
     expect(shadow.activeElement).toBe(name);
 
     notes.focus();
     dialog.focus();
     expect(shadow.activeElement).toBe(notes);
-    webAwesomeDialog.dispatchEvent(new CustomEvent("wa-after-show", { bubbles: true }));
+    finishModalOpening(modal);
     expect(shadow.activeElement).toBe(notes);
     await userEvent.keyboard("Shadow draft");
     expect(notes.value).toBe("Shadow draft");

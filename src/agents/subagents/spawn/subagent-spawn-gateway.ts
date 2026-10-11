@@ -6,6 +6,7 @@ import {
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import {
@@ -17,7 +18,10 @@ import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.j
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
 import { callGatewayTool } from "../../tools/gateway.js";
@@ -38,9 +42,22 @@ const SUBAGENT_AGENT_RECONCILE_INTERVAL_MS = 800;
 const SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS = 6_400;
 
 type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
-type SubagentGatewayDispatchMode = "in_process" | "out_of_process";
 
-async function callSubagentGatewayWithDispatchMode(
+/** Captures the request's Gateway binding and operator owner before spawn preparation awaits. */
+export function captureSubagentSpawnGatewayContext() {
+  const gatewayCaller = getGatewayToolCallerIdentity();
+  const gatewayScope = getPluginRuntimeGatewayRequestScope();
+  const gatewayContextResolver =
+    gatewayCaller?.gatewayContextResolver ??
+    gatewayScope?.resolveGatewayContext ??
+    gatewayScope?.context?.resolveGatewayContext;
+  const operatorAuthority =
+    resolveGatewayToolOperatorSelection().operatorAuthority ??
+    gatewayScope?.client?.internal?.operatorRunAuthority;
+  return { gatewayContextResolver, operatorAuthority };
+}
+
+async function dispatchSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   options?: {
@@ -48,7 +65,7 @@ async function callSubagentGatewayWithDispatchMode(
     gatewayContextResolver?: GatewayContextResolver;
     preparedLaunch?: PreparedSessionRun;
   },
-): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
+): Promise<{ response: SubagentGatewayResponse; registrationRequired: boolean }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
     readSubagentGatewayExecutionIdentity(params) ?? {};
   // Subagent lifecycle requires methods spanning multiple scope tiers
@@ -101,10 +118,10 @@ async function callSubagentGatewayWithDispatchMode(
     const dispatch = async (workerIdentity?: WorkerTurnExecutionIdentity) => {
       // Cleanup can lose its worker claim while awaiting a session lifecycle drain.
       const assertDispatchCurrent = workerIdentity
-        ? () => {
-            request.assertDispatchCurrent?.();
-            workerIdentity.receiptAuthority();
-          }
+        ? composeSessionSourceAssertion([
+            request.assertDispatchCurrent,
+            workerIdentity.receiptAuthority,
+          ])
         : request.assertDispatchCurrent;
       assertDispatchCurrent?.();
       const operationalRunInstance = gatewayCaller?.workerTurnClaim
@@ -164,7 +181,7 @@ async function callSubagentGatewayWithDispatchMode(
           return await dispatch(identity);
         })
       : await dispatch();
-    return { response, dispatchMode: "in_process" };
+    return { response, registrationRequired: true };
   }
   const dispatchAgentRequest = (timeoutMs?: number | null) => {
     request.assertDispatchCurrent?.();
@@ -200,7 +217,7 @@ async function callSubagentGatewayWithDispatchMode(
     request.method === "agent"
       ? await reconcileSubagentAgentDispatch(dispatchAgentRequest, request.timeoutMs)
       : await dispatchAgentRequest(request.timeoutMs);
-  return { response, dispatchMode: "out_of_process" };
+  return { response, registrationRequired: false };
 }
 
 async function reconcileSubagentAgentDispatch(
@@ -248,7 +265,7 @@ export async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
 ): Promise<SubagentGatewayResponse> {
-  return (await callSubagentGatewayWithDispatchMode(params, authorization)).response;
+  return (await dispatchSubagentGateway(params, authorization)).response;
 }
 
 export async function callNativeSubagentGateway(
@@ -256,21 +273,14 @@ export async function callNativeSubagentGateway(
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
   preparedLaunch?: PreparedSessionRun,
-): Promise<{
-  response: SubagentGatewayResponse;
-  registrationRequired: boolean;
-}> {
-  const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
+) {
+  // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
+  // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
+  return await dispatchSubagentGateway(params, authorization, {
     agentRunTracking: "native_subagent",
     gatewayContextResolver,
     preparedLaunch,
   });
-  return {
-    response: result.response,
-    // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
-    // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-    registrationRequired: result.dispatchMode === "in_process",
-  };
 }
 
 export function readGatewayRunId(

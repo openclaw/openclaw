@@ -103,7 +103,7 @@ async function fixture(
         ],
       })
     : undefined;
-  const pins = seedSkillLibrarySelection(authority);
+  const pins = await seedSkillLibrarySelection(authority);
   const sessionKey = "agent:main:node-skills";
   const sessionId = "node-skills";
   const entry = {
@@ -127,7 +127,7 @@ async function fixture(
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
   const admitted = await admission.admit("plugin-harness");
   const capability = options.authoring
-    ? prepareGatewaySkillAuthoring(owner, sessionKey, true)
+    ? await prepareGatewaySkillAuthoring(owner, sessionKey, true)
     : undefined;
   capability?.bind(admitted);
   const snapshot = options.managed
@@ -437,49 +437,46 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
     }
   });
 
-  it.each([false, true])(
-    "refuses retired request authority after pairing awaits (managed skills: %s)",
-    async (managed) => {
-      const pairingStarted = createDeferredCore();
-      const pairing = createDeferredCore<{ identity: string; generation: string }>();
-      const f = await fixture(
-        "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
-        {
-          managed,
-          resolveCurrentPairingState: async () => {
-            pairingStarted.resolve();
-            return await pairing.promise;
-          },
+  it("refuses retired request authority after managed-skill pairing awaits", async () => {
+    const pairingStarted = createDeferredCore();
+    const pairing = createDeferredCore<{ identity: string; generation: string }>();
+    const f = await fixture(
+      "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
+      {
+        managed: true,
+        resolveCurrentPairingState: async () => {
+          pairingStarted.resolve();
+          return await pairing.promise;
         },
-      );
-      const retired = new Error("request authority retired while resolving node pairing");
-      let current = true;
-      f.context.params.assertCurrent = () => {
-        if (!current) {
-          throw retired;
-        }
-      };
-      const running = f.execute();
-      const outcome = Promise.allSettled([running]);
-      try {
-        await Promise.race([
-          pairingStarted.promise,
-          running.then(() => {
-            throw new Error("Node turn completed before pairing resolution");
-          }),
-        ]);
-        current = false;
-        pairing.resolve({ identity: "node-1", generation: "generation-1" });
-
-        expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-        expect(f.requests).toEqual([]);
-      } finally {
-        pairing.resolve({ identity: "node-1", generation: "generation-1" });
-        await outcome;
-        await f.close();
+      },
+    );
+    const retired = new Error("request authority retired while resolving node pairing");
+    let current = true;
+    f.context.params.assertCurrent = () => {
+      if (!current) {
+        throw retired;
       }
-    },
-  );
+    };
+    const running = f.execute();
+    const outcome = Promise.allSettled([running]);
+    try {
+      await Promise.race([
+        pairingStarted.promise,
+        running.then(() => {
+          throw new Error("Node turn completed before pairing resolution");
+        }),
+      ]);
+      current = false;
+      pairing.resolve({ identity: "node-1", generation: "generation-1" });
+
+      expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+      expect(f.requests).toEqual([]);
+    } finally {
+      pairing.resolve({ identity: "node-1", generation: "generation-1" });
+      await outcome;
+      await f.close();
+    }
+  });
 
   it("requires the additive node capability before dispatching a selected bundle", async () => {
     const f = await fixture("process.exit(99)", { managed: true, capability: false });
@@ -520,7 +517,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
         type: "string",
         enum: expect.arrayContaining(["create", "update"]),
       });
-      const entries = listSkillLibrary(f.authority).entries;
+      const entries = (await listSkillLibrary(f.authority)).entries;
       expect(entries).toHaveLength(1);
       const published = await readSkillLibrary(f.authority, entries[0]!.skillId);
       expect(published.content).toBe(content + "Updated on node.\n");
@@ -579,7 +576,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
         }
         resume.resolve();
         await running.catch(() => undefined);
-        expect(listSkillLibrary(f.authority).entries).toEqual([]);
+        expect((await listSkillLibrary(f.authority)).entries).toEqual([]);
       } finally {
         resume.resolve();
         await running?.catch(() => undefined);

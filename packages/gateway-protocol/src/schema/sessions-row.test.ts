@@ -33,12 +33,13 @@ describe("SessionRowSchema", () => {
       archiveReason: "manual",
       icon: "🦞",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
-      conversationLink: { url: "https://chat.example.test/thread/123", label: "Source Thread" },
       visibility: "suggest",
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
       permissionMode: "workspace",
       sandboxMode: "off",
+      communication: { receive: "ask" },
+      effectiveCommunication: { send: "always", receive: "ask" },
       sessionRoot: "/workspace/project",
     };
     const roundTripped = structuredClone(row);
@@ -49,12 +50,6 @@ describe("SessionRowSchema", () => {
     expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(SessionRowSchema.properties.parentSessionId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
-    expect(
-      Value.Check(SessionRowSchema, {
-        ...roundTripped,
-        conversationLink: { url: "javascript:alert(1)", label: "Source Thread" },
-      }),
-    ).toBe(false);
     expect(Value.Check(SessionRowSchema, { key: "agent:main:main", kind: "global" })).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, parentSessionId: 42 })).toBe(false);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, sandboxMode: "required" })).toBe(false);

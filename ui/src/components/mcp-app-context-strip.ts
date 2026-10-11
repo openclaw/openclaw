@@ -32,7 +32,6 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
     .watch(
       () => this.context?.gateway,
       (gateway, notify) => {
-        const refreshes = new Map<string, number>();
         const stop = gateway.subscribe(notify);
         const stopEvents = gateway.subscribeEvents((event) => {
           if (event.event !== "mcp.app.hostContextChanged") {
@@ -54,37 +53,27 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
           if (!client || !entry) {
             return;
           }
-          const generation = (refreshes.get(entry.viewId) ?? 0) + 1;
-          refreshes.set(entry.viewId, generation);
+          if ("modelContext" in payload && payload.modelContext === null) {
+            if (!("updateId" in payload) || payload.updateId !== entry.state?.updateId) {
+              return;
+            }
+            publishMcpAppContext(client, { ...entry, state: null });
+            return;
+          }
+          const publish = (contextState: McpAppContextState) =>
+            publishMcpAppContext(client, { ...entry, state: contextState });
           void client
             .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
               sessionKey: entry.sessionKey,
               agentId: entry.agentId,
               viewId: entry.viewId,
             })
-            .then((result) => {
-              if (
-                this.isConnected &&
-                gateway.snapshot.client === client &&
-                refreshes.get(entry.viewId) === generation
-              ) {
-                publishMcpAppContext(client, { ...entry, state: result.state });
-              }
-            })
-            .catch(() => {
-              if (
-                this.isConnected &&
-                gateway.snapshot.client === client &&
-                refreshes.get(entry.viewId) === generation
-              ) {
-                publishMcpAppContext(client, { ...entry, state: null });
-              }
-            });
+            .then((result) => publish(result.state))
+            .catch(() => publish(null));
         });
         return () => {
           stop();
           stopEvents();
-          refreshes.clear();
         };
       },
     )

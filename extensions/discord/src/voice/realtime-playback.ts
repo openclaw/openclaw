@@ -186,7 +186,6 @@ export class DiscordRealtimePlayback<TState> {
       this.retainedSpeechClosed = true;
       this.speechSuccessor = undefined;
       this.queuedExactSpeechMessages = [];
-      this.retireExactSpeech();
     }
     this.clearOutputAudio("session-close");
     this.directOutput?.close();
@@ -210,8 +209,7 @@ export class DiscordRealtimePlayback<TState> {
       );
       return false;
     }
-    const outputActive = this.hasInterruptibleOutputAudio();
-    if (!outputActive) {
+    if (!this.hasInterruptibleOutputAudio()) {
       logger.info(
         `discord voice: realtime barge-in ignored reason=${reason} outputActive=false guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
       );
@@ -578,7 +576,7 @@ export class DiscordRealtimePlayback<TState> {
       speech.direct &&
       Atomics.exchange(speech.direct.clock, DISCORD_CONTINUOUS_EXACT_SPEECH, 0n) ===
         -speech.direct.epoch;
-    if (preserveUnplayed && !directStarted && !speech.output?.activity.snapshot().playbackStarted) {
+    if (preserveUnplayed && !directStarted && !speech.output?.hasStarted()) {
       this.queuedExactSpeechMessages.unshift(speech.message);
     }
   }
@@ -609,7 +607,6 @@ export class DiscordRealtimePlayback<TState> {
     this.speechSuccessor = undefined;
     this.params.stopTerminally();
     this.queuedExactSpeechMessages = [];
-    this.retireExactSpeech();
     this.clearOutputAudio(reason);
     this.params.onTerminalError(error);
   }

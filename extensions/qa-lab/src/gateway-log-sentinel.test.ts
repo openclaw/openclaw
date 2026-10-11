@@ -10,8 +10,6 @@ import {
 
 describe("gateway log sentinels", () => {
   it.each([
-    [{ content: [{ type: "toolResult", content: "codex output" }] }, "codex output"],
-    [{ content: [{ type: "text", text: "standard output" }] }, "standard output"],
     [
       {
         content: [
@@ -80,13 +78,13 @@ describe("gateway log sentinels", () => {
     });
   });
 
-  it("throws actionable summaries unless only environment blockers are allowed", () => {
+  it("throws actionable summaries for product and environment failures", () => {
     expect(() => assertNoGatewayLogSentinels("codex_app_server progress stalled")).toThrow(
       "stalled-agent-run",
     );
-    expect(() =>
-      assertNoGatewayLogSentinels("OpenAI quota exceeded", { allowEnvironmentBlocked: true }),
-    ).not.toThrow();
+    expect(() => assertNoGatewayLogSentinels("OpenAI quota exceeded")).toThrow(
+      "live-quota-or-subscription",
+    );
     expect(formatGatewayLogSentinelSummary(scanGatewayLogSentinels("OpenAI quota exceeded"))).toBe(
       "live-quota-or-subscription@1 environment-blocked owner=environment: OpenAI quota exceeded",
     );

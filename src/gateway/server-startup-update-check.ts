@@ -1,9 +1,12 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   canReadDetailedUpdateMetadata,
@@ -25,6 +28,8 @@ export function createDeferredGatewayUpdateCheck(params: {
     | ReturnType<typeof createGatewayUpdateCheck>
     | Promise<ReturnType<typeof createGatewayUpdateCheck>>;
   getConfig: () => OpenClawConfig;
+  /** Catalog republication borrows unchanged plugin instances from this live Gateway registry. */
+  getPluginRegistry: () => PluginRegistry | undefined;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -96,9 +101,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     void (async () => {
       if (params.waitForPostReadyWork) {
         await params.waitForPostReadyWork();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
       }
       if (stopped || params.isClosing?.()) {
         return;
@@ -109,7 +112,9 @@ export function createDeferredGatewayUpdateCheck(params: {
             lifecycle,
             getConfig: params.getConfig,
             applyRemoteCatalogUpdate: (signal) =>
-              applyRemoteModelCatalogUpdate(params.getConfig, signal),
+              withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+                applyRemoteModelCatalogUpdate(params.getConfig, signal),
+              ),
             onUpdateRunCreated: wakeUpdateRunWatcher,
             log: params.log,
             isNixMode: params.isNixMode,
@@ -156,9 +161,7 @@ export function createDeferredGatewayUpdateCheck(params: {
         });
       })();
       await ownerReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       if (!stopped && !params.isClosing?.()) {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           if (stopped || params.isClosing?.()) {

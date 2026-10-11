@@ -2,7 +2,6 @@
 // tears both down together when its session or presentation changes.
 import { render } from "lit";
 import { icons } from "../../../components/icons.ts";
-import { syncScrollState } from "../../../components/scroll-state.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
@@ -109,6 +108,10 @@ function mountPopup(
   paneId: string,
   onEscape?: () => void,
   anchorElement?: HTMLElement,
+  // A layout-driven transcript scroll must not dismiss in-progress input. The
+  // annotation editor supplies its own policy; the selection toolbar keeps the
+  // default scroll dismissal.
+  shouldDismissOnScroll: () => boolean = () => true,
 ) {
   removeChatSelectionPopup();
   document.body.appendChild(popup);
@@ -142,7 +145,9 @@ function mountPopup(
     "scroll",
     (event) => {
       if (!(event.target instanceof Node) || !popup.contains(event.target)) {
-        removeChatSelectionPopup();
+        if (shouldDismissOnScroll()) {
+          removeChatSelectionPopup();
+        }
       }
     },
     { capture: true, passive: true, signal },
@@ -286,26 +291,30 @@ export function showChatAnnotationEditor(options: {
       }
     }
   });
+  // A width or height change repositions the editor and makes the transcript
+  // follow its end by scrolling. That layout compensation must not discard a
+  // comment the user is still writing, so an edited comment survives the
+  // scroll; an untouched editor still closes, keeping its existing behavior.
+  const originalComment = options.comment;
   const signal = mountPopup(
     popup,
     options.anchorRect,
     options.paneId,
     options.onCancel,
     options.anchorElement,
+    () => input.value === originalComment,
   );
   const resizeInput = () => {
     const scrollTop = input.scrollTop;
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
     input.scrollTop = scrollTop;
-    syncScrollState(input);
     positionPopup(popup, options.anchorElement?.getBoundingClientRect() ?? options.anchorRect);
   };
   input.addEventListener("input", resizeInput, { signal });
   input.addEventListener("compositionend", recordCompositionEnd, { signal });
   input.addEventListener("keyup", clearCompositionEnd, { signal });
   input.addEventListener("blur", clearCompositionEnd, { signal });
-  input.addEventListener("scroll", () => syncScrollState(input), { passive: true, signal });
   window.addEventListener("resize", resizeInput, { signal });
   resizeInput();
   if (options.sourceRange && typeof Highlight !== "undefined") {

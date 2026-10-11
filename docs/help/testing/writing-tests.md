@@ -1,10 +1,53 @@
 ---
-summary: "Temp-directory rules, agent reliability eval gaps, and how to add a regression"
+summary: "Behavioral integration proof, test value and cost, and regression authoring"
 title: "Writing and adding tests"
 read_when:
   - You are writing a new test
   - You are adding a regression for a provider bug
 ---
+
+## Prove behavior at the owning boundary
+
+Prefer focused integration tests through real production owners, with fixed
+external I/O fixtures, not mocked internal decisions or whole-product boots.
+Keep independent unit contracts and the [cost budget](#cost-budget).
+
+- **Behavior:** name the caller-visible contract, credible regression, and what
+  the boundary cannot prove. Use independent expected values; exercise the same
+  interface as callers. Raw-storage assertions, call counts, ordering, and exact
+  bytes belong when they protect storage, billing, delivery, or protocol contracts.
+- **Feedback:** work in vertical slices: failing behavior, smallest coherent
+  repair, passing proof. Confirm regressions fail on the original defect, not
+  fixture setup; report unavailable baseline proof. Refactor under green tests.
+  Replace redundant tests only after checking for distinct contracts or edge cases.
+- **Requests:** capture final serialized payloads and resolved routing after real
+  assembly. Compare instructions/developer messages, tools/order, input prefix,
+  model parameters, cache identity, endpoint, and auth mode. Warm-prefix reuse
+  shares one preparation owner; document permitted differences. Standalone
+  summaries need an intentional separate contract, not accidental cache reuse.
+- **Paid work:** a paid provider result is kept or never requested.
+  - Preflight predictable failures, such as redaction or budget checks, before the call.
+  - Distinguish not sent, uncertain outcome, provider completed, and locally persisted.
+    Reconcile uncertain outcomes; exactly-once claims need proof that external retries cannot duplicate effects.
+  - Inject relevant failures and assert physical requests and observed usage,
+    including rejected results. A local processing error never silently buys another call.
+  - Preserve valid results without bypassing redaction, cancellation, or authority.
+- **Recovery:** assert a sanitized reason and outcome through the actual diagnostic
+  consumer. Warn on unexpected degradation; expected recovery may use a documented
+  structured outcome. Persist decisions that change future replay, then reconstruct
+  and exercise the next request, not merely a mocked save call. Cover compaction,
+  switching, and concurrent edits when relevant; transient errors are not permanent bans.
+- **Defaults:** enumerate affected routes, auth modes, capabilities, and stored
+  states. Exercise supported and unsupported cases through execution's eligibility
+  owner, not a copied capability table or precomputed allowed flag.
+- **Measurements:** support cost/performance claims with comparable request counts,
+  input/cached/output tokens, and latency as relevant; name model, route, and
+  conditions. Live cache/billing claims need live evidence; label local estimates.
+  Existing live-proof requirements apply, not paid benchmarks for unrelated edits.
+
+Use synthetic content and keep credentials out of captures. Select failure cases
+from the changed contract, not a universal matrix. If proof needs many private
+controls, inspect fragmented ownership rather than adding test-only exports.
 
 ## Test Temp Directories
 
@@ -63,7 +106,7 @@ What's still missing for skills (see [Skills](/tools/skills)):
 - **Compliance:** does the agent read `SKILL.md` before use and follow required steps/args?
 - **Workflow contracts:** multi-turn scenarios that assert tool order, session history carryover, and sandbox boundaries.
 
-Future evals should stay deterministic first:
+Start future evals with fixed inputs and mock providers:
 
 - A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
 - A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
@@ -87,7 +130,7 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
 - The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
   maintainer leaves in mixed fast configs: product-only PRs and main omit it,
   tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
-  retain it. Keep tests in their canonical configs, with their process and timer
+  retain it. Keep tests in their assigned configs, with their process and timer
   policies, so new files inherit the same owner routing. Dedicated product E2E
   and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 - Use an injected clock at the owner instead of real timers, sleeps, or polling;
@@ -113,8 +156,40 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
 `config/test-timeout-race-baseline.txt` shrink-only. Wait for the owned completion
 signal with `awaitGateBeforeSettlement(gate, operation, message)` or
 `withinTest(work, signal)` from `test/helpers/promise.ts`, or use `vi.useFakeTimers()`
-through the owner's injected clock seam. After removing sites, run
+through the owner's injected clock. After removing sites, run
 `pnpm check:test-timeout-race-ratchet --prune` to shrink the baseline.
+
+## Module mocks and export completeness
+
+New first-party `vi.mock` and `vi.doMock` factories should preserve the real
+module's exports when the fixture only needs to override a few functions:
+
+```ts
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  start: vi.fn(),
+}));
+```
+
+Use pass-through for **export completeness** only. `importOriginal` and
+`vi.importActual` can return a separate module instance for stateful singletons;
+they do not guarantee shared state or lifecycle identity. Keep a closed mock when
+isolating real state or initialization is the fixture's purpose, and explain that
+contract on the line immediately above the mock call:
+
+```ts
+// mock-isolation: Keep the database and process-wide cache outside this fixture.
+vi.mock("./runtime.js", () => ({ start: vi.fn() }));
+```
+
+`pnpm check:test-mock-exports` checks literal first-party module registrations,
+including relative, workspace-package, and TypeScript-path aliases. Factories
+without a recognizable real-module return/spread need the annotation, including
+indirect factories the syntax check cannot prove. Existing unannotated factories
+have an exact source-target and token-fingerprint baseline; new or changed factories cannot borrow
+another site's allowance. After removing or annotating existing factories, run
+`pnpm check:test-mock-exports --prune` to shrink that baseline. This guard runs
+with the existing CI ratchets and `check:changed`; it does not rewrite tests.
 
 ## Raw SQLite state access
 
@@ -169,9 +244,10 @@ When you fix a provider/model issue discovered in live:
 
 - Add a CI-safe regression if possible (mock/stub provider, or capture the exact request-shape transformation)
 - If it's inherently live-only (rate limits, auth policies), keep the live test narrow and opt-in via env vars
-- Prefer targeting the smallest layer that catches the bug:
-  - provider request conversion/replay bug -> direct models test
-  - gateway session/history/tool pipeline bug -> gateway live smoke or CI-safe gateway mock test
+- Prefer the smallest production composition that reaches the defect:
+  - provider request conversion/replay bug -> real adapter with a captured final request
+  - gateway session/history/tool pipeline bug -> CI-safe Gateway integration fixture, plus required live proof
+  - isolated parser/algorithm bug -> focused unit test of its independent contract
 - SecretRef traversal guardrail:
   - `src/secrets/exec-secret-ref-id-parity.test.ts` derives one sampled target per SecretRef class from registry metadata (`listSecretTargetRegistryEntries()`), then asserts traversal-segment exec ids are rejected.
   - If you add a new `includeInPlan` SecretRef target family in `src/secrets/target-registry-data.ts`, update `classifyTargetClass` in that test. The test intentionally fails on unclassified target ids so new classes cannot be skipped silently.

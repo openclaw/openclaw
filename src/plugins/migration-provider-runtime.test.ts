@@ -293,12 +293,18 @@ describe("migration provider runtime", () => {
             const retirement = owner.dispose().then(cleaned);
             await Promise.resolve();
             expect(cleaned).not.toHaveBeenCalled();
-            expect(() => retainedPlan(context)).toThrow("reloaded or disabled");
+            expect(() => retainedPlan(context)).toThrow(
+              "Plugin managed-migration was reloaded or disabled; use its current tools.",
+            );
+            expect(provider.plan).toHaveBeenCalledTimes(3);
             resume.resolve();
             await expect(pending).resolves.toBe(runtime.plan);
             await retirement;
             expect(cleaned).toHaveBeenCalledOnce();
-            expect(() => retainedPlan(context)).toThrow("reloaded or disabled");
+            expect(() => retainedPlan(context)).toThrow(
+              "Plugin managed-migration was reloaded or disabled; use its current tools.",
+            );
+            expect(provider.plan).toHaveBeenCalledTimes(3);
           },
         );
         expect(mocks.acquirePluginRegistryForInspection).toHaveBeenCalledTimes(

@@ -7,6 +7,32 @@ export type FormatErrorMessageOptions = {
 
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
+const PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND = Symbol.for(
+  "openclaw.provider-auth-persistence-error",
+);
+
+export class ProviderAuthPersistenceError extends AggregateError {
+  readonly [PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND] = true;
+  readonly persistenceError: unknown;
+  readonly cleanupError: unknown;
+
+  constructor(message: string, persistenceError: unknown, { cause }: { cause: unknown }) {
+    super([persistenceError, cause], message, { cause });
+    this.persistenceError = persistenceError;
+    this.cleanupError = cause;
+  }
+}
+
+function isProviderAuthPersistenceError(value: Error): value is ProviderAuthPersistenceError {
+  try {
+    return (
+      PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND in value &&
+      value[PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND] === true
+    );
+  } catch {
+    return false;
+  }
+}
 
 function isErrorObject(value: unknown): value is Error {
   try {
@@ -37,21 +63,7 @@ function isAggregateErrorObject(error: Error): boolean {
   return false;
 }
 
-function readProperty(
-  value: object,
-  key:
-    | "cause"
-    | "code"
-    | "status"
-    | "errors"
-    | "message"
-    | "name"
-    | "error"
-    | "suppressed"
-    | "reason"
-    | "original"
-    | "data",
-): unknown {
+function readProperty(value: object, key: string): unknown {
   try {
     return (value as Record<string, unknown>)[key];
   } catch {
@@ -114,6 +126,10 @@ export function readErrorCauses(current: Record<string, unknown>): unknown[] {
   }
   const cause = readProperty(current, "cause");
   const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
+  // Cleanup is the native cause; keep initiating failures first in operator diagnostics.
+  const persistenceFailures = isProviderAuthPersistenceError(current)
+    ? [readProperty(current, "persistenceError"), readProperty(current, "cleanupError")]
+    : [];
   // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
   const suppressed =
     readErrorText(current, "name") === "SuppressedError"
@@ -121,7 +137,12 @@ export function readErrorCauses(current: Record<string, unknown>): unknown[] {
           failure == null ? String(failure) : failure,
         )
       : [];
-  return [cause || undefined, ...(Array.isArray(errors) ? errors : []), ...suppressed];
+  return [
+    ...persistenceFailures,
+    cause || undefined,
+    ...(Array.isArray(errors) ? errors : []),
+    ...suppressed,
+  ];
 }
 
 /** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
@@ -137,17 +158,6 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       formatted += ` | ${message}`;
       seenMessages.add(message);
     };
-    // Wrappers routinely embed the cause verbatim ("failed to parse X: <cause.message>"),
-    // which exact-match dedupe misses, so the whole sentence prints twice. Codes stay on
-    // their own: a trailing bare code is this formatter's convention even when the detail
-    // already names it.
-    const appendCauseErrorMessage = (message: string | undefined): void => {
-      if (message && formatted.includes(message)) {
-        seenMessages.add(message);
-        return;
-      }
-      appendCauseMessage(message);
-    };
     if (options.includeCode) {
       const code = readProperty(value, "code");
       if (typeof code === "string" || typeof code === "number") {
@@ -157,7 +167,13 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
     const causes = collectErrorGraphCandidates(value, readErrorCauses);
     for (const cause of causes.slice(1)) {
       if (isErrorObject(cause)) {
-        appendCauseErrorMessage(readErrorText(cause, "message"));
+        const message = readErrorText(cause, "message");
+        // Wrappers may already embed the cause message; codes remain separate below.
+        if (message && formatted.includes(message)) {
+          seenMessages.add(message);
+        } else {
+          appendCauseMessage(message);
+        }
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));
@@ -165,9 +181,6 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
       } else {
-        // Mirror the top-level branch: an object cause with keys beyond
-        // status/code makes formatStatusAndCode return undefined, so fall
-        // back to stringifyUnknown rather than dropping the cause entirely.
         appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
       }
     }

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,10 +7,15 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
-import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
+import {
+  getFreePort,
+  readProcessTreeCpuMs,
+  startGatewayRssSampling,
+} from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
+  buildGatewayBenchCommand,
   classifyGatewayReadyLog,
   CliArgumentError,
   collectOutputLines,
@@ -19,12 +25,10 @@ import {
   formatMb,
   formatMs,
   formatStats,
-  hasFlag,
   hasHelpFlag,
-  parseFlagValue,
+  parseGatewayBenchRuntimeOptions,
   parseNonNegativeInt,
   parsePositiveInt,
-  parseRepeatableFlag,
   resolveCases as resolveGatewayBenchCases,
   resolveEntry as resolveGatewayBenchEntry,
   resolveOutputPath,
@@ -33,8 +37,8 @@ import {
   summarizeNumbers,
   summarizeTraceStats,
   type InitialProbeResult,
-  type SummaryStats,
-  validateCliArgs as validateGatewayBenchCliArgs,
+  type GatewayBenchRuntimeOptions,
+  parseCliArgs,
   writeGatewayBenchConfig,
   writePluginFixtures,
   waitForInitialProbe as waitForProbe,
@@ -57,8 +61,6 @@ type GatewayBenchCase = {
   runByDefault?: boolean;
 };
 
-type ProbeResult = InitialProbeResult;
-
 type GatewaySample = {
   completionMs: number | null;
   cpuCoreRatio: number | null;
@@ -68,33 +70,17 @@ type GatewaySample = {
   firstOutputMs: number | null;
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
-  healthz: ProbeResult;
+  healthz: InitialProbeResult;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   maxRssMb: number | null;
   outputTail: string;
-  readyz: ProbeResult;
+  readyz: InitialProbeResult;
   signal: string | null;
   startupTrace: Record<string, number>;
 };
 
-type CaseResult = {
-  id: string;
-  name: string;
-  samples: GatewaySample[];
-  summary: {
-    completionMs: SummaryStats | null;
-    firstOutputMs: SummaryStats | null;
-    cpuCoreRatio: SummaryStats | null;
-    cpuMs: SummaryStats | null;
-    gatewayReadyLogMs: SummaryStats | null;
-    healthzMs: SummaryStats | null;
-    httpListenLogMs: SummaryStats | null;
-    maxRssMb: SummaryStats | null;
-    readyzMs: SummaryStats | null;
-    startupTrace: Record<string, SummaryStats>;
-  };
-};
+type CaseResult = ReturnType<typeof summarizeCase>;
 
 type BenchmarkFailure = {
   id: string;
@@ -102,7 +88,7 @@ type BenchmarkFailure = {
   sampleIndex: number;
 };
 
-type CliOptions = {
+type CliOptions = GatewayBenchRuntimeOptions & {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
@@ -134,6 +120,8 @@ const VALUE_FLAGS = new Set([
   "--case",
   "--cpu-prof-dir",
   "--entry",
+  "--gateway-runtime",
+  "--gateway-cpus",
   "--heap-prof-dir",
   "--installed-cohort",
   "--output",
@@ -171,6 +159,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
     agents: {
       defaults: {
         model: { primary: model },
+        modelPolicy: { allow: [model] },
         models: { [model]: { agentRuntime: { id: "openclaw" } } },
       },
     },
@@ -319,18 +308,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   },
 ] as const;
 
-function validateCliArgs(argv: string[]): void {
-  validateGatewayBenchCliArgs(argv, {
-    booleanFlags: BOOLEAN_FLAGS,
-    repeatableValueFlags: new Set(["--case"]),
-    valueFlags: VALUE_FLAGS,
-  });
-}
-
-function resolveEntry(raw: string | undefined): string {
-  return resolveGatewayBenchEntry(raw, DEFAULT_ENTRY);
-}
-
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   const defaultCases = GATEWAY_CASES.filter((benchCase) => benchCase.runByDefault !== false);
   return resolveGatewayBenchCases(caseIds, caseIds.length === 0 ? defaultCases : GATEWAY_CASES, {
@@ -340,10 +317,14 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 }
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
-  validateCliArgs(argv);
-  const installedCohort = parseFlagValue(argv, "--installed-cohort");
-  const installedChild = hasFlag(argv, "--installed-child");
-  const installedCpuDiagnostic = hasFlag(argv, "--installed-cpu-diagnostic");
+  const flags = parseCliArgs(argv, {
+    booleanFlags: BOOLEAN_FLAGS,
+    repeatableValueFlags: new Set(["--case"]),
+    valueFlags: VALUE_FLAGS,
+  });
+  const installedCohort = flags.get("--installed-cohort")?.[0];
+  const installedChild = flags.has("--installed-child");
+  const installedCpuDiagnostic = flags.has("--installed-cpu-diagnostic");
   if (installedChild && !installedCohort) {
     throw new CliArgumentError("--installed-child requires --installed-cohort");
   }
@@ -354,6 +335,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     for (const flag of [
       "--case",
       "--entry",
+      "--gateway-runtime",
+      "--gateway-cpus",
       "--runs",
       "--warmup",
       "--cpu-prof-dir",
@@ -364,27 +347,24 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
         throw new CliArgumentError(`${flag} is not supported with --installed-cohort`);
       }
     }
-    if (!parseFlagValue(argv, "--output")) {
+    if (!flags.get("--output")?.[0]) {
       throw new CliArgumentError("--installed-cohort requires --output");
     }
   }
   return {
-    cases: installedCohort ? [] : resolveCases(parseRepeatableFlag(argv, "--case")),
-    cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
-    entry: resolveEntry(parseFlagValue(argv, "--entry")),
-    heapProfDir: parseFlagValue(argv, "--heap-prof-dir"),
+    ...parseGatewayBenchRuntimeOptions(flags),
+    cases: installedCohort ? [] : resolveCases(flags.get("--case") ?? []),
+    cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
+    entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
+    heapProfDir: flags.get("--heap-prof-dir")?.[0],
     installedCohort,
     installedChild,
     installedCpuDiagnostic,
-    json: hasFlag(argv, "--json"),
-    output: resolveOutputPath(parseFlagValue(argv, "--output")),
-    runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
-    timeoutMs: parsePositiveInt(
-      parseFlagValue(argv, "--timeout-ms"),
-      DEFAULT_TIMEOUT_MS,
-      "--timeout-ms",
-    ),
-    warmup: parseNonNegativeInt(parseFlagValue(argv, "--warmup"), DEFAULT_WARMUP, "--warmup"),
+    json: flags.has("--json"),
+    output: resolveOutputPath(flags.get("--output")?.[0]),
+    runs: parsePositiveInt(flags.get("--runs")?.[0], DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(flags.get("--timeout-ms")?.[0], DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -398,6 +378,8 @@ Usage:
 Options:
   --case <id>          Specific case id to run; repeatable
   --entry <path>       Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
+  --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --runs <n>           Measured runs per case (default: ${DEFAULT_RUNS})
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
@@ -414,7 +396,7 @@ Case ids:
 `);
 }
 
-function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): CaseResult {
+function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   const startupTrace = summarizeTraceStats(samples, (sample) => sample.startupTrace);
   const summarize = (read: (sample: GatewaySample) => number | null) =>
     summarizeNumbers(
@@ -544,7 +526,7 @@ async function waitForStartupTracePhase(params: {
 function buildBenchAgentList(
   root: string,
   topology: GatewayBenchCase["agentTopology"],
-): Array<{ id: string; default?: boolean; workspace: string }> | undefined {
+): Array<{ id: string; workspace: string }> | undefined {
   if (!topology) {
     return undefined;
   }
@@ -552,19 +534,17 @@ function buildBenchAgentList(
   const distinctWorkspace = path.join(root, "distinct-workspace");
   mkdirSync(sharedWorkspace, { recursive: true });
   if (topology === "single") {
-    return [{ id: "main", default: true, workspace: sharedWorkspace }];
+    return [{ id: "main", workspace: sharedWorkspace }];
   }
   if (topology === "incident-scale") {
     return Array.from({ length: 8 }, (_, index) => ({
       id: `incident-agent-${String(index + 1).padStart(2, "0")}`,
-      default: index === 0,
       workspace: path.join(root, "workspaces", `agent-${String(index + 1).padStart(2, "0")}`),
     }));
   }
   mkdirSync(distinctWorkspace, { recursive: true });
   return Array.from({ length: 12 }, (_, index) => ({
     id: `agent-${String(index + 1).padStart(2, "0")}`,
-    ...(index === 0 ? { default: true } : {}),
     workspace: index === 11 ? distinctWorkspace : sharedWorkspace,
   }));
 }
@@ -756,30 +736,20 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
   return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
 }
 
-function sanitizedEnv(
-  root: string,
-  configPath: string,
-  benchCase: GatewayBenchCase,
-): NodeJS.ProcessEnv {
-  return createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
-}
-
-function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
-  collectTraceLine(line, "startup trace", startupTrace);
-}
-
-async function runGatewaySample(options: {
-  benchCase: GatewayBenchCase;
-  cpuProfDir?: string;
-  entry: string;
-  heapProfDir?: string;
-  sampleIndex: number;
-  timeoutMs: number;
-}): Promise<GatewaySample> {
+async function runGatewaySample(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
+    entry: string;
+    heapProfDir?: string;
+    sampleIndex: number;
+    timeoutMs: number;
+  },
+): Promise<GatewaySample> {
   return await withGatewayBenchRoot(async (root) => {
     const port = await getFreePort();
     const configPath = writeConfig(root, options.benchCase);
-    const env = sanitizedEnv(root, configPath, options.benchCase);
+    const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
     if (options.benchCase.incidentFixture) {
       await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
       if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
@@ -796,10 +766,9 @@ async function runGatewaySample(options: {
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
-    let maxRssMb: number | null = null;
     let childExited = false;
     let child: ChildProcessWithoutNullStreams | undefined;
-    let rssTimer: ReturnType<typeof setInterval> | undefined;
+    let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
       const nodeOptions = [
@@ -815,23 +784,22 @@ async function runGatewaySample(options: {
         ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
       ];
       const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
-      child = spawn(process.execPath, childArgs, {
+      const command = buildGatewayBenchCommand(childArgs, options);
+      child = spawn(command.command, command.args, {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
         stdio: ["pipe", "pipe", "pipe"],
       });
+      try {
+        await once(child, "spawn");
+      } catch (error) {
+        child = undefined;
+        throw error;
+      }
       const startedChild = child;
       const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
-      const sampleRss = () => {
-        const rssMb = readProcessRssMb(startedChild.pid);
-        if (rssMb != null) {
-          maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-        }
-      };
-      sampleRss();
-      rssTimer = setInterval(sampleRss, 100);
-      rssTimer.unref?.();
+      rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
         childExited = true;
       });
@@ -846,7 +814,7 @@ async function runGatewaySample(options: {
           gatewayReadyLogMs = nowMs;
           gatewayReadyLogLine = line;
         }
-        collectStartupTrace(line, startupTrace);
+        collectTraceLine(line, "startup trace", startupTrace);
       };
       const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
         if (firstOutputMs == null) {
@@ -890,7 +858,7 @@ async function runGatewaySample(options: {
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
       const exit = await stopChild(startedChild);
-      sampleRss();
+      const maxRssMb = rssSampler.sample();
       child = undefined;
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
         flushPartial: true,
@@ -915,9 +883,7 @@ async function runGatewaySample(options: {
         startupTrace,
       };
     } finally {
-      if (rssTimer) {
-        clearInterval(rssTimer);
-      }
+      rssSampler?.stop();
       if (child) {
         await stopChild(child).catch(() => undefined);
       }
@@ -925,25 +891,23 @@ async function runGatewaySample(options: {
   });
 }
 
-async function runCase(options: {
-  benchCase: GatewayBenchCase;
-  cpuProfDir?: string;
-  entry: string;
-  heapProfDir?: string;
-  runs: number;
-  timeoutMs: number;
-  warmup: number;
-}): Promise<CaseResult> {
+async function runCase(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
+    entry: string;
+    heapProfDir?: string;
+    runs: number;
+    timeoutMs: number;
+    warmup: number;
+  },
+): Promise<CaseResult> {
   const samples: GatewaySample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
     const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      cpuProfDir: options.cpuProfDir,
-      entry: options.entry,
-      heapProfDir: options.heapProfDir,
+      ...options,
       sampleIndex: index + 1,
-      timeoutMs: options.timeoutMs,
     });
     if (index >= options.warmup) {
       samples.push(sample);
@@ -1027,21 +991,13 @@ async function main() {
   }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        cpuProfDir: options.cpuProfDir,
-        entry: options.entry,
-        heapProfDir: options.heapProfDir,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {
     entry: options.entry,
+    gatewayRuntime: options.gatewayRuntime,
+    gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
     results,
   };
@@ -1066,10 +1022,8 @@ async function main() {
 
 export const testing = {
   collectResultFailures,
-  collectStartupTrace,
   listIncidentPackagedPluginArtifacts,
   parseOptions,
-  sanitizedEnv,
   summarizeCase,
   waitForStartupTracePhase,
   withGatewayBenchRoot,

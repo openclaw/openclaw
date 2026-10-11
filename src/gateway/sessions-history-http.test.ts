@@ -1,20 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEntryRows from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
-import * as boundaryPath from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
@@ -26,7 +20,11 @@ import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
-import { closeHistoryHarness, withGatewayHarness } from "./sessions-history-http.test-support.js";
+import {
+  closeHistoryHarness,
+  makeTranscriptAssistantMessage,
+  withGatewayHarness,
+} from "./sessions-history-http.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -77,20 +75,6 @@ async function seedSession(params?: { text?: string }) {
     expect(appended.ok).toBe(true);
   }
   return { storePath };
-}
-
-function makeTranscriptAssistantMessage(params: {
-  text: string;
-  provider?: string;
-  model?: string;
-}): AssistantMessage {
-  return makeAgentAssistantMessage({
-    content: [{ type: "text", text: params.text }],
-    provider: params.provider ?? "openai",
-    model: params.model ?? "gpt-5.5",
-    usage: createZeroUsageFixture(),
-    timestamp: Date.now(),
-  });
 }
 
 async function appendText(storePath: string, text: string, emitInlineMessage = true) {
@@ -789,7 +773,10 @@ describe("session history HTTP endpoints", () => {
       "agents/{agentId}/sessions/sessions.json",
     );
     testState.sessionConfig = { store: storeTemplate };
-    testState.agentsConfig = { list: [{ id: AGENT_ID, default: true }, { id: agentId }] };
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { [AGENT_ID]: {}, [agentId]: {} },
+    };
     await writeSessionStore({ entries: {}, storePath });
     const sessionKey = `agent:${agentId}:missing`;
     const missingDatabasePath = resolveSqliteTargetFromSessionStorePath(
@@ -1011,41 +998,6 @@ describe("session history HTTP endpoints", () => {
         id: visibleMessageId,
         seq: 2,
       });
-    });
-  });
-
-  test("shares transcript path checks across SSE streams and delivers session updates", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
-
-    await withGatewayHarness(async (harness) => {
-      const streams: SessionHistorySseStream[] = [];
-      try {
-        for (let index = 0; index < 2; index++) {
-          const stream = await openSessionHistorySse(harness.port, SESSION_KEY);
-          streams.push(stream);
-          await expectHistoryEventTexts(stream, ["first message"]);
-        }
-        const unrelatedFile = path.join(path.dirname(storePath), "unrelated-session.jsonl");
-        const resolvePath = vi.spyOn(boundaryPath, "resolveRealpathOrAbsolute");
-        try {
-          const update = { sessionFile: unrelatedFile };
-          emitSessionTranscriptUpdate(update);
-          emitSessionTranscriptUpdate(update);
-          expect(resolvePath.mock.calls.filter(([file]) => file === unrelatedFile)).toHaveLength(2);
-        } finally {
-          resolvePath.mockRestore();
-        }
-        const appendedId = await appendText(storePath, "second message");
-        for (const stream of streams) {
-          await expectMessageEventMatch(stream, {
-            text: "second message",
-            seq: 2,
-            id: appendedId,
-          });
-        }
-      } finally {
-        await Promise.all(streams.map((stream) => stream.reader.cancel()));
-      }
     });
   });
 

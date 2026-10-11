@@ -37,7 +37,9 @@ import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/e
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
+import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -84,6 +86,7 @@ const sourceFiles = [
   "en-devices.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
+  "en-processes.ts",
   "en-labs.ts",
   "en-login.ts",
   "en-link-reader.ts",
@@ -96,6 +99,7 @@ const sourceFiles = [
   "en-model-controls.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
+  "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
@@ -135,6 +139,9 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     if (key === "searchPlaceholder") {
       Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
     }
+    if (key === "archiveSession") {
+      Object.assign(sessionsView, registerSessionOrganizationEnglish.catalog.sessionsView);
+    }
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
@@ -159,7 +166,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
+        pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
       },
+      sessionHovercard: registerGitHubEnglish.catalog.sessionHovercard,
+      githubPublication: registerGitHubEnglish.catalog.githubPublication,
+      githubConnections: registerGitHubEnglish.catalog.githubConnections,
       agentTools: {
         ...registerGitHubEnglish.catalog.agentTools,
         ...en.agentTools,
@@ -192,6 +203,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerDevicesEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
+    registerProcessesEnglish.catalog,
     registerLabsEnglish.catalog,
     registerLoginEnglish.catalog,
     registerLinkReaderEnglish.catalog,

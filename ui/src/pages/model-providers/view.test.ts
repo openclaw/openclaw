@@ -7,8 +7,6 @@ import { choosePickerValue, updatePickers } from "../../test-helpers/select-pick
 import { card, mount, props, text } from "./view.test-support.ts";
 import { renderModelProviders } from "./view.ts";
 
-type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
-
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
   const onDecisionChange = vi.fn();
   const container = document.createElement("div");
@@ -104,9 +102,12 @@ function settingsRow(container: Element, label: string): HTMLElement {
   return match;
 }
 
-function selectSegment(group: SegmentedGroup, value: string) {
-  group.value = value;
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+function selectedSegment(group: Element) {
+  return group.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value;
+}
+
+function selectSegment(group: Element, value: string) {
+  group.querySelector<HTMLInputElement>(`.settings-segmented__input[value="${value}"]`)!.click();
 }
 
 describe("renderModelProviders", () => {
@@ -164,7 +165,7 @@ describe("renderModelProviders", () => {
     const thinkingRow = settingsRow(behavior, "Thinking");
     const fastRow = settingsRow(behavior, "Fast Mode");
 
-    expect(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("adaptive");
+    expect(selectedSegment(thinkingRow)).toBe("adaptive");
     expect(text(thinkingRow)).toContain("Adaptive");
     expect(text(thinkingRow)).not.toContain("Default: Model policy");
     expect(text(fastRow)).not.toContain("Default: Model policy");
@@ -172,13 +173,21 @@ describe("renderModelProviders", () => {
     const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
     expect(thinkingHelp?.textContent).toContain("model's thinking policy");
     expect(fastModeHelp?.textContent).toContain("Unlike Auto");
-    expect(thinkingRow.querySelector("wa-radio button")).toBeNull();
-    expect(fastRow.querySelector("wa-radio button")).toBeNull();
-    expect(thinkingRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
-    expect(fastRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
+    expect(thinkingRow.querySelector(".settings-segmented__btn button")).toBeNull();
+    expect(fastRow.querySelector(".settings-segmented__btn button")).toBeNull();
+    expect(
+      thinkingRow
+        .querySelector('.settings-segmented__input[value=""]')
+        ?.parentElement?.hasAttribute("title"),
+    ).toBe(false);
+    expect(
+      fastRow
+        .querySelector('.settings-segmented__input[value=""]')
+        ?.parentElement?.hasAttribute("title"),
+    ).toBe(false);
 
-    selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
-    selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
+    selectSegment(thinkingRow, "");
+    selectSegment(fastRow, "");
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
 
@@ -196,17 +205,14 @@ describe("renderModelProviders", () => {
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
     const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
     const inheritedFast = settingsRow(inheritedBehavior, "Fast Mode");
-    expect(inheritedThinking.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
-    expect(inheritedFast.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
+    expect(selectedSegment(inheritedThinking)).toBe("");
+    expect(selectedSegment(inheritedFast)).toBe("");
     expect(
-      (
-        inheritedThinking.querySelector('wa-radio[value=""]') as HTMLElement & {
-          checked: boolean;
-        }
-      ).checked,
+      inheritedThinking.querySelector<HTMLInputElement>('.settings-segmented__input[value=""]')!
+        .checked,
     ).toBe(true);
     expect(
-      (inheritedFast.querySelector('wa-radio[value=""]') as HTMLElement & { checked: boolean })
+      inheritedFast.querySelector<HTMLInputElement>('.settings-segmented__input[value=""]')!
         .checked,
     ).toBe(true);
     expect(text(inheritedThinking)).not.toContain("Using default: Model policy");
@@ -233,8 +239,8 @@ describe("renderModelProviders", () => {
     const thinking = settingsRow(behavior, "Thinking");
     const fast = settingsRow(behavior, "Fast Mode");
 
-    thinking.querySelector<HTMLElement>('wa-radio[value=""]')?.click();
-    fast.querySelector<HTMLElement>('wa-radio[value=""]')?.click();
+    selectSegment(thinking, "");
+    selectSegment(fast, "");
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
   });
@@ -246,36 +252,35 @@ describe("renderModelProviders", () => {
     });
     const container = mount(viewProps);
     const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinking = settingsRow(behavior, "Thinking").querySelector<SegmentedGroup>(
-      "wa-radio-group",
-    )!;
-    const fastMode = settingsRow(behavior, "Fast Mode").querySelector<SegmentedGroup>(
-      "wa-radio-group",
-    )!;
+    const thinking = settingsRow(behavior, "Thinking");
+    const fastMode = settingsRow(behavior, "Fast Mode");
 
     selectSegment(thinking, "");
     selectSegment(fastMode, "");
     render(renderModelProviders(viewProps), container);
 
-    expect(thinking.value).toBe("high");
-    expect(fastMode.value).toBe("on");
+    expect(selectedSegment(thinking)).toBe("high");
+    expect(selectedSegment(fastMode)).toBe("on");
     expect(
-      (thinking.querySelector('wa-radio[value="high"]') as HTMLElement & { checked: boolean })
-        .checked,
+      thinking.querySelector<HTMLInputElement>('.settings-segmented__input[value="high"]')!.checked,
     ).toBe(true);
     expect(
-      (fastMode.querySelector('wa-radio[value="on"]') as HTMLElement & { checked: boolean })
-        .checked,
+      fastMode.querySelector<HTMLInputElement>('.settings-segmented__input[value="on"]')!.checked,
     ).toBe(true);
   });
 
   it("locks model behavior while shared config work is pending", () => {
     const container = mount(props({ configBusy: true }));
     const behavior = container.querySelector("#settings-model-behavior");
-    const groups = behavior?.querySelectorAll<SegmentedGroup>("wa-radio-group") ?? [];
+    const groups = behavior?.querySelectorAll('.settings-segmented[role="radiogroup"]') ?? [];
 
     expect(groups).toHaveLength(2);
-    expect([...groups].every((group) => group.disabled)).toBe(true);
+    expect(
+      [...groups].every((group) => {
+        const inputs = [...group.querySelectorAll<HTMLInputElement>(".settings-segmented__input")];
+        return inputs.length > 0 && inputs.every((input) => input.disabled);
+      }),
+    ).toBe(true);
   });
 
   it("locks provider and default-model mutations while shared config work is pending", async () => {
@@ -463,12 +468,8 @@ describe("renderModelProviders", () => {
     const behavior = container.querySelector("#settings-model-behavior");
 
     expect(behavior).not.toBeNull();
-    expect(
-      settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>("wa-radio-group")?.value,
-    ).toBe("high");
-    expect(
-      settingsRow(behavior!, "Fast Mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
-    ).toBe("on");
+    expect(selectedSegment(settingsRow(behavior!, "Thinking"))).toBe("high");
+    expect(selectedSegment(settingsRow(behavior!, "Fast Mode"))).toBe("on");
     expect(text(container)).not.toContain("Configure a provider before selecting default models.");
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
@@ -509,7 +510,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "ok", profileCount: 1 },
+            auth: { kind: "ok" },
             profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
             modelCount: 0,
             availableModelCount: 0,
@@ -540,7 +541,7 @@ describe("renderModelProviders", () => {
         props({
           cards: [
             card({
-              auth: { kind: "ok", profileCount: 1 },
+              auth: { kind: "ok" },
               profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
               hasConfigApiKey,
               catalogStatus: "auth-rejected",
@@ -567,7 +568,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "api-key", profileCount: 0 },
+            auth: { kind: "api-key" },
           }),
         ],
       }),
@@ -670,7 +671,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "ok", profileCount: 1 },
+            auth: { kind: "ok" },
             profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
             modelCount: 0,
             availableModelCount: 0,

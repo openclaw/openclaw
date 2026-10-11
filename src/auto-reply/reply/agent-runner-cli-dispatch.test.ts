@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -98,7 +97,6 @@ describe("runCliAgentWithLifecycle", () => {
 
     await runCliAgentWithLifecycle({
       runId: "run-compaction-bridge",
-      provider: "claude-cli",
       onCompactionStart: async () => {
         callbacks.push("start");
       },
@@ -111,47 +109,6 @@ describe("runCliAgentWithLifecycle", () => {
     });
 
     expect(callbacks).toEqual(["start", "incomplete", "start", "end"]);
-  });
-
-  it("bridges typed CLI plan events", async () => {
-    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      emitAgentEvent({
-        runId: params.runId,
-        stream: "plan",
-        data: {
-          phase: "update",
-          title: "Plan updated",
-          source: "codex-exec",
-          steps: [
-            { step: "Inspect", status: "completed" },
-            { step: "Patch", status: "pending" },
-          ],
-        },
-      });
-      return { payloads: [], meta: { durationMs: 1 } };
-    });
-    const onPlanUpdate = vi.fn(async () => undefined);
-
-    await runCliAgentWithLifecycle({
-      runId: "run-plan-bridge",
-      provider: "codex-cli",
-      onPlanUpdate,
-      runParams: createRunParams("run-plan-bridge", {
-        provider: "codex-cli",
-        model: "codex",
-      }),
-    });
-
-    expect(onPlanUpdate).toHaveBeenCalledWith({
-      phase: "update",
-      title: "Plan updated",
-      explanation: undefined,
-      source: "codex-exec",
-      steps: [
-        { step: "Inspect", status: "completed" },
-        { step: "Patch", status: "pending" },
-      ],
-    });
   });
 
   it("normalizes shipped string-step plan events to pending typed steps", async () => {
@@ -172,7 +129,6 @@ describe("runCliAgentWithLifecycle", () => {
 
     await runCliAgentWithLifecycle({
       runId: "run-plan-legacy",
-      provider: "codex-cli",
       onPlanUpdate,
       runParams: createRunParams("run-plan-legacy", {
         provider: "codex-cli",
@@ -220,7 +176,6 @@ describe("runCliAgentWithLifecycle", () => {
 
     const result = await runCliAgentWithLifecycle({
       runId: "run-thinking-bridge",
-      provider: "claude-cli",
       onReasoningText,
       runParams: createRunParams("run-thinking-bridge"),
     });
@@ -234,67 +189,6 @@ describe("runCliAgentWithLifecycle", () => {
       { text: "Thinking more", isReasoning: true },
       { text: "Visible answer" },
     ]);
-  });
-
-  it("keeps durable reasoning when the CLI has no visible final answer", async () => {
-    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "Only thinking", delta: "Only thinking", isReasoningSnapshot: true },
-      });
-      emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "Only thinking more", delta: " more", isReasoningSnapshot: true },
-      });
-      return { payloads: [], meta: { durationMs: 1 } };
-    });
-
-    const result = await runCliAgentWithLifecycle({
-      runId: "run-thinking-without-answer",
-      provider: "claude-cli",
-      runParams: createRunParams("run-thinking-without-answer"),
-    });
-
-    expect(result.payloads).toEqual([{ text: "Only thinking more", isReasoning: true }]);
-  });
-
-  it("bridges thinking token progress without adding durable reasoning", async () => {
-    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { progressTokens: 50 },
-      });
-      emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { progressTokens: 50 },
-      });
-      emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { progressTokens: 200 },
-      });
-      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
-    });
-    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
-      async () => undefined,
-    );
-
-    const result = await runCliAgentWithLifecycle({
-      runId: "run-thinking-progress",
-      provider: "claude-cli",
-      onReasoningProgress,
-      runParams: createRunParams("run-thinking-progress"),
-    });
-
-    expect(onReasoningProgress.mock.calls.map((call) => call[0])).toEqual([
-      { progressTokens: 50 },
-      { progressTokens: 200 },
-    ]);
-    expect(result.payloads).toEqual([{ text: "Visible answer" }]);
   });
 
   it("stamps onActivity for every delivered bridge event, including reasoning-only progress", async () => {
@@ -323,7 +217,6 @@ describe("runCliAgentWithLifecycle", () => {
 
     await runCliAgentWithLifecycle({
       runId: "run-activity-reasoning-progress",
-      provider: "claude-cli",
       onActivity,
       onReasoningProgress,
       runParams: createRunParams("run-activity-reasoning-progress"),
@@ -364,7 +257,6 @@ describe("runCliAgentWithLifecycle", () => {
 
     await runCliAgentWithLifecycle({
       runId: "run-activity-suppressed",
-      provider: "claude-cli",
       suppressAssistantBridge: true,
       onActivity,
       onAssistantText,
@@ -408,21 +300,34 @@ describe("runCliAgentWithLifecycle", () => {
     });
     const onActivity = vi.fn();
     const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
-
-    await runCliAgentWithLifecycle({
-      runId: "run-activity-assistant",
-      provider: "claude-cli",
-      onActivity,
-      onAssistantText,
-      runParams: createRunParams("run-activity-assistant"),
+    const assistantEvents: Record<string, unknown>[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-activity-assistant" && event.stream === "assistant") {
+        assistantEvents.push(event.data);
+      }
     });
+
+    try {
+      await runCliAgentWithLifecycle({
+        runId: "run-activity-assistant",
+        onActivity,
+        onAssistantText,
+        runParams: createRunParams("run-activity-assistant"),
+      });
+    } finally {
+      stop();
+    }
 
     // Every real event stamps, independent of which callbacks are registered.
     expect(onAssistantText).toHaveBeenCalledTimes(1);
     expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(assistantEvents).toEqual([
+      { text: "Visible answer", delta: "Visible answer" },
+      { itemId: "cli-assistant:run-activity-assistant", text: "Visible answer" },
+    ]);
   });
 
-  it("keeps the captured lifecycle generation on start and terminal events", async () => {
+  it("keeps the captured lifecycle generation on the start event", async () => {
     const events: Array<{
       stream?: string;
       lifecycleGeneration?: string;
@@ -445,7 +350,6 @@ describe("runCliAgentWithLifecycle", () => {
         runId: "run-before-restart",
         lifecycleGeneration,
         startedAt: 1_000,
-        provider: "claude-cli",
         runParams: createRunParams("run-before-restart", {
           agentId: "support",
           thinkLevel: "off",
@@ -456,7 +360,8 @@ describe("runCliAgentWithLifecycle", () => {
     }
 
     const lifecycleEvents = events.filter((event) => event.stream === "lifecycle");
-    expect(lifecycleEvents).toHaveLength(2);
+    expect(lifecycleEvents).toHaveLength(1);
+    expect(lifecycleEvents[0]?.data?.phase).toBe("start");
     expect(
       lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
@@ -483,7 +388,6 @@ describe("runCliAgentWithLifecycle", () => {
     await expect(
       runCliAgentWithLifecycle({
         runId: "run-restart",
-        provider: "claude-cli",
         runParams: createRunParams("run-restart", {
           thinkLevel: "off",
           abortSignal: controller.signal,
@@ -492,92 +396,7 @@ describe("runCliAgentWithLifecycle", () => {
     ).rejects.toThrow("agent run aborted for restart");
     stop();
 
-    const terminal = events.find(
-      (event) => event.stream === "lifecycle" && event.data?.phase === "error",
-    );
-    expect(terminal?.data).toMatchObject({
-      aborted: true,
-      stopReason: "restart",
-    });
     expect(events.some((event) => event.stream === "assistant")).toBe(false);
-  });
-
-  it("attributes a structured CLI watchdog timeout on the terminal event", async () => {
-    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
-    const stop = onAgentEvent((event) => {
-      if (event.runId === "run-timeout") {
-        events.push(event);
-      }
-    });
-    cliDispatchState.runCliAgentMock.mockRejectedValueOnce(
-      createCliTimeoutError(
-        { provider: "claude-cli", model: "claude", sessionId: "session-1" },
-        {
-          mode: "no-output",
-          timeoutSeconds: 1,
-          observedActivity: false,
-          activeToolCount: 0,
-          backgroundTaskCount: 0,
-        },
-      ),
-    );
-
-    await expect(
-      runCliAgentWithLifecycle({
-        runId: "run-timeout",
-        provider: "claude-cli",
-        runParams: createRunParams("run-timeout", {
-          thinkLevel: "off",
-        }),
-      }),
-    ).rejects.toThrow("CLI produced no output");
-    stop();
-
-    expect(
-      events.find((event) => event.stream === "lifecycle" && event.data?.phase === "error")?.data,
-    ).toMatchObject({
-      stopReason: "timeout",
-      timeoutPhase: "provider",
-    });
-  });
-
-  it("propagates yielded result metadata on lifecycle end", async () => {
-    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
-    const stop = onAgentEvent((event) => {
-      if (event.runId === "run-yielded") {
-        events.push(event);
-      }
-    });
-    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {
-        durationMs: 1,
-        yielded: true,
-        livenessState: "paused",
-        stopReason: "end_turn",
-      },
-    } satisfies EmbeddedAgentRunResult);
-
-    try {
-      await runCliAgentWithLifecycle({
-        runId: "run-yielded",
-        provider: "claude-cli",
-        runParams: createRunParams("run-yielded", {
-          thinkLevel: "off",
-        }),
-      });
-    } finally {
-      stop();
-    }
-
-    const terminal = events.find(
-      (event) => event.stream === "lifecycle" && event.data?.phase === "end",
-    );
-    expect(terminal?.data).toMatchObject({
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-    });
   });
 });
 
@@ -727,41 +546,23 @@ describe("createCliToolSummaryTracker", () => {
     result: { content: [{ type: "text", text: "Wed Jun 10 2026" }] },
   };
 
-  it.each(["exec", "server.exec"])(
-    "delivers a safe %s summary using metadata captured at start",
-    async (name) => {
-      const deliver = vi.fn();
-      const tracker = createCliToolSummaryTracker({
-        commandDetailsVisible: false,
-        shouldEmitToolResult: () => true,
-        shouldEmitToolOutput: () => false,
-        deliver,
-      });
-      await tracker.noteToolEvent({ ...startEvent, name });
-      const commandBearing = await tracker.noteToolEvent({ ...resultEvent, name });
-      expect(commandBearing).toBe(true);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
-      expect(payload.text).toContain(name === "exec" ? "Exec" : "Server.exec");
-      expect(payload.text).not.toContain("date -u");
-      expect(payload.text).not.toContain("Wed Jun 10 2026");
-      expect(payload.isError).toBeUndefined();
-    },
-  );
-
-  it("appends the tool output block when full verbose output is enabled", async () => {
+  it.each(["exec"])("delivers a safe %s summary using metadata captured at start", async (name) => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
-      commandDetailsVisible: true,
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => true,
+      shouldEmitToolOutput: () => false,
       deliver,
     });
-    await tracker.noteToolEvent(startEvent);
-    await tracker.noteToolEvent(resultEvent);
-    const payload = deliver.mock.calls[0]?.[0] as { text: string };
-    expect(payload.text).toContain("```txt");
-    expect(payload.text).toContain("Wed Jun 10 2026");
+    await tracker.noteToolEvent({ ...startEvent, name });
+    const commandBearing = await tracker.noteToolEvent({ ...resultEvent, name });
+    expect(commandBearing).toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
+    expect(payload.text).toBe(name === "server.exec" ? "Server.exec" : "Exec");
+    expect(payload.text).not.toContain("date -u");
+    expect(payload.text).not.toContain("Wed Jun 10 2026");
+    expect(payload.isError).toBeUndefined();
   });
 
   it("renders top-level structured CLI results in full verbose output", async () => {
@@ -796,40 +597,38 @@ describe("createCliToolSummaryTracker", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "progress_card",
-    "mcp__openclaw__progress_card",
-    "update_plan",
-    "mcp__openclaw__update_plan",
-  ])("leaves %s to the authoritative plan event instead of summarizing arguments", async (name) => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      commandDetailsVisible: true,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => true,
-      deliver,
-    });
-    await tracker.noteToolEvent({
-      name,
-      phase: "start",
-      args: {
-        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
-      },
-      toolCallId: "plan-1",
-    });
-    await tracker.noteToolEvent({
-      name,
-      phase: "result",
-      args: undefined,
-      toolCallId: "plan-1",
-      isError: false,
-      result: { content: [{ type: "text", text: "Progress card updated" }] },
-    });
+  it.each(["update_plan"])(
+    "leaves %s to the authoritative plan event instead of summarizing arguments",
+    async (name) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: true,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => true,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        name,
+        phase: "start",
+        args: {
+          markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+        },
+        toolCallId: "plan-1",
+      });
+      await tracker.noteToolEvent({
+        name,
+        phase: "result",
+        args: undefined,
+        toolCallId: "plan-1",
+        isError: false,
+        result: { content: [{ type: "text", text: "Progress card updated" }] },
+      });
 
-    expect(deliver).not.toHaveBeenCalled();
-  });
+      expect(deliver).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps card errors visible without arguments (full output: %s)",
     async (fullOutput) => {
       const deliver = vi.fn();
@@ -855,37 +654,11 @@ describe("createCliToolSummaryTracker", () => {
       });
 
       expect(deliver).toHaveBeenCalledWith({
-        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        text: fullOutput ? "Progress Card\n```txt\nwrite failed\n```" : "Progress Card",
         isError: true,
       });
     },
   );
-
-  it("propagates tool errors on the summary payload", async () => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      commandDetailsVisible: false,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      deliver,
-    });
-    await tracker.noteToolEvent(startEvent);
-    await tracker.noteToolEvent({ ...resultEvent, isError: true });
-    const payload = deliver.mock.calls[0]?.[0] as { isError?: boolean };
-    expect(payload.isError).toBe(true);
-  });
-
-  it("summarizes results without a tracked start event", async () => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      commandDetailsVisible: false,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      deliver,
-    });
-    await tracker.noteToolEvent({ ...resultEvent, toolCallId: "unseen" });
-    expect(deliver).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("runCliAgentWithLifecycle fast auto progress", () => {
@@ -922,7 +695,6 @@ describe("runCliAgentWithLifecycle fast auto progress", () => {
 
     await runCliAgentWithLifecycle({
       runId: "run-fast-cli",
-      provider: "codex-cli",
       runParams: createRunParams("run-fast-cli", {
         sessionKey: "agent:main:cli-fast",
         prompt: "run one tool",

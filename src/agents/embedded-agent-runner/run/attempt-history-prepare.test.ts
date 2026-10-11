@@ -2,6 +2,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 
 const mocks = vi.hoisted(() => ({
@@ -62,9 +64,18 @@ function createFixture() {
     },
     prepared: {
       sessionRuntime: {
-        agentSession: { activeSession: { agent, messages } },
+        agentSession: {
+          activeSession: {
+            agent,
+            get messages() {
+              return agent.state.messages;
+            },
+          },
+          settingsManager: SettingsManager.inMemory(),
+        },
         boundary: {},
         sessionManager: {},
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         transcriptPolicy: {},
         transport: {},
         state: { systemPromptText: "System prompt" },
@@ -122,21 +133,28 @@ it("awaits descriptive worker rows before publishing the recovery briefing", asy
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     content: expect.not.stringContaining("unrelated"),
   });
-  const [, update, options] = mocks.updateEntry.mock.calls[0]!;
-  expect(options?.assertCommitAllowed).toBe(fixture.assertActive);
+  const [, update] = mocks.updateEntry.mock.calls[0]!;
   expect(await update(fixture.entry, {})).toMatchObject({ quotaSuspension: { state: "active" } });
   expect(await update({ ...fixture.entry, sessionId: "replacement" }, {})).toBeNull();
 });
 
-it.each(["entry", "hierarchy", "settlement"] as const)(
-  "refuses a revoked attempt after awaiting %s",
-  async (stage) => {
+it.each([
+  { stage: "entry", rejected: false },
+  { stage: "hierarchy", rejected: false },
+  { stage: "settlement", rejected: false },
+  { stage: "hierarchy", rejected: true },
+])(
+  "refuses publication after $stage revocation or rejection ($rejected)",
+  async ({ stage, rejected }) => {
     const fixture = createFixture();
     const entered = createDeferred();
     const resume = createDeferred();
     const wait = async () => {
       entered.resolve();
       await resume.promise;
+      if (rejected) {
+        throw new Error("reader unavailable");
+      }
     };
     if (stage === "entry") {
       mocks.readEntry.mockImplementationOnce(async () => {
@@ -160,22 +178,14 @@ it.each(["entry", "hierarchy", "settlement"] as const)(
       preparation,
       "read/settlement was not reached",
     );
-    fixture.controller.abort(new Error("attempt retired"));
+    if (!rejected) {
+      fixture.controller.abort(new Error("attempt retired"));
+    }
     resume.resolve();
-    await expect(preparation).rejects.toThrow("attempt retired");
+    await expect(preparation).rejects.toThrow(rejected ? "reader unavailable" : "attempt retired");
     expect(fixture.agent.state.messages).toBe(fixture.messages);
     if (stage !== "settlement") {
       expect(mocks.updateEntry).not.toHaveBeenCalled();
     }
   },
 );
-
-it("propagates worker read rejection without a native fallback or resumption write", async () => {
-  const fixture = createFixture();
-  mocks.readSummaries.mockRejectedValueOnce(new Error("reader unavailable"));
-  await expect(prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive)).rejects.toThrow(
-    "reader unavailable",
-  );
-  expect(fixture.agent.state.messages).toBe(fixture.messages);
-  expect(mocks.updateEntry).not.toHaveBeenCalled();
-});

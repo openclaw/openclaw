@@ -16,8 +16,9 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 - Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Automation runs are recorded in cron run history.
+- Isolated agent-turn jobs created from a conversation keep their own run session. When default announce delivery has no explicit or remembered external route, completion commits the final visible result into the creating conversation. The commit verifies its creation-time session generation and deduplicates by job/run identity; deleted or reset conversations produce a delivery failure. See [Automation delivery](/automation/cron-jobs/delivery).
 - One-shot jobs (`--at`) auto-delete after successful completion: delivery is confirmed, not requested, intentionally suppressed, or explicitly best-effort. Failed or unknown required delivery retains the job disabled for inspection without replaying the payload. Pass `--keep-after-run` to keep successful jobs too.
-- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by the scheduler's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
+- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by the scheduler's own 60-minute watchdog; command jobs default to 10 minutes, and script payloads default to 5 minutes. This scheduler deadline is independent of the per-model-attempt budget (`agents.defaults.timeoutSeconds`, default 48 hours): starting a fallback does not reset it.
 - On Gateway startup, overdue agent-turn jobs and jobs that await a heartbeat are rescheduled instead of replayed immediately, keeping model/tool execution out of scheduler startup. This includes heartbeat monitors, migrated heartbeat tasks, and main-session system events with immediate wake. Startup catch-up delays survive label or payload-content reconciliation and another restart; changing the schedule starts a new scheduling decision.
 - When a running Gateway wakes after a deadline, the scheduler coalesces missed timer ticks. Cron rechecks eligible jobs using its stored deadlines and run receipts. The shared [Gateway scheduler](/concepts/architecture#timed-work-and-shutdown) owns timer arming and shutdown joining; cron owns execution, catch-up policy, and durable results.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; `--local` runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
@@ -72,10 +73,10 @@ cron expression.
 
 On confirmation the agent:
 
-1. Creates the job, with delivery defaulting to the channel and thread where you
-   asked.
+1. Creates the job, with delivery defaulting to the conversation where you asked:
+   its channel and thread, or a conversation commit when there is no external route.
 2. Immediately runs it once with `run` in `force` mode as a visible test,
-   delivered to that same thread, so you see real output well before the first
+   delivered to that same conversation, so you see real output well before the first
    scheduled occurrence.
 3. Removes the job and tells you if that test fails.
 

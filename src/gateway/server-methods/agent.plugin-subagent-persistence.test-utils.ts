@@ -1,7 +1,8 @@
 // Registered in agent.test.ts's existing handler suite and cleanup lifetime.
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -19,6 +20,7 @@ import {
   requireValue,
   waitForAssertion,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -40,7 +42,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
           entry: {
             sessionId: "plugin-subagent-registry-fail-session",
             updatedAt: Date.now(),
@@ -139,11 +141,13 @@ export function registerPluginSubagentPersistenceFailureTest() {
         );
 
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
           runId: pausedRunId,
           pauseReason: "sessions_yield",
         });
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
+        expect((await getSubagentRunByChildSessionKey(childSessionKey))?.runId).not.toBe(
+          adoptionRunId,
+        );
         expect(mocks.registryWrite).toHaveBeenCalledOnce();
         const storedRuns = loadSubagentRegistryFromSqlite();
         expect(storedRuns.has(adoptionRunId)).toBe(false);
@@ -183,7 +187,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
         await waitForAssertion(() => {
           expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
           const retryRun = requireValue(
-            getSubagentRunByChildSessionKey(childSessionKey),
+            subagentRuns.get(retryRunId),
             "expected retry plugin subagent run",
           );
           expect(retryRun.runId).toBe(retryRunId);

@@ -1,8 +1,3 @@
-/**
- * Public type contract for prepared agent runtime plans. These types describe
- * provider auth, prompt, tool, transcript, delivery, outcome, transport, and
- * observability decisions shared across embedded-agent hot paths.
- */
 import type { TSchema } from "typebox";
 import type {
   ModelApi,
@@ -13,13 +8,13 @@ import type { ReplyPayload as AgentRuntimeReplyPayload } from "../../shared/repl
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { AgentTool } from "../runtime/index.js";
+import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
-/** Runtime transport selected for one model attempt. */
 export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
 
-/** Thinking levels accepted by runtime-plan extra-param preparation. */
 type AgentRuntimeThinkLevel =
   | "off"
   | "minimal"
@@ -30,12 +25,8 @@ type AgentRuntimeThinkLevel =
   | "adaptive"
   | "max";
 
-/** System prompt rendering mode selected for one attempt. */
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
-/** Trigger source that can alter provider system prompt contributions. */
-type AgentRuntimePromptTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
-/** Provider model descriptor consumed by runtime-plan hooks. */
 type AgentRuntimeModel = {
   id?: string;
   name?: string;
@@ -56,19 +47,16 @@ type AgentRuntimeModel = {
   compat?: unknown;
 };
 
-/** Text replacement rule used by provider input/output transforms. */
 type AgentRuntimeTextReplacement = {
   from: string | RegExp;
   to: string;
 };
 
-/** Provider text transforms applied around model calls. */
 type AgentRuntimeTextTransforms = {
   input?: AgentRuntimeTextReplacement[];
   output?: AgentRuntimeTextReplacement[];
 };
 
-/** Resolved provider runtime handle forwarded to plugin-owned hooks. */
 type AgentRuntimeProviderHandle = {
   provider: string;
   modelId?: string | null;
@@ -83,17 +71,6 @@ type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
   prepared: true;
 };
 
-/** Stable section IDs for provider system prompt overrides. */
-type AgentRuntimeSystemPromptSectionId = "interaction_style" | "tool_call_style" | "execution_bias";
-
-/** Provider-owned system prompt contribution and section overrides. */
-type AgentRuntimeSystemPromptContribution = {
-  stablePrefix?: string;
-  dynamicSuffix?: string;
-  sectionOverrides?: Partial<Record<AgentRuntimeSystemPromptSectionId, string>>;
-};
-
-/** Context passed when resolving provider system prompt contributions. */
 type AgentRuntimeSystemPromptContributionContext = {
   config?: unknown;
   agentDir?: string;
@@ -104,16 +81,14 @@ type AgentRuntimeSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
-  trigger?: AgentRuntimePromptTrigger;
+  trigger?: EmbeddedRunTrigger;
 };
 
-/** Provider fallback route decision for follow-up delivery. */
 type AgentRuntimeFollowupFallbackRouteResult = {
   route?: "origin" | "dispatcher" | "drop";
   reason?: string;
 };
 
-/** Runtime hook that classifies run results for model fallback. */
 type AgentRuntimeOutcomeClassifier = (params: {
   provider: string;
   model: string;
@@ -122,7 +97,6 @@ type AgentRuntimeOutcomeClassifier = (params: {
   hasBlockReplyPipelineOutput?: boolean;
 }) => ModelFallbackResultClassification;
 
-/** Resolved provider/model/harness/transport reference for an attempt. */
 type AgentRuntimeResolvedRef = {
   provider: string;
   modelId: string;
@@ -131,7 +105,6 @@ type AgentRuntimeResolvedRef = {
   transport?: AgentRuntimeTransport;
 };
 
-/** Concrete provider-owned route selected for one runtime attempt. */
 export type AgentRuntimeAuthModelRoute = {
   provider: string;
   modelId: string;
@@ -150,7 +123,6 @@ type AgentRuntimeAuthDeferredRouteSupport = {
   runtimePolicy: ProviderModelRouteRuntimePolicy;
 };
 
-/** Auth forwarding decision for one runtime attempt. */
 export type AgentRuntimeCredentialSource = ProviderModelAuthSourceClassification | { kind: "none" };
 
 /** Actual provider/model/source tuple owned by one physical model attempt. */
@@ -182,14 +154,13 @@ export type AgentRuntimeAuthPlan = {
   credentialSource?: AgentRuntimeCredentialSource;
 };
 
-/** Prompt transforms and provider contribution hooks for one runtime attempt. */
 type AgentRuntimePromptPlan = {
   provider: string;
   modelId: string;
   textTransforms?: AgentRuntimeTextTransforms;
   resolveSystemPromptContribution(
     context: AgentRuntimeSystemPromptContributionContext,
-  ): AgentRuntimeSystemPromptContribution | undefined;
+  ): ProviderSystemPromptContribution | undefined;
   transformSystemPrompt(
     context: AgentRuntimeSystemPromptContributionContext & {
       systemPrompt: string;
@@ -211,7 +182,6 @@ type AgentRuntimeModelOverrides = {
   model?: AgentRuntimeModel;
 };
 
-/** Tool normalization and diagnostics hooks for one runtime attempt. */
 type AgentRuntimeToolPlan = {
   preparedPlanning?: PreparedOpenClawToolPlanning;
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
@@ -221,7 +191,6 @@ type AgentRuntimeToolPlan = {
   logDiagnostics(tools: AgentTool[], params?: AgentRuntimeModelOverrides): void;
 };
 
-/** Delivery behavior hooks for one runtime attempt. */
 export type AgentRuntimeDeliveryPlan = {
   isSilentPayload(
     payload: Pick<
@@ -238,7 +207,6 @@ export type AgentRuntimeDeliveryPlan = {
   }): AgentRuntimeFollowupFallbackRouteResult | undefined;
 };
 
-/** Extra transport parameter plan for one runtime attempt. */
 type AgentRuntimeTransportPlan = {
   extraParams: Record<string, unknown>;
   resolveExtraParams(params?: {
@@ -251,7 +219,6 @@ type AgentRuntimeTransportPlan = {
   }): Record<string, unknown>;
 };
 
-/** Complete prepared runtime plan consumed by embedded-agent attempts. */
 export type AgentRuntimePlan = {
   resolvedRef: AgentRuntimeResolvedRef;
   providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
@@ -273,7 +240,6 @@ export type AgentRuntimePlan = {
   };
 };
 
-/** Inputs needed to build delivery-only runtime decisions. */
 export type BuildAgentRuntimeDeliveryPlanParams = {
   config?: unknown;
   workspaceDir?: string;
@@ -283,7 +249,6 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
   providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
 };
 
-/** Inputs needed to build the full prepared runtime plan. */
 export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & {
   model?: AgentRuntimeModel;
   modelApi?: string | null;

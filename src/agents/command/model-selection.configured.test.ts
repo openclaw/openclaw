@@ -13,6 +13,7 @@ import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
+import { loadProviderScopedThinkingCatalog } from "../model-catalog.runtime.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
@@ -21,6 +22,13 @@ import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import * as runtimeLoaders from "./runtime-loaders.js";
 
 vi.mock("../model-catalog.js", { spy: true });
+vi.mock("../model-catalog.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-catalog.runtime.js")>();
+  return {
+    ...actual,
+    loadProviderScopedThinkingCatalog: vi.fn().mockResolvedValue([]),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:subagent:configured-selection";
@@ -168,18 +176,64 @@ function createRestrictedFixture() {
 }
 
 describe("command selection with configured model facts", () => {
-  it("does not probe a primary excluded by the original operator policy", async () => {
-    const fixture = createRestrictedFixture();
-    fixture.store[sessionKey] = {
-      ...automaticEntry("manual"),
-      modelOverrideFallbackOriginModel: "child",
-    };
-    const selected = await fixture.select({
-      opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
-    });
-    expect(selected).toMatchObject({ provider: "custom", model: "manual" });
-    expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
-  });
+  it.each([
+    { previous: null, observed: "max", configured: undefined, supported: true },
+    { previous: "max", observed: null, configured: undefined, supported: false },
+    { previous: null, observed: "max", configured: null, supported: false },
+    { previous: "max", observed: null, configured: "max", supported: true },
+    { previous: "max", observed: undefined, configured: undefined, supported: true },
+  ])(
+    "uses observed max support ($supported) over stale catalog facts",
+    async ({ previous, observed, configured, supported }) => {
+      const fixture = createFixture();
+      fixture.custom.models.forEach((model) => {
+        model.reasoning = true;
+        if (model.id === "child" && configured !== undefined) {
+          model.thinkingLevelMap = { max: configured };
+        }
+      });
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      const stale = {
+        ...catalogEntry("custom", "child"),
+        reasoning: true,
+        thinkingLevelMap: { max: previous },
+      };
+      fixture.inventory.mockReturnValue([stale]);
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue(
+        observed === undefined ? [] : [{ ...stale, thinkingLevelMap: { max: observed } }],
+      );
+      const selection = fixture.select({
+        configuredThinkingCatalog: [stale],
+        requestedThinkLevel: "max",
+        thinkOnce: "max",
+        isSubagentLane: false,
+      });
+      if (supported) {
+        await expect(selection).resolves.toMatchObject({ provider: "custom", model: "child" });
+      } else {
+        await expect(selection).rejects.toThrow('Thinking level "max" is not supported');
+      }
+    },
+  );
+
+  it.each(["fallback", "automatic"] as const)(
+    "constrains stored %s selection without probing a role-denied primary",
+    async (source) => {
+      const fixture = createRestrictedFixture();
+      if (source === "fallback") {
+        fixture.store[sessionKey] = {
+          ...automaticEntry("manual"),
+          modelOverrideFallbackOriginModel: "child",
+        };
+      }
+      const selected = await fixture.select({
+        opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
+      });
+      expect(selected).toMatchObject({ provider: "custom", model: "manual" });
+      expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
+      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps an incompatible shared account pin when role policy selects another provider", async () => {
     const fixture = createRestrictedFixture();
@@ -214,38 +268,28 @@ describe("command selection with configured model facts", () => {
     expect(fixture.store).toEqual(before);
   });
 
-  it.each(["custom/child", "blocked"])(
-    "rejects a role-denied explicit %s before selection or runtime effects",
+  it.each(["custom/child", "blocked", "locked"])(
+    "rejects a role-denied %s selection before runtime effects",
     async (model) => {
       const fixture = createRestrictedFixture();
+      if (model === "locked") {
+        fixture.entry().modelSelectionLocked = true;
+      }
       const before = structuredClone(fixture.store);
-
       await expect(
         fixture.select({
           opts: {
             message: "Use requested model",
-            model,
-            allowModelOverride: true,
+            ...(model === "locked" ? {} : { model, allowModelOverride: true }),
             operatorAuthority: fixture.operatorAuthority,
           },
         }),
       ).rejects.toThrow("Your operator role cannot use this model");
-
       expect(fixture.store).toEqual(before);
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
       expect(harnessRuntime.ensureSelectedAgentHarnessPlugin).not.toHaveBeenCalled();
     },
   );
-
-  it("constrains stored automatic selection for a restricted caller", async () => {
-    const fixture = createRestrictedFixture();
-    const selected = await fixture.select({
-      opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
-    });
-
-    expect(selected).toMatchObject({ provider: "custom", model: "manual" });
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-  });
 
   it("allows an explicit permitted alias without weakening the agent's manual policy", async () => {
     const fixture = createRestrictedFixture();
@@ -261,21 +305,6 @@ describe("command selection with configured model facts", () => {
     await expect(fixture.select({ opts })).rejects.toThrow(
       'Model override "custom/manual" is not allowed',
     );
-  });
-
-  it("does not let a model lock bypass the original caller's model policy", async () => {
-    const fixture = createRestrictedFixture();
-    fixture.entry().modelSelectionLocked = true;
-    const before = structuredClone(fixture.store);
-
-    await expect(
-      fixture.select({
-        opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
-      }),
-    ).rejects.toThrow("Your operator role cannot use this model");
-
-    expect(fixture.store).toEqual(before);
-    expect(harnessRuntime.ensureSelectedAgentHarnessPlugin).not.toHaveBeenCalled();
   });
 
   it("preserves an explicit CLI route across resumed command turns and a later API selection", async () => {
@@ -308,61 +337,100 @@ describe("command selection with configured model facts", () => {
     expect(await select()).toMatchObject({ provider: "custom", model: "child" });
   });
 
-  it("retains a resolved self-origin child outside manual policy without manifest inventory", async () => {
-    const fixture = createFixture();
-    const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
-    const selected = await fixture.select();
-
-    expect(selected).toMatchObject({
-      provider: "custom",
-      model: "child",
-      requestedRouteResolution: "resolved",
-      storedModelOverrideSource: "auto",
-      effectiveTurnThinkLevel: "off",
-      sessionEntry: automaticEntry(),
-      sessionEntryForAttempt: automaticEntry(),
-    });
-    expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
-    expect(selected.thinkingCatalog).toContainEqual(
-      expect.objectContaining({
+  it.each([false, true])(
+    "retains configured automatic child facts with manifest owner=%s",
+    async (manifestOwner) => {
+      const fixture = createFixture({ manifestOwner });
+      if (manifestOwner) {
+        fixture.inventory.mockReturnValue([
+          {
+            ...catalogEntry("custom", "child"),
+            baseUrl: "https://donor.invalid/v1",
+            contextWindow: 32_768,
+          },
+        ]);
+      }
+      const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
+      const selected = await fixture.select();
+      expect(selected).toMatchObject({
         provider: "custom",
-        id: "child",
-        reasoning: false,
-        configuredReasoning: false,
-        api: "openai-completions",
-        baseUrl: "https://custom.invalid/v1",
-      }),
-    );
-    expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-  });
+        model: "child",
+        requestedRouteResolution: "resolved",
+        storedModelOverrideSource: "auto",
+        effectiveTurnThinkLevel: "off",
+        sessionEntry: automaticEntry(),
+        sessionEntryForAttempt: automaticEntry(),
+      });
+      expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
+      expect(selected.thinkingCatalog).toContainEqual(
+        expect.objectContaining({
+          provider: "custom",
+          id: "child",
+          configuredReasoning: false,
+          ...(manifestOwner
+            ? { baseUrl: "https://donor.invalid/v1", contextWindow: 32_768 }
+            : {
+                reasoning: false,
+                api: "openai-completions",
+                baseUrl: "https://custom.invalid/v1",
+              }),
+        }),
+      );
+      expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
+      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+    },
+  );
 
-  it("retains declared capabilities for an unrestricted unconfigured selection", async () => {
+  it.each([
+    ["unconfigured", "unconfigured"],
+    ["wildcard", "z-first"],
+    ["unqualified", "shared"],
+  ] as const)("selects the manifest catalog's %s route", async (mode, model) => {
     const fixture = createFixture();
-    delete fixture.defaults.modelPolicy;
-    fixture.defaults.model = { primary: "remote/unconfigured" };
-    delete fixture.cfg.models;
-    fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
     const declared: ModelCatalogEntry = {
-      ...catalogEntry("remote", "unconfigured"),
+      ...catalogEntry("remote", model),
       input: ["text", "image"],
     };
-    fixture.inventory.mockReturnValue([declared]);
+    fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
+    if (mode === "wildcard") {
+      fixture.defaults.modelPolicy = { allow: ["remote/*"] };
+      fixture.inventory.mockReturnValue([
+        catalogEntry("remote", "z-first"),
+        catalogEntry("remote", "a-second"),
+      ]);
+    } else {
+      delete fixture.defaults.modelPolicy;
+      if (mode === "unconfigured") {
+        fixture.defaults.model = { primary: "remote/unconfigured" };
+        delete fixture.cfg.models;
+        fixture.inventory.mockReturnValue([declared]);
+      } else {
+        fixture.defaults.models = { shared: {} };
+        fixture.store[sessionKey] = {
+          ...fixture.entry(),
+          providerOverride: "remote",
+          modelOverride: "shared",
+          modelOverrideSource: "user",
+          modelOverrideRouteResolution: "resolved",
+        };
+        fixture.inventory.mockReturnValue([catalogEntry("remote", "shared")]);
+      }
+    }
     const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
-
-    const selected = await fixture.select({
-      configuredThinkingCatalog: [],
-      requestedThinkLevel: "off",
-    });
-
+    const selected = await fixture.select(
+      mode === "unconfigured" ? { configuredThinkingCatalog: [], requestedThinkLevel: "off" } : {},
+    );
     expect(selected).toMatchObject({
       provider: "remote",
-      model: "unconfigured",
-      effectiveTurnThinkLevel: "off",
+      model,
+      requestedRouteResolution: "resolved",
     });
-    expect(selected.thinkingCatalog).toContainEqual(expect.objectContaining(declared));
+    if (mode === "unconfigured") {
+      expect(selected.effectiveTurnThinkLevel).toBe("off");
+      expect(selected.thinkingCatalog).toContainEqual(expect.objectContaining(declared));
+      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+    }
     expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
   });
 
   it.each(["raw", "resolved"] as const)(
@@ -424,51 +492,6 @@ describe("command selection with configured model facts", () => {
     },
   );
 
-  it("keeps wildcard replacement in catalog order rather than alphabetical order", async () => {
-    const fixture = createFixture();
-    fixture.defaults.modelPolicy = { allow: ["remote/*"] };
-    fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
-    fixture.inventory.mockReturnValue([
-      catalogEntry("remote", "z-first"),
-      catalogEntry("remote", "a-second"),
-    ]);
-    const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
-
-    const selected = await fixture.select();
-
-    expect(selected).toMatchObject({
-      provider: "remote",
-      model: "z-first",
-      requestedRouteResolution: "resolved",
-    });
-    expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-  });
-
-  it("retains unqualified policy inference from the manifest catalog", async () => {
-    const fixture = createFixture();
-    delete fixture.defaults.modelPolicy;
-    fixture.defaults.models = { shared: {} };
-    fixture.store[sessionKey] = {
-      sessionId: "configured-child",
-      updatedAt: 1,
-      providerOverride: "remote",
-      modelOverride: "shared",
-      modelOverrideSource: "user",
-      modelOverrideRouteResolution: "resolved",
-    };
-    fixture.inventory.mockReturnValue([catalogEntry("remote", "shared")]);
-    const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
-
-    const selected = await fixture.select();
-
-    expect(selected).toMatchObject({
-      provider: "remote",
-      model: "shared",
-      requestedRouteResolution: "resolved",
-    });
-    expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-  });
-
   it.each(["incomplete", "inherited"] as const)(
     "does not grant the child's automatic-policy exemption to %s provenance",
     async (provenance) => {
@@ -504,42 +527,12 @@ describe("command selection with configured model facts", () => {
       expect(fixture.cfg).toEqual(configBefore);
     },
   );
-
-  it("retains manifest-owned donor facts for a configured automatic child", async () => {
-    const fixture = createFixture({ manifestOwner: true });
-    fixture.inventory.mockReturnValue([
-      {
-        ...catalogEntry("custom", "child"),
-        baseUrl: "https://donor.invalid/v1",
-        contextWindow: 32_768,
-      },
-    ]);
-    const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
-
-    const selected = await fixture.select();
-
-    expect(selected).toMatchObject({
-      provider: "custom",
-      model: "child",
-      requestedRouteResolution: "resolved",
-      effectiveTurnThinkLevel: "off",
-    });
-    expect(selected.thinkingCatalog).toContainEqual(
-      expect.objectContaining({
-        provider: "custom",
-        id: "child",
-        baseUrl: "https://donor.invalid/v1",
-        contextWindow: 32_768,
-        configuredReasoning: false,
-      }),
-    );
-    expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-  });
 });
 
 describe("command selection with real transcript routing", () => {
   it.each([
     [sessionKey, true, false, "store"],
+    [sessionKey, true, false, "explicit"],
     [sessionKey, true, true, "suppressed"],
     [sessionKey, false, true, "fallback"],
     [undefined, true, true, "fallback"],
@@ -551,12 +544,15 @@ describe("command selection with real transcript routing", () => {
       fixture.defaults.modelPolicy = { allow: ["custom/*"] };
       fixture.inventory.mockReturnValue([catalogEntry("custom", "base")]);
       const sessionId = "routing-session";
-      const storedEntry: SessionEntry = { sessionId: "stored-session", updatedAt: 2 };
+      const storedEntry: SessionEntry =
+        route === "explicit" ? fixture.entry() : { sessionId: "stored-session", updatedAt: 2 };
       const store = {
         [sessionKey]: storedEntry,
         [sessionId]: { sessionId: "not-a-keyed-session", updatedAt: 3 },
         "": { sessionId: "not-an-empty-key-session", updatedAt: 4 },
       };
+      const explicitEntry: SessionEntry | undefined =
+        route === "explicit" ? { sessionId: "explicit-session", updatedAt: 1 } : undefined;
       const storePath = path.join(fixture.cfg.agents!.entries!.main!.workspace!, "sessions.json");
       const resolver = vi.fn(resolveSessionTranscriptFile);
       vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockResolvedValue({
@@ -567,46 +563,33 @@ describe("command selection with real transcript routing", () => {
         opts: { message: "Resolve transcript routing", threadId: 42 },
         sessionId,
         sessionKey: key,
-        sessionEntry: undefined,
+        sessionEntry: explicitEntry,
         sessionStore: withStore ? store : undefined,
         storePath,
         suppressVisibleSessionEffects,
       });
 
       expect(selected.sessionFile).toBe(key === undefined ? sessionId : key);
-      expect(selected.sessionEntry).toBe(route === "store" ? storedEntry : undefined);
-      expect(selected.sessionEntryForAttempt).toBeUndefined();
+      expect(selected.sessionEntry).toBe(
+        explicitEntry ?? (route === "store" ? storedEntry : undefined),
+      );
+      expect(selected.sessionEntryForAttempt).toBe(explicitEntry);
+      expect(store[sessionKey]).toBe(storedEntry);
+      if (route === "explicit") {
+        expect(fixture.entry()).toBe(storedEntry);
+      }
       expect(resolver).toHaveBeenCalledTimes(1);
       const forwarded = expectDefined(resolver.mock.calls[0], "transcript resolution call")[0];
       expect(forwarded).toMatchObject({
         sessionKey: key === undefined ? sessionId : key,
       });
-      expect(forwarded.sessionEntry).toBeUndefined();
-      expect(forwarded.sessionStore).toBe(route === "store" ? store : undefined);
+      expect(forwarded.sessionEntry).toBe(explicitEntry);
+      expect(forwarded.sessionStore).toBe(
+        route === "store" || route === "explicit" ? store : undefined,
+      );
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );
-
-  it("keeps the explicit entry ahead of the store and preserves the attempt entry", async () => {
-    const fixture = createFixture();
-    fixture.defaults.modelPolicy = { allow: ["custom/*"] };
-    fixture.inventory.mockReturnValue([catalogEntry("custom", "base")]);
-    const explicitEntry: SessionEntry = { sessionId: "explicit-session", updatedAt: 1 };
-    const storedEntry = fixture.entry();
-    const resolver = vi.fn(resolveSessionTranscriptFile);
-    vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockResolvedValue({
-      resolveSessionTranscriptFile: resolver,
-    });
-
-    const selected = await fixture.select({ sessionEntry: explicitEntry });
-
-    expect(selected.sessionFile).toBe(sessionKey);
-    expect(selected.sessionEntry).toBe(explicitEntry);
-    expect(selected.sessionEntryForAttempt).toBe(explicitEntry);
-    expect(fixture.entry()).toBe(storedEntry);
-    expect(resolver).toHaveBeenCalledTimes(1);
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-  });
 
   it("rechecks operator authority after loading transcript routing", async () => {
     const fixture = createFixture();

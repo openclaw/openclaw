@@ -55,9 +55,8 @@ describe("sandbox/tool-policy", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "tavern",
+        entries: {
+          tavern: {
             tools: {
               sandbox: {
                 tools: {
@@ -66,7 +65,7 @@ describe("sandbox/tool-policy", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
@@ -149,9 +148,8 @@ describe("sandbox/tool-policy", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "tavern",
+        entries: {
+          tavern: {
             tools: {
               sandbox: {
                 tools: {
@@ -160,7 +158,7 @@ describe("sandbox/tool-policy", () => {
               },
             },
           },
-        ],
+        },
       },
       tools: {
         sandbox: {
@@ -193,7 +191,7 @@ describe("sandbox/tool-policy", () => {
         defaults: {
           sandbox: { mode: "non-main", scope: "agent" },
         },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
@@ -225,7 +223,7 @@ describe("sandbox/tool-policy", () => {
       session: { store: storePath },
       agents: {
         defaults: { sandbox: { mode: "off", scope: "session", workspaceAccess: "rw" } },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
@@ -259,7 +257,7 @@ describe("sandbox/tool-policy", () => {
       session: { store: storePath },
       agents: {
         defaults: { sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" } },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 

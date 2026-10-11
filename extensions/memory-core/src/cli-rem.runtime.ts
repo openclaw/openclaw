@@ -17,7 +17,7 @@ import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 const { heading, muted, warn } = theme;
@@ -28,9 +28,7 @@ export async function runMemorySessionBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory session-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -55,57 +53,64 @@ export async function runMemorySessionBackfill(
         agentId,
         workspaceDir,
         pluginConfig,
-        ...(opts.from !== undefined ? { from: opts.from } : {}),
-        ...(opts.to !== undefined ? { to: opts.to } : {}),
-        ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
-        ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
-        ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
-        ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
-        ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
-        ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
+        from: opts.from,
+        to: opts.to,
+        limitDays: opts.limitDays,
+        rem: opts.rem,
+        apply: opts.apply,
+        rollback: opts.rollback,
+        archiveFiles: opts.archiveFiles,
+        timezone: remConfig.timezone,
       });
-      if (opts.json) {
-        defaultRuntime.writeJson(result);
-        return;
-      }
-      if (result.rollback) {
-        defaultRuntime.log(
-          [
-            `${heading("Session Backfill")} ${muted("(rollback)")}`,
-            muted(`workspace=${shortenHomePath(workspaceDir)}`),
-            muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
-            muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
-          ].join("\n"),
-        );
-        return;
-      }
-      const lines = [
-        `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
-        muted(`workspace=${shortenHomePath(workspaceDir)}`),
-        muted(
-          `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
-        ),
-      ];
-      for (const batch of result.batches ?? []) {
-        lines.push(
-          muted(
-            `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
-          ),
-        );
-      }
-      for (const day of result.days) {
-        lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
-        lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
-      }
-      if (result.days.length === 0) {
-        lines.push("", "No new hash-untracked trusted session candidates.");
-      }
-      if (!result.applied && !result.rem) {
-        lines.push("", muted("Dry run; use --apply to stage candidates."));
-      }
-      defaultRuntime.log(lines.join("\n"));
+      printSessionBackfillResult(result, opts);
     },
   });
+}
+
+export function printSessionBackfillResult(
+  result: import("./session-backfill-contract.js").SessionBackfillResult,
+  opts: Pick<MemorySessionBackfillOptions, "json">,
+) {
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  if (result.rollback) {
+    defaultRuntime.log(
+      [
+        `${heading("Session Backfill")} ${muted("(rollback)")}`,
+        muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+        muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
+        muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
+      ].join("\n"),
+    );
+    return;
+  }
+  const lines = [
+    `${heading("Session Backfill")} ${muted(`(${result.agentId})`)}`,
+    muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+    muted(
+      `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+    ),
+  ];
+  for (const batch of result.batches ?? []) {
+    lines.push(
+      muted(
+        `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
+      ),
+    );
+  }
+  for (const day of result.days) {
+    lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
+    lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
+  }
+  if (result.days.length === 0) {
+    lines.push("", "No new hash-untracked trusted session candidates.");
+  }
+  if (!result.applied && !result.rem) {
+    lines.push("", muted("Dry run; use --apply to stage candidates."));
+  }
+  defaultRuntime.log(lines.join("\n"));
 }
 
 export async function runMemoryRemHarness(
@@ -114,9 +119,7 @@ export async function runMemoryRemHarness(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-harness",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -256,9 +259,7 @@ export async function runMemoryRemBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -366,10 +367,11 @@ export async function runMemoryRemBackfill(
             replacedShortTermEntries = cleared.removed;
             const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
             if (shortTermSeedItems.length > 0) {
-              await recordGroundedShortTermCandidates({
+              await recordShortTermRecalls({
                 workspaceDir,
                 query: "__dreaming_grounded_backfill__",
-                items: shortTermSeedItems,
+                signalType: "grounded",
+                results: shortTermSeedItems,
                 dedupeByQueryPerDay: true,
                 nowMs: Date.now(),
                 timezone: remConfig.timezone,
@@ -521,53 +523,46 @@ function parseGroundedRef(
 }
 function collectGroundedShortTermSeedItems(
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] {
-  const items: Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] = [];
+): Parameters<typeof recordShortTermRecalls>[0]["results"] {
+  const items: Parameters<typeof recordShortTermRecalls>[0]["results"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
-    const signals = [
-      ...file.memoryImplications.map((item) => ({
-        text: item.text,
-        refs: item.refs,
-        score: 0.92,
-        query: "__dreaming_grounded_backfill__:lasting-update",
-        signalCount: 2,
-      })),
-      ...file.candidates
-        .filter((candidate) => candidate.lean === "likely_durable")
-        .map((candidate) => ({
-          text: candidate.text,
-          refs: candidate.refs,
-          score: 0.82,
-          query: "__dreaming_grounded_backfill__:candidate",
-          signalCount: 1,
-        })),
-    ];
-    for (const signal of signals) {
-      if (!signal.text.trim()) {
-        continue;
+    for (const [signals, score, query, signalCount] of [
+      [file.memoryImplications, 0.92, "__dreaming_grounded_backfill__:lasting-update", 2],
+      [
+        file.candidates.filter((candidate) => candidate.lean === "likely_durable"),
+        0.82,
+        "__dreaming_grounded_backfill__:candidate",
+        1,
+      ],
+    ] as const) {
+      for (const signal of signals) {
+        if (!signal.text.trim()) {
+          continue;
+        }
+        const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
+        const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
+        if (!parsedRef) {
+          continue;
+        }
+        const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${query}:${signal.text.toLowerCase()}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({
+          source: "memory",
+          path: parsedRef.path,
+          startLine: parsedRef.startLine,
+          endLine: parsedRef.endLine,
+          snippet: signal.text,
+          score,
+          query,
+          signalCount,
+          ...(dayBucket ? { dayBucket } : {}),
+        });
       }
-      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
-      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
-      if (!parsedRef) {
-        continue;
-      }
-      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      items.push({
-        path: parsedRef.path,
-        startLine: parsedRef.startLine,
-        endLine: parsedRef.endLine,
-        snippet: signal.text,
-        score: signal.score,
-        query: signal.query,
-        signalCount: signal.signalCount,
-        ...(dayBucket ? { dayBucket } : {}),
-      });
     }
   }
   return items;

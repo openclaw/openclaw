@@ -1,16 +1,11 @@
-// Retired runtime config keys that migrate or disappear before canonical validation.
 import {
-  defineLegacyConfigMigration,
+  createLegacyConfigRule as rule,
   ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
-import {
-  hasConfigTrancheLegacyKeys,
-  migrateConfigTranche,
-} from "./legacy-config-migrations.runtime.config-tranche.js";
+import { migrateConfigTranche } from "./legacy-config-migrations.runtime.config-tranche.js";
 import {
   consolidateMediaCapabilityConfig,
   hasDiscordRealtimeVoice,
@@ -23,20 +18,11 @@ import {
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
 import {
+  deleteRetiredPath,
   moveLegacyConfigKey,
   visitAgentConfigScopes,
   visitChannelEntries,
 } from "./legacy-config-record-shared.js";
-
-const rule = (
-  path: string[],
-  message: string,
-  match?: LegacyConfigRule["match"],
-): LegacyConfigRule => ({
-  path,
-  message: `${message} Run "openclaw doctor --fix".`,
-  ...(match ? { match } : {}),
-});
 
 function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
   const globalMessage = getRecord(getRecord(raw.tools)?.message);
@@ -272,8 +258,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     "bootstrapPromptTruncationWarning",
     "mediaGenerationAutoProviderFallback",
   ]) {
-    if (defaults && Object.hasOwn(defaults, key)) {
-      delete defaults[key];
+    if (deleteRetiredPath(defaults, [key])) {
       changes.push(`Removed agents.defaults.${key}; built-in behavior now applies.`);
     }
   }
@@ -300,57 +285,35 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     changes.push("Removed diagnostics.cacheTrace detail fields; only enabled remains.");
   }
 
-  const attachments = getRecord(raw.attachments);
-  if (attachments && Object.hasOwn(attachments, "preserveFilenames")) {
-    delete attachments.preserveFilenames;
+  if (deleteRetiredPath(raw.attachments, ["preserveFilenames"])) {
     changes.push("Removed attachments.preserveFilenames; temp-safe names now always apply.");
   }
   const browser = getRecord(raw.browser);
-  if (browser && Object.hasOwn(browser, "color")) {
-    delete browser.color;
+  if (deleteRetiredPath(browser, ["color"])) {
     changes.push("Removed browser.color; the built-in color now applies.");
   }
-  const profiles = getRecord(browser?.profiles);
-  if (profiles) {
-    for (const [profileId, value] of Object.entries(profiles)) {
-      const profile = getRecord(value);
-      if (profile && Object.hasOwn(profile, "color")) {
-        delete profile.color;
-        changes.push(`Removed browser.profiles.${profileId}.color.`);
-      }
+  for (const [profileId, profile] of Object.entries(getRecord(browser?.profiles) ?? {})) {
+    if (deleteRetiredPath(profile, ["color"])) {
+      changes.push(`Removed browser.profiles.${profileId}.color.`);
     }
   }
 
   visitChannelEntries(raw, "discord", (entry, path) => {
-    const autoPresence = getRecord(entry.autoPresence);
     for (const key of ["healthyText", "degradedText", "exhaustedText"]) {
-      if (autoPresence && Object.hasOwn(autoPresence, key)) {
-        delete autoPresence[key];
+      if (deleteRetiredPath(entry.autoPresence, [key])) {
         changes.push(`Removed ${path}.autoPresence.${key}.`);
       }
     }
-    const components = getRecord(getRecord(entry.ui)?.components);
-    if (components && Object.hasOwn(components, "accentColor")) {
-      delete components.accentColor;
+    if (deleteRetiredPath(entry, ["ui", "components", "accentColor"])) {
       changes.push(`Removed ${path}.ui.components.accentColor.`);
-      const ui = getRecord(entry.ui);
-      if (Object.keys(components).length === 0 && ui) {
-        delete ui.components;
-      }
-      if (ui && Object.keys(ui).length === 0) {
-        delete entry.ui;
-      }
     }
   });
 
   const messages = getRecord(raw.messages);
-  const statusReactions = getRecord(messages?.statusReactions);
-  if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
-    delete statusReactions.emojis;
+  if (deleteRetiredPath(messages?.statusReactions, ["emojis"])) {
     changes.push("Removed messages.statusReactions.emojis; curated defaults now apply.");
   }
-  if (messages && Object.hasOwn(messages, "removeAckAfterReply")) {
-    delete messages.removeAckAfterReply;
+  if (deleteRetiredPath(messages, ["removeAckAfterReply"])) {
     changes.push("Removed messages.removeAckAfterReply; acknowledgements are retained.");
   }
 
@@ -361,8 +324,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   visitChannelEntries(raw, "slack", (entry, path) => {
     const socketMode = getRecord(entry.socketMode);
     for (const key of ["clientPingTimeout", "serverPingTimeout", "pingPongLoggingEnabled"]) {
-      if (socketMode && Object.hasOwn(socketMode, key)) {
-        delete socketMode[key];
+      if (deleteRetiredPath(socketMode, [key])) {
         changes.push(`Removed ${path}.socketMode.${key}.`);
       }
     }
@@ -371,16 +333,13 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     }
   });
   visitChannelEntries(raw, "imessage", (entry, path) => {
-    if (Object.hasOwn(entry, "coalesceSameSenderDms")) {
-      delete entry.coalesceSameSenderDms;
+    if (deleteRetiredPath(entry, ["coalesceSameSenderDms"])) {
       changes.push(`Removed ${path}.coalesceSameSenderDms.`);
     }
   });
 
-  const commands = getRecord(raw.commands);
   for (const key of ["ownerDisplay", "ownerDisplaySecret"]) {
-    if (commands && Object.hasOwn(commands, key)) {
-      delete commands[key];
+    if (deleteRetiredPath(raw.commands, [key])) {
       changes.push(`Removed commands.${key}; owner ids now render raw.`);
     }
   }
@@ -405,33 +364,41 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     logging.consoleStyle = "pretty";
     changes.push("Mapped logging.consoleStyle compact → pretty.");
   }
-  const controlUi = getRecord(gateway?.controlUi);
-  if (controlUi && Object.hasOwn(controlUi, "chatMessageMaxWidth")) {
-    delete controlUi.chatMessageMaxWidth;
+  if (deleteRetiredPath(gateway?.controlUi, ["chatMessageMaxWidth"])) {
     changes.push("Removed gateway.controlUi.chatMessageMaxWidth; chat width is now browser-local.");
   }
 }
 
 function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string[]): void {
-  const ui = getRecord(raw.ui);
-  if (!ui || !Object.hasOwn(ui, "assistant")) {
-    return;
-  }
-
   // The retired override was presentation-only. Translating it into agent identity
   // would unexpectedly change outbound channel identity.
-  delete ui.assistant;
-  if (Object.keys(ui).length === 0) {
-    delete raw.ui;
+  if (deleteRetiredPath(raw, ["ui", "assistant"])) {
+    changes.push("Removed retired ui.assistant; configure agents.list[].identity instead.");
   }
-  changes.push("Removed retired ui.assistant; configure agents.list[].identity instead.");
+}
+
+function probedMigration(
+  id: string,
+  message: string,
+  apply: LegacyConfigMigrationSpec["apply"],
+): LegacyConfigMigrationSpec {
+  return {
+    id,
+    legacyRules: [
+      rule([], message, (_value, root) => {
+        const changes: string[] = [];
+        apply(structuredClone(root), changes);
+        return changes.length > 0;
+      }),
+    ],
+    apply,
+  };
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
-  defineLegacyConfigMigration({
+  {
     id: "runtime.automatic-local-model-lean",
-    describe: "Remove onboarding-owned local model lean settings",
     legacyRules: [
       rule(
         ["wizard", "localModelLeanAutoModel"],
@@ -463,10 +430,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       delete wizard.localModelLeanAutoModel;
       changes.push("Removed retired wizard.localModelLeanAutoModel.");
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "runtime.messages-suppress-tool-errors",
-    describe: "Remove retired tool failure warning suppression",
     legacyRules: [
       rule(
         ["messages", "suppressToolErrors"],
@@ -474,19 +440,15 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       ),
     ],
     apply: (raw, changes) => {
-      const messages = getRecord(raw.messages);
-      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
-        return;
+      if (deleteRetiredPath(raw.messages, ["suppressToolErrors"])) {
+        changes.push(
+          "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+        );
       }
-      delete messages.suppressToolErrors;
-      changes.push(
-        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
-      );
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "runtime.retired-internal-hook-handlers",
-    describe: "Remove retired internal hook handler registrations",
     legacyRules: [
       {
         path: ["hooks", "internal", "handlers"],
@@ -518,46 +480,24 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         );
       }
     },
-  }),
-  defineLegacyConfigMigration({
-    id: "runtime.doctor-tier-eval-tranche",
-    describe: "Consolidate approved tier-eval configuration surfaces",
-    legacyRules: [
-      rule([], "Approved tier-eval configuration surfaces were consolidated.", (_value, root) => {
-        const changes: string[] = [];
-        migrateTierEvalTranche(structuredClone(root), changes);
-        return changes.length > 0;
-      }),
-    ],
-    apply: migrateTierEvalTranche,
-  }),
-  defineLegacyConfigMigration({
-    id: "runtime.final-layout-polish",
-    describe: "Normalize final configuration layout names",
-    legacyRules: [
-      rule([], "Final layout aliases were retired.", (_value, root) => {
-        const changes: string[] = [];
-        migrateFinalLayoutRenames(structuredClone(root), changes);
-        return changes.length > 0;
-      }),
-    ],
-    apply: migrateFinalLayoutRenames,
-  }),
-  defineLegacyConfigMigration({
-    id: "runtime.final-layout-kills",
-    describe: "Remove final layout tuning knobs",
-    legacyRules: [
-      rule([], "Final layout tuning knobs were retired.", (_value, root) => {
-        const changes: string[] = [];
-        migrateFinalLayoutKills(structuredClone(root), changes);
-        return changes.length > 0;
-      }),
-    ],
-    apply: migrateFinalLayoutKills,
-  }),
-  defineLegacyConfigMigration({
+  },
+  probedMigration(
+    "runtime.doctor-tier-eval-tranche",
+    "Approved tier-eval configuration surfaces were consolidated.",
+    migrateTierEvalTranche,
+  ),
+  probedMigration(
+    "runtime.final-layout-polish",
+    "Final layout aliases were retired.",
+    migrateFinalLayoutRenames,
+  ),
+  probedMigration(
+    "runtime.final-layout-kills",
+    "Final layout tuning knobs were retired.",
+    migrateFinalLayoutKills,
+  ),
+  {
     id: "runtime.media-models-consolidation",
-    describe: "Consolidate per-capability media model configuration",
     legacyRules: [
       rule(
         ["tools", "media"],
@@ -569,22 +509,14 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       migrateMediaDeepgram(raw, changes);
       consolidateMediaCapabilityConfig(raw, changes);
     },
-  }),
-  defineLegacyConfigMigration({
-    id: "runtime.config-tranche",
-    describe: "Migrate retired config-tranche options",
-    legacyRules: [
-      rule(
-        [],
-        "Presentation-only preferences and duplicate tuning options moved to canonical defaults.",
-        (_value, root) => hasConfigTrancheLegacyKeys(root),
-      ),
-    ],
-    apply: migrateConfigTranche,
-  }),
-  defineLegacyConfigMigration({
+  },
+  probedMigration(
+    "runtime.config-tranche",
+    "Presentation-only preferences and duplicate tuning options moved to current defaults.",
+    migrateConfigTranche,
+  ),
+  {
     id: "runtime.tuning-knobs-purge",
-    describe: "Remove retired runtime tuning knobs",
     legacyRules: [
       rule(
         [],
@@ -593,18 +525,16 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       ),
     ],
     apply: stripRetiredTuningKnobs,
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "runtime.ui-assistant-identity",
-    describe: "Remove the retired UI assistant identity override",
     legacyRules: [
       rule(["ui", "assistant"], "ui.assistant was retired; use agents.list[].identity instead."),
     ],
     apply: removeUiAssistantIdentity,
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "runtime.retired-config-keys",
-    describe: "Migrate retired root and tool config keys",
     legacyRules: [
       rule(["tui"], "tui was retired and is ignored."),
       rule(["commands", "modelsWrite"], "commands.modelsWrite was retired and is ignored."),
@@ -658,13 +588,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
     ],
     apply: (raw, changes) => {
       migrateTruncateAfterCompaction(raw, changes);
-      if (Object.hasOwn(raw, "tui")) {
-        delete raw.tui;
+      if (deleteRetiredPath(raw, ["tui"])) {
         changes.push("Removed retired tui config; the footer uses the default compact display.");
       }
-      const commands = getRecord(raw.commands);
-      if (commands && Object.hasOwn(commands, "modelsWrite")) {
-        delete commands.modelsWrite;
+      if (deleteRetiredPath(raw.commands, ["modelsWrite"])) {
         changes.push("Removed retired commands.modelsWrite.");
       }
       const messages = getRecord(raw.messages);
@@ -680,9 +607,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         }
         delete messages.messagePrefix;
       }
-      const media = getRecord(getRecord(raw.tools)?.media);
-      if (media && Object.hasOwn(media, "asyncCompletion")) {
-        delete media.asyncCompletion;
+      if (deleteRetiredPath(getRecord(raw.tools)?.media, ["asyncCompletion"])) {
         changes.push("Removed retired tools.media.asyncCompletion.directSend.");
       }
       migrateMessageCrossContext(raw, changes);
@@ -704,5 +629,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       migrateDiscordVoice(raw, changes);
       migrateMediaDeepgram(raw, changes);
     },
-  }),
+  },
 ];

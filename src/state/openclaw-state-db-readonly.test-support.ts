@@ -1,4 +1,7 @@
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadLocation,

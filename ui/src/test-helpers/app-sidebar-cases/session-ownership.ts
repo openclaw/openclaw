@@ -36,7 +36,7 @@ function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {
 describe("AppSidebar session ownership", () => {
   registerSessionOwnershipAvatarTests();
 
-  it("keeps an owner filter through transient or narrowed owner facets", async () => {
+  it("keeps an owner through unresolved facets and clears it from a complete All facet", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:ada"]);
     const result = harness.sessions.state.result;
@@ -91,6 +91,7 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
   });
 
   it("shows the authenticated user first in the owner filter", async () => {
@@ -506,16 +507,8 @@ describe("AppSidebar session ownership", () => {
         ?.querySelector(".sidebar-recent-sessions__head")
         ?.getAttribute("draggable"),
     ).toBe("false");
-    // Derived person sections carry no stored-group menu; the only header action
-    // is the owner filter, which reuses the group-actions reveal styling.
-    expect(
-      ownerSections()[0]?.querySelector('.sidebar-session-group-actions[aria-haspopup="menu"]'),
-    ).toBeNull();
-    expect(
-      ownerSections()[0]
-        ?.querySelector(".sidebar-session-person-filter")
-        ?.getAttribute("aria-label"),
-    ).toBe("Show only Zoe");
+    // Derived person sections keep filtering in the shared Sessions toolbar.
+    expect(ownerSections()[0]?.querySelector(".sidebar-session-group-actions")).toBeNull();
 
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });

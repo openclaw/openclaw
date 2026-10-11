@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -15,6 +16,7 @@ import { t } from "../i18n/index.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import {
   WidgetSandboxHost,
   WIDGET_LOAD_TIMEOUT_MS,
@@ -23,6 +25,7 @@ import {
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
@@ -84,6 +87,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   @property() override title = "";
   @property({ type: Number }) preferredHeight?: number;
   @property({ type: Number }) connectionGeneration = 0;
+  @property({ type: Boolean }) presentationActive = true;
   @state() private view?: CanvasDocumentViewResult;
   @state() private error = "";
   @state() private runtimeError = "";
@@ -93,6 +97,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   private sandboxHost?: WidgetSandboxHost;
   private promptPort?: MessagePort;
   private sandboxOrigin = "";
+  private scrollNonce = "";
   private releaseTheme?: () => void;
   private scriptsAllowed = true;
   private sandboxGeneration = 0;
@@ -159,6 +164,10 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     window.addEventListener("message", this.handleMessage);
   }
 
+  connectedMoveCallback(): void {
+    // Atomic transcript moves preserve the iframe and its sandbox lifecycle.
+  }
+
   override disconnectedCallback(): void {
     window.removeEventListener("message", this.handleMessage);
     this.clearView();
@@ -178,6 +187,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   private clearSandbox(): void {
+    this.scrollNonce = "";
     this.sandboxHost?.dispose();
     this.sandboxHost = undefined;
     this.promptPort?.close();
@@ -194,7 +204,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       binding &&
       gateway &&
       snapshot &&
-      binding.client === snapshot.client &&
       binding.docId === this.docId &&
       binding.sessionKey === this.sessionKey &&
       binding.connectionRevision === gateway.connectionRevision &&
@@ -215,6 +224,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       this.sameOwner(binding) &&
       this.isConnected &&
       this.binding === binding &&
+      binding.client === this.context!.gateway.snapshot.client &&
       isGatewayAvailable(this.context!.gateway.snapshot) &&
       binding.generation === getCanvasWidgetFrameConnectionGeneration()
     );
@@ -257,7 +267,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       }
     }
     const generation = getCanvasWidgetFrameConnectionGeneration();
-    if (this.binding?.generation === generation) {
+    if (this.binding?.client === client && this.binding.generation === generation) {
       return;
     }
     this.clearRetry();
@@ -306,7 +316,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.validated = binding;
         this.pending = false;
         this.retryDelayMs = 1_000;
-        this.sandboxHost?.setActive(true);
+        this.sandboxHost?.setActive(this.presentationActive);
       })
       .catch((error: unknown) => {
         if (!this.isCurrent(binding)) {
@@ -335,6 +345,8 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   override updated(): void {
+    const active = this.presentationActive && this.isCurrent(this.validated);
+    this.sandboxHost?.setActive(active);
     const frame = this.querySelector<HTMLIFrameElement>("iframe");
     const view = this.view;
     const binding = this.binding;
@@ -342,6 +354,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       return;
     }
     this.releaseTheme = registerWidgetThemeFrame(frame, this.sandboxOrigin);
+    this.scrollNonce = generateUUID();
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin: this.sandboxOrigin,
@@ -352,7 +365,11 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = false;
         this.postHostState();
       },
-      onError: (error) => this.fail(error),
+      onRendered: () => this.postHostState(),
+      onError: (error) => {
+        this.clearSandbox();
+        this.error = formatUiError(error);
+      },
       onReadyTimeout: () => {
         this.pending = true;
       },
@@ -360,11 +377,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = true;
       },
     });
-  }
-
-  private fail(error: unknown): void {
-    this.clearSandbox();
-    this.error = formatUiError(error);
+    this.sandboxHost.setActive(active);
   }
 
   private postHostState(): void {
@@ -374,6 +387,11 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
+    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    frame.contentWindow?.postMessage(
+      { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
+      this.sandboxOrigin,
+    );
   }
 
   private readonly handleMessage = (event: MessageEvent): void => {
@@ -389,14 +407,28 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     host.handleMessage(event);
     const data = asOptionalRecord(event.data);
+    if (
+      data?.type === "openclaw:widget-scroll" &&
+      this.scrollNonce &&
+      data.nonce === this.scrollNonce &&
+      typeof data.deltaY === "number" &&
+      Number.isFinite(data.deltaY)
+    ) {
+      forwardChatWheelToTranscript(
+        new WheelEvent("wheel", { deltaY: data.deltaY, cancelable: true }),
+        this.closest<HTMLElement>(".chat-thread"),
+      );
+      return;
+    }
     if (data?.type === "openclaw:widget-runtime-error") {
-      if (!this.sessionKey || typeof data.message !== "string") {
+      if (!this.presentationActive || !this.sessionKey || typeof data.message !== "string") {
         return;
       }
       // Download/rejection failures are not evidence that agent-authored code is
       // broken. Keep a local recovery action, never wake the agent to rewrite it.
+      const validated = this.validated;
       if (
-        !this.isCurrent(this.validated) ||
+        !this.isCurrent(validated) ||
         !navigator.onLine ||
         /failed to fetch|load failed|networkerror|network request failed|importing a module script failed|failed to load module script/i.test(
           data.message,
@@ -406,7 +438,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         return;
       }
       const report = {
-        message: data.message.slice(0, 500),
+        message: truncateUtf16Safe(data.message, 500).toWellFormed(),
         line: typeof data.line === "number" && Number.isInteger(data.line) ? data.line : undefined,
         column:
           typeof data.column === "number" && Number.isInteger(data.column)
@@ -432,8 +464,8 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         report.line === undefined
           ? ""
           : `, line ${report.line}${report.column === undefined ? "" : `, column ${report.column}`}`;
-      const text = `Inline widget "${this.title.slice(0, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
-      void binding.client
+      const text = `Inline widget "${truncateUtf16Safe(this.title, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
+      void validated.client
         .request("wake", { mode: "now", sessionKey: this.sessionKey, text })
         .catch((error: unknown) => console.warn("Widget runtime error wake failed", error));
       return;
@@ -465,12 +497,13 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     this.promptPort = port;
     port.addEventListener("message", (message: MessageEvent) => {
       if (
+        this.presentationActive &&
         this.isCurrent(this.validated) &&
         this.sandboxHost === host &&
         this.promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
-        dispatchWidgetPrompt(
+        void dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
           `${this.sessionKey}\0${this.docId}\0${this.validated!.generation}`,
@@ -548,6 +581,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
             : nothing
         }${this.runtimeError ? html`<div class="board-widget__notice" role="status">${t("board.widget.runtimeError", { message: this.runtimeError })}</div>` : nothing}<iframe
           class="chat-tool-card__preview-frame"
+          allow="fullscreen"
           title=${this.title}
           src=${src ?? nothing}
           srcdoc=${this.allowScripts ? nothing : this.view.html}

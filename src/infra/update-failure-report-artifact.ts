@@ -43,6 +43,15 @@ function nativeFailureDiagnostics(steps: UpdateRunRecord["steps"]): string {
   return diagnostics.length ? `${NATIVE_FAILURE_REPORT_SECTION}\n${diagnostics.join("\n\n")}` : "";
 }
 
+async function readSavedUpdateReport(filePath: string): Promise<string | undefined> {
+  return fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    if (hasErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+}
+
 async function withUpdateReportWrite<T>(outputPath: string, write: () => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
   return withFileLock(
@@ -69,12 +78,7 @@ export async function refreshUpdateRunReportArtifact(
   const id = z.uuid().parse(run.runId);
   const outputPath = path.join(stateDir, "update-reports", `${id}.md`);
   await withUpdateReportWrite(outputPath, async () => {
-    const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
-      if (hasErrorCode(error, "ENOENT")) {
-        return "";
-      }
-      throw error;
-    });
+    const previous = (await readSavedUpdateReport(outputPath)) ?? "";
     // A child can commit the terminal ledger before its report is published.
     // Repair missing/pending projections, but retain terminal or user-authored bytes.
     if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -87,7 +91,10 @@ export async function refreshUpdateRunReportArtifact(
     const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
       ? ""
       : nativeFailureDiagnostics(run.steps);
-    const report = renderUpdateRunReport(run, { mode: run.target.kind });
+    const report = renderUpdateRunReport(run, {
+      mode: run.target.kind,
+      markdownLimit: Infinity,
+    });
     await writeTextAtomic(
       outputPath,
       redactSupportString(
@@ -168,12 +175,7 @@ export async function writeUpdateRunReportArtifact(params: {
     const run = params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
-      const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
-        if (hasErrorCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
+      const previous = await readSavedUpdateReport(outputPath);
       // An old reader can lose schema admission after the helper settles.
       // Its fallback result cannot replace already-published terminal details.
       if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -224,12 +226,6 @@ export async function writeUpdateRunReportArtifact(params: {
   return outputPath;
 }
 
-export type SavedUpdateFailureReport = {
-  reportCreated: boolean;
-  reportDirCreated: boolean;
-  stagedReportCreated: boolean;
-};
-
 export function bindSavedReportArtifact(
   prepared: PreparedUpdateFailureReport,
   reservationId: string,
@@ -273,33 +269,23 @@ function isAttemptArtifactName(base: path.ParsedPath, entry: string): boolean {
 
 export async function discardSavedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
-  removeExistingReport = false,
 ): Promise<void> {
   // Remove the rename source first. After receipt ownership is revoked, this
   // ordering prevents a paused publisher from moving staged content back into
   // the final report path between cleanup operations.
-  if (saved.stagedReportCreated || removeExistingReport) {
-    await fs.rm(stagedReportPath(prepared), { force: true });
-  }
-  if (saved.reportCreated || removeExistingReport) {
-    await fs.rm(prepared.savedReportPath, { force: true });
-  }
-  if (saved.reportDirCreated || removeExistingReport) {
-    await fs.rmdir(path.dirname(prepared.savedReportPath)).catch((error: unknown) => {
-      if (!hasErrorCode(error, "ENOENT", "ENOTEMPTY")) {
-        throw error;
-      }
-    });
-  }
+  await fs.rm(stagedReportPath(prepared), { force: true });
+  await fs.rm(prepared.savedReportPath, { force: true });
+  await fs.rmdir(path.dirname(prepared.savedReportPath)).catch((error: unknown) => {
+    if (!hasErrorCode(error, "ENOENT", "ENOTEMPTY")) {
+      throw error;
+    }
+  });
 }
 
 export async function discardSavedUpdateFailureReportBestEffort(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
-  removeExistingReport = false,
 ): Promise<void> {
-  await discardSavedUpdateFailureReport(prepared, saved, removeExistingReport).catch(() => {});
+  await discardSavedUpdateFailureReport(prepared).catch(() => {});
 }
 
 /** Captures the immutable retired-artifact set for one fenced sweep generation. */
@@ -333,7 +319,6 @@ export async function removeRetiredUpdateFailureReportArtifacts(
 /** Writes reviewed content to a non-public staging name under live client authority. */
 export async function savePreparedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
   hasCurrentAuthority?: () => boolean,
 ): Promise<void> {
   const ensureCurrentAuthority = () => {
@@ -343,28 +328,21 @@ export async function savePreparedUpdateFailureReport(
   };
   const reportDir = path.dirname(prepared.savedReportPath);
   ensureCurrentAuthority();
-  const created = await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
-  saved.reportDirCreated = created !== undefined;
+  await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
   ensureCurrentAuthority();
+  let stagedReportCreated = false;
   try {
     await fs.writeFile(stagedReportPath(prepared), prepared.body, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
     });
-    saved.stagedReportCreated = true;
+    stagedReportCreated = true;
   } catch (error) {
     if (!hasErrorCode(error, "EEXIST")) {
       throw error;
     }
-    const existing = await fs
-      .readFile(stagedReportPath(prepared), "utf8")
-      .catch((readError: unknown) => {
-        if (hasErrorCode(readError, "ENOENT")) {
-          return undefined;
-        }
-        throw readError;
-      });
+    const existing = await readSavedUpdateReport(stagedReportPath(prepared));
     if (existing !== undefined && existing !== prepared.body) {
       throw new Error("The saved update report does not match the reviewed preview.", {
         cause: error,
@@ -372,7 +350,7 @@ export async function savePreparedUpdateFailureReport(
     }
   }
   ensureCurrentAuthority();
-  if (saved.stagedReportCreated) {
+  if (stagedReportCreated) {
     await fs.chmod(stagedReportPath(prepared), 0o600);
   }
   ensureCurrentAuthority();
@@ -381,10 +359,7 @@ export async function savePreparedUpdateFailureReport(
 /** Publishes staged content only after the caller acquired the durable receipt phase. */
 export async function publishPreparedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
 ): Promise<void> {
   await fs.rename(stagedReportPath(prepared), prepared.savedReportPath);
-  saved.stagedReportCreated = false;
-  saved.reportCreated = true;
   await fs.chmod(prepared.savedReportPath, 0o600);
 }

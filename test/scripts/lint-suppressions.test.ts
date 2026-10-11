@@ -201,6 +201,8 @@ describe("production lint suppressions", () => {
         "extensions/nostr/src/nostr-profile-url-safety.ts|no-warning-comments|1",
         "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+        // The fault observer preserves methods for restoration and supplies each database receiver through .call.
+        "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|preserve-caught-error|1",
         "scripts/e2e/parallels/host-command.ts|no-warning-comments|1",
@@ -212,22 +214,24 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
-        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/agents/sessions/session-manager-persistence-entry.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
+        // Account defaults and heterogeneous registries erase plugin-specific callback families;
+        // unknown rejects concrete account/probe/audit callbacks. Gateway versions remain checked.
+        "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|2",
         "src/cli/cli-utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         "src/commands/backup-restore.ts|preserve-caught-error|1",
+        // Probes retain raw prototype methods for restoration; Reflect.apply supplies the live receiver.
+        "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
-        // Intl.Collator.compare is a getter returning a bound function.
-        "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
+        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
+        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -236,6 +240,9 @@ describe("production lint suppressions", () => {
         "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
+        // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
+        "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
         "src/logging/redact.ts|unicorn/no-new-array|1",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
@@ -248,22 +255,26 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        // Reflect.apply supplies the wrapped callable as Function.prototype.bind's receiver.
+        "src/plugins/plugin-instance-bindings.ts|typescript/unbound-method|1",
         "src/plugins/plugin-instance-owned-values.ts|eslint/no-constructor-return|1",
         "src/plugins/plugin-instance-owned-values.ts|typescript/no-extraneous-class|1",
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
         "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
-        "src/plugins/provider-auth-persistence.ts|preserve-caught-error|2",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
+        "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
+        // Admission records original factory identities; executable views bind their receivers.
+        "src/plugins/registry-registrars.ts|typescript/unbound-method|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
+        // Synchronous acquisition failures reject with the acquiring owner's original value.
+        "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
-        "src/state/openclaw-agent-db-admission.ts|typescript/prefer-promise-reject-errors|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
-        "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",

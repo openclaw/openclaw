@@ -24,6 +24,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/index.js";
+import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
@@ -31,10 +32,10 @@ import {
   createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
   persistToolResultProjections,
-  serializeCacheTtlToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
@@ -77,7 +78,6 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       promptError: null,
       promptErrorSource: null,
       yieldAborted: false,
-      sessionIdUsed: "sess-settle-1",
     },
     readLifecycleState: () => ({
       aborted: false,
@@ -90,7 +90,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
     prePromptMessageCount: 0,
-    nestedToolActivities: [],
+    nestedToolActivityState: createAttemptNestedToolActivityState(),
     cache: {
       retention: undefined,
     },
@@ -181,6 +181,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       ...input.cache,
       getObservation: () => ({
         requestIndex: 3,
+        messageCount: 5,
         broke: false,
         input: 100,
         cacheRead: 10_000,
@@ -259,7 +260,6 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         ...input.state,
         promptError,
         promptErrorSource: "prompt",
-        sessionIdUsed: target.sessionId,
       };
       const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: input.attempt,
@@ -478,7 +478,6 @@ describe("attempt projection persistence through settlement", () => {
           },
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           runtimeOnly: false,
-          sessionPromptState,
           systemPrompt: "test prompt",
           toolResultAggregateMaxChars: 8_000,
           toolResultMaxChars: 4_000,

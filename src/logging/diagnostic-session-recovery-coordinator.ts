@@ -19,6 +19,7 @@ import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
   peekDiagnosticSessionState,
+  touchDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 
 export type RecoverStuckSession = (
@@ -32,24 +33,6 @@ type RequestStuckSessionRecoveryParams = {
 };
 
 const recoveryRequestsInFlight = new Set<string>();
-
-function emitSessionRecoveryRequested(params: {
-  request: StuckSessionRecoveryRequest;
-  classification: SessionAttentionClassification;
-}): void {
-  emitDiagnosticEvent({
-    type: "session.recovery.requested",
-    sessionId: params.request.sessionId,
-    sessionKey: params.request.sessionKey,
-    state: params.request.expectedState ?? "processing",
-    stateGeneration: params.request.stateGeneration,
-    ageMs: params.request.ageMs,
-    queueDepth: params.request.queueDepth,
-    reason: params.classification.reason,
-    activeWorkKind: params.classification.activeWorkKind,
-    allowActiveAbort: params.request.allowActiveAbort,
-  });
-}
 
 function emitSessionRecoveryCompleted(params: {
   request: StuckSessionRecoveryRequest;
@@ -140,10 +123,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   }
   const prevState = state.state;
   state.state = "idle";
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(state);
   const preserveQueuedIdleWork =
     params.request.expectedState === "idle" && (params.outcome.queuedCount ?? 0) > 0;
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)
@@ -164,9 +144,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   markActivity();
 }
 
-function requestStuckSessionRecoveryOutcome(
-  params: RequestStuckSessionRecoveryParams,
-): Promise<StuckSessionRecoveryOutcome | undefined> {
+export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryParams): void {
   const inFlightKey = resolveStuckSessionRecoveryRef(params.request);
   if (inFlightKey && recoveryRequestsInFlight.has(inFlightKey)) {
     const outcome: StuckSessionRecoveryOutcome = {
@@ -178,14 +156,22 @@ function requestStuckSessionRecoveryOutcome(
       activeWorkKind: params.classification.activeWorkKind,
     };
     emitSessionRecoveryCompleted({ request: params.request, outcome });
-    return Promise.resolve(outcome);
+    return;
   }
   if (inFlightKey) {
     recoveryRequestsInFlight.add(inFlightKey);
   }
-  emitSessionRecoveryRequested({
-    request: params.request,
-    classification: params.classification,
+  emitDiagnosticEvent({
+    type: "session.recovery.requested",
+    sessionId: params.request.sessionId,
+    sessionKey: params.request.sessionKey,
+    state: params.request.expectedState ?? "processing",
+    stateGeneration: params.request.stateGeneration,
+    ageMs: params.request.ageMs,
+    queueDepth: params.request.queueDepth,
+    reason: params.classification.reason,
+    activeWorkKind: params.classification.activeWorkKind,
+    allowActiveAbort: params.request.allowActiveAbort,
   });
   const recoveryStartedAfterEmbeddedRunSequence = getDiagnosticEmbeddedRunActivitySequence();
   const recoveryStartedAfterDiagnosticEventSequence = getInternalDiagnosticEventSequence();
@@ -201,10 +187,9 @@ function requestStuckSessionRecoveryOutcome(
       recoveryStartedAfterEmbeddedRunSequence,
       recoveryStartedAfterDiagnosticEventSequence,
     });
-    return outcome;
   };
   const failRecovery = (err: unknown) => {
-    return completeRecovery({
+    completeRecovery({
       status: "failed",
       action: "none",
       reason: "exception",
@@ -216,25 +201,21 @@ function requestStuckSessionRecoveryOutcome(
   try {
     const result = params.recover(params.request);
     if (isRecoveryPromiseLike(result)) {
-      return result
+      void result
         .then((outcome) => completeRecovery(outcome ?? undefined))
         .catch(failRecovery)
         .finally(clearInFlight);
+      return;
     }
-    const outcome = completeRecovery(result ?? undefined);
+    completeRecovery(result ?? undefined);
     clearInFlight();
-    return Promise.resolve(outcome);
   } catch (err) {
     try {
-      return Promise.resolve(failRecovery(err));
+      failRecovery(err);
     } finally {
       clearInFlight();
     }
   }
-}
-
-export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryParams): void {
-  void requestStuckSessionRecoveryOutcome(params);
 }
 
 export function resetDiagnosticSessionRecoveryCoordinatorForTest(): void {

@@ -4,17 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
 import { ensureSessionEntrySync } from "../../src/config/sessions/session-accessor.js";
 import * as support from "../../src/gateway/worker-environments/service.test-support.js";
-import type { OpenAsyncKeyedStoreOptions } from "../../src/plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../../src/plugin-sdk/plugin-state-runtime.js";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "../../src/plugin-sdk/plugin-state-test-runtime.js";
-import { createTestPluginApi } from "../../src/plugin-sdk/plugin-test-api.js";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "../../src/plugin-sdk/plugin-test-api.js";
 import * as processRuntime from "../../src/plugin-sdk/process-runtime.js";
 import { createPluginRuntimeMock } from "../../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import type { OpenClawPluginService, WorkerProvider } from "../../src/plugins/types.js";
+import type { OpenClawPluginApi, WorkerProvider } from "../../src/plugins/types.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../src/state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../../src/state/openclaw-agent-db-lifecycle.js";
 
 describe("Crabbox allocation through Gateway ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -50,16 +56,40 @@ describe("Crabbox allocation through Gateway ownership", () => {
     async ({ allocation, allowed }) => {
       const entered = createDeferredCore();
       const released = createDeferredCore();
+      const seedReleased = createDeferredCore();
+      let seedLeaseId: string | null = null;
       let pauseLookup = false;
       const runtime = createPluginRuntimeMock({
         state: {
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
             const store = createPluginStateKeyedStoreForTests<T>("crabbox", {
               ...options,
               env: { OPENCLAW_STATE_DIR: support.testState.root },
             });
+            const compareAndApply = store.compareAndApply;
+            if (!compareAndApply) {
+              throw new Error("Crabbox fixture requires atomic plugin state");
+            }
             return {
               ...store,
+              compareAndApply: async (key, comparison, intent) => {
+                const result = await compareAndApply(key, comparison, intent);
+                if (
+                  options.namespace === "warm-images" &&
+                  seedLeaseId &&
+                  result.status === "applied" &&
+                  intent.action === "set" &&
+                  typeof intent.value === "object" &&
+                  intent.value !== null &&
+                  "allocations" in intent.value &&
+                  typeof intent.value.allocations === "object" &&
+                  intent.value.allocations !== null &&
+                  !Object.hasOwn(intent.value.allocations, seedLeaseId)
+                ) {
+                  seedReleased.resolve();
+                }
+                return result;
+              },
               entries: async () => {
                 const entries = await store.entries();
                 if (options.namespace === "warm-images" && pauseLookup) {
@@ -146,7 +176,8 @@ describe("Crabbox allocation through Gateway ownership", () => {
           return result();
         });
       const providers: WorkerProvider[] = [];
-      const services: OpenClawPluginService[] = [];
+      const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+      const scheduler = createTestPluginServiceScheduler();
       const api = createTestPluginApi({
         id: "crabbox",
         runtime,
@@ -186,7 +217,10 @@ describe("Crabbox allocation through Gateway ownership", () => {
             profileId: "development",
             idempotencyKey: "checkpoint-source",
           });
+          seedLeaseId = seed.leaseId;
           await service.destroyUnattached(seed.environmentId);
+          // The seed's real capture must publish before this case can exercise a fork.
+          await seedReleased.promise;
         }
         runner.mockClear();
         pauseLookup = true;
@@ -238,13 +272,19 @@ describe("Crabbox allocation through Gateway ownership", () => {
         }
       } finally {
         released.resolve();
-        await service.stop();
-        for (const owner of services) {
-          await owner.stop?.({
-            config: support.testState.config,
-            stateDir: support.testState.root,
-            logger: api.logger,
-          });
+        scheduler.beginClose();
+        try {
+          await service.stop();
+          for (const owner of services) {
+            await owner.stop?.({
+              config: support.testState.config,
+              stateDir: support.testState.root,
+              logger: api.logger,
+              scheduler,
+            });
+          }
+        } finally {
+          await scheduler.stop();
         }
       }
     },

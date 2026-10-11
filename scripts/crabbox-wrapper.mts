@@ -33,11 +33,13 @@ import { StringDecoder } from "node:string_decoder";
 import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeForLog, stripAnsi } from "@openclaw/terminal-core/ansi";
 import {
   ensureManagedCrabboxBinary,
   findCrabboxBinary,
   type CrabboxBinary,
 } from "../extensions/crabbox/cli-runtime-api.js";
+import { redactSupportString } from "../src/logging/diagnostic-support-redaction.js";
 import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mts";
 import {
   prepareCrabboxSourceCapsule,
@@ -63,6 +65,11 @@ import {
   loadManagedChildSpawner,
 } from "./lib/managed-child-process.mts";
 import {
+  claimManagedCleanup,
+  failManagedCleanup,
+  ManagedCleanupCancelled,
+} from "./lib/managed-cleanup-handoff.mts";
+import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
 } from "./testbox-lease-freshness.mts";
@@ -81,7 +88,12 @@ type RunFacts = ReturnType<typeof analyzeRemoteCommand>;
 type AwsMacosScriptRequirements = ReturnType<typeof awsMacosScriptBootstrapRequirements>;
 type FullCheckout = ReturnType<typeof prepareFullCheckoutForSync>;
 type KeepaliveOptions = { intervalMs?: number; onMissing?: () => void };
-type DoctorCheck = { status: string; check: string; details?: Record<string, string> };
+type DoctorCheck = {
+  status: string;
+  check: string;
+  message?: string;
+  details?: Record<string, string>;
+};
 type DoctorResult = { ok: boolean; provider: string; checks: DoctorCheck[] };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -486,6 +498,7 @@ function checkedOutput(
     status: timedOut ? 124 : (result.status ?? 1),
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
+    stderr: (result.stderr ?? "").trim(),
   };
 }
 
@@ -861,14 +874,18 @@ function crabboxProviderReadiness(provider: string, context: TargetContext) {
       (check) => check.status === "failed" && check.details?.class === "broker_auth",
     ) === true;
   const ready = result?.ok === true && brokerReady;
-  const diagnostic = compactDiagnosticText(doctor.text);
+  // The JSON report is on stdout; stderr can contain bracket-prefixed CLI errors.
+  const cliError = doctor.stderr || (/^[[{]/u.test(doctor.stdout) ? "" : doctor.stdout);
+  const diagnostic = result
+    ? doctorFailureDiagnostic(result, brokerReady)
+    : compactDiagnosticText(cliError);
   return {
     ready,
     reason: ready
       ? "doctor-ready"
       : result
         ? `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`
-        : `invalid doctor JSON${diagnostic ? `: ${diagnostic}` : ""}`,
+        : `invalid doctor JSON (exit ${doctor.status})${diagnostic ? `: ${diagnostic}` : ""}`,
     ...(ready ? {} : { recovery: `run \`${recoveryCommand(doctorArgs)}\`` }),
     brokerReady,
     brokerAuthFailure,
@@ -882,6 +899,7 @@ function isDoctorCheck(value: unknown): value is DoctorCheck {
     Boolean(value.status) &&
     typeof value.check === "string" &&
     Boolean(value.check) &&
+    (value.message === undefined || typeof value.message === "string") &&
     (value.details === undefined ||
       (isRecord(value.details) &&
         Object.values(value.details).every((detail) => typeof detail === "string")))
@@ -915,11 +933,43 @@ function parseDoctorResult(value: string, provider: string, status: number): Doc
 }
 
 function compactDiagnosticText(value: string, maxLength = 500) {
-  const compact = value.replace(/\s+/gu, " ").trim();
-  if (compact.length <= maxLength) {
-    return compact;
+  const plain = stripAnsi(value)
+    .split(/\r\n?|\n/u)
+    .map(sanitizeForLog)
+    .join("\n");
+  // Redact the complete value before compaction or truncation can split a credential.
+  const redacted = redactSupportString(
+    plain,
+    { env: process.env, stateDir: "" },
+    { maxLength: Number.MAX_SAFE_INTEGER },
+  );
+  const compact = redacted.replace(/\s+/gu, " ").trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 3)}...`;
+}
+
+function doctorFailureDiagnostic(result: DoctorResult, brokerReady: boolean) {
+  const failed = result.checks.filter((check) =>
+    ["failed", "missing"].includes(check.status.trim().toLowerCase()),
+  );
+  // Project only failure fields; successful checks and arbitrary provider details
+  // can contain configuration, identities, and response payloads.
+  const summaries = failed.slice(0, 4).map((check) => {
+    const reason = [
+      ...["class", "hint"].flatMap((key) => {
+        const value = check.details?.[key];
+        return value ? [`${key}=${compactDiagnosticText(value, 80)}`] : [];
+      }),
+      ...(check.message ? [compactDiagnosticText(check.message, 160)] : []),
+    ].join(" ");
+    return `${compactDiagnosticText(check.check, 60)} (${check.status.trim().toLowerCase()})${reason ? `: ${reason}` : ""}`;
+  });
+  if (failed.length > summaries.length) {
+    summaries.push(`${failed.length - summaries.length} more failed checks omitted`);
   }
-  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
+  if (!brokerReady && !failed.some((check) => check.check === "broker")) {
+    summaries.push("broker: required ok check missing");
+  }
+  return summaries.join("; ");
 }
 
 function formatProviderReadiness(readiness: ReadonlyMap<string, ProviderReadiness>) {
@@ -982,6 +1032,7 @@ function enforceBrokeredCloud(
   if ("brokerAuthFailure" in readiness && readiness.brokerAuthFailure) {
     const instructions = [
       `[crabbox] provider=${canonicalProvider} requires managed Crabbox broker authentication for OpenClaw proof.`,
+      `[crabbox] ${readiness.reason}.`,
       `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
     ];
     if (canonicalProvider !== "aws") {
@@ -1196,13 +1247,12 @@ function blacksmithTestboxPrivateKeyPath(id: string) {
   return joinPath(root, "testboxes", id, "id_ed25519");
 }
 
-// Crabbox claims bind raw Testbox ids to one repo before remote execution.
-// Check the same sidecar so a dependency exit bug cannot make refusal green.
-function blacksmithTestboxClaimPath(id: string) {
-  return resolve(blacksmithTestboxClaimsDir(), `${id}.json`);
+// Crabbox claims bind retained leases to the physical checkout running the CLI.
+function crabboxLeaseClaimPath(id: string) {
+  return resolve(crabboxLeaseClaimsDir(), `${id}.json`);
 }
 
-function blacksmithTestboxClaimsDir() {
+function crabboxLeaseClaimsDir() {
   const configuredStateRoot = process.env.XDG_STATE_HOME;
   const stateDir = configuredStateRoot
     ? resolve(configuredStateRoot, "crabbox")
@@ -1211,7 +1261,7 @@ function blacksmithTestboxClaimsDir() {
 }
 
 function blacksmithTestboxClaimRepoRoot(id: string) {
-  const claimPath = blacksmithTestboxClaimPath(id);
+  const claimPath = crabboxLeaseClaimPath(id);
   if (!pathExists(claimPath)) {
     return "";
   }
@@ -1252,7 +1302,7 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs: string[]) {
   }
 }
 
-function restoreTemporaryBlacksmithTestboxClaimPath(claimPath: string) {
+function restoreTemporaryLeaseClaimPath(claimPath: string) {
   const original = readFileSync(claimPath, "utf8");
   const claim = JSON.parse(original);
   if (!claim || typeof claim !== "object" || claim.repoRoot !== childCwd) {
@@ -1265,40 +1315,52 @@ function restoreTemporaryBlacksmithTestboxClaimPath(claimPath: string) {
       encoding: "utf8",
       mode: 0o600,
     });
-    if (readFileSync(claimPath, "utf8") !== original) {
-      return;
-    }
     renameSync(temporaryPath, claimPath);
   } finally {
     rmSync(temporaryPath, { force: true });
   }
 }
 
-function restoreTemporaryBlacksmithTestboxClaim(commandArgs: string[], capturedLeaseId: string) {
+function restoreTemporaryLeaseClaim(commandArgs: string[], capturedLeaseId: string) {
   if (childCwd === repoRoot) {
     return true;
   }
 
-  const explicitLeaseId = commandArgs[0] === "run" ? optionValue(commandArgs, "--id") : "";
+  const requestedLeaseId =
+    commandArgs[0] === "run"
+      ? optionValue(commandArgs, "--id") || optionValue(commandArgs, "--lease-id")
+      : "";
+  // Brokered AWS also accepts lease slugs; those are not claim filenames.
+  const explicitLeaseId =
+    canonicalProvider === "aws" && !/^cbx_[a-f0-9]{12}$/u.test(requestedLeaseId)
+      ? ""
+      : requestedLeaseId;
   const exactLeaseId = explicitLeaseId || capturedLeaseId;
   const canCreateRetainedLease =
     commandArgs[0] === "warmup" ||
     (commandArgs[0] === "run" &&
-      (hasOption(commandArgs, "--keep") || hasOption(commandArgs, "--keep-on-failure")));
+      (canonicalProvider === "aws" ||
+        requestedLeaseId ||
+        hasOption(commandArgs, "--keep") ||
+        hasOption(commandArgs, "--keep-on-failure")));
   let claimPaths: string[] = [];
   if (exactLeaseId) {
-    claimPaths = [blacksmithTestboxClaimPath(exactLeaseId)];
+    claimPaths = [crabboxLeaseClaimPath(exactLeaseId)];
   } else if (canCreateRetainedLease) {
     try {
-      const claimsDir = blacksmithTestboxClaimsDir();
+      const claimsDir = crabboxLeaseClaimsDir();
       if (pathExists(claimsDir)) {
         claimPaths = readdirSync(claimsDir)
-          .filter((entry) => entry.endsWith(".json"))
+          .filter(
+            (entry) =>
+              entry.endsWith(".json") &&
+              (canonicalProvider !== "aws" || /^cbx_[a-f0-9]{12}\.json$/u.test(entry)),
+          )
           .map((entry) => resolve(claimsDir, entry));
       }
     } catch (error) {
       console.error(
-        `[crabbox] warning: failed to inspect temporary Testbox claims: ${error instanceof Error ? error.message : String(error)}`,
+        `[crabbox] warning: failed to inspect temporary lease claims: ${error instanceof Error ? error.message : String(error)}`,
       );
       return false;
     }
@@ -1312,18 +1374,18 @@ function restoreTemporaryBlacksmithTestboxClaim(commandArgs: string[], capturedL
       continue;
     }
     try {
-      restoreTemporaryBlacksmithTestboxClaimPath(claimPath);
+      restoreTemporaryLeaseClaimPath(claimPath);
     } catch (error) {
       restored = false;
       console.error(
-        `[crabbox] warning: failed to restore temporary Testbox claim: ${error instanceof Error ? error.message : String(error)}`,
+        `[crabbox] warning: failed to restore temporary lease claim: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
   return restored;
 }
 
-function observeBlacksmithTimingJSONLine(line: string) {
+function observeLeaseTimingJSONLine(line: string) {
   const value = line.trim();
   if (!value.startsWith("{") || !value.endsWith("}")) {
     return;
@@ -1331,11 +1393,13 @@ function observeBlacksmithTimingJSONLine(line: string) {
   try {
     const report = JSON.parse(value);
     if (
-      canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
+      canonicalProviderName(report?.provider) === canonicalProvider &&
       typeof report.leaseId === "string" &&
-      /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId)
+      (canonicalProvider === "aws"
+        ? /^cbx_[a-f0-9]{12}$/u.test(report.leaseId)
+        : /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId))
     ) {
-      capturedBlacksmithLeaseId = report.leaseId;
+      capturedLeaseId = report.leaseId;
     }
   } catch {
     // Human stderr may contain brace-delimited non-JSON lines.
@@ -1660,7 +1724,7 @@ function changedGateBasesFromWords(
   options: CommandNormalizeOptions = {},
 ): string[] {
   const words = normalizeExecutableWords(wordsInput, options);
-  if (isChangedGateWords(words)) {
+  if (isCheckGateWords(words)) {
     for (let index = 0; index < words.length; index += 1) {
       const word = words[index] ?? "";
       if (word === "--base") {
@@ -1712,6 +1776,21 @@ function isChangedGateWords(wordsInput: string[]) {
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
     nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
+  );
+}
+
+function isCheckGateWords(wordsInput: string[]) {
+  if (isChangedGateWords(wordsInput)) {
+    return true;
+  }
+  const words = normalizeExecutableWords(wordsInput);
+  if (words[0] === "corepack") {
+    words.shift();
+  }
+  return (
+    (words[0] === "pnpm" && words[1] === "check") ||
+    (words[0] === "pnpm" && words[1] === "run" && words[2] === "check") ||
+    nodeScriptWord(words)?.endsWith("scripts/check.mts")
   );
 }
 
@@ -2402,16 +2481,20 @@ function changedGateBaseForCommand(commandArgs: string[]) {
   }
   const explicitBase = requestedBases[0] ?? "origin/main";
   const remoteAlias = remoteAliasForChangedGateBase(explicitBase);
-  if (explicitBase !== "origin/main" && !remoteAlias) {
+  const immutableBase = /^[a-f0-9]{40}$/u.test(explicitBase);
+  if (explicitBase !== "origin/main" && !remoteAlias && !immutableBase) {
     throw new Error(
-      `remote changed-gate sync requires an exact origin/<branch> base; received: ${explicitBase}`,
+      `remote changed-gate sync requires an exact origin/<branch> or full commit SHA base; received: ${explicitBase}`,
     );
   }
-  // Only exact remote-tracking refs can be recreated under their original name
-  // after the remote raw-sync checkout initializes fresh Git metadata.
+  // The receiver recreates named remote refs and fetches the exact capsule base.
+  // A literal commit must itself be the fork base, not merely resolve to one.
   const requestedBase = explicitBase;
   const base = gitOutput(["merge-base", requestedBase, "HEAD"]);
   if (base.status === 0 && base.stdout) {
+    if (immutableBase && base.stdout !== requestedBase) {
+      throw new Error(`explicit changed-gate commit must be an ancestor of HEAD: ${requestedBase}`);
+    }
     return {
       remoteAlias,
       resolvedBase: base.stdout,
@@ -3891,7 +3974,7 @@ let cleanupSucceeded: boolean | undefined;
 let sourceCapsule: CrabboxSourceCapsule | null = null;
 let sourceStaging: StagingHandle | undefined;
 let remoteChangedGateAlias = "";
-let capturedBlacksmithLeaseId = "";
+let capturedLeaseId = "";
 let scriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 const preparationAbort = new AbortController();
@@ -4003,8 +4086,7 @@ try {
   if (shouldUseFullCheckoutForRemoteSync(normalizedArgs, provider)) {
     const invocation = parseCommandInvocation(help.text, normalizedArgs);
     const facts = analyzeRemoteCommand(invocation);
-    const changedGate = facts.changedGate ? changedGateBaseForCommand(facts.commandArgs) : null;
-    const changedGateBase = changedGate?.resolvedBase ?? "";
+    const checkGate = changedGateBaseForCommand(facts.commandArgs);
     const needsCapsule = needsSourceCapsule(normalizedArgs, provider);
     if (needsCapsule) {
       const syncRoot = fullCheckoutSyncRoot();
@@ -4019,7 +4101,7 @@ try {
           process.env,
           process.platform,
         ),
-        base: changedGateBase || changedGateBaseForCommand([]).resolvedBase,
+        base: checkGate.resolvedBase,
       });
       sourceStaging = sourceCapsule.staging;
     }
@@ -4046,7 +4128,7 @@ try {
     // Crabbox claims Git's physical top-level. Match it so macOS /var aliases
     // restore to the invoking repository instead of the disposable checkout.
     childCwd = realpathSync(checkout.dir);
-    remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
+    remoteChangedGateAlias = checkGate.remoteAlias;
     console.error(
       `[crabbox] isolated checkout sync; syncing from temporary full checkout ${checkout.dir}`,
     );
@@ -4068,6 +4150,7 @@ function cleanupOnce() {
   }
   cleanupSucceeded = false;
   if (!childTreeSettled) {
+    failManagedCleanup();
     try {
       sourceStaging?.hold("writers");
     } catch {
@@ -4097,12 +4180,9 @@ function cleanupOnce() {
       );
     }
   }
-  if (canonicalProvider === "blacksmith-testbox") {
+  if (canonicalProvider === "blacksmith-testbox" || canonicalProvider === "aws") {
     // Crabbox stamps claims with its cwd; retained leases belong to the caller.
-    claimsRestored = restoreTemporaryBlacksmithTestboxClaim(
-      normalizedArgs,
-      capturedBlacksmithLeaseId,
-    );
+    claimsRestored = restoreTemporaryLeaseClaim(normalizedArgs, capturedLeaseId);
     succeeded = claimsRestored && succeeded;
   }
   try {
@@ -4237,8 +4317,9 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
-const captureBlacksmithTimingJSON =
-  canonicalProvider === "blacksmith-testbox" && hasOption(normalizedArgs, "--timing-json");
+const captureLeaseTimingJSON =
+  (canonicalProvider === "blacksmith-testbox" || canonicalProvider === "aws") &&
+  hasOption(normalizedArgs, "--timing-json");
 // Fast-fail hint context: run --id reuse dies in under a second when the
 // lease hit its idle timeout, with only a bare nonzero exit from the binary.
 const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
@@ -4247,8 +4328,7 @@ const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
 try {
-  // Preparation can yield while a receipt or source changes. Keep the original
-  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  // Verify the allocation still belongs to this caller before native Testbox I/O.
   testboxLeaseFreshness?.assertCurrent();
 } catch (error) {
   cleanupOnce();
@@ -4268,9 +4348,20 @@ if (sourceStaging?.recorded) {
   const leaseId = optionValue(normalizedArgs, "--id");
   sourceStaging.admitted(namespace, leaseId ? [leaseId] : undefined);
 }
+try {
+  await claimManagedCleanup();
+  await preparationCheckpoint();
+} catch (error) {
+  if (error instanceof ManagedCleanupCancelled) {
+    cancellationSignal ??= error.signal;
+  }
+  await preparationCheckpoint(error);
+  cleanupOnce();
+  throw error;
+}
 const child = spawnManagedChild(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
-  stdio: ["inherit", "inherit", captureBlacksmithTimingJSON ? "pipe" : "inherit"],
+  stdio: ["inherit", "inherit", captureLeaseTimingJSON ? "pipe" : "inherit"],
   detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
@@ -4298,7 +4389,7 @@ if (childStderr) {
         return;
       }
       if (!discardingOversizedLine) {
-        observeBlacksmithTimingJSONLine(pending);
+        observeLeaseTimingJSONLine(pending);
       }
       pending = "";
       discardingOversizedLine = false;
@@ -4316,7 +4407,7 @@ if (childStderr) {
   childStderr.on("end", () => {
     observeText(decoder.end());
     if (pending && !discardingOversizedLine) {
-      observeBlacksmithTimingJSONLine(pending);
+      observeLeaseTimingJSONLine(pending);
     }
   });
 }
@@ -4334,9 +4425,9 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
   let exitCode = code;
   const fullCheckoutAvailable =
     !fullCheckout || assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
-  if (settled && !signal && (code === 0 || capturedBlacksmithLeaseId)) {
+  if (settled && !signal && (code === 0 || capturedLeaseId)) {
     try {
-      recordTestboxLeaseFreshness(testboxLeaseFreshness, capturedBlacksmithLeaseId, code ?? 1);
+      recordTestboxLeaseFreshness(testboxLeaseFreshness, capturedLeaseId, code ?? 1);
     } catch (error) {
       console.error(
         `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
@@ -4351,7 +4442,7 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
       JSON.stringify({
         event: "testbox-completion",
         ...testboxLeaseFreshness.attribution,
-        leaseId: capturedBlacksmithLeaseId || testboxLeaseFreshness.id || undefined,
+        leaseId: capturedLeaseId || testboxLeaseFreshness.id || undefined,
         sourceTree: sourceCapsule?.tree,
         elapsedMs: Date.now() - childStartedAtMs,
         exitCode:
@@ -4441,7 +4532,7 @@ function settleChildTree(childProcess: ChildProcess, signal?: Signal): Promise<b
       // A failed receipt write keeps future recovery conservative; the live
       // owner still completes its already-authorized normal cleanup.
       try {
-        sourceStaging?.settled(capturedBlacksmithLeaseId ? [capturedBlacksmithLeaseId] : undefined);
+        sourceStaging?.settled(capturedLeaseId ? [capturedLeaseId] : undefined);
       } catch (error) {
         console.error(
           "[crabbox] staging settlement receipt failed: " +

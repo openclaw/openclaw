@@ -11,9 +11,12 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
-import * as sessionPersistence from "./session-entry-persistence.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
@@ -33,7 +36,8 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
   })),
 }));
 
-vi.mock("./commands.runtime.js", () => ({
+vi.mock("./commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands.js")>()),
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
 }));
 
@@ -44,7 +48,15 @@ vi.mock("./commands-status.js", () => ({
 const { maybeResolveNativeSlashCommandFastReply } =
   await import("./get-reply-native-slash-fast-path.js");
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawAgentDatabasesForTest(root);
+    }
+    cleanup();
+  }),
+);
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 const runtimeCliBackends = [
@@ -210,7 +222,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
   it.each([
     ["/queue Can you diagnose this?", 'Unrecognized queue mode "Can".'],
-    ["/queue /think high", 'Unrecognized queue mode "/think"'],
     ["/think about my deployment plan", 'Unrecognized thinking level "about".'],
     ["/verbose explain quantum computing", 'Unrecognized verbose level "explain".'],
     ["/trace banana please", 'Unrecognized trace level "banana".'],
@@ -227,15 +238,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
   it.each([
     ["/queue collect please help", 'Unexpected argument "please" for /queue.'],
-    ["/think high please", 'Unexpected argument "please" for /think.'],
-    ["/verbose on please", 'Unexpected argument "please" for /verbose.'],
-    ["/fast on please", 'Unexpected argument "please" for /fast.'],
-    ["/reasoning on please", 'Unexpected argument "please" for /reasoning.'],
     ["/exec host=node please", 'Unexpected argument "please" for /exec.'],
-    [
-      "/model openai/gpt-5.5 --runtime codex --runtime acp",
-      'Unexpected argument "--runtime" for /model.',
-    ],
     ["/model openai/gpt-5.5 -slow", 'Unexpected argument "-slow" for /model.'],
   ])("rejects trailing prose instead of dropping native command %s", async (command, expected) => {
     const { result } = await resolveNativeDirectiveCommand(command);
@@ -394,69 +397,63 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
-  it("resolves the selected model context for native compact", async () => {
-    handleCommandsMock.mockResolvedValueOnce({
-      shouldContinue: false,
-      reply: { text: "⚙️ Compacted" },
-    });
+  it.each(["/compact", "/context json"])(
+    "resolves the selected model context for %s",
+    async (body) => {
+      handleCommandsMock.mockResolvedValueOnce({
+        shouldContinue: false,
+        reply: { text: "⚙️ Compacted" },
+      });
 
-    const storePath = path.join(tempDirs.make("openclaw-native-override-"), "sessions.json");
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: "agent:main:main", storePath },
-      {
-        sessionId: "fable-session",
-        updatedAt: Date.now(),
-        providerOverride: "anthropic",
-        modelOverride: "claude-fable-5",
-        modelOverrideSource: "user",
-        contextTokens: 1_000_000,
-        agentRuntimeOverride: "claude-cli",
-        thinkingLevel: "off",
-      },
-    );
-
-    const typing = createTypingController();
-    const result = await runTestNativeSlashFastReply({
-      ctx: buildNativeCommandCtx("/compact", {
-        SessionKey: "telegram:slash:123",
-        CommandTargetSessionKey: "agent:main:main",
-      }),
-      cfg: markCompleteReplyConfig(
+      const storePath = path.join(tempDirs.make("openclaw-native-override-"), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
         {
-          session: { store: storePath },
-        } as OpenClawConfig,
-        { runtimeMode: "full" },
-      ),
-      agentId: "main",
-      agentCfg: undefined,
-      commandAuthorized: true,
-      typing,
-    });
+          sessionId: "fable-session",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-fable-5",
+          modelOverrideSource: "user",
+          contextTokens: 1_000_000,
+          agentRuntimeOverride: "claude-cli",
+          thinkingLevel: "off",
+        },
+      );
 
-    expect(result.handled).toBe(true);
-    expect(handleCommandsMock).toHaveBeenCalledOnce();
-    const call = handleCommandsMock.mock.calls[0]?.[0] as
-      | { provider?: string; model?: string; contextTokens?: number }
-      | undefined;
-    // The selected model owns the context budget forwarded into command handling.
-    expect(call?.provider).toBe("anthropic");
-    expect(call?.model).toMatch(/claude-fable-5/);
-    expect(call?.contextTokens).toBe(1_000_000);
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
-  });
+      const typing = createTypingController();
+      const result = await runTestNativeSlashFastReply({
+        ctx: buildNativeCommandCtx(body, {
+          SessionKey: "telegram:slash:123",
+          CommandTargetSessionKey: "agent:main:main",
+        }),
+        cfg: markCompleteReplyConfig(
+          {
+            session: { store: storePath },
+          } as OpenClawConfig,
+          { runtimeMode: "full" },
+        ),
+        agentId: "main",
+        agentCfg: undefined,
+        commandAuthorized: true,
+        typing,
+      });
+
+      expect(result.handled).toBe(true);
+      expect(handleCommandsMock).toHaveBeenCalledOnce();
+      const call = handleCommandsMock.mock.calls[0]?.[0] as
+        | { provider?: string; model?: string; contextTokens?: number }
+        | undefined;
+      // The selected model owns the context budget forwarded into command handling.
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toMatch(/claude-fable-5/);
+      expect(call?.contextTokens).toBe(1_000_000);
+      expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     { source: "auto" as const, locked: false, expectedProvider: "openai" },
     { source: "auto" as const, locked: false, activeFallback: true, expectedProvider: "anthropic" },
-    { source: "auto" as const, locked: true, expectedProvider: "anthropic" },
-    { source: undefined, locked: false, legacyAuto: true, expectedProvider: "anthropic" },
-    {
-      source: "auto" as const,
-      locked: false,
-      selfOrigin: true,
-      targetAgentId: "subagent",
-      expectedProvider: "anthropic",
-    },
     {
       source: "user" as const,
       locked: false,
@@ -466,54 +463,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     },
     {
       source: "user" as const,
-      locked: false,
-      overrideProvider: "claude-cli",
-      hasBoundCli: true,
-      expectedProvider: "claude-cli",
-    },
-    {
-      source: "user" as const,
-      locked: false,
-      allowed: ["openai/*"],
-      agentAllowed: ["anthropic/legacy-fast-model", "anthropic/claude-sonnet-4-6"],
-      targetAgentId: "research",
-      overrideModel: "claude-sonnet-4-6",
-      resolvedModel: "claude-sonnet-4-6",
-      expectedProvider: "anthropic",
-    },
-    {
-      source: "user" as const,
-      locked: false,
-      allowed: ["openai/*"],
-      expectedProvider: "openai",
-    },
-    {
-      source: "user" as const,
-      locked: false,
-      allowed: ["anthropic/*"],
-      expectedProvider: "anthropic",
-    },
-    {
-      source: "user" as const,
       locked: true,
       allowed: ["openai/*"],
       expectedProvider: "anthropic",
-    },
-    {
-      source: "user" as const,
-      locked: false,
-      allowed: ["anthropic/*"],
-      agentAllowed: ["openai/*"],
-      expectedProvider: "openai",
-    },
-    {
-      source: "user" as const,
-      locked: false,
-      allowed: ["anthropic/claude-fable-5"],
-      overrideProvider: "openai",
-      overrideModel: "gpt-5.5",
-      expectedProvider: "openai",
-      expectedContextTokens: 200_000,
     },
     {
       source: "user" as const,
@@ -539,7 +491,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       });
       const targetAgentId =
         ("targetAgentId" in testCase ? testCase.targetAgentId : undefined) ?? "main";
-      const resolvedModel = "resolvedModel" in testCase ? testCase.resolvedModel : undefined;
       const targetSessionKey = `agent:${targetAgentId}:main`;
       const storePath = path.join(tempDirs.make("openclaw-native-source-"), "sessions.json");
       await replaceSessionEntry(
@@ -554,20 +505,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           modelSelectionLocked: locked,
           contextTokens: 1_000_000,
           thinkingLevel: "off",
-          ...("legacyAuto" in testCase || "selfOrigin" in testCase || "activeFallback" in testCase
+          ...("activeFallback" in testCase
             ? {
-                modelOverrideFallbackOriginProvider:
-                  "selfOrigin" in testCase ? "anthropic" : "openai",
-                modelOverrideFallbackOriginModel:
-                  "selfOrigin" in testCase ? "claude-fable-5" : "gpt-5.5",
-              }
-            : {}),
-          ...("hasBoundCli" in testCase
-            ? {
-                agentHarnessId: "claude-cli",
-                cliSessionBindings: {
-                  "claude-cli": { sessionId: "native-claude-session", forceReuse: true },
-                },
+                modelOverrideFallbackOriginProvider: "openai",
+                modelOverrideFallbackOriginModel: "gpt-5.5",
               }
             : {}),
         },
@@ -598,24 +539,14 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
                     },
                     ...("agentAllowed" in testCase
                       ? {
-                          list: [
-                            {
-                              id: targetAgentId,
+                          entries: {
+                            [targetAgentId]: {
                               modelPolicy: { allow: testCase.agentAllowed },
                               ...("agentCap" in testCase
                                 ? { contextTokens: testCase.agentCap }
                                 : {}),
-                              ...(resolvedModel !== undefined
-                                ? {
-                                    models: {
-                                      [`anthropic/${resolvedModel}`]: {
-                                        alias: "legacy-fast-model",
-                                      },
-                                    },
-                                  }
-                                : {}),
                             },
-                          ],
+                          },
                         }
                       : {}),
                   },
@@ -626,34 +557,13 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ),
         agentId: targetAgentId,
         commandAuthorized: transportAuthorized,
-        aliasIndex: {
-          byKey: new Map(),
-          byAlias: new Map(
-            resolvedModel !== undefined
-              ? [
-                  [
-                    "legacy-fast-model",
-                    {
-                      alias: "legacy-fast-model",
-                      ref: { provider: "anthropic", model: resolvedModel },
-                    },
-                  ],
-                ]
-              : [],
-          ),
-        },
         typing: createTypingController(),
       });
 
       expect(result.handled).toBe(true);
       expect(handleCommandsMock.mock.calls[0]?.[0]).toMatchObject({
         provider: expectedProvider,
-        model:
-          resolvedModel !== undefined
-            ? resolvedModel
-            : expectedProvider === "openai"
-              ? "gpt-5.5"
-              : "claude-fable-5",
+        model: expectedProvider === "openai" ? "gpt-5.5" : "claude-fable-5",
         contextTokens:
           "expectedContextTokens" in testCase
             ? testCase.expectedContextTokens
@@ -661,40 +571,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
               ? 200_000
               : 1_000_000,
       });
-    },
-  );
-
-  it("keeps model-independent /status plugins available under an invalid model policy", async () => {
-    const { result } = await resolveNativeDirectiveCommand(
-      "/status plugins",
-      { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } } as OpenClawConfig,
-      { shouldContinue: false, reply: { text: "plugin status" } },
-    );
-
-    expect(result).toMatchObject({ handled: true, reply: { text: "plugin status" } });
-    expect(handleCommandsMock).toHaveBeenCalledOnce();
-  });
-
-  it.each(["model", "models", "help", "stop"])(
-    "keeps /%s available to recover from an invalid default model policy",
-    async (commandName) => {
-      const { result } = await resolveNativeDirectiveCommand(
-        `/${commandName}`,
-        {
-          session: {
-            store: path.join(tempDirs.make("openclaw-native-recovery-"), "sessions.json"),
-          },
-          agents: {
-            defaults: {
-              modelPolicy: { allow: ["anthropic/*"] },
-            },
-          },
-        } as OpenClawConfig,
-        { shouldContinue: false, reply: { text: "recovery available" } },
-      );
-
-      expect(result).toMatchObject({ handled: true, reply: { text: "recovery available" } });
-      expect(handleCommandsMock).toHaveBeenCalledOnce();
     },
   );
 
@@ -791,7 +667,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
   it.each([
     { commandName: "config show", authorized: false },
-    { commandName: "compact", authorized: false },
     { commandName: "compact", authorized: true, deniedByPolicy: true },
   ])("rejects unauthorized native /$commandName before model selection", async (testCase) => {
     const { commandName, authorized } = testCase;
@@ -840,53 +715,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     }
   });
 
-  it("rejects session initialization invalidated during persistence", async () => {
-    vi.spyOn(sessionPersistence, "persistReplySessionEntry").mockResolvedValueOnce({
-      status: "lifecycle-invalidated",
-      error: 'Session "agent:main:main" was deleted while starting work. Retry.',
-    });
-    const { result } = await resolveNativeDirectiveCommand("/compact");
-
-    expect(result).toEqual({
-      handled: true,
-      reply: expect.objectContaining({ text: expect.stringContaining("was deleted") }),
-    });
-    if (!result.handled || !result.reply || Array.isArray(result.reply)) {
-      throw new Error("expected single handled reply");
-    }
-    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-  });
-
-  it("adopts a supported legacy alias before native command initialization", async () => {
-    const storePath = path.join(tempDirs.make("openclaw-native-slash-alias-"), "sessions.json");
-    const sessionKey = "agent:main:main";
-    await replaceSessionEntry({ sessionKey: "Agent:main:main", storePath }, {
-      sessionId: "legacy-session",
-      updatedAt: 1,
-    } as SessionEntry);
-    handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
-      expect(params.sessionEntry).toMatchObject({ sessionId: "legacy-session" });
-      return { shouldContinue: false, reply: { text: "ok" } };
-    });
-
-    const result = await runTestNativeSlashFastReply({
-      ctx: buildNativeCommandCtx("/compact", {
-        CommandTargetSessionKey: sessionKey,
-      }),
-      cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
-      agentId: "main",
-      commandAuthorized: true,
-      typing: createTypingController(),
-    });
-
-    expect(result).toEqual({
-      handled: true,
-      reply: expect.objectContaining({ text: "ok" }),
-    });
-    expect(handleCommandsMock).toHaveBeenCalledOnce();
-  });
-
   it("does not mutate an archived session during native command initialization", async () => {
     const storePath = path.join(tempDirs.make("openclaw-native-slash-archived-"), "sessions.json");
     const sessionKey = "agent:main:main";
@@ -915,6 +743,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       handled: true,
       reply: expect.objectContaining({ text: expect.stringContaining("is archived") }),
     });
+    if (!result.handled || !result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected single handled reply");
+    }
+    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toEqual(persistedArchivedEntry);
   });

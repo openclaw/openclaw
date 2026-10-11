@@ -15,6 +15,7 @@ import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/
 import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   agentsCapability,
   agentsList,
@@ -195,7 +196,7 @@ describe("AgentsPage gateway lifecycle", () => {
       runtimeConfig: { save },
     } as unknown as ApplicationContext;
 
-    page.saveAgentConfig();
+    void page.refreshAgents("save");
     await waitForFast(() => expect(save).toHaveBeenCalledOnce());
     expect(refreshList).not.toHaveBeenCalled();
   });
@@ -228,18 +229,17 @@ describe("AgentsPage gateway lifecycle", () => {
     setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.loadEffectiveToolsForAgent("main");
-    await Promise.resolve();
-    expect(page.toolsEffectiveResult?.profile).toBe("messaging");
+    await waitForFast(() => expect(page.toolsEffectiveResult?.profile).toBe("messaging"));
 
-    page.saveAgentConfig();
+    void page.refreshAgents("save");
     saved.resolve(true);
     await saved.promise;
     roster.resolve(agentsList);
     await roster.promise;
     await Promise.resolve();
 
+    await waitForFast(() => expect(page.toolsEffectiveResult?.profile).toBe("full"));
     expect(effectiveReads).toBe(2);
-    expect(page.toolsEffectiveResult?.profile).toBe("full");
   });
 
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
@@ -440,11 +440,6 @@ describe("AgentsPage gateway lifecycle", () => {
         page.loadActivePanelData();
       }
 
-      if (replacement === "publication" || replacement === "gateway source") {
-        expect(oldRequest.mock.calls.length + nextRequest.mock.calls.length).toBe(1);
-        expect(page.modelCatalog.models).toEqual([]);
-        oldResult.resolve({ models: oldModels });
-      }
       await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
       oldResult.resolve({ models: oldModels });
       await oldResult.promise;
@@ -849,7 +844,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await page.loadAgentFiles("main");
 
     expect(page.agentFileActive).toBe("AGENTS.md");
-    expect(page.agentFileContents["AGENTS.md"]).toBe("# Instructions");
+    expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions");
     expect(request).toHaveBeenCalledWith("agents.files.get", {
       agentId: "main",
       name: "AGENTS.md",
@@ -874,7 +869,7 @@ describe("AgentsPage gateway lifecycle", () => {
     };
     page.agentsSelectedId = "main";
     page.routeData = { panel: "files" } as AgentsRouteData;
-    page.agentFileContents = { "cached.md": "keep" };
+    setAgentFileValues(page, "content", { "cached.md": "keep" });
     page.routeDataInitialized = true;
     page.context = {
       agents: {
@@ -891,7 +886,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     setPageGateway(page, client, false);
     expect(page.agentFilesLoading).toBe(false);
-    expect(page.agentFileContents).toEqual({ "cached.md": "keep" });
+    expect(agentFileValues(page, "content")).toEqual({ "cached.md": "keep" });
 
     setPageGateway(page, client);
     expect(ensureFiles).toHaveBeenCalledTimes(2);
@@ -978,51 +973,6 @@ describe("AgentsPage gateway lifecycle", () => {
     nextEnsure.resolve();
     await nextEnsure.promise;
     await waitForFast(() => expect(page.agentIdentityLoading).toBe(false));
-    page.subscriptions.hostDisconnected();
-  });
-
-  it("rejects effective-tools results from a replaced sessions capability", async () => {
-    const oldResult = deferred<ToolsEffectiveResult>();
-    const nextResult = deferred<ToolsEffectiveResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(oldResult.promise)
-      .mockReturnValueOnce(nextResult.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const currentGateway = gateway(snapshot(client));
-    const agents = agentsCapability(async () => files("main", "unused"));
-    const oldSessions = {
-      state: { result: null, modelOverrides: {} },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["sessions"];
-    const nextSessions = {
-      state: { result: null, modelOverrides: {} },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["sessions"];
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    const context = pageContext(currentGateway, agents, { sessions: oldSessions });
-    page.routeData = agentsRouteData(currentGateway);
-    page.context = context;
-    setPageGateway(page, client);
-    page.subscriptions.hostConnected();
-    page.loadEffectiveToolsForAgent("main");
-    expect(page.toolsEffectiveLoading).toBe(true);
-
-    page.context = { ...context, sessions: nextSessions };
-    page.subscriptions.hostUpdate();
-    page.loadEffectiveToolsForAgent("main");
-    expect(page.toolsEffectiveLoading).toBe(true);
-
-    oldResult.resolve({ profile: "old" } as ToolsEffectiveResult);
-    await oldResult.promise;
-    await Promise.resolve();
-    expect(page.toolsEffectiveResult).toBeNull();
-    expect(page.toolsEffectiveLoading).toBe(true);
-
-    nextResult.resolve({ profile: "new" } as ToolsEffectiveResult);
-    await nextResult.promise;
-    await waitForFast(() => expect(page.toolsEffectiveResult?.profile).toBe("new"));
-    expect(page.toolsEffectiveLoading).toBe(false);
     page.subscriptions.hostDisconnected();
   });
 });

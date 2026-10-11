@@ -15,6 +15,8 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
+import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -67,7 +69,7 @@ function detailLevel(value: string): DetailLevel {
 }
 
 type InheritChoice = "inherit" | "on" | "off";
-type QuietHoursWindow = { startMinute: number; endMinute: number; timeZone: string };
+type QuietHoursWindow = WebPushNotificationPreferences["quietHours"];
 
 function detailLevelOptions(): Array<{ value: DetailLevel; label: string }> {
   return [
@@ -87,50 +89,48 @@ function inheritChoiceOptions(
   ];
 }
 
-function renderQuietHoursWindowRows<T extends QuietHoursWindow>(
-  quietHours: T,
-  onChange: (quietHours: T) => void,
+function renderQuietHoursWindowRows(
+  quietHours: QuietHoursWindow,
+  onChange: (quietHours: QuietHoursWindow) => void,
 ) {
-  return html`
+  const rows = html`
     ${renderSettingsRow({
       title: t("configView.notifications.quietHoursWindow"),
       control: html`
-        <input
-          type="time"
-          class="settings-input"
-          aria-label=${t("configView.notifications.quietHoursStart")}
-          .value=${minutesToTime(quietHours.startMinute)}
-          @change=${(event: Event) =>
-            onChange({
-              ...quietHours,
-              startMinute: timeToMinutes(inputTarget(event).value, quietHours.startMinute),
-            })}
-        />
-        <span class="settings-row__value" aria-hidden="true">–</span>
-        <input
-          type="time"
-          class="settings-input"
-          aria-label=${t("configView.notifications.quietHoursEnd")}
-          .value=${minutesToTime(quietHours.endMinute)}
-          @change=${(event: Event) =>
-            onChange({
-              ...quietHours,
-              endMinute: timeToMinutes(inputTarget(event).value, quietHours.endMinute),
-            })}
-        />
+        ${(
+          [
+            ["startMinute", "quietHoursStart"],
+            ["endMinute", "quietHoursEnd"],
+          ] as const
+        ).map(
+          ([field, label], index) => html`
+            ${index ? html`<span class="settings-row__value" aria-hidden="true">–</span>` : nothing}
+            <input
+              type="time"
+              class="settings-input"
+              aria-label=${t(`configView.notifications.${label}`)}
+              .value=${minutesToTime(quietHours[field])}
+              @change=${(event: Event) =>
+                onChange({
+                  ...quietHours,
+                  [field]: timeToMinutes(inputTarget(event).value, quietHours[field]),
+                })}
+            />
+          `,
+        )}
       `,
     })}
-    ${renderSettingsRow({
+    ${renderSettingsSelectRow({
       title: t("configView.notifications.timeZone"),
-      control: html`<input
-        type="text"
-        class="settings-input"
-        aria-label=${t("configView.notifications.timeZone")}
-        .value=${quietHours.timeZone}
-        @change=${(event: Event) => onChange({ ...quietHours, timeZone: inputTarget(event).value })}
-      />`,
+      value: quietHours.timeZone,
+      options: resolveTimezoneSuggestions([quietHours.timeZone]).map((value) => ({
+        value,
+        label: value.replaceAll("_", " "),
+      })),
+      onChange: (timeZone) => onChange({ ...quietHours, timeZone }),
     })}
   `;
+  return html`<div class="settings-subrows quiet-hours-window">${rows}</div>`;
 }
 
 function renderAgentIdsRow(agentIds: string[], onChange: (agentIds: string[]) => void) {
@@ -160,9 +160,7 @@ function renderUserNotificationPreferences(
     onChange({ ...preferences, ...next });
   return html`
     <section class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.notifications.accountDefaults")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.notifications.accountDefaults"))}
       <div class="settings-group">
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsToggleRow({
@@ -205,9 +203,7 @@ function renderDeviceNotificationPreferences(
   const deviceQuietHours = preferences.quietHours;
   return html`
     <section class="settings-section">
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("configView.notifications.installedApp")}</h2>
-      </div>
+      ${renderSettingsSectionHeader(t("configView.notifications.installedApp"))}
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("configView.notifications.deliverDevice"),
@@ -314,6 +310,25 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
   }
 }
 
+function renderNotificationActions(actions: TemplateResult | typeof nothing) {
+  return actions === nothing
+    ? nothing
+    : html`<div class="settings-row">
+        <div class="settings-row__control">${actions}</div>
+      </div>`;
+}
+
+function renderBlockedNotifications(description: string) {
+  return renderSettingsRow({
+    title: t("configView.notifications.blocked"),
+    description,
+    control: renderSettingsStatus({
+      kind: "danger",
+      label: t("configView.notifications.denied"),
+    }),
+  });
+}
+
 function renderNotificationSection(
   title: string,
   status: TemplateResult,
@@ -378,25 +393,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               title: t("configView.notifications.permission"),
               control: renderSettingsValue(status.label),
             })}
-            ${
-              actionButton !== nothing
-                ? html`
-                    <div class="settings-row">
-                      <div class="settings-row__control">${actionButton}</div>
-                    </div>
-                  `
-                : nothing
-            }
+            ${renderNotificationActions(actionButton)}
             ${
               native.permission === "denied"
-                ? renderSettingsRow({
-                    title: t("configView.notifications.blocked"),
-                    description: t("configView.notifications.nativeBlockedHint"),
-                    control: renderSettingsStatus({
-                      kind: "danger",
-                      label: t("configView.notifications.denied"),
-                    }),
-                  })
+                ? renderBlockedNotifications(t("configView.notifications.nativeBlockedHint"))
                 : nothing
             }
             ${
@@ -542,25 +542,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               label: subscriptionLabel,
             }),
           })}
-          ${
-            actionButtons !== nothing
-              ? html`
-                  <div class="settings-row">
-                    <div class="settings-row__control">${actionButtons}</div>
-                  </div>
-                `
-              : nothing
-          }
+          ${renderNotificationActions(actionButtons)}
           ${
             push.permission === "denied"
-              ? renderSettingsRow({
-                  title: t("configView.notifications.blocked"),
-                  description: t("configView.notifications.blockedHint"),
-                  control: renderSettingsStatus({
-                    kind: "danger",
-                    label: t("configView.notifications.denied"),
-                  }),
-                })
+              ? renderBlockedNotifications(t("configView.notifications.blockedHint"))
               : nothing
           }
           ${

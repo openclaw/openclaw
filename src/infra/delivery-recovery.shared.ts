@@ -172,6 +172,30 @@ export function isProvenDeliveryNotSentError(err: unknown): boolean {
   return hasDeliveryNotSentProof(collectErrorGraphCandidates(err, nestedErrorCandidates));
 }
 
+/** Transport ambiguity is not no-send proof; only opted-in final text may replay it. */
+export function isAmbiguousDeliveryTransportError(error: unknown): boolean {
+  const candidates = collectErrorGraphCandidates(error, nestedErrorCandidates);
+  if (
+    hasDeliveryNotSentProof(candidates) ||
+    candidates.some(
+      (candidate) =>
+        isRecord(candidate) &&
+        ((Array.isArray(candidate.results) && candidate.results.length > 0) ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            (candidate.deliveryResult.visibleReplySent === true ||
+              (Array.isArray(candidate.deliveryResult.messageIds) &&
+                candidate.deliveryResult.messageIds.length > 0)))),
+    )
+  ) {
+    return false;
+  }
+  return candidates.some((candidate) => {
+    const code = extractErrorCode(candidate)?.trim().toUpperCase();
+    return code !== undefined && TRANSPORT_ERROR_CODE_RE.test(code);
+  });
+}
+
 /** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */
 export function findPlatformMessageRejectedError(
   err: unknown,
@@ -186,9 +210,13 @@ export function findPlatformMessageRejectedError(
  * Untyped pre-connect proof stays undefined so caller-specific text policy keeps precedence.
  */
 export function resolveDeliveryNotSentRetryability(err: unknown): boolean | undefined {
+  return deliveryNotSentRetryability(err, true);
+}
+
+function deliveryNotSentRetryability(err: unknown, requireMarker: boolean): boolean | undefined {
   const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
   if (
-    !candidates.some(isPlatformMessageNotDispatchedError) ||
+    (requireMarker && !candidates.some(isPlatformMessageNotDispatchedError)) ||
     !hasDeliveryNotSentProof(candidates) ||
     hasDeliverySendEvidence(candidates)
   ) {
@@ -209,12 +237,7 @@ function hasDeliverySendEvidence(candidates: readonly unknown[]): boolean {
 
 /** True only when the complete error graph proves a retryable recipient no-send. */
 export function isRetryableDeliveryNotSentError(err: unknown): boolean {
-  const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
-  return (
-    hasDeliveryNotSentProof(candidates) &&
-    !hasDeliverySendEvidence(candidates) &&
-    !candidates.some(isPlatformMessageRejectedError)
-  );
+  return deliveryNotSentRetryability(err, false) ?? false;
 }
 
 /** True when the durable queue retained the exact failed attempt for recovery. */
@@ -260,15 +283,12 @@ function createRecoveryReplayPacer() {
     });
 }
 
-/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
-export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
-  const activeDrains = new Set<string>();
+function createRecoveryClaim() {
   const activeEntries = new Set<string>();
-
-  async function withClaim<Result>(
+  return async <Result>(
     entryId: string,
     run: () => Promise<Result>,
-  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> {
+  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> => {
     if (activeEntries.has(entryId)) {
       return { status: "claimed-by-other-owner" };
     }
@@ -278,22 +298,19 @@ export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntr
     } finally {
       activeEntries.delete(entryId);
     }
-  }
+  };
+}
+
+/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
+export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
+  const withClaim = createRecoveryClaim();
+  const withDrainClaim = createRecoveryClaim();
 
   return {
     withClaim,
 
     async withDrain(drainKey: string, run: () => Promise<void>): Promise<boolean> {
-      if (activeDrains.has(drainKey)) {
-        return false;
-      }
-      activeDrains.add(drainKey);
-      try {
-        await run();
-        return true;
-      } finally {
-        activeDrains.delete(drainKey);
-      }
+      return (await withDrainClaim(drainKey, run)).status === "claimed";
     },
 
     async scan(options: DeliveryRecoveryScanOptions<T>): Promise<void> {

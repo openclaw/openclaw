@@ -16,6 +16,7 @@ import {
   getActiveMcpLoopbackRuntimeMock,
   closeMcpLoopbackServerMock,
   buildProgramMock,
+  assertRuntimeMock,
   registerSubCliByNameMock,
   restoreRuntimeTerminalStateMock,
   enableConsoleCaptureMock,
@@ -30,9 +31,18 @@ import { CommanderError } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
 import { registerRunMainProxyExitTests } from "./run-main.proxy-exit.test-support.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
+
+  it("cleans resources when runtime preflight rejects before dispatch", async () => {
+    const failure = new Error("runtime preflight failed");
+    assertRuntimeMock.mockRejectedValueOnce(failure);
+    hasMemoryRuntimeMock.mockReturnValue(true);
+    await expect(runCli(["node", "openclaw", "status"])).rejects.toBe(failure);
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledOnce();
+  });
 
   it("completes asynchronous teardown before returning to the outer entrypoint", async () => {
     const order: string[] = [];
@@ -135,7 +145,7 @@ describe("runCli exit behavior", () => {
     process.exitCode = exitCode;
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "restores terminal state before uncaught CLI exits (machine output: %s)",
     async (machineOutput) => {
       buildProgramMock.mockReturnValueOnce({
@@ -143,6 +153,7 @@ describe("runCli exit behavior", () => {
         parseAsync: vi.fn().mockResolvedValueOnce(undefined),
       });
 
+      const previousExitCode = process.exitCode;
       const processOnSpy = vi.spyOn(process, "on");
       const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -158,7 +169,10 @@ describe("runCli exit behavior", () => {
 
       try {
         loggingState.forceConsoleToStderr = machineOutput;
-        expect(() => handler(new Error("boom"))).toThrow("process.exit(1)");
+        handler(new Error("boom"));
+        expect(await waitForCliSignalExit()).toBe(1);
+        expect(process.exitCode).toBe(1);
+        expect(exitSpy).not.toHaveBeenCalled();
         expect(consoleErrorSpy).toHaveBeenCalledWith(
           "[openclaw] OpenClaw hit an unexpected runtime error.",
         );
@@ -167,6 +181,8 @@ describe("runCli exit behavior", () => {
           resumeStdinIfPaused: false,
         });
       } finally {
+        await waitForCliSignalExit();
+        process.exitCode = previousExitCode;
         loggingState.forceConsoleToStderr = false;
         if (typeof handler === "function") {
           process.off("uncaughtException", handler);

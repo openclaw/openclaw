@@ -18,7 +18,6 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveIMessageAccount } from "./accounts.js";
 import { getIMessageApprovalApprovers } from "./approval-auth.js";
-import { iMessageApprovalControlBindings } from "./approval-control-binding-window.js";
 import {
   buildApprovalPollOptions,
   iMessageApprovalPollTargets,
@@ -117,13 +116,7 @@ function classifyIMessageApprovalTargetTransport(params: {
   return "unknown";
 }
 
-/**
- * Cache-only capability check, run before the prompt is sent so the tapback hint
- * can be omitted up front. Deliberately never probes: a probe spawns imsg and
- * would put seconds of latency in front of an approval prompt. An available
- * bridge status is cached for the process lifetime (see probe.ts), so the only
- * cost of a cold cache is that the first approval after start uses tapbacks.
- */
+// Never spawn a probe before an approval prompt; a cold cache falls back to tapbacks.
 function canIMessageApprovalUsePoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -172,28 +165,8 @@ function canIMessageApprovalUsePoll(params: {
   }
 }
 
-function resolveIMessageApprovalCliOptions(params: {
-  cfg: OpenClawConfig;
-  target: PreparedIMessageApprovalTarget;
-}): { cliPath: string; dbPath?: string; timeoutMs?: number } {
-  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.target.accountId });
-  return {
-    cliPath: account.config.cliPath?.trim() || "imsg",
-    dbPath: account.config.dbPath?.trim() || undefined,
-    timeoutMs: account.config.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
-  };
-}
-
-/**
- * Send the poll balloon after the approval details prompt. imsg normally echoes
- * every poll question as a separate caption after the balloon; suppress that
- * echo because OpenClaw already rendered the full context above the controls.
- *
- * Conversation-read authority: `chatGuid` is resolved from the approval's own
- * routing target (origin session or a configured approver), so this read is
- * host-originated and carries the server-owned direct-operator attestation.
- *
- */
+// Suppress imsg's duplicate caption. Routing targets are host-owned, so chat lookup
+// carries direct-operator authority rather than model-delegated authority.
 async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -209,14 +182,31 @@ async function deliverIMessageApprovalPoll(params: {
 } | null> {
   const options = buildApprovalPollOptions({ allowedDecisions: params.allowedDecisions });
   try {
-    const cliOptions = resolveIMessageApprovalCliOptions({
-      cfg: params.cfg,
-      target: params.target,
-    });
-    const chatGuid = await resolveIMessageApprovalChatGuid({
-      to: params.target.to,
-      cliOptions,
-    });
+    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.target.accountId });
+    const cliOptions = {
+      cliPath: account.config.cliPath?.trim() || "imsg",
+      dbPath: account.config.dbPath?.trim() || undefined,
+      timeoutMs: account.config.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    };
+    const target = parseIMessageTarget(params.target.to);
+    // Polls require a registered chat; synthesizing a new DM would lose the control.
+    let chatGuid: string | null;
+    if (target.kind === "chat_guid") {
+      chatGuid = target.chatGuid;
+    } else {
+      const runtime = await loadIMessageActionsRuntime();
+      chatGuid = await runtime.resolveChatGuidForTarget({
+        target:
+          target.kind === "handle"
+            ? {
+                kind: "chat_identifier",
+                chatIdentifier: `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`,
+              }
+            : target,
+        options: cliOptions,
+        conversationReadOrigin: "direct-operator",
+      });
+    }
     // chat_id and unprefixed identifiers do not carry their transport. Resolve
     // them before sending controls, then fail back to text for an SMS chat.
     if (!chatGuid || /^SMS;/i.test(chatGuid)) {
@@ -292,65 +282,6 @@ async function deliverIMessageApprovalPoll(params: {
   } catch (error) {
     log.warn(`imessage approvals: poll send failed, falling back to tapbacks: ${String(error)}`);
     return null;
-  }
-}
-
-/**
- * Polls must target a chat Messages already knows. Unlike send, we never
- * synthesize an unregistered DM identifier here: the bridge would reject it and
- * the poll would be lost.
- */
-async function resolveIMessageApprovalChatGuid(params: {
-  to: string;
-  cliOptions: { cliPath: string; dbPath?: string; timeoutMs?: number };
-}): Promise<string | null> {
-  const target = parseIMessageTarget(params.to);
-  if (target.kind === "chat_guid") {
-    return target.chatGuid;
-  }
-  const runtime = await loadIMessageActionsRuntime();
-  if (target.kind === "chat_id" || target.kind === "chat_identifier") {
-    return await runtime.resolveChatGuidForTarget({
-      target,
-      options: params.cliOptions,
-      conversationReadOrigin: "direct-operator",
-    });
-  }
-  if (target.kind !== "handle") {
-    return null;
-  }
-  const service = target.service === "sms" ? "SMS" : "iMessage";
-  return await runtime.resolveChatGuidForTarget({
-    target: { kind: "chat_identifier", chatIdentifier: `${service};-;${target.to}` },
-    options: params.cliOptions,
-    conversationReadOrigin: "direct-operator",
-  });
-}
-
-/**
- * The prompt went out without its tapback hint because a poll was expected.
- * If poll delivery fails, restore the complete reaction fallback while the
- * original details message still carries every manual command.
- */
-async function recoverIMessageApprovalTextFallback(params: {
-  cfg: OpenClawConfig;
-  target: PreparedIMessageApprovalTarget;
-  promptMessageId?: string;
-  fallbackText: string;
-  approvalPrompt: IMessageApprovalPromptBinding;
-}): Promise<string | undefined> {
-  try {
-    const result = await sendMessageIMessage(params.target.to, params.fallbackText, {
-      config: params.cfg,
-      approvalPrompt: params.approvalPrompt,
-      conversationReadOrigin: "direct-operator",
-      ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
-      ...(params.promptMessageId ? { replyToId: params.promptMessageId } : {}),
-    });
-    return result.guid;
-  } catch (error) {
-    log.error(`imessage approvals: text-fallback recovery failed: ${String(error)}`);
-    return undefined;
   }
 }
 
@@ -524,104 +455,99 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         cfg,
         accountId: preparedTarget.accountId,
       }).accountId;
-      const bindingWindow = iMessageApprovalControlBindings.begin({ accountId, conversation });
-      try {
-        const targetTransport = expectPoll
-          ? classifyIMessageApprovalTargetTransport({ cfg, target: preparedTarget })
-          : "unknown";
-        // Unknown targets include chat_id and auto handles. Keep the reaction
-        // fallback visible until the send receipt confirms the actual transport.
-        const reactionFallbackVisible = !expectPoll || targetTransport !== "imessage";
-        const promptText = reactionFallbackVisible ? pendingPayload.text : pendingPayload.pollText;
-        const approvalPrompt: IMessageApprovalPromptBinding = {
-          approvalId: view.approvalId,
-          approvalKind: view.approvalKind,
-          allowedDecisions: pendingPayload.allowedDecisions,
-        };
-        const result = await sendMessageIMessage(preparedTarget.to, promptText, {
-          config: cfg,
-          ...(reactionFallbackVisible ? { approvalPrompt } : {}),
-          // Approval delivery is host-originated: the target comes from the
-          // approval's own routing (origin session or a configured approver),
-          // never from model input. Attest that so #99905's conversation-read
-          // policy sees the real authority instead of failing closed to
-          // "delegated". If the target ever becomes caller-influenced, this
-          // must go back to delegated.
-          conversationReadOrigin: "direct-operator",
-          ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
-        });
-        if (!result.guid) {
-          // A numeric ROWID cannot bind inbound reactions or anchor the poll.
-          // The poll-mode details still carry `/approve`, so return without
-          // duplicating the prompt and leave manual commands available.
-          return null;
-        }
-        const confirmedTransport =
-          result.service ??
-          (result.chatGuid && /^iMessage;/i.test(result.chatGuid)
-            ? "imessage"
-            : result.chatGuid && /^SMS;/i.test(result.chatGuid)
-              ? "sms"
-              : targetTransport);
-        const poll =
-          expectPoll && confirmedTransport === "imessage"
-            ? await deliverIMessageApprovalPoll({
-                cfg,
-                target: preparedTarget,
-                approvalId: view.approvalId,
-                approvalKind: view.approvalKind,
-                expiresAtMs: view.expiresAtMs,
-                question: pendingPayload.pollText,
-                allowedDecisions: pendingPayload.allowedDecisions,
-              })
-            : null;
-        const hintMessageId =
-          expectPoll && !poll && !reactionFallbackVisible
-            ? await recoverIMessageApprovalTextFallback({
-                cfg,
-                target: preparedTarget,
-                promptMessageId: result.guid,
-                fallbackText: pendingPayload.text,
-                approvalPrompt,
-              })
-            : undefined;
-        const entry: PendingIMessageApprovalEntry = {
-          accountId,
-          to: preparedTarget.to,
-          conversation: poll ? { ...conversation, chatGuid: poll.chatGuid } : conversation,
-          messageId: result.guid,
-          ...(hintMessageId ? { hintMessageId } : {}),
-          ...(poll && reactionFallbackVisible ? { reactionFallbackVisible: true } : {}),
-          ...(poll
-            ? {
-                poll: {
-                  ...(poll.pollGuid ? { pollGuid: poll.pollGuid } : {}),
-                  optionDecisions: poll.optionDecisions,
-                },
-              }
-            : {}),
-        };
-        const bound = await bindIMessageApprovalEntry({
-          entry,
-          approvalId: view.approvalId,
-          approvalKind: view.approvalKind,
-          allowedDecisions: pendingPayload.allowedDecisions,
-          expiresAtMs: view.expiresAtMs,
-          // Poll delivery registers before returning so an immediate vote can
-          // overtake the blocked chat lane. Never recreate that target here:
-          // the vote may already have resolved and removed it at this await.
-          pollTargetWasRegisteredDuringDelivery: Boolean(entry.poll),
-        });
-        if (bound) {
-          // Generic bindPending runs after delivery. Mark this exact entry so
-          // it acknowledges the eager bind without recreating a target that an
-          // inbound control may already have resolved and removed.
-          eagerlyBoundApprovalEntries.add(entry);
-        }
-        return entry;
-      } finally {
-        bindingWindow.close();
+      const targetTransport = expectPoll
+        ? classifyIMessageApprovalTargetTransport({ cfg, target: preparedTarget })
+        : "unknown";
+      // Unknown targets include chat_id and auto handles. Keep the reaction
+      // fallback visible until the send receipt confirms the actual transport.
+      const reactionFallbackVisible = !expectPoll || targetTransport !== "imessage";
+      const promptText = reactionFallbackVisible ? pendingPayload.text : pendingPayload.pollText;
+      const approvalPrompt: IMessageApprovalPromptBinding = {
+        approvalId: view.approvalId,
+        approvalKind: view.approvalKind,
+        allowedDecisions: pendingPayload.allowedDecisions,
+      };
+      const result = await sendMessageIMessage(preparedTarget.to, promptText, {
+        config: cfg,
+        ...(reactionFallbackVisible ? { approvalPrompt } : {}),
+        // Authority comes from host-owned approval routing, never model input.
+        conversationReadOrigin: "direct-operator",
+        ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
+      });
+      if (!result.guid) {
+        // A numeric ROWID cannot bind inbound reactions or anchor the poll.
+        // The poll-mode details still carry `/approve`, so return without
+        // duplicating the prompt and leave manual commands available.
+        return null;
       }
+      const confirmedTransport =
+        result.service ??
+        (result.chatGuid && /^iMessage;/i.test(result.chatGuid)
+          ? "imessage"
+          : result.chatGuid && /^SMS;/i.test(result.chatGuid)
+            ? "sms"
+            : targetTransport);
+      const poll =
+        expectPoll && confirmedTransport === "imessage"
+          ? await deliverIMessageApprovalPoll({
+              cfg,
+              target: preparedTarget,
+              approvalId: view.approvalId,
+              approvalKind: view.approvalKind,
+              expiresAtMs: view.expiresAtMs,
+              question: pendingPayload.pollText,
+              allowedDecisions: pendingPayload.allowedDecisions,
+            })
+          : null;
+      let hintMessageId: string | undefined;
+      if (expectPoll && !poll && !reactionFallbackVisible) {
+        try {
+          const fallback = await sendMessageIMessage(preparedTarget.to, pendingPayload.text, {
+            config: cfg,
+            approvalPrompt,
+            conversationReadOrigin: "direct-operator",
+            ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
+            replyToId: result.guid,
+          });
+          hintMessageId = fallback.guid;
+        } catch (error) {
+          log.error(`imessage approvals: text-fallback recovery failed: ${String(error)}`);
+        }
+      }
+      const entry: PendingIMessageApprovalEntry = {
+        accountId,
+        to: preparedTarget.to,
+        conversation: poll ? { ...conversation, chatGuid: poll.chatGuid } : conversation,
+        messageId: result.guid,
+        ...(hintMessageId ? { hintMessageId } : {}),
+        ...(poll && reactionFallbackVisible ? { reactionFallbackVisible: true } : {}),
+        ...(poll
+          ? {
+              poll: {
+                ...(poll.pollGuid ? { pollGuid: poll.pollGuid } : {}),
+                optionDecisions: poll.optionDecisions,
+              },
+            }
+          : {}),
+      };
+      const bound = await bindIMessageApprovalEntry({
+        entry,
+        approvalId: view.approvalId,
+        approvalKind: view.approvalKind,
+        allowedDecisions: pendingPayload.allowedDecisions,
+        expiresAtMs: view.expiresAtMs,
+        // Poll delivery registers before returning so an immediate vote can
+        // overtake the blocked chat lane. Never recreate that target here:
+        // the vote may already have resolved and removed it at this await.
+        pollTargetWasRegisteredDuringDelivery: Boolean(entry.poll),
+      });
+      if (bound) {
+        // Generic bindPending runs after delivery. Mark this exact entry so
+        // it acknowledges the eager bind without recreating a target that an
+        // inbound control may already have resolved and removed.
+        eagerlyBoundApprovalEntries.add(entry);
+      }
+      return entry;
     },
     updateEntry: async ({ cfg, entry, payload }) => {
       await sendMessageIMessage(entry.to, payload.text, {

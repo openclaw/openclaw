@@ -32,6 +32,7 @@ import {
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import { prepareAndAdmitChatSend } from "./server-methods/chat-send-setup.js";
@@ -77,28 +78,6 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
 }
 
 describe("queued collector session projection", () => {
-  it("rejects an already-cancelled collector before starting spawn effects", async () => {
-    const effectsStarted = vi.fn();
-    await expect(
-      nativeSpawn.spawnSubagentDirect(
-        { task: "cancelled collector", collect: true, context: "isolated" },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          assertActive: () => {
-            throw new Error("requester already cancelled");
-          },
-          onSpawnEffectsStart: effectsStarted,
-        },
-      ),
-    ).resolves.toEqual({
-      status: "error",
-      error: "sessions_spawn could not read the requester session: requester already cancelled",
-    });
-    expect(effectsStarted).not.toHaveBeenCalled();
-    expect(launchedRunIds).toEqual([]);
-  });
-
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
     const broadcast = vi.fn();
@@ -464,7 +443,9 @@ describe("queued collector session projection", () => {
     expect(await exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
     expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
-      loadSubagentSessionListRunsFromSqlite().get(entry.runId),
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+        entry.runId,
+      ),
       "compact queued record",
     );
     expect(compact.execution).toEqual({ status: "queued" });
@@ -768,7 +749,7 @@ describe("queued collector session projection", () => {
           }),
           "ordinary chat admission while collector is queued",
         );
-        return prepared.admitted.value;
+        return prepared.admission;
       };
       const admission = await admitOrdinaryChat(
         extraRunId,

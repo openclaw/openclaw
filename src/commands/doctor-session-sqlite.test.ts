@@ -42,62 +42,94 @@ function sessionScope(store: TestStore) {
 }
 
 describe("runDoctorSessionSqlite", () => {
-  it("refuses retired room grouping without changing the source", async () => {
+  it.each([" session-1 ", "agent:main:main"])(
+    "imports legacy pending delivery state without changing identity %j",
+    async (sessionId) => {
+      const store = createLegacyStore({
+        entryOverrides: {
+          sessionId,
+          initializationPending: true,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "saved reply",
+          pendingFinalDeliveryCreatedAt: 1000,
+          pendingFinalDeliveryContext: { channel: "telegram", to: "synthetic-recipient" },
+          pendingFinalDeliveryIntentId: "legacy-intent",
+          pendingFinalDeliveryAttemptCount: 2,
+          pendingFinalDeliveryLastAttemptAt: 1500,
+          pendingFinalDeliveryLastError: "old failure",
+        },
+        transcriptLines: [
+          JSON.stringify({ type: "session", version: 3, id: sessionId }),
+          '{"type":"event","id":"evt-1"}',
+        ],
+      });
+      const originalStore = fs.readFileSync(store.storePath, "utf8");
+
+      const report = await importLegacyStore(store);
+
+      expect(report.totals).toMatchObject({
+        importedEntries: 1,
+        importedTranscriptEvents: 2,
+        issues: 0,
+      });
+      const imported = loadExactSessionEntry(sessionScope(store))?.entry;
+      expect(imported).toMatchObject({
+        sessionId,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "saved reply",
+          createdAt: 1000,
+          context: { channel: "telegram", to: "synthetic-recipient" },
+          intentId: "legacy-intent",
+        },
+      });
+      expect(imported).not.toHaveProperty("pendingFinalDeliveryText");
+      expect(imported).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
+      const archivedStore = expectDefined(
+        report.targets[0]?.archivedLegacyStoreFiles?.[0],
+        "archived legacy store",
+      );
+      expect(fs.readFileSync(archivedStore, "utf8")).toBe(originalStore);
+    },
+  );
+
+  it("imports supported July provider routing and archives original source bytes", async () => {
     const store = createLegacyStore({
-      entryOverrides: { room: "legacy", groupChannel: undefined },
+      entryOverrides: {
+        channel: undefined,
+        lastChannel: undefined,
+        provider: "telegram",
+        lastTo: "123",
+        lastAccountId: "work",
+      },
     });
     const originalStore = fs.readFileSync(store.storePath, "utf8");
     const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
 
-    await expect(importLegacyStore(store)).rejects.toThrow(
-      'Session field "room" predates July 2026 and is no longer supported',
-    );
+    const report = await importLegacyStore(store);
 
-    expect(fs.readFileSync(store.storePath, "utf8")).toBe(originalStore);
-    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(originalTranscript);
-    expect(loadExactSessionEntry(sessionScope(store))).toBeUndefined();
+    expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+    const imported = loadExactSessionEntry(sessionScope(store))?.entry;
+    expect(imported).toMatchObject({
+      delivery: {
+        kind: "external",
+        context: { channel: "telegram", to: "123", accountId: "work" },
+      },
+    });
+    expect(imported).not.toHaveProperty("provider");
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+    const target = expectDefined(manifest.targets[0], "imported target");
+    for (const [kind, original] of [
+      ["legacy-store", originalStore],
+      ["transcript", originalTranscript],
+    ] as const) {
+      const archived = expectDefined(
+        target.completedMoves.find((move) => move.kind === kind),
+        `archived ${kind}`,
+      );
+      expect(fs.readFileSync(archived.archivePath, "utf8")).toBe(original);
+    }
   });
-
-  it.each(["provider", "lastProvider"])(
-    "imports supported July %s routing and archives original source bytes",
-    async (field) => {
-      const store = createLegacyStore({
-        entryOverrides: {
-          channel: undefined,
-          lastChannel: undefined,
-          [field]: "telegram",
-          lastTo: "123",
-          lastAccountId: "work",
-        },
-      });
-      const originalStore = fs.readFileSync(store.storePath, "utf8");
-      const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
-
-      const report = await importLegacyStore(store);
-
-      expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
-      const imported = loadExactSessionEntry(sessionScope(store))?.entry;
-      expect(imported).toMatchObject({
-        delivery: {
-          kind: "external",
-          context: { channel: "telegram", to: "123", accountId: "work" },
-        },
-      });
-      expect(imported).not.toHaveProperty(field);
-      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-      const target = expectDefined(manifest.targets[0], "imported target");
-      for (const [kind, original] of [
-        ["legacy-store", originalStore],
-        ["transcript", originalTranscript],
-      ] as const) {
-        const archived = expectDefined(
-          target.completedMoves.find((move) => move.kind === kind),
-          `archived ${kind}`,
-        );
-        expect(fs.readFileSync(archived.archivePath, "utf8")).toBe(original);
-      }
-    },
-  );
 
   it("repairs legacy transcript and route shapes at the import boundary", async () => {
     const store = createLegacyStore({

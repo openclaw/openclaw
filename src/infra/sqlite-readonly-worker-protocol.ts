@@ -14,6 +14,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "content-version"
+  | "file-generation"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -35,6 +36,7 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
+  | { ok: true; generation: string }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
@@ -52,6 +54,7 @@ export type SqliteAuthProfileReadOptions = {
   mode: "auth-profile-rows";
   source: "canonical" | "snapshot";
   expectedIdentity: string;
+  artifactPreserving?: true;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   stagingRoot?: never;
@@ -92,7 +95,16 @@ export function sqliteReadOnlyWorkerRequestArgs(
   return args;
 }
 
-export type SqliteReadOnlyWorkerOutput = { failure?: string; stderr: string; stdout: string };
+export type SqliteReadOnlyWorkerOutput =
+  | {
+      kind: "launched";
+      stdout: string;
+      stderr: string;
+      status: number | null;
+      failure?: string;
+      cause?: Error;
+    }
+  | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
   | string
   | string[]
@@ -113,6 +125,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       "contentVersion" in value &&
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
+    (value.ok === true && "generation" in value && typeof value.generation === "string") ||
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
@@ -121,11 +134,16 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
   );
 }
 
-export function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
+export function createSqliteReadOnlyWorkerError(
+  message: string,
+  stderr: string,
+  options?: ErrorOptions,
+): Error {
   // Node can split a decoded surrogate pair when its child stderr buffer overflows.
   const stderrTail = toUSVString(sliceUtf16Safe(stderr.trim(), -SQLITE_READONLY_STDERR_TAIL_CHARS));
   return new Error(
     `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
+    options,
   );
 }
 
@@ -150,7 +168,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "consolidated" | "content-version",
+  mode: "sync" | "async" | "consolidated" | "content-version" | "file-generation",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -164,22 +182,25 @@ export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: SqliteReadOnlyWorkerMode,
 ): SqliteReadOnlyWorkerValue {
+  if (params.kind === "launch-failed") {
+    throw params.error;
+  }
   let result: SqliteReadOnlyWorkerResult;
   try {
     result = parseSqliteReadOnlyWorkerResult(params.stdout, params.stderr);
   } catch (error) {
     if (params.failure) {
-      throw createSqliteReadOnlyWorkerError(params.failure, params.stderr);
+      throw createSqliteReadOnlyWorkerError(params.failure, params.stderr, { cause: params.cause });
     }
     throw error;
   }
-  if (params.failure || !result.ok) {
+  if (params.status !== 0 || params.failure || !result.ok) {
     const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
     const message = !result.ok
       ? contention
         ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
         : result.message
-      : (params.failure ?? "failed");
+      : (params.failure ?? `exited with code ${params.status}`);
     const allocationRefused =
       params.failure === undefined &&
       !result.ok &&
@@ -188,6 +209,7 @@ export function readSqliteReadOnlyWorkerValue(
     const error = createSqliteReadOnlyWorkerError(
       allocationRefused ? message.slice(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX.length) : message,
       params.stderr,
+      { cause: params.cause },
     );
     if (contention) {
       const failure = new SqliteReadOnlyInspectionContentionError(error.message);
@@ -209,6 +231,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;
+  }
+  if (mode === "file-generation" && "generation" in result) {
+    return result.generation;
   }
   if (mode === "reclaim" && "warnings" in result) {
     return result.warnings;

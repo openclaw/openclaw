@@ -1,5 +1,6 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
+import { registerListener } from "../shared/listeners.js";
+import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 
 // Capture sessions must settle while their exact store is still writable.
 // This registry avoids a runtime/store import cycle and never acquires a store.
@@ -15,8 +16,7 @@ export function registerCaptureStoreFinalizer(store: object, finalize: () => voi
     callbacks = new Set();
     finalizers.set(store, callbacks);
   }
-  callbacks.add(finalize);
-  return () => callbacks.delete(finalize);
+  return registerListener(callbacks, finalize);
 }
 
 export function finalizeCaptureStore(store: object): void {
@@ -39,7 +39,7 @@ export function finalizeCaptureStore(store: object): void {
   }
 }
 
-type AsyncFinalizer = (store: AsyncDebugProxyCaptureStore) => Promise<void>;
+type AsyncFinalizer = (store: AsyncDebugProxyCaptureWriter) => Promise<void>;
 const asyncFinalizers = new WeakMap<object, Set<AsyncFinalizer>>();
 const asyncFinalizations = new WeakMap<object, Promise<void>>();
 
@@ -60,8 +60,8 @@ export function registerAsyncCaptureStoreFinalizer(
 }
 
 export function finalizeCaptureStoreAsync(
-  store: AsyncDebugProxyCaptureStore,
-  finalizingStore: AsyncDebugProxyCaptureStore,
+  store: AsyncDebugProxyCaptureWriter,
+  finalizingStore: AsyncDebugProxyCaptureWriter,
 ): Promise<void> {
   const existing = asyncFinalizations.get(store);
   if (existing) {

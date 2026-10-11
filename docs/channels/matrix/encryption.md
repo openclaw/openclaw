@@ -16,6 +16,13 @@ In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image p
 
 All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (machine-readable output), and `--account <id>` (multi-account setups). Output is concise by default.
 
+`verify status`, `verify bootstrap`, and `verify device` use the running local
+Gateway's account and crypto owner. Other commands on this page require stopping
+the local Gateway through its service owner first, then restarting it afterward.
+Account preparation and shutdown can persist crypto data, so offline commands
+retain exclusive ownership through that cleanup. Unsupported Gateway versions
+and failed routed requests never fall back to local writes.
+
 ### Enable encryption
 
 ```bash
@@ -37,7 +44,7 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config; restart the Gateway after the command completes. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
 
 Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
 
@@ -74,7 +81,7 @@ With `--include-recovery-key`, text output confirms when a raw recovery key is a
 
 `Verified by owner` is `yes` only when `Cross-signing verified` is `yes`; local trust or an owner signature alone is not enough.
 
-`--allow-degraded-local-state` returns best-effort diagnostics without preparing the Matrix account first; useful for offline or partially-configured probes.
+`--allow-degraded-local-state` returns best-effort diagnostics without preparing the Matrix account first; useful for offline or partially-configured checks.
 
 ### Verify this device with a recovery key
 

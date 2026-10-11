@@ -7,16 +7,16 @@ import {
   type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerMetadata extends SessionManagerEntries {
   private async appendMetadataEntry(change: SessionMetadataChange): Promise<string> {
     const publication = captureSessionMetadataPublication(this, change);
-    return await withSessionManagerWrite(this, async (admission) => {
+    return await withSessionManagerAppend(this, async (admission) => {
       this.assertTranscriptViewAvailable();
       const entry = {
         ...change,
@@ -24,7 +24,12 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         parentId: this.appendParentId,
         timestamp: new Date().toISOString(),
       };
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
+      if (
+        !admission ||
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+          !("actor" in admission) &&
+          "db" in admission.database)
+      ) {
         // Volatile storage keeps its one native owner until its complete actor cutover.
         const appended = this.appendEntry(entry);
         return this.publishMetadataCommit(

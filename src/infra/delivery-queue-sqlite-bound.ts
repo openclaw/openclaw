@@ -3,13 +3,16 @@ import type { DatabaseSync } from "node:sqlite";
 import type { RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { emptyOutboundDeliveryQueueAdmission } from "./delivery-queue-cache.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
@@ -182,6 +185,10 @@ export function inflateDeliveryQueueRow(
   };
 }
 
+export function inflateDeliveryQueueRows(rows: readonly DeliveryQueueSqliteRow[]) {
+  return rows.flatMap((row) => inflateDeliveryQueueRow(row) ?? []);
+}
+
 function deliveryQueueMetadata(
   queueName: string,
   entry: DeliveryQueueEntryState | Record<string, unknown>,
@@ -286,23 +293,23 @@ function createDeliveryQueueUpsert(database: DatabaseSync, mode: DeliveryQueueUp
   });
 }
 
-const deliveryQueueUpserts = new WeakMap<
-  DatabaseSync,
+const deliveryQueueUpserts = createSqliteQueryCache<
   Partial<Record<DeliveryQueueUpsertMode, ReturnType<typeof createDeliveryQueueUpsert>>>
->();
+>(() => ({}));
 
 /** Mutates only the exact supplied shared-state handle; never opens or hardens a file. */
 export function upsertBoundDeliveryQueueEntryInDatabase(
   bound: BoundDeliveryQueueEntry,
   database: OpenClawStateDatabase,
 ): boolean {
-  let queries = deliveryQueueUpserts.get(database.db);
-  if (!queries) {
-    queries = {};
-    deliveryQueueUpserts.set(database.db, queries);
-  }
+  const queries = deliveryQueueUpserts(database.db);
   const query = (queries[bound.mode] ??= createDeliveryQueueUpsert(database.db, bound.mode));
-  return query(bound.row).numAffectedRows === 1n;
+  const changed = query(bound.row).numAffectedRows === 1n;
+  if (changed) {
+    // Every queue insertion/replacement passes here; deletion cannot make an empty queue nonempty.
+    publishSqliteDatabaseAdmission(database.db, emptyOutboundDeliveryQueueAdmission, undefined);
+  }
+  return changed;
 }
 
 /** Recovery and media custody share the same inventory of unfinished work. */
@@ -342,10 +349,9 @@ function createDeliveryQueueRead(database: OpenClawStateDatabase, mode: Delivery
   );
 }
 
-const deliveryQueueReads = new WeakMap<
-  DatabaseSync,
+const deliveryQueueReads = createSqliteQueryCache<
   Partial<Record<DeliveryQueueReadMode, ReturnType<typeof createDeliveryQueueRead>>>
->();
+>(() => ({}));
 
 /** Reads one row from the exact supplied handle for cross-owner invariant validation. */
 export function loadDeliveryQueueEntryInDatabase(
@@ -354,13 +360,8 @@ export function loadDeliveryQueueEntryInDatabase(
   id: string,
   mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
-  let queries = deliveryQueueReads.get(database.db);
-  if (!queries) {
-    queries = {};
-    deliveryQueueReads.set(database.db, queries);
-  }
-  const readMode = mode === "all" || mode === "pending" ? mode : "unfinished";
-  const query = (queries[readMode] ??= createDeliveryQueueRead(database, readMode));
+  const queries = deliveryQueueReads(database.db);
+  const query = (queries[mode] ??= createDeliveryQueueRead(database, mode));
   const row = query({ queueName, id });
   return row ? inflateDeliveryQueueRow(row) : null;
 }

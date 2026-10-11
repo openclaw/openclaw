@@ -96,7 +96,6 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
       server,
       port,
       resolved,
-      owner: "server",
     });
   } catch (err) {
     await new Promise<void>((resolve) => {
@@ -115,7 +114,6 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   return await withBrowserControlStart(startBrowserControlServerUnlocked);
 }
 
-/** Stops the Browser control HTTP server and unregisters bridge auth. */
 export async function stopBrowserControlServer(): Promise<void> {
   const stopped = await stopBrowserControlRuntime({
     requestedBy: "server",

@@ -26,7 +26,7 @@ openclaw workboard move <id> --status <status> [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
-The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
+The command uses the same plugin-owned SQLite database as the dashboard and Workboard agent tools. When a local Gateway owns the state directory, commands route through that Gateway before opening the store. With the Gateway stopped, commands acquire exclusive offline ownership and close the store before releasing it. An unavailable, older, or rejecting live Gateway never triggers a local write fallback; fix its connection or stop it through its service owner and retry. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
 
 Valid `status` values: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`. Valid `priority` values: `low`, `normal`, `high`, `urgent`.
 
@@ -45,6 +45,8 @@ Text output is compact:
 ```
 
 Columns are id prefix, status, priority, board id, optional agent id, and title.
+
+An invalid `--status` exits with an error listing the allowed values instead of returning an empty list.
 
 | Flag                 | Purpose                                       |
 | -------------------- | --------------------------------------------- |
@@ -72,7 +74,7 @@ openclaw workboard create "Write Workboard docs" --status ready --agent docs-age
 | `--labels <items>`      | Comma-separated labels                  |
 | `--json`                | Print the created card as machine JSON  |
 
-`create` writes directly to Workboard SQLite state. The card is immediately visible in the Control UI Workboard tab and to Workboard tools.
+`create` writes through the selected state owner. The card is immediately visible in the Control UI Workboard tab and to Workboard tools.
 
 ## `show`
 
@@ -96,6 +98,9 @@ openclaw workboard move 7f4a2c10 --status done --json
 
 `move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token. Claim tokens remain scoped to agent-tool mutations, and JSON output redacts them.
 
+This command writes through the selected state owner, using Gateway RPC while
+the Gateway is running and exclusive offline ownership when it is stopped.
+
 ## `dispatch`
 
 ```bash
@@ -106,7 +111,7 @@ openclaw workboard dispatch --admin
 openclaw workboard dispatch --url http://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
-`dispatch` first calls the running Gateway RPC method `workboard.cards.dispatch`. That method uses the same subagent runtime as the dashboard dispatch action. Ready cards therefore become task-tracked worker runs with linked session keys. `--max-starts` uses the additive `workboard.cards.dispatchWithOptions` method, so an older Gateway rejects the option before starting any workers. Restart the Gateway after upgrading, before you use the flag. Cards with an assigned agent use agent-scoped subagent session keys. Unassigned cards keep an unscoped subagent key, so the Gateway's configured default agent is preserved.
+`dispatch` selects the active Gateway before opening local Workboard state. Implicit local requests use the owner-bound `workboard.cards.dispatch.owner` RPC. That method uses the same subagent runtime as the dashboard dispatch action. Ready cards therefore become task-tracked worker runs with linked session keys. `--max-starts` uses `workboard.cards.dispatchWithOptions.owner` for the implicit local Gateway. Older Gateways or Workboard plugins without owner routing refuse before starting workers; explicit remote targets retain the existing `workboard.cards.dispatch` and `workboard.cards.dispatchWithOptions` contracts. Restart the Gateway after upgrading, before you use the flag. Cards with an assigned agent use agent-scoped subagent session keys. Unassigned cards keep an unscoped subagent key, so the Gateway's configured default agent is preserved.
 
 The dispatch loop:
 
@@ -128,9 +133,13 @@ If worker start fails after a card is claimed, Workboard blocks that card and cl
 The CLI falls back to data-only dispatch against local Workboard state when both of these are true:
 
 - You give no explicit Gateway target.
-- The local Gateway is unavailable, or it does not expose the Workboard dispatch method yet.
+- The local Gateway is stopped and the CLI can acquire exclusive offline state ownership.
 
-Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. Auth, permission, and validation failures, and failures for an explicit `--url` or `--token` target, are reported directly instead of triggering the fallback.
+Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. A live owner that cannot be reached, lacks the required method, or rejects the request never triggers local fallback. Auth, permission, validation, and explicit-target failures are reported directly. After an uncertain reply, inspect the board before retrying.
+
+Data-only dispatch requires the Gateway to be stopped. A connection error or
+missing RPC method alone does not establish that it stopped. A running Gateway
+does not poll for mutations made by another process.
 
 Text output reports worker starts:
 
@@ -138,13 +147,17 @@ Text output reports worker starts:
 dispatch complete: started=2 failures=0
 ```
 
+When a worker cannot start, text output also prints its card id prefix and the failure reason. JSON output includes the same reason in `startFailures`.
+
+For a card already authorized for full-host workspace access, a refusal because the current caller is limited to configured workspaces includes a `--admin` hint. This requests `operator.admin`; the Gateway must approve that scope. The hint does not apply to cards with restricted, read-only, or unknown persisted workspace authority, and `--admin` does not override those limits.
+
 Fallback output is explicit:
 
 ```text
 gateway unavailable; data dispatch only: promoted=1 blocked=0
 ```
 
-JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`. Data-only fallback includes `gatewayUnavailable: true`. Claim tokens are redacted from card JSON output.
+JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`. Data-only fallback includes `gatewayUnavailable: true` and empty `started` and `startFailures` arrays. Claim tokens are redacted from card JSON output.
 
 In the dashboard, the same dispatch result appears as a short summary. An operator can see how many cards started, promoted, blocked, reclaimed, or failed without opening card details.
 

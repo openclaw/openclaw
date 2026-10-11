@@ -77,7 +77,7 @@ async function withProjectionSessionStore(
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const tempConfig = {
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     session: { store: storePath },
   };
   return await withEnvAsync(
@@ -288,6 +288,7 @@ describe("plugin session extension SessionEntry projection", () => {
       "completion-custody": "restartRecoveryHarnessCompletion",
       "retired-execsecurity": "execSecurity",
       "retired-execask": "execAsk",
+      "retired-conversation-link": "conversationLink",
     };
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
