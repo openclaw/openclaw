@@ -46,9 +46,6 @@ function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
   expect(request).toHaveBeenCalledWith("config.patch", params);
 }
 
-const conflictError = () =>
-  new Error("config changed since last load; re-run config.get and retry");
-
 describe("server preferences", () => {
   it("adopts the preference revision before saving an in-flight Settings edit", async () => {
     vi.useFakeTimers();
