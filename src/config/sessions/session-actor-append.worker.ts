@@ -16,6 +16,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { ensureSessionEntryInTransaction } from "./session-accessor.sqlite-initial-entry.js";
+import { readSessionPendingInputWorkerReceipt } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
@@ -139,11 +140,11 @@ export function applySessionActorAppend(
           authorize("transaction");
           const value = applySessionMetadataAppendInTransaction(database, scoped, beforeFresh);
           authorize("commit");
+          value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
           return value;
         }),
     );
     const value = result.value;
-    value.pendingInputReceipt = result.pendingInputReceipt;
     if (input.view && sessionMetadataAppendNeedsReload(input, value)) {
       try {
         value.reload = {
@@ -195,9 +196,9 @@ export function applySessionActorAppend(
         authorize("transaction");
         const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
         authorize("commit");
+        value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
         return value;
       }),
   );
-  result.value.pendingInputReceipt = result.pendingInputReceipt;
   return { kind: "message", value: result.value, initialEntry, header };
 }
