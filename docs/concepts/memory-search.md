@@ -14,8 +14,9 @@ searches them with embeddings, keywords, or both.
 When indexing Markdown, the builtin engine attaches a heading-only chunk to the
 following content chunk. This keeps short headings from taking search result slots
 on their own while preserving section context and source line references. A final
-heading with no following content stays searchable, and provider input limits still
-apply to merged chunks.
+heading with no following content stays searchable. Oversized headings already
+split across chunks keep their fragments, and provider input limits still apply
+to merged chunks.
 
 After upgrading, existing builtin indexes rebuild once on the next normal search
 or sync to apply this chunking change. No configuration change or manual

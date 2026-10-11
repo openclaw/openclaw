@@ -25,6 +25,18 @@ describe("heading chunks at the indexing boundary", () => {
     ]);
   });
 
+  it("preserves a long heading continuation that shares the next chunk's source line", () => {
+    const { chunks } = prepareMemoryIndexChunks({
+      entry: { path: "memory/notes.md", mtimeMs: 1 },
+      source: "memory",
+      content: `# ${"a".repeat(32)}\nBody`,
+      pathClassification: { curatedRoot: false, originClass: "agent" },
+      chunking: { tokens: 8, overlap: 0 },
+      hardMaxInputTokens: 8192,
+    });
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(`# ${"a".repeat(32)}\nBody`);
+  });
+
   it.each(["memory", "sessions"] as const)("preserves a final heading for %s", (source) => {
     const { chunks } = prepareMemoryIndexChunks({
       entry: { path: "MEMORY.md", mtimeMs: 1 },

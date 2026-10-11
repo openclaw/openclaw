@@ -76,7 +76,15 @@ export function prepareMemoryIndexChunks({
       source === "memory" &&
       previous &&
       chunk.endLine > previous.endLine &&
-      previous.text.split("\n").every((line) => !line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line))
+      // Size-split heading fragments share line numbers without being overlapping text.
+      previous.text
+        .split("\n")
+        .every(
+          (line, index) =>
+            (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
+            line.replace(/\r$/u, "") ===
+              stripMemoryAnnotationCarriers(sourceLines[previous.startLine + index - 1] ?? ""),
+        )
     ) {
       // Keep the following entry's annotation span, and do not repeat overlapping headings.
       const following = chunk.text
