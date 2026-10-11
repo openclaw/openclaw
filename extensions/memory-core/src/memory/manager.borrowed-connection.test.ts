@@ -13,6 +13,7 @@ import {
 import {
   encodeMemoryEmbedding,
   ensureMemoryChunkProvenance,
+  loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -30,6 +31,7 @@ import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
@@ -116,7 +118,8 @@ describe("memory manager agent database lifecycle", () => {
     const manager = await fixture.getFreshManager(cfg, "cli");
     const memoryFile = path.join(fixture.paths.memory, "2026-01-12.md");
     await manager.sync({ reason: "cli", force: true });
-    const db = managerDatabase(manager);
+    const db = memoryIndexFixtureWriter(manager);
+    expect((await loadSqliteVecExtension({ db })).ok).toBe(true);
     const vectorTexts = () =>
       db
         .prepare(

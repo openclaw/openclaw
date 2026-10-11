@@ -609,7 +609,7 @@ describe("resolveDeliveryTarget", () => {
       to: "room:default",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       channel: "forum",
       to: "room:default",

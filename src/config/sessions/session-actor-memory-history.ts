@@ -7,7 +7,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
-import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
+import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
@@ -22,7 +22,7 @@ import {
 
 /** The actor already owns these bytes; limits select a detached view, never a second store. */
 export function readSessionActorMemoryHistory(
-  state: SessionActorMemoryState,
+  state: SessionActorMemoryWindow,
   limits?: { maxBytes: number; maxEvents: number },
 ): PreparedSessionTranscriptHydration {
   const version = { ...state.hot.transcript.version };

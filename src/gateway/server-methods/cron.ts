@@ -12,19 +12,14 @@ import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
-import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import {
   resolveCronDeliveryFailurePreview,
   resolveCronDeliveryPreview,
 } from "../../cron/delivery-preview.js";
-import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { cronAddResultReadView, cronJobReadView } from "../../cron/job-read-view.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
-import {
-  isInvalidCronSessionTargetIdError,
-  resolveCronSessionTargetSessionKey,
-} from "../../cron/session-target.js";
+import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type {
   CronDeliveryPreview,
@@ -59,6 +54,7 @@ import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
+  cronRunQueuesBehindCaller,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
   normalizeCronUpdateRequest,
@@ -133,8 +129,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const callerScope = readCronCallerScope(client);
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
-    const { assertCurrent: assertCreatorSessionCurrent, ...creatorOptions } =
-      captureCronCreatorSession(jobCreate, callerScope, client);
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
@@ -149,11 +143,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
-    const commitGuard = () => {
-      assertMutationCurrent?.();
-      assertCapturedAuthorityCurrent?.();
-      assertCreatorSessionCurrent();
-    };
     const cfg = context.getRuntimeConfig();
     if (
       !cronCreateMatchesCallerScope({
@@ -190,6 +179,13 @@ export const cronHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const { assertCurrent: assertCreatorSessionCurrent, ...creatorOptions } =
+      captureCronCreatorSession(jobCreate, callerScope, client);
+    const commitGuard = () => {
+      assertMutationCurrent?.();
+      assertCapturedAuthorityCurrent?.();
+      assertCreatorSessionCurrent();
+    };
     try {
       assertCronDoesNotTargetAgentHarness(jobCreate);
       await assertValidCronCreateDelivery(cfg, jobCreate);
@@ -588,28 +584,15 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
       const ack = { ...result, processInstanceId: getGatewayProcessInstanceId() };
       const callerSessionKey = client?.internal?.agentRuntimeIdentity?.sessionKey;
-      // An agent turn holds the main lane and its own session lane until it ends, so an
-      // agent-turn run that executes there, or announces a current-session result into it,
-      // cannot finish while this request waits. Command and script payloads run as processes.
-      const dependentSessionKey =
-        job.payload.kind !== "agentTurn"
-          ? undefined
-          : job.sessionTarget === "current"
-            ? resolveCronDeliveryPlan(job).requested
-              ? job.sessionKey
-              : undefined
-            : resolveCronSessionTargetSessionKey(job.sessionTarget);
-      const cfg = context.getRuntimeConfig();
       const runQueuesBehindCaller =
-        callerSessionKey !== undefined &&
-        (job.sessionTarget === "main" ||
-          (dependentSessionKey !== undefined &&
-            resolveCronAgentSessionKey({
-              sessionKey: dependentSessionKey,
-              agentId: normalizeAgentId(job.agentId ?? context.cron.getDefaultAgentId()),
-              mainKey: cfg.session?.mainKey,
-              cfg,
-            }) === callerSessionKey));
+        p.waitTimeoutMs !== undefined &&
+        "enqueued" in result &&
+        (await cronRunQueuesBehindCaller({
+          job,
+          cfg: context.getRuntimeConfig(),
+          callerSessionKey,
+          resolveDefaultAgentId: () => context.cron.getDefaultAgentId(),
+        }));
       let run: unknown;
       let finished = false;
       // cron.run stays an enqueue (#40192); waiting is opt-in and bounded by the caller.

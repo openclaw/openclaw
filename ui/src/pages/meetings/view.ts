@@ -91,6 +91,7 @@ type TranscriptsViewProps = {
   onSummaryRetry?: () => void;
   exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string };
   onNavigate: (patch: Record<string, string | null>) => void;
+  onOpenCaptureSettings: () => void;
   onRefresh: () => void;
   onReaderRetry: () => void;
   onReaderTab: (tab: "text" | "summary") => void;
@@ -590,6 +591,13 @@ export function renderTranscripts(props: TranscriptsViewProps) {
             captureTarget.search +
             captureTarget.hash
           }
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            props.onOpenCaptureSettings();
+          }}
           >${icons.settings}${t("meetingCapture.title")}</a
         >
         <button

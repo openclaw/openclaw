@@ -124,6 +124,10 @@ On Windows, point `worktreeRoot` at a directory on a ReFS volume, such as `D:\wo
 
 OpenClaw maintains one reusable source-only template per repository and destination root. Concurrent creates share one cold build and retain the ready template while cloning independently. A changed commit or checkout policy rebuilds an unused template; while readers still hold it, that request uses normal Git checkout. Cleanup retires templates unused for seven days once their readers have settled. Uncertain native operations retain template custody while their process owner is live or unknown. The next template acquisition or cleanup reclaims readers whose process owner is definitely dead, without requiring an OS reboot. Allocation and template mutation leases retain their existing expiry-based recovery. Git continues to own worktree registration, indexes, and branches; the filesystem backend supplies the shared file contents.
 
+Sandboxed source-only sessions also reuse templates. Template creation, validation, and index refresh use the same isolated Git configuration as ordinary source-only materialization, so repository filters never run on the host. Their cache identity includes that checkout policy, preventing reuse of a template prepared with host filters.
+
+Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
+
 Private Git index copies for template checkouts and safety snapshots prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Snapshot indexes retain the source index's timestamp boundary so Git still detects edits made within the filesystem's timestamp resolution.
 
 New checkouts with no file data, including empty session workspaces, use normal Git checkout without preparing or cloning a template.
