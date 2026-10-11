@@ -78,8 +78,5 @@ declare module "@solidjs/web" {
     interface SVGAttributes<T> {
       "xml:space"?: "default" | "preserve";
     }
-    interface SVGAttributes<T> {
-      "xml:space"?: "default" | "preserve";
-    }
   }
 }
