@@ -421,7 +421,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
 
   private renderHeaderActions(
     panelActions: TemplateResult | typeof nothing | null,
-    hostedActions: TemplateResult | typeof nothing,
+    hostedActions: TemplateResult | Node | typeof nothing,
   ) {
     const active = sidebarActivePanel(this.layout);
     const expanded = this.layout.expanded === true && this.layout.expandedSide === true;

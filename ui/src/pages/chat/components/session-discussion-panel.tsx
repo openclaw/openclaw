@@ -1,17 +1,19 @@
-import { html, nothing } from "lit";
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import { icons } from "../../../components/icons.ts";
-import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { buildWidgetThemeMessage, postWidgetTheme } from "../../../lib/widget-theme.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-lit-content.tsx";
+import {
+  defineSolidBridge,
+  LitContent,
+  type SolidBridgeElement,
+} from "../../../lit/solid-bridge.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionStateListener = (
@@ -151,17 +153,17 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
   });
   onCleanup(() => observer.disconnect());
   const empty = (description: string, openUrl?: string | null) => (
-    <LitContent
-      value={renderPanelEmptyState({
-        icon: icons.messageSquare,
-        heading: t("chat.sidePanel.discussion"),
-        description,
-        action: openUrl
-          ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener"
-              >${t("chat.sessionDiscussion.openExternal")}</a
-            >`
-          : nothing,
-      })}
+    <PanelEmptyState
+      icon={<Icon name="messageSquare" />}
+      heading={t("chat.sidePanel.discussion")}
+      description={description}
+      action={
+        openUrl ? (
+          <a class="session-link" href={openUrl} target="_blank" rel="noopener">
+            {t("chat.sessionDiscussion.openExternal")}
+          </a>
+        ) : undefined
+      }
     />
   );
   const renderState = () => {

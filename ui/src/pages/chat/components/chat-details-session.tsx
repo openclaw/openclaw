@@ -1,10 +1,12 @@
-import { nothing } from "lit";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-lit-content.tsx";
+import {
+  defineSolidBridge,
+  LitContent,
+  type SolidBridgeElement,
+} from "../../../lit/solid-bridge.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -43,7 +45,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const pullRequests = createMemo(() => {
             const snapshot = props.props;
             if (!snapshot) {
-              return nothing;
+              return null;
             }
             const current = () => host.isConnected && props.presented && props.props === snapshot;
             return renderChatPullRequests({
@@ -205,7 +207,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     <span>{props.props?.pullRequests?.length || null}</span>
                   </summary>
                   <Show
-                    when={pullRequests() !== nothing}
+                    when={pullRequests() !== null}
                     fallback={
                       <div class="chat-details__muted">
                         {t("chat.sessionDetails.noPullRequests")}

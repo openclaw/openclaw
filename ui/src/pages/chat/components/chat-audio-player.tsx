@@ -10,8 +10,8 @@ import {
 } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-lit-content.tsx";
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent } from "../../../lit/solid-bridge.ts";
 import {
   openAttachmentCardFromClick,
   renderAttachmentCardHeader,

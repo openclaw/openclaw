@@ -1,4 +1,5 @@
 import { render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createRenderEffect,
@@ -36,6 +37,20 @@ type ComponentProps<Props, Methods> = Partial<Props> &
   Omit<JSX.HTMLAttributes<SolidBridgeElement<Props, Methods>>, keyof Props> & {
     children?: JSX.Element;
   };
+
+/** Isolates retained Lit template helpers until their rendering owners migrate. */
+export function LitContent(props: { value: unknown }) {
+  const container = document.createElement("span");
+  container.style.display = "contents";
+  createRenderEffect(
+    () => props.value,
+    (value) => {
+      renderLit(value, container);
+    },
+  );
+  onCleanup(() => renderLit(nothing, container));
+  return container;
+}
 
 /** Interim tag owner: delete with the last Lit caller at the Solid cutover. */
 export function defineSolidBridge<Props extends object, Methods extends object = object>(

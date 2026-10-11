@@ -11,8 +11,8 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-lit-content.tsx";
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent } from "../../../lit/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { AttachmentDownloadController } from "./chat-attachment-download-controller.ts";
 import { FileCopyController } from "./chat-file-copy-controller.ts";
@@ -85,7 +85,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let fileDraftContent: string | null = null;
   let fileSavedContent = "";
   let fileHash = "";
-  const requestAttachmentUpdate = () => invalidate();
   const attachmentDownload = new AttachmentDownloadController(
     updatingHost,
     () => (props.content === visibleContent ? props.content : null),
@@ -96,31 +95,30 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     contentChanged: boolean,
     navigationChanged: boolean,
     previousRuntime: AttachmentSidebarRuntime | undefined,
+    content: ChatDetailPanelContent | null,
+    navigation: FileSidebarNavigation | null,
+    runtime: AttachmentSidebarRuntime,
   ) {
-    if (
-      previousRuntime &&
-      previousRuntime.connectionEpoch !== props.attachmentRuntime.connectionEpoch
-    ) {
-      releaseChatMediaResourceSubscriber(requestAttachmentUpdate);
+    if (previousRuntime && previousRuntime.connectionEpoch !== runtime.connectionEpoch) {
+      releaseChatMediaResourceSubscriber(invalidate);
       attachmentDownload.cancel();
     }
-    if (navigationChanged && props.fileNavigation && props.content?.kind === "file") {
+    if (navigationChanged && navigation && content?.kind === "file") {
       htmlPreview.showSource();
     }
     if (!contentChanged) {
       // A line link is navigation, not replacement content: keep drafts, undo,
       // save operations, and the mounted editor intact. Plain tab selection
       // does not change this request and must not reset raw view or scroll.
-      if (navigationChanged && props.fileNavigation && props.content?.kind === "file" && rawView) {
-        const content = rawView.file ?? props.content;
+      if (navigationChanged && navigation && content?.kind === "file" && rawView) {
+        visibleContent = rawView.file ?? content;
         rawView = null;
-        visibleContent = content;
       }
       return;
     }
-    releaseChatMediaResourceSubscriber(requestAttachmentUpdate);
+    releaseChatMediaResourceSubscriber(invalidate);
     attachmentDownload.cancel();
-    visibleContent = props.content;
+    visibleContent = content;
     error = null;
     rawView = null;
     fileSearchOpen = false;
@@ -133,30 +131,25 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     fileSaving = false;
     fileSaveNotice = null;
     const retainedDraft =
-      props.content?.kind === "file" && props.content.edit
-        ? readFileDraft(props.content)
-        : undefined;
+      content?.kind === "file" && content.edit ? readFileDraft(content) : undefined;
     const restoredDraft =
-      props.content?.kind === "file" && retainedDraft?.content !== props.content.content
+      content?.kind === "file" && retainedDraft?.content !== content.content
         ? retainedDraft
         : undefined;
-    if (retainedDraft && !restoredDraft && props.content?.kind === "file") {
-      setFileDraft(props.content, null);
+    if (retainedDraft && !restoredDraft && content?.kind === "file") {
+      setFileDraft(content, null);
     }
     fileDraftContent = restoredDraft?.content ?? null;
-    fileSavedContent = props.content?.kind === "file" ? props.content.content : "";
+    fileSavedContent = content?.kind === "file" ? content.content : "";
     fileHash =
-      restoredDraft?.expectedHash ??
-      (props.content?.kind === "file" ? (props.content.edit?.hash ?? "") : "");
+      restoredDraft?.expectedHash ?? (content?.kind === "file" ? (content.edit?.hash ?? "") : "");
     fileEditing = Boolean(restoredDraft);
     fileDirty = Boolean(restoredDraft);
     htmlPreview.reset(
       fileDraftContent,
-      Boolean(
-        props.fileNavigation || (props.content?.kind === "file" && props.content.line != null),
-      ),
+      Boolean(navigation || (content?.kind === "file" && content.line != null)),
     );
-    fileEditorLoading = props.content?.kind === "file" && !htmlPreview.showing;
+    fileEditorLoading = content?.kind === "file" && !htmlPreview.showing;
     destroyFileEditor();
   }
 
@@ -676,7 +669,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       onViewRawText: showRawText,
       onClick: handlePanelClick,
       onKeydown: handlePanelKeyDown,
-      onAttachmentUpdate: requestAttachmentUpdate,
+      onAttachmentUpdate: invalidate,
       attachmentRuntime: props.attachmentRuntime,
       attachmentDownload,
     });
@@ -698,7 +691,14 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       const navigationChanged = navigation !== previousNavigation;
       if (contentChanged || navigationChanged || runtime !== previousRuntime) {
         navigate ||= contentChanged || navigationChanged;
-        updateSelection(contentChanged, navigationChanged, previousRuntime);
+        updateSelection(
+          contentChanged,
+          navigationChanged,
+          previousRuntime,
+          content,
+          navigation,
+          runtime,
+        );
         invalidate();
       }
       previousContent = content;
@@ -726,7 +726,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       fileDraftContent = currentFileText();
     }
     destroyFileEditor();
-    releaseChatMediaResourceSubscriber(requestAttachmentUpdate);
+    releaseChatMediaResourceSubscriber(invalidate);
   });
   return <LitContent value={lifecycle.snapshot()} />;
 }

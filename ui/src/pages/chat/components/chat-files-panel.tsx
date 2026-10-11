@@ -1,16 +1,19 @@
-import { html, nothing, type TemplateResult } from "lit";
 import { For, Show, createEffect } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
-  PANEL_HOSTED_TABS_CHANGE_EVENT,
+  notifyPanelHostedTabsChanged,
   type PanelHostedTab,
 } from "../../../components/panel-hosted-tabs.ts";
-import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-lit-content.tsx";
+import {
+  defineSolidBridge,
+  LitContent,
+  type SolidBridgeElement,
+} from "../../../lit/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
@@ -20,8 +23,9 @@ type Props = {
   previews: SessionWorkspacePreview[];
   activeId: string | null;
   tabsInHeader: boolean;
-  browser: TemplateResult | typeof nothing;
-  renderDetail: ((content: SidebarContent) => TemplateResult) | null;
+  /** Opaque output of the retained workspace renderer, consumed only by LitContent. */
+  browser: unknown;
+  renderDetail: ((content: SidebarContent) => unknown) | null;
   onSelect: (id: string | null) => void;
   onClose: (id: string) => void;
 };
@@ -29,7 +33,7 @@ type Methods = { selectHostedTab(id: string): void; closeHostedTab(id: string): 
 export type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
-  readonly hostedActions: TemplateResult;
+  readonly hostedActions: HTMLButtonElement;
 };
 let filesPanelSequence = 0;
 
@@ -90,16 +94,20 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
         : tabs;
     };
     const activeHostedTabId = () => props.activeId ?? (props.previews.length ? "browse" : null);
-    const hostedActions = () =>
-      html`<button
-        class="rail-header__action"
-        type="button"
-        aria-label=${t("chat.sidePanel.files")}
-        title=${t("chat.sidePanel.files")}
-        @click=${() => props.onSelect(null)}
-      >
-        ${icons.folder}
-      </button>`;
+    let browseAction!: HTMLButtonElement;
+    <button
+      ref={(element) => {
+        browseAction = element;
+      }}
+      class="rail-header__action"
+      type="button"
+      aria-label={t("chat.sidePanel.files")}
+      title={t("chat.sidePanel.files")}
+      onClick={() => props.onSelect(null)}
+    >
+      <Icon name="folder" />
+    </button>;
+    const hostedActions = () => browseAction;
     Object.defineProperties(host, {
       hostedTabs: { configurable: true, get: hostedTabs },
       activeHostedTabId: { configurable: true, get: activeHostedTabId },
@@ -114,15 +122,12 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
       }
     };
     createEffect(
-      () =>
-        JSON.stringify([
-          activeHostedTabId(),
-          t("chat.sidePanel.files"),
-          hostedTabs().map(({ id, label, title, className }) => [id, label, title, className]),
-        ]),
-      () => {
-        host.dispatchEvent(new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true }));
-      },
+      () => [
+        activeHostedTabId(),
+        t("chat.sidePanel.files"),
+        hostedTabs().map(({ id, label, title, className }) => [id, label, title, className]),
+      ],
+      (facts) => notifyPanelHostedTabsChanged(host, facts),
     );
     return (
       <>
@@ -168,17 +173,18 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}
                 >
-                  <LitContent
-                    value={
-                      entry().content.kind === "loading"
-                        ? renderPanelLoadingSkeleton("files", t("common.loading"))
-                        : entry().content.kind === "unavailable"
-                          ? html`<div class="callout danger" role="alert">
-                              ${entry().content.kind === "unavailable" ? entry().content.message : ""}
-                            </div>`
-                          : rendered().renderDetail?.(entry().content)
-                    }
-                  />
+                  {entry().content.kind === "loading" ? (
+                    <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
+                  ) : entry().content.kind === "unavailable" ? (
+                    <div class="callout danger" role="alert">
+                      {(() => {
+                        const content = entry().content;
+                        return content.kind === "unavailable" ? content.message : "";
+                      })()}
+                    </div>
+                  ) : (
+                    <LitContent value={rendered().renderDetail?.(entry().content)} />
+                  )}
                 </div>
               );
             }}
@@ -192,7 +198,7 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
       previews: { default: [], attribute: false },
       activeId: { default: null, attribute: false },
       tabsInHeader: { default: true, type: Boolean },
-      browser: { default: nothing, attribute: false },
+      browser: { default: undefined, attribute: false },
       renderDetail: { default: null, attribute: false },
       onSelect: { default: () => {}, attribute: false },
       onClose: { default: () => {}, attribute: false },
