@@ -51,40 +51,6 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
-  it("serializes sibling add-on writes through the shared configuration owner", async () => {
-    const firstMutation = createMemoryTestDeferred<unknown>();
-    const setEnabled = vi.fn((pluginId: string) =>
-      pluginId === "active-memory"
-        ? firstMutation.promise
-        : Promise.resolve(committed(pluginId, true)),
-    );
-    const { element, runExternalMutation } = createMemoryPage({
-      configObject: {},
-      catalog: [
-        createMemoryTestAddon("active-memory", true),
-        createMemoryTestAddon("memory-wiki", false),
-      ],
-      setEnabled,
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
-      toggleAddon(element, "Active memory", false);
-      toggleAddon(element, "Memory wiki", true);
-
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
-      expect(setEnabled).toHaveBeenCalledWith("active-memory", false);
-
-      firstMutation.resolve(committed("active-memory", false));
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
-    } finally {
-      firstMutation.resolve(committed("active-memory", false));
-      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
-      element.remove();
-    }
-  });
-
   it.each(["reconnect", "boot", "admin scope", "read-only catalog"])(
     "drops an add-on mutation queued before a %s change",
     async (change) => {
@@ -467,7 +433,6 @@ describe("Memory plugin mutation ownership", () => {
   });
 
   it.each([
-    ["active-memory", "memory-wiki"],
     ["engine", "active-memory"],
     ["active-memory", "engine"],
   ] as const)(

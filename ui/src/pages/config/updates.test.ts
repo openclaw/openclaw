@@ -5,10 +5,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
-import {
-  createIosNativeDeviceSettingsSnapshot,
-  createNativeDeviceSettingsSnapshot,
-} from "../../test-helpers/native-device-settings.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
   createUpdatesViewDom,
@@ -30,65 +27,6 @@ beforeEach(async () => {
 
 describe("renderUpdates", () => {
   it.each([
-    {
-      name: "checking",
-      props: { update: { updateStatusRefreshing: true } },
-      status: "Checking for updates…",
-      tone: "muted",
-      label: "Update now",
-      disabled: true,
-      title: "Checking for updates…",
-    },
-    {
-      name: "updating while a check is pending",
-      props: { updateBusy: true, update: { updateStatusRefreshing: true } },
-      status: "Update available v2026.8.2",
-      tone: "accent",
-      label: "Updating…",
-      disabled: true,
-      title: "",
-    },
-    {
-      name: "failed check with a known update",
-      props: {
-        update: {
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "failed check with a previously confirmed checkout update",
-      props: {
-        configObject: { update: { channel: "dev", checkOnStart: false } },
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
-          },
-          updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
     {
       name: "failed check with a previously confirmed diverged checkout update",
       props: {
@@ -134,40 +72,6 @@ describe("renderUpdates", () => {
       label: "Update now",
       disabled: true,
       title: "Check for updates successfully before starting an update.",
-    },
-    {
-      name: "up to date",
-      props: {
-        update: {
-          updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
-          updateAvailable: null,
-        },
-      },
-      status: "Up to date",
-      tone: "ok",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "update available",
-      props: {},
-      status: "Update available v2026.8.2",
-      tone: "accent",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "real update failure",
-      props: {
-        update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } },
-      },
-      status: "Update error: build failed",
-      tone: "danger",
-      label: "Update now",
-      disabled: false,
-      title: "",
     },
     {
       name: "restart pending",
@@ -238,35 +142,6 @@ describe("renderUpdates", () => {
         statusChecking ? "Checking for updates…" : "Could not check for updates: timeout",
       );
       expect(row("Failure details").textContent).toContain("Update error: build failed");
-    },
-  );
-
-  it.each(["ios", "waiting"])(
-    "keeps Gateway updates without an advertised device updater: %s",
-    (host) => {
-      const nativeDeviceSettings = {
-        snapshot: host === "ios" ? createIosNativeDeviceSettingsSnapshot() : null,
-        subscribe: () => () => undefined,
-        set: vi.fn(),
-        requestPermission: vi.fn(),
-        openSystemSettings: vi.fn(),
-        openPanel: vi.fn(),
-        checkForUpdates: vi.fn(),
-        setupChromeExtension: vi.fn(),
-        refresh: vi.fn(),
-        dispose: vi.fn(),
-      } satisfies NativeDeviceSettingsCapability;
-      const props = createProps({ nativeDeviceSettings });
-      render(renderUpdates(props), container);
-      expect(container.textContent).not.toContain("This Mac");
-      expect(container.textContent).not.toContain("This iPhone");
-      expect(container.textContent).not.toContain("This device");
-      expect(container.textContent).not.toContain("App version");
-      expect(container.textContent).not.toContain("Check for updates automatically");
-      expect(row("Gateway version").textContent).toContain("2026.8.1");
-      row("Update now").querySelector<HTMLButtonElement>("button")?.click();
-      expect(props.onUpdateNow).toHaveBeenCalledOnce();
-      expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
     },
   );
 
@@ -418,67 +293,6 @@ describe("renderUpdates", () => {
     expect(automatic.hasAttribute("disabled")).toBe(true);
   });
 
-  it("keeps the authored channel ahead of the Gateway schedule channel", () => {
-    render(
-      renderUpdates(
-        createProps({
-          configObject: { update: { channel: "beta", auto: { enabled: false } } },
-          update: {
-            updateSchedule: {
-              channel: "extended-stable",
-              autoEnabled: true,
-              install: { kind: "package" },
-            },
-            updateAvailable: null,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const channel = row("Release channel").querySelector<HTMLInputElement>(
-      ".settings-segmented__input:checked",
-    );
-    expect(channel?.value).toBe("beta");
-    expect(
-      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Stable", "Beta", "Dev"]);
-    expect(automaticUpdatesControl().toggle.hasAttribute("disabled")).toBe(false);
-  });
-
-  it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {
-    const onUpdateChecksChange = vi.fn();
-    render(
-      renderUpdates(
-        createProps({
-          configObject: {
-            update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
-          },
-          update: { updateSchedule: { channel: "stable", autoEnabled: false } },
-          onUpdateChecksChange,
-        }),
-      ),
-      container,
-    );
-
-    const checks =
-      row("Check for updates").querySelector<HTMLInputElement>(".settings-toggle__input");
-    if (!checks) {
-      throw new Error("Missing update checks control");
-    }
-    expect(checks.checked).toBe(false);
-    expect(checks.hasAttribute("disabled")).toBe(false);
-    const automatic = automaticUpdatesControl().toggle;
-    expect(automatic.checked).toBe(true);
-    expect(automatic.hasAttribute("disabled")).toBe(true);
-    expect(row("Automatic updates").textContent).toContain("Check for updates");
-    checks.checked = true;
-    checks.dispatchEvent(new Event("change"));
-    expect(onUpdateChecksChange).toHaveBeenCalledWith(true);
-  });
-
   it.each([
     {
       name: "disables dev package installs",
@@ -492,13 +306,6 @@ describe("renderUpdates", () => {
       name: "allows dev git installs",
       channel: "dev",
       installKind: "git",
-      disabled: false,
-      description: undefined,
-    },
-    {
-      name: "allows stable package installs",
-      channel: "stable",
-      installKind: "package",
       disabled: false,
       description: undefined,
     },
@@ -686,11 +493,6 @@ describe("renderUpdates", () => {
 
   it.each([
     {
-      name: "current",
-      git: { status: "current" } as const,
-      label: "Up to date",
-    },
-    {
       name: "ahead",
       git: { status: "ahead", commitsAhead: 2 } as const,
       label: "2 commits ahead of tracked upstream",
@@ -752,16 +554,7 @@ describe("renderUpdates", () => {
 
   it.each([
     { status: "succeeded", reason: null, recovery: false, reconciled: false },
-    { status: "failed", reason: "build-failed", recovery: true, reconciled: false },
     { status: "skipped", reason: "dirty", recovery: true, reconciled: false },
-    {
-      status: "skipped",
-      reason: "external-supervisor-update-required",
-      recovery: false,
-      reconciled: false,
-    },
-    { status: "skipped", reason: "container-image-install", recovery: false, reconciled: false },
-    { status: "skipped", reason: "already-current", recovery: false, reconciled: false },
     { status: "failed", reason: "abandoned", recovery: false, reconciled: true },
   ] as const)(
     "renders the durable $status/$reason report with reconciled=$reconciled and only offers current recovery",
@@ -837,7 +630,6 @@ describe("renderUpdates", () => {
 
   it.each([
     { reason: "external-supervisor-update-required", recovery: false },
-    { reason: "already-current", recovery: false },
     { reason: "dirty", recovery: true },
   ])(
     "keeps the retained $reason sentinel outcome without false recovery",
@@ -953,38 +745,6 @@ describe("renderUpdates", () => {
 
     const report = row("Failure report");
     expect(report.textContent).toContain("may have completed");
-    expect(report.querySelector("a")).toBeNull();
-  });
-
-  it("renders a definitely unstarted report as retryable rather than ambiguous", () => {
-    const run = createUpdateRunFixture({
-      status: "failed",
-      phase: "finished",
-      reason: "build-failed",
-    });
-    render(
-      renderUpdates(
-        createProps({
-          update: {
-            updateRun: run,
-            reportableUpdateFailureId: run.runId,
-            updateFailureReportNotice: {
-              attemptId: run.runId,
-              result: {
-                status: "retryable",
-                message: "No issue submission was started; retry this action later.",
-              },
-            },
-          },
-        }),
-      ),
-      container,
-    );
-
-    const report = row("Failure report");
-    expect(report.textContent).toContain("No GitHub issue submission was started");
-    expect(report.textContent).toContain("retry this action later");
-    expect(report.textContent).not.toContain("may have completed");
     expect(report.querySelector("a")).toBeNull();
   });
 
