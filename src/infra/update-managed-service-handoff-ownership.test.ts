@@ -22,6 +22,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -71,7 +75,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
 
-const tempDirs = new Set<string>();
+const tempDirs = createManagedHandoffTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
@@ -88,7 +92,7 @@ beforeEach(async () => {
     process.nextTick(() => {
       signalMockManagedUpdateHandoffReady({
         child,
-        paramsPath: args.at(-1) ?? "",
+        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
         cleanups: mockedHandoffLeaseCleanups,
       });
     });
@@ -101,8 +105,7 @@ afterEach(async () => {
     cleanup();
   }
   closeOpenClawStateDatabaseForTest();
-  await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempDirs.clear();
+  await tempDirs.cleanup();
   vi.resetModules();
 });
 
@@ -240,7 +243,7 @@ async function runOwnershipHelper(params: {
   }
   const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
 
-  await startManagedServiceUpdateHandoff({
+  const started = await startManagedServiceUpdateHandoff({
     root: tmpDir,
     timeoutMs: 1_800_000,
     restartDrainTimeoutMs: 300_000,
@@ -263,12 +266,9 @@ async function runOwnershipHelper(params: {
     string[],
     { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
   ];
-  const helperScriptPath = args[0] ?? "";
-  tempDirs.add(path.dirname(helperScriptPath));
-  const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as Record<
-    string,
-    unknown
-  >;
+  tempDirs.add(path.dirname(started.logPath));
+  const { scriptPath: helperScriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+  const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf8")) as Record<string, unknown>;
   await params.prepareStateDatabase?.(env);
   if (params.sentinel !== undefined) {
     writeRestartSentinelRow(env, params.sentinel);

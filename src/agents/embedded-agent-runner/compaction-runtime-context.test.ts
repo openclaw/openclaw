@@ -53,6 +53,61 @@ describe("resolveCompactionContextTokenBudget", () => {
   );
 
   it.each([
+    { windowSource: "synthetic" as const, authoredWindow: undefined, expected: 872_000 },
+    { windowSource: undefined, authoredWindow: undefined, expected: 128_000 },
+    { windowSource: "synthetic" as const, authoredWindow: 64_000, expected: 64_000 },
+  ])(
+    "respects reported capacity with window source $windowSource and authored window $authoredWindow",
+    ({ windowSource, authoredWindow, expected }) => {
+      const model = {
+        id: "mock-model",
+        name: "Mock model",
+        provider: "openai",
+        api: "openai-completions" as const,
+        baseUrl: "https://models.example.test/v1",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        contextTokens: 872_000,
+        maxTokens: 4_096,
+        contextWindowSource: windowSource,
+      };
+      const config: OpenClawConfig = authoredWindow
+        ? {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://models.example.test/v1",
+                  models: [
+                    {
+                      id: model.id,
+                      name: model.name,
+                      reasoning: model.reasoning,
+                      input: model.input,
+                      cost: model.cost,
+                      contextWindow: authoredWindow,
+                      maxTokens: model.maxTokens,
+                    },
+                  ],
+                },
+              },
+            },
+          }
+        : {};
+      expect(
+        resolveCompactionContextTokenBudget({
+          config,
+          provider: model.provider,
+          modelId: model.id,
+          model,
+          requestedTokenBudget: 900_000,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
     { requested: 16_000, expected: 3_000 },
     { requested: 2_000, expected: 2_000 },
   ])(
