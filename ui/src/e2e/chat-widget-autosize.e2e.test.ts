@@ -131,15 +131,15 @@ suite.define(() => {
           }
           const pane = document.querySelector(".chat-pane-cache__pane--active");
           const thread = pane?.querySelector<HTMLElement>(".chat-thread");
-          const preview = thread?.querySelector(
+          const widget = thread?.querySelector(
             '.chat-tool-card__preview[data-content-kind="canvas-html"]',
           );
           const anchor = thread?.querySelector('[data-entry-id="widget-reload-anchor"]');
-          if (thread?.clientHeight && preview && anchor) {
+          if (thread?.clientHeight && widget && anchor) {
             window.widgetReloadFrames!.push({
               scrollTop: thread.scrollTop,
               endGap: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
-              previewHeight: preview.getBoundingClientRect().height,
+              previewHeight: widget.getBoundingClientRect().height,
               anchorTop: anchor.getBoundingClientRect().top,
             });
           }
@@ -171,7 +171,9 @@ suite.define(() => {
         .waitFor();
       const samples = await page.evaluate(async () => {
         for (let index = 0; index < 20; index += 1) {
-          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
         }
         window.widgetReloadRecording = false;
         return window.widgetReloadFrames ?? [];

@@ -299,9 +299,9 @@ class WidgetFrameDirective extends Directive {
               widgetFrameRegistry.delete(this.frame);
             }
             this.frame = element;
-            widgetFrameResize.set(element, (height) => {
-              this.reportedHeight = height;
-              params.onHeightChange?.(height);
+            widgetFrameResize.set(element, (reportedHeight) => {
+              this.reportedHeight = reportedHeight;
+              params.onHeightChange?.(reportedHeight);
             });
           })}
           src=${src || nothing}
@@ -349,7 +349,8 @@ function renderWidgetContent(
       .sessionKey=${options?.sessionKey ?? ""}
       .viewId=${preview.mcpApp.viewId}
       .height=${height}
-      .onHeightChange=${(height: number) => options?.widgetLayout?.write(key, height)}
+      .onHeightChange=${(reportedHeight: number) =>
+        options?.widgetLayout?.write(key, reportedHeight)}
       style=${`display:block;min-height:${height}px`}
       .title=${preview.title?.trim() || t("mcpApp.title")}
     ></mcp-app-view>`;
