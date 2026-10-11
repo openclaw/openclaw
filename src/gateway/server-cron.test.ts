@@ -1978,7 +1978,7 @@ describe("buildGatewayCronService", () => {
   it("does not retry cancelled command output while still notifying terminal failure", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     let deliverySignal: AbortSignal | undefined;
-    const failureDelivered = createDeferred<void>();
+    const failureDelivered = createDeferred();
     const send = expectDefined(
       sendCronAnnouncePayloadStrictMock.getMockImplementation(),
       "cron delivery mock",
@@ -2001,7 +2001,6 @@ describe("buildGatewayCronService", () => {
       await withCronService(createCronConfig("cron-cancelled-retry"), async (state) => {
         const job = await addCommandJob(state, "cancelled", "console.log('scheduled result')", {
           deleteAfterRun: false,
-          failureAlert: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });
         await state.cron.run(job.id, "force");

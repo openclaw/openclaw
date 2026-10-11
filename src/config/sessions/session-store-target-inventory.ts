@@ -479,7 +479,10 @@ export function readSessionStoreTargetInventory(
       };
       if (request.selection === "recovery") {
         // Maintenance must retain retired and held stores in its discovered roster.
-        resolveAllAgentSessionStoreTargetsSync(config, options);
+        resolveAllAgentSessionStoreTargetsSync(config, {
+          ...options,
+          fixedStoreAgentIds: new Set(request.agentIds),
+        });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
           resolveConfiguredSessionStoreTargets(config, env, request.paths),

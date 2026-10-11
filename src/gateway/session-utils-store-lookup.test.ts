@@ -51,7 +51,6 @@ import {
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 vi.mock("./github-publication-availability.js", async () => {
   const actual = await vi.importActual<typeof import("./github-publication-availability.js")>(

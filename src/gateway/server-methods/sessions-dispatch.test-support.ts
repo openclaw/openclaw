@@ -28,7 +28,7 @@ export function getDispatchTestMocks() {
 }
 
 beforeEach(() => {
-  const readSessionEntry: typeof sessionStore.loadGatewaySessionEntryReadOnly = (
+  const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnly = (
     key,
     opts,
     cfg = getRuntimeConfig(),
@@ -48,11 +48,11 @@ beforeEach(() => {
       legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
     };
   };
-  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnly").mockImplementation(readSessionEntry);
+  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnly").mockImplementation(readFixtureEntry);
   vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(
     async (params) => {
       params.assertActive?.();
-      return readSessionEntry(params.key, params, params.cfg);
+      return readFixtureEntry(params.key, params, params.cfg);
     },
   );
   vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(async (...args) =>
