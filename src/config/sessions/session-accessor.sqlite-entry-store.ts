@@ -740,13 +740,20 @@ export function writeSessionEntry(
           persisted.snapshotsChanged ? persisted.snapshots : undefined,
         )
       : undefined;
+  const snapshotJson = new Map(
+    persisted.snapshots.map(({ field, valueJson }) => [field, valueJson]),
+  );
   const row = persistedEntry
     ? {
         ...canonicalPreviousRow,
         ...sessionNode,
-        session_diff_baseline_json: JSON.stringify(canonicalEntry.sessionDiffBaseline) ?? null,
-        skills_snapshot_json: JSON.stringify(canonicalEntry.skillsSnapshot) ?? null,
-        system_prompt_report_json: JSON.stringify(canonicalEntry.systemPromptReport) ?? null,
+        ...(persisted.snapshotsChanged
+          ? {
+              session_diff_baseline_json: snapshotJson.get("sessionDiffBaseline") ?? null,
+              skills_snapshot_json: snapshotJson.get("skillsSnapshot") ?? null,
+              system_prompt_report_json: snapshotJson.get("systemPromptReport") ?? null,
+            }
+          : {}),
         window: written.window.postimage,
       }
     : undefined;
