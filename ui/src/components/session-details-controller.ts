@@ -116,7 +116,7 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
       },
       { onInvalidate: () => void refresh() },
     );
-    if (row.rowMode === "compact") {
+    if (row.rowMode) {
       void refresh();
     }
   }

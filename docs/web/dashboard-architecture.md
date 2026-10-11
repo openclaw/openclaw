@@ -55,6 +55,13 @@ Principles:
 
 ## UX flows
 
+The dashboard gallery requests `sessions.list` with `rowMode: "dashboard"`.
+Rows retain card display, navigation, and membership facts; model, usage,
+permission, and participant details remain available through `sessions.describe`.
+The gallery uses the shared session-event reconciler and paced fallback refresh.
+Omitted fields never clear richer session facts already held by another view.
+Other session lists retain their existing compact or full projections.
+
 - **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
   renders in the transcript → hover shows **Pin to dashboard** → widget appears
   on the session's board. The agent can pass `pin: true` to do the same. A

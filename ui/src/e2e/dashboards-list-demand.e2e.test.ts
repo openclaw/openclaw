@@ -24,7 +24,7 @@ const DASHBOARD_REQUEST_PARAMS = {
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-  rowMode: "compact",
+  rowMode: "dashboard",
   source: "dashboard",
 } as const;
 

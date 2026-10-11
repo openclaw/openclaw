@@ -1,4 +1,7 @@
-import { SESSION_ROW_DETAIL_FIELDS } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+} from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   isUiGlobalSessionKey,
@@ -99,6 +102,7 @@ export function mergeSessionFieldObservations(
 
 type RowObservation = {
   read: FieldObservation;
+  readFields?: ReadonlySet<string>;
   agentId: string | null;
   fields: ReadonlyMap<string, FieldObservation>;
 };
@@ -107,6 +111,16 @@ const donatedFields = ["derivedTitle", "lastMessagePreview", ...thinkingMetadata
 const enrichmentFields = ["derivedTitle", "lastMessagePreview", "activitySummary"] as const;
 const compactOmittedFields = [...enrichmentFields, ...SESSION_ROW_DETAIL_FIELDS];
 const identityFields = new Set(["key", "sessionId", "agentId"]);
+const unobservedField: FieldObservation = { source: { revision: 0, updatedAt: null } };
+
+function fieldObservation(observation: RowObservation, field: string): FieldObservation {
+  return (
+    observation.fields.get(field) ??
+    (observation.readFields && !observation.readFields.has(field)
+      ? unobservedField
+      : observation.read)
+  );
+}
 
 /** Field receipts follow row copies without retaining another store of row values. */
 export function createSessionRowProvenance() {
@@ -157,8 +171,7 @@ export function createSessionRowProvenance() {
       }
       return fieldNames.filter(
         (name) =>
-          !identityFields.has(name) &&
-          (projected.fields.get(name) ?? projected.read).source === source.source,
+          !identityFields.has(name) && fieldObservation(projected, name).source === source.source,
       );
     };
   };
@@ -194,17 +207,19 @@ export function createSessionRowProvenance() {
     const read: FieldObservation = {
       source: { revision, updatedAt: row.updatedAt ?? null, snapshotAt: row.snapshotAt },
     };
+    const observed: RowObservation = {
+      read,
+      readFields: row.rowMode === "dashboard" ? SESSION_DASHBOARD_ROW_FIELDS : undefined,
+      agentId: readAgentId ? normalizeAgentId(readAgentId) : null,
+      fields,
+    };
     for (const [name, writer] of writers) {
-      const source = (fields.get(name) ?? read).source;
+      const source = fieldObservation(observed, name).source;
       if (isNewerSource(source, writer)) {
         fields.set(name, { source, writer });
       }
     }
-    observationsByRow.set(row, {
-      read,
-      agentId: readAgentId ? normalizeAgentId(readAgentId) : null,
-      fields,
-    });
+    observationsByRow.set(row, observed);
     return selectSourceFields(row, read, agentId);
   };
   const inheritRow = (
@@ -225,7 +240,7 @@ export function createSessionRowProvenance() {
       const donated = metadata(donor, sourceMetadata.agentId);
       for (const field of donatedFields) {
         if (row[field] !== source[field] && row[field] === donor[field]) {
-          fields.set(field, donated.fields.get(field) ?? donated.read);
+          fields.set(field, fieldObservation(donated, field));
         }
       }
     }
@@ -287,8 +302,8 @@ export function createSessionRowProvenance() {
       if (identityFields.has(field)) {
         continue;
       }
-      const currentField = currentMetadata.fields.get(field) ?? currentMetadata.read;
-      const offeredField = offeredMetadata.fields.get(field) ?? offeredMetadata.read;
+      const currentField = fieldObservation(currentMetadata, field);
+      const offeredField = fieldObservation(offeredMetadata, field);
       const merged = mergeSessionFieldObservations(currentField, offeredField);
       const source = merged.useOffered ? offeredValues : currentValues;
       const provenance = merged.observation;
@@ -355,7 +370,7 @@ export function createSessionRowProvenance() {
     ],
     fieldObservation: (row: GatewaySessionRow, field: string): FieldObservation => {
       const observed = metadata(row);
-      return observed.fields.get(field) ?? observed.read;
+      return fieldObservation(observed, field);
     },
     bindOwner(row: GatewaySessionRow, agentId?: string | null) {
       if (!observationsByRow.has(row)) {

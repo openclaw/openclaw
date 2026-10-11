@@ -7,9 +7,14 @@ import {
 } from "./session-row-provenance.ts";
 
 describe("session row provenance", () => {
-  it.each(["descriptor-first", "compact-first"] as const)(
-    "retains detail facts across compact reads and lets full reads clear them (%s)",
-    (order) => {
+  it.each([
+    ["descriptor-first", "compact"],
+    ["compact-first", "compact"],
+    ["descriptor-first", "dashboard"],
+    ["compact-first", "dashboard"],
+  ] as const)(
+    "retains detail facts across %s %s reads and lets full reads clear them",
+    (order, rowMode) => {
       const provenance = createSessionRowProvenance();
       const identity = {
         key: "agent:main:details",
@@ -23,10 +28,11 @@ describe("session row provenance", () => {
         label: "Before",
         thinkingLevels: [{ id: "high", label: "High" }],
         toolOverrides: { webSearch: false },
+        ...(rowMode === "dashboard" ? { model: "test-model", totalTokens: 123 } : {}),
       };
       const compact: GatewaySessionRow = {
         ...identity,
-        rowMode: "compact",
+        rowMode,
         updatedAt: 200,
         snapshotAt: 200,
         label: "Current",
@@ -40,6 +46,7 @@ describe("session row provenance", () => {
         label: "Current",
         thinkingLevels: [{ id: "high", label: "High" }],
         toolOverrides: { webSearch: false },
+        ...(rowMode === "dashboard" ? { model: "test-model", totalTokens: 123 } : {}),
       });
 
       const cleared: GatewaySessionRow = {
@@ -52,6 +59,8 @@ describe("session row provenance", () => {
       const next = provenance.mergeRow(merged, cleared);
       expect(next.thinkingLevels).toBeUndefined();
       expect(next.toolOverrides).toBeUndefined();
+      expect(next.model).toBeUndefined();
+      expect(next.totalTokens).toBeUndefined();
       expect(next.rowMode).toBeUndefined();
     },
   );

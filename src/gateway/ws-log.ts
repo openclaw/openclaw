@@ -57,7 +57,8 @@ export function summarizeSessionListForWsLog(input: unknown): Record<string, unk
   const params = isRecord(input) ? input : {};
   return {
     source: SESSION_LIST_SOURCES.find((source) => source === params.source) ?? "unspecified",
-    rowMode: params.rowMode === "compact" ? "compact" : "full",
+    rowMode:
+      params.rowMode === "compact" || params.rowMode === "dashboard" ? params.rowMode : "full",
     limit:
       typeof params.limit === "number" && Number.isSafeInteger(params.limit) && params.limit > 0
         ? params.limit

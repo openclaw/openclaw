@@ -37,7 +37,7 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
-    rowMode: "compact",
+    rowMode: "dashboard",
     source: "dashboard",
     excludeDock: true,
     hasBoard: true,
@@ -79,7 +79,7 @@ export function buildSessionRequestParams(
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
   const params: SessionsListParams = {
-    rowMode: "compact",
+    rowMode: options.rowMode ?? "compact",
     source: options.source ?? "chat-pane",
     includeGlobal: true,
     includeUnknown: true,
