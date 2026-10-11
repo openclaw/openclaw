@@ -32,6 +32,11 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "build": {
+      "workerEntries": [
+        "./src/telegram-ingress-worker.runtime.ts"
+      ]
+    },
     "setupFeatures": {
       "configPromotion": true
     },

@@ -8,6 +8,7 @@ import { createGatewayStoreTestStore } from "../../app/gateway-store.test-suppor
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   resetComposerFixture,
@@ -32,7 +33,7 @@ afterEach(async () => {
 type PickerDropdown = HTMLElement & { open: boolean; updateComplete: Promise<unknown> };
 
 function mountPicker(composerProps: ReturnType<typeof props>) {
-  const container = document.body.appendChild(document.createElement("div"));
+  const container = document.body.appendChild(createComposerContainer());
   const draw = () => render(renderChatComposer(composerProps), container);
   composerProps.onRequestUpdate = draw;
   draw();
@@ -63,7 +64,7 @@ describe("composer microphone picker", () => {
       createGatewayStoreTestStore({ settings }).gateway,
     );
     onTestFinished(() => theme.dispose());
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     document.body.append(container);
     const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
     const draw = () => {

@@ -126,19 +126,22 @@ function mutate<T>(
   context: WorkerWriteOperationContext,
   operation: (
     db: ReturnType<WorkerWriteOperationContext["open"]>["db"],
-    retire: (ids: string[]) => void,
+    capture: (receipt: UserGitHubConnectionCommit) => void,
   ) => T,
 ): T {
   return context.write(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const retiredProfileIds: string[] = [];
-      const result = operation(db, (ids) => retiredProfileIds.push(...ids));
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       const receipt: UserGitHubConnectionCommit = {
         kind: "user-github-connection",
-        retiredProfileIds,
+        changedOwners: [],
+        retiredProfileIds: [],
       };
+      const result = operation(db, (publication) => {
+        receipt.changedOwners.push(...publication.changedOwners);
+        receipt.retiredProfileIds.push(...publication.retiredProfileIds);
+      });
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
       deferSqliteWorkerCommitReceipt(db, receipt);
       return result;
     },
@@ -163,23 +166,23 @@ export const userGitHubConnectionOperations = {
     ) {
       return undefined;
     }
-    return mutate(context, (db, retire) => {
+    return mutate(context, (db, capture) => {
       const { owner, mutation } = input;
       if (mutation.kind === "disconnect") {
-        return disconnectUserGitHubConnectionInDatabase(db, owner, retire);
+        return disconnectUserGitHubConnectionInDatabase(db, owner, capture);
       }
       if (mutation.kind === "cancel") {
-        return cancelUserGitHubAuthorizationInDatabase(db, owner, mutation.requestId, retire);
+        return cancelUserGitHubAuthorizationInDatabase(db, owner, mutation.requestId, capture);
       }
       const current = readUserGitHubConnectionInDatabase(db, owner);
       const next = applyMutation(current, mutation);
       return next
-        ? writeUserGitHubConnectionInDatabase(db, owner, next, current, retire)
+        ? writeUserGitHubConnectionInDatabase(db, owner, next, current, capture)
         : undefined;
     });
   },
   "userGitHubConnections.refresh": (input: UserGitHubRefreshMutation, context) =>
-    mutate(context, (db, retire) => {
+    mutate(context, (db, capture) => {
       const resolved = readCanonicalUserGitHubConnectionInDatabase(db, input.owner);
       if (!resolved) {
         return false;
@@ -223,7 +226,7 @@ export const userGitHubConnectionOperations = {
         owner,
         { ...current, selection: next },
         current,
-        retire,
+        capture,
       );
       return true;
     }),

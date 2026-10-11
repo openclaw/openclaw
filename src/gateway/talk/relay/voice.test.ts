@@ -2,11 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
 import {
   captureClientVoiceSessionSettlement,
   withClientVoiceSessionSettlement,
 } from "../../../talk/client-voice-session-lifecycle.js";
+import { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../talk/voice-transcript.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { RelaySession } from "./state.js";
@@ -75,9 +75,7 @@ function createRelaySession(refuseCloseSource = false): {
       getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
     },
-    confirmationReadiness: createClientVoiceConfirmationReadiness({
-      agentId: "main",
-      voiceSessionId: "relay-voice-bounded",
+    transcriptReadiness: createClientVoiceTranscriptReadiness({
       flushTranscript: async () => await session.voiceTranscriptQueue.flush(),
     }),
     voiceSessionCreated: false,

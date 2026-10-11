@@ -164,13 +164,7 @@ export function createWorkerInferenceSessionControls(params: {
   let stoppingPromise: Promise<void> | undefined;
 
   const captureCancellationEntries = (predicate: (entry: ActiveInference) => boolean) =>
-    [...active.values()].filter(predicate).map((entry) => ({
-      entry,
-      claimKey: entry.claimKey,
-      sessionId: entry.request.sessionId,
-      runId: entry.request.runId,
-      turnId: entry.request.turnId,
-    }));
+    [...active.values()].filter(predicate);
   const cancelCaptured = (
     captured: ReturnType<typeof captureCancellationEntries>,
     reason: WorkerInferenceErrorReason,
@@ -179,19 +173,13 @@ export function createWorkerInferenceSessionControls(params: {
     const settling: Promise<void>[] = [];
     let failure: { error: unknown } | undefined;
     try {
-      for (const { entry, claimKey, sessionId, runId, turnId } of captured) {
+      for (const entry of captured) {
         control?.assertCurrent?.();
-        if (
-          active.get(claimKey) !== entry ||
-          entry.claimKey !== claimKey ||
-          entry.request.sessionId !== sessionId ||
-          entry.request.runId !== runId ||
-          entry.request.turnId !== turnId
-        ) {
+        if (active.get(entry.claimKey) !== entry) {
           continue;
         }
         settling.push(settleAbort(entry, reason));
-        control?.onCancelled?.(runId);
+        control?.onCancelled?.(entry.request.runId);
       }
     } catch (error) {
       failure = { error };
@@ -216,7 +204,7 @@ export function createWorkerInferenceSessionControls(params: {
         (runId === undefined || entry.request.runId === runId),
     );
     return {
-      runIds: [...new Set(captured.map((entry) => entry.runId))].toSorted(),
+      runIds: [...new Set(captured.map((entry) => entry.request.runId))].toSorted(),
       cancel(control) {
         const cancelled = new Set<string>();
         const settled = cancelCaptured(captured, "cancelled", {
@@ -242,14 +230,6 @@ export function createWorkerInferenceSessionControls(params: {
     [...operations.values()].some((owner) => owner.sessionId === sessionId);
 
   const reserveSessionDrain = (sessionId: string): WorkerInferenceSessionDrainReservation => {
-    const captured = captureCancellationEntries((entry) => entry.request.sessionId === sessionId);
-    const entries = new Set(captured.map(({ entry }) => entry));
-    const sessionOperations = [...operations].filter(([, owner]) => owner.sessionId === sessionId);
-    const capturedOperations = new Set(sessionOperations.map(([operation]) => operation));
-    const capturedStoreKeys = new Set([
-      ...captured.map(({ entry }) => entry.storeKey),
-      ...sessionOperations.map(([, owner]) => owner.storeKey),
-    ]);
     let reserved = true;
     let accepted: ReturnType<WorkerInferenceSessionDrainReservation["accept"]> | undefined;
     const assertReserved = () => {
@@ -259,23 +239,23 @@ export function createWorkerInferenceSessionControls(params: {
       if (drainingSessions.has(sessionId)) {
         throw new WorkerInferenceSessionDrainBusyError(sessionId);
       }
-      if (
-        [...active.values()].some(
-          (entry) => entry.request.sessionId === sessionId && !entries.has(entry),
-        ) ||
-        [...operations].some(
-          ([operation, owner]) =>
-            owner.sessionId === sessionId && !capturedOperations.has(operation),
-        )
-      ) {
-        throw new Error("Worker inference registrations changed before drain acceptance");
-      }
     };
     return {
       assertReserved,
       accept() {
         assertReserved();
         reserved = false;
+        const captured = captureCancellationEntries(
+          (entry) => entry.request.sessionId === sessionId,
+        );
+        const sessionOperations = [...operations].filter(
+          ([, owner]) => owner.sessionId === sessionId,
+        );
+        const capturedOperations = sessionOperations.map(([operation]) => operation);
+        const capturedStoreKeys = new Set([
+          ...captured.map((entry) => entry.storeKey),
+          ...sessionOperations.map(([, owner]) => owner.storeKey),
+        ]);
         let started = false;
         let settled = false;
         let releaseRequested = false;

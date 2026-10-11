@@ -172,13 +172,14 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   /** Wait for exact prior owners, including queued work, without waiting on inherited admission. */
   function getCompetingSessionWorkAdmissionRelease(
-    params: SessionWorkAdmissionReleaseParams & { excludePendingOwner?: symbol },
+    params: SessionWorkAdmissionReleaseParams & { owner?: symbol; excludePendingOwner?: symbol },
   ): Promise<void> | undefined {
     const current = currentAdmissions();
     return sessionWorkAdmissionRelease(
       params,
       (admission) =>
         !current?.has(admission) &&
+        (params.owner === undefined || admission.owner === params.owner) &&
         !(
           params.excludePendingOwner !== undefined &&
           admission.phase === "pending" &&
