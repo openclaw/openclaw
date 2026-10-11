@@ -352,6 +352,86 @@ describe("turn-send-ledger operation identity", () => {
   });
 });
 
+describe("turn-send-ledger concurrent operation identity", () => {
+  // The Gateway joins concurrent requests sharing an idempotency key into one delivery and
+  // reports its outcome to every caller, so same-operation reservations taken while one is
+  // in flight must share one charge and commit at most once.
+  const key = { sessionKey: "s1", runId: "run-1", targetKey: "tg:a" };
+
+  function reserveConcurrentPair(maxPerTurn?: number): [TurnSendReservation, TurnSendReservation] {
+    const owner = expectReserved(reserveTurnSend(key, { maxPerTurn, operationId: "op-1" }));
+    const joiner = expectReserved(reserveTurnSend(key, { maxPerTurn, operationId: "op-1" }));
+    return [owner, joiner];
+  }
+
+  it("commits one logical delivery once when both holders succeed", () => {
+    const [owner, joiner] = reserveConcurrentPair();
+    expect(commitTurnSend(owner)).toBe(1);
+    expect(commitTurnSend(joiner)).toBe(1);
+    expect(peekTurnSendCount(key)).toBe(1);
+    expect(inspectTurnSendLedger()[0]?.pending).toBe(0);
+    expect(reserveTurnSend(key, { operationId: "op-1" }).status).toBe("replay");
+  });
+
+  it.each([
+    ["the opener fails first", 0],
+    ["the joiner fails first", 1],
+  ])("commits once when one holder fails (%s)", (_label, failedIndex) => {
+    const pair = reserveConcurrentPair(1);
+    releaseTurnSend(pair[failedIndex]!);
+    // The surviving holder still owns the shared charge, so the cap stays occupied.
+    expect(reserveTurnSend(key, { maxPerTurn: 1, operationId: "op-2" }).status).toBe("exhausted");
+    expect(commitTurnSend(pair[1 - failedIndex]!)).toBe(1);
+    expect(peekTurnSendCount(key)).toBe(1);
+    expect(inspectTurnSendLedger()[0]?.pending).toBe(0);
+  });
+
+  it("keeps a commit when the other holder fails after it", () => {
+    const [owner, joiner] = reserveConcurrentPair(1);
+    expect(commitTurnSend(owner)).toBe(1);
+    releaseTurnSend(joiner);
+    expect(peekTurnSendCount(key)).toBe(1);
+    expect(reserveTurnSend(key, { maxPerTurn: 1, operationId: "op-2" }).status).toBe("exhausted");
+  });
+
+  it("frees the shared charge only after every holder failed, so a retry reserves fresh", () => {
+    const [owner, joiner] = reserveConcurrentPair(1);
+    releaseTurnSend(owner);
+    releaseTurnSend(joiner);
+    expect(peekTurnSendCount(key)).toBe(0);
+    expect(inspectTurnSendLedger()[0]?.pending).toBe(0);
+    expect(commitOne(key, { maxPerTurn: 1, operationId: "op-1" })).toBe(1);
+  });
+
+  it("admits a joined holder at cap 1 instead of reporting a false exhaustion", () => {
+    const [owner, joiner] = reserveConcurrentPair(1);
+    expect(commitTurnSend(joiner)).toBe(1);
+    expect(commitTurnSend(owner)).toBe(1);
+    expect(reserveTurnSend(key, { maxPerTurn: 1, operationId: "op-2" }).status).toBe("exhausted");
+  });
+
+  it("charges one slot at cap 2, leaving room for a distinct operation", () => {
+    const [owner, joiner] = reserveConcurrentPair(2);
+    expect(commitOne(key, { maxPerTurn: 2, operationId: "op-2" })).toBe(1);
+    expect(commitTurnSend(owner)).toBe(2);
+    expect(commitTurnSend(joiner)).toBe(2);
+    expect(reserveTurnSend(key, { maxPerTurn: 2, operationId: "op-3" }).status).toBe("exhausted");
+  });
+
+  it("keeps one operation id on two accounts as two charged deliveries", () => {
+    // The Gateway scopes idempotency by channel and account, so the same key on another
+    // account is a separate delivery that must charge its own target.
+    const other = { ...key, targetKey: "tg:b" };
+    const first = expectReserved(reserveTurnSend(key, { maxPerTurn: 1, operationId: "op-1" }));
+    const second = expectReserved(reserveTurnSend(other, { maxPerTurn: 1, operationId: "op-1" }));
+    expect(commitTurnSend(first)).toBe(1);
+    expect(commitTurnSend(second)).toBe(1);
+    expect(peekTurnSendCount(other)).toBe(1);
+    expect(reserveTurnSend(other, { maxPerTurn: 1, operationId: "op-2" }).status).toBe("exhausted");
+    expect(reserveTurnSend(other, { maxPerTurn: 1, operationId: "op-1" }).status).toBe("replay");
+  });
+});
+
 describe("turn-send-ledger live-slot retention", () => {
   // The removed LRU cap evicted the oldest-touched slot once 2048 slots accumulated.
   // The victim could be a run that is still live but idle (a long tool wait while
@@ -483,8 +563,7 @@ describe("turn-send-ledger stale settlement across a slot generation", () => {
 
   it("discards a commit from an old reservation after the same key reopened for a new turn", () => {
     // Turn 1 admits a send that is still in flight; its terminal clears the slot. Turn 2
-    // reuses the same logical key (an isolated cron reuses its durable session id as runId)
-    // and commits its own send. Turn 1's delayed delivery then lands — it must NOT mutate
+    // reuses the same logical key (a caller that reuses a runId) and commits its own send. Turn 1's delayed delivery then lands — it must NOT mutate
     // turn 2's slot. Pre-fix, the shared logical key let the stale commit push turn 2's
     // committed count to 2; the generation guard discards it and the count stays 1.
     const stale = expectReserved(reserveTurnSend(key, {}));

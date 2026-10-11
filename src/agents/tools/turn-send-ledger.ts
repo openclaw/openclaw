@@ -33,8 +33,8 @@ type TurnSendSlot = {
   createdAt: number;
   // Monotonic identity of this exact slot instance. Every reserve that opens a slot for a
   // (session, run) pair stamps the next generation; the terminal clear deletes the slot,
-  // so a later turn reusing the same logical key (an isolated cron reuses its durable
-  // session id as runId) opens a distinct generation. A reservation captures the generation
+  // so a later turn reusing the same logical key (a caller that reuses a runId) opens a
+  // distinct generation. A reservation captures the generation
   // it reserved against and settles only while it still matches — so a settlement that
   // arrives after its slot was cleared, or after a newer turn reopened the key, is a no-op
   // and can neither resurrect a cleared slot nor mutate a newer one's counts.
@@ -57,8 +57,26 @@ type TurnSendSlot = {
   // repeated one to the completed operation and returns "sent" without
   // re-delivering. Tracking committed ids lets a replay through the cap and keeps
   // it from double-counting. The message tool passes its idempotency key here too.
+  // Entries are scoped by target key (operationKey): the Gateway scopes idempotency by
+  // channel and account, so one key reused on another route is a distinct delivery.
   seenOperations: Set<string>;
+  // Operation identities reserved but not yet settled. The Gateway joins concurrent
+  // requests that share an idempotency key into one delivery and reports its outcome to
+  // every caller, so a same-operation reservation taken while one is in flight joins it:
+  // all holders share one pending charge, the first successful holder commits it, and the
+  // charge is released only when every holder has failed. Scoped like seenOperations.
+  pendingOperations: Map<string, PendingOperation>;
 };
+
+type PendingOperation = {
+  // The charge belongs to the reservation that opened the operation; joiners settle it.
+  readonly chargeCap: boolean;
+  holders: number;
+};
+
+function operationKey(targetKey: string, operationId: string): string {
+  return `${targetKey}\0${operationId}`;
+}
 
 // One entry per (session, run): the turn's per-target committed counts and pending
 // reservations. Concurrent turns can share a sessionKey but carry distinct runIds, so
@@ -126,8 +144,10 @@ export function buildTurnSendLedgerSessionKey(
  * Canonical per-turn ledger key `${channel}\0${account}\0${target}`, shared by the
  * `message` and `conversations_send` tools. Both must key on the same normalized
  * route so alternating the two tools at one real recipient can't evade the nudge or
- * the hard cap. Byte-identical to the route `resolveOutboundActionRoute` builds in
- * message-tool.ts (`normalizeAccountId(undefined)` folds to the "default" account).
+ * the hard cap. Callers pass the account delivery uses: conversations_send the
+ * registry record's account, the message tool the effective account from
+ * resolveEffectiveMessageAccountId. An absent account folds to "default" only when no
+ * channel account can be resolved at all.
  */
 export function buildTurnSendTargetKey(params: {
   channel: string;
@@ -167,6 +187,7 @@ function openSlotForReservation(sessionKey: string, runId: string): TurnSendSlot
     pending: new Map<string, number>(),
     capPending: new Map<string, number>(),
     seenOperations: new Set<string>(),
+    pendingOperations: new Map<string, PendingOperation>(),
   };
 }
 
@@ -204,6 +225,10 @@ export type TurnSendReserveResult =
  *   - `replay`    — `operationId` was already committed this turn (an idempotent Gateway
  *                   replay). Admitted past the cap and NOT recounted; the caller
  *                   dispatches but must skip settling.
+ *   - `reserved` with a joined `operationId` — the operation is still in flight. The
+ *                   reservation shares the in-flight charge (admitted past the cap, no
+ *                   new pending) and settles like any other: the operation commits once
+ *                   on the first success and releases only after every holder failed.
  *   - `exhausted` — committed + pending has reached a positive `maxPerTurn`. The caller
  *                   suppresses the send.
  *   - `reserved`  — otherwise; pending is incremented and the returned reservation must
@@ -223,8 +248,25 @@ export function reserveTurnSend(
 ): TurnSendReserveResult {
   const storeKey = ledgerKey(key.sessionKey, key.runId);
   const slot = openSlotForReservation(key.sessionKey, key.runId);
-  if (options.operationId !== undefined && slot.seenOperations.has(options.operationId)) {
+  const operationId = options.operationId;
+  const operation =
+    operationId === undefined ? undefined : operationKey(key.targetKey, operationId);
+  if (operation !== undefined && slot.seenOperations.has(operation)) {
     return { status: "replay" };
+  }
+  const inFlight = operation === undefined ? undefined : slot.pendingOperations.get(operation);
+  if (inFlight) {
+    inFlight.holders += 1;
+    return {
+      status: "reserved",
+      reservation: {
+        key,
+        operationId,
+        chargeCap: inFlight.chargeCap,
+        generation: slot.generation,
+        state: "reserved",
+      },
+    };
   }
   const chargeCap = options.chargeCap !== false;
   const committed = slot.capCommitted.get(key.targetKey) ?? 0;
@@ -239,12 +281,15 @@ export function reserveTurnSend(
   if (chargeCap) {
     slot.capPending.set(key.targetKey, pending + 1);
   }
+  if (operation !== undefined) {
+    slot.pendingOperations.set(operation, { chargeCap, holders: 1 });
+  }
   storeSlot(storeKey, slot);
   return {
     status: "reserved",
     reservation: {
       key,
-      operationId: options.operationId,
+      operationId,
       chargeCap,
       generation: slot.generation,
       state: "reserved",
@@ -257,7 +302,8 @@ export function reserveTurnSend(
  * records its operationId so an idempotent replay is admitted past the cap without
  * recounting, and returns the resulting committed send count for the target (>= 2 means
  * the caller should nudge). Settles against the same slot instance it reserved against no
- * matter how long the awaited delivery took — the slot lives for the whole run. Idempotent:
+ * matter how long the awaited delivery took — the slot lives for the whole run. A holder of an
+ * operation another holder already committed settles without recounting. Idempotent:
  * a repeat call — or a commit after release — neither re-increments committed nor
  * re-decrements pending and simply reports the current committed count. A settlement whose
  * slot was already cleared at its terminal, or replaced by a newer turn reusing the same
@@ -275,6 +321,16 @@ export function commitTurnSend(reservation: TurnSendReservation): number {
     return slot.committed.get(targetKey) ?? 0;
   }
   reservation.state = "committed";
+  const operation =
+    reservation.operationId === undefined
+      ? undefined
+      : operationKey(targetKey, reservation.operationId);
+  if (operation !== undefined) {
+    leavePendingOperation(slot, operation);
+    if (slot.seenOperations.has(operation)) {
+      return slot.committed.get(targetKey) ?? 0;
+    }
+  }
   releasePending(slot, targetKey);
   if (reservation.chargeCap) {
     releasePendingMap(slot.capPending, targetKey);
@@ -282,8 +338,8 @@ export function commitTurnSend(reservation: TurnSendReservation): number {
   }
   const committed = (slot.committed.get(targetKey) ?? 0) + 1;
   slot.committed.set(targetKey, committed);
-  if (reservation.operationId !== undefined) {
-    slot.seenOperations.add(reservation.operationId);
+  if (operation !== undefined) {
+    slot.seenOperations.add(operation);
   }
   return committed;
 }
@@ -292,7 +348,9 @@ export function commitTurnSend(reservation: TurnSendReservation): number {
  * Rolls back a reservation whose delivery never reached the peer (suppressed, dry-run,
  * broadcast, or a throw): decrements only the pending count, leaving committed and the
  * seen-operation set untouched, so a failed send neither consumes the cap nor fires a
- * nudge. Idempotent and double-release safe via the reservation `state`; a no-op once
+ * nudge. A holder of a joined operation releases the shared charge only as its last holder,
+ * and never once another holder committed it. Idempotent and double-release safe via the
+ * reservation `state`; a no-op once
  * the reservation is committed, once the turn's slot has already been cleared, or once a
  * newer turn reopened the same logical key (generation mismatch) — a stale release must
  * never decrement a newer slot's pending.
@@ -309,10 +367,36 @@ export function releaseTurnSend(reservation: TurnSendReservation): void {
     return;
   }
   reservation.state = "released";
+  const operation =
+    reservation.operationId === undefined
+      ? undefined
+      : operationKey(targetKey, reservation.operationId);
+  if (
+    operation !== undefined &&
+    (leavePendingOperation(slot, operation) > 0 || slot.seenOperations.has(operation))
+  ) {
+    // Another holder may still land this operation, or already committed it.
+    return;
+  }
   releasePending(slot, targetKey);
   if (reservation.chargeCap) {
     releasePendingMap(slot.capPending, targetKey);
   }
+}
+
+// Drop one holder from an in-flight operation and return how many remain; the record is
+// deleted with its last holder so a failed operation can be retried as a fresh reservation.
+function leavePendingOperation(slot: TurnSendSlot, operation: string): number {
+  const pending = slot.pendingOperations.get(operation);
+  if (!pending) {
+    return 0;
+  }
+  pending.holders -= 1;
+  if (pending.holders <= 0) {
+    slot.pendingOperations.delete(operation);
+    return 0;
+  }
+  return pending.holders;
 }
 
 // Decrement one pending reservation for `targetKey`, dropping the map entry at zero so

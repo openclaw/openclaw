@@ -213,6 +213,13 @@ successful sends, independent of `tools.loopDetection` and its master switch.
   (`sendAttachment`, `upload-file`) and broadcast fan-out are exempt so
   legitimately split messages are never truncated. The per-agent override lives
   at `agents.entries.*.tools.message.maxMessagesPerTurnPerTarget`.
+- **What counts as one target.** A target is the channel, the account the send
+  leaves through, and the recipient. A send that omits `accountId` counts
+  against the account delivery picks (the agent's binding for that recipient,
+  else the channel's default account), so it shares a count with explicit-account
+  sends and `conversations_send` to the same recipient. A retry that reuses the
+  same idempotency key or operation counts once, even when both calls are in
+  flight at the same time.
 
 ```json5
 {
