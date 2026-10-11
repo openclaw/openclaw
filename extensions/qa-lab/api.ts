@@ -17,6 +17,7 @@ export { createQaChannelTransport } from "./src/qa-channel-transport.js";
 export { createQaCrablineTransportAdapter } from "./src/crabline-transport.js";
 export { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 export { buildQaGatewayConfig } from "./src/qa-gateway-config.js";
+export { isInternalRuntimeContextCarrierText } from "./src/providers/shared/runtime-context.js";
 export {
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
