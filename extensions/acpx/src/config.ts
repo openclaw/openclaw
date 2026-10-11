@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { splitCommandParts } from "./command-line.js";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import type {
@@ -111,7 +114,37 @@ export function resolveOpenClawRoot(currentRoot: string): string {
     }
     return parent;
   }
-  return path.resolve(currentRoot, "..");
+  // An externally installed acpx package sits outside the host tree, so locate the host from its launcher.
+  return resolveHostPackageRoot(process.argv[1]) ?? path.resolve(currentRoot, "..");
+}
+
+function resolveHostPackageRoot(argv1: string | undefined): string | null {
+  if (!argv1) {
+    return null;
+  }
+  let cursor: string;
+  try {
+    cursor = path.dirname(fs.realpathSync(argv1));
+  } catch {
+    return null;
+  }
+  for (;;) {
+    try {
+      const manifest: unknown = JSON.parse(
+        fs.readFileSync(path.join(cursor, "package.json"), "utf8"),
+      );
+      if (isRecord(manifest) && manifest.name === "openclaw") {
+        return cursor;
+      }
+    } catch {
+      // Directories without a readable package.json are not the host root.
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      return null;
+    }
+    cursor = parent;
+  }
 }
 
 function resolveTsxImportSpecifier(): string {
