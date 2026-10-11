@@ -99,7 +99,6 @@ describe("Codex initialization through the registered session deletion owner", (
         };
         const sourceHistory = await loadTranscriptEvents(params.source);
         let linkOperation: "write" | "cleanup" | undefined;
-        let linkFailureInjected = false;
         let linkGrantReads = 0;
         let rollbackCommitRefused = false;
         let rejectReadinessCommit = false;
