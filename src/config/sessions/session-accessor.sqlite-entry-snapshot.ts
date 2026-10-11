@@ -6,7 +6,7 @@ import {
   readSessionEntryRowScan,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import type { SessionEntryWindowFacts } from "./session-accessor.sqlite-provenance.js";
+import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Exact reads already own nested values; retain them through identity publication. */

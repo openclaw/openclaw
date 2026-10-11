@@ -44,10 +44,7 @@ import {
   deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
-import {
-  prepareSessionEntryWindowRow,
-  type SessionEntryWindowFacts,
-} from "./session-accessor.sqlite-provenance.js";
+import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -72,6 +69,7 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
+import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
 import type {
   SessionEntryWritePostimage,
   SessionEntryWritePostimages,

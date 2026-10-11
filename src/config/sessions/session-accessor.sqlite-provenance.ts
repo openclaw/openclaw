@@ -1,44 +1,14 @@
-import type { Selectable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  sessionEntryWindowColumns,
+  type SessionEntryWindowFacts,
+  type SessionEntryWindowRow,
+} from "./session-entry-window.types.js";
 import type { SessionEntry } from "./types.js";
-
-const sessionEntryWindowColumns = [
-  "session_id",
-  "session_key",
-  "reason",
-  "created_at",
-  "updated_at",
-  "session_entry_provenance",
-  "acp_owned",
-  "plugin_owner_id",
-  "hook_external_content_source",
-  "previous_session_id",
-  "session_scope",
-  "started_at",
-  "ended_at",
-  "status",
-  "chat_type",
-  "channel",
-  "account_id",
-  "model_provider",
-  "model",
-  "agent_harness_id",
-  "parent_session_key",
-  "spawned_by",
-  "display_name",
-  "primary_conversation_id",
-  "transcript_observed_at",
-  "transcript_updated_at",
-] as const;
-
-export type SessionEntryWindowRow = Pick<
-  Selectable<OpenClawAgentKyselyDatabase["session_windows"]>,
-  (typeof sessionEntryWindowColumns)[number]
->;
 
 type SessionEntryWindowFactSelection = {
   [Column in keyof SessionEntryWindowRow]: `session_windows.${Column} as window_${Column}`;
@@ -76,11 +46,6 @@ export function takeSessionEntryWindowFacts(
   // SAFETY: The join selects every typed window column; Object.fromEntries erases those known keys.
   return present ? (Object.fromEntries(entries) as SessionEntryWindowRow) : null;
 }
-
-export type SessionEntryWindowFacts = {
-  sessionId: string;
-  row: SessionEntryWindowRow | null;
-};
 
 type SessionProvenanceRow = {
   acp_owned: number;

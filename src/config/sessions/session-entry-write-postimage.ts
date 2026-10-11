@@ -1,4 +1,4 @@
-import type { SessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Exact persisted facts retained by the synchronous transaction that wrote them. */
