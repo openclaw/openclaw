@@ -1,5 +1,5 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, For, onCleanup, untrack } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import { isQuestionThumbnail } from "../../../../../packages/gateway-protocol/src/question-media.js";
 import type {
   QuestionResourceAction,
@@ -38,7 +38,10 @@ export const ChatQuestionResource = defineSolidBridge<ResourceProps>(
     const [error, setError] = createSignal("");
     const [uploaded, setUploaded] = createSignal<Array<{ uri: string; name: string }>>([]);
     const [preview, setPreview] = createSignal<{
-      viewId?: string;
+      view?: {
+        id: string;
+        View: (typeof import("../../../components/mcp-app-view-registration.ts"))["McpAppView"];
+      };
       text?: string;
       images?: string[];
     } | null>(null);
@@ -164,11 +167,11 @@ export const ChatQuestionResource = defineSolidBridge<ResourceProps>(
           );
         } else if ("preview" in result) {
           if (result.preview.viewId) {
-            await import("../../../components/mcp-app-view-registration.ts");
+            const { McpAppView } = await import("../../../components/mcp-app-view-registration.ts");
             if (!current()) {
               return;
             }
-            setPreview({ viewId: result.preview.viewId });
+            setPreview({ view: { id: result.preview.viewId, View: McpAppView } });
           } else {
             const text = result.preview.contents?.map((entry) => entry.text ?? "").join("\n") ?? "";
             const images = result.preview.contents
@@ -297,24 +300,28 @@ export const ChatQuestionResource = defineSolidBridge<ResourceProps>(
             </For>
             {isBusy() && <div role="status">{t("common.loading")}</div>}
             {error() && <div role="alert">{error()}</div>}
-            {preview()?.viewId ? (
-              <mcp-app-view prop:sessionKey={props.sessionKey} prop:viewId={preview()!.viewId} />
-            ) : (
-              preview() && (
-                <>
-                  <For each={preview()?.images}>
-                    {(src) => (
-                      <img
-                        class="chat-question-panel__resource-image"
-                        src={src}
-                        alt={props.question!.header}
-                      />
-                    )}
-                  </For>
-                  <pre class="chat-question-panel__resource-preview">{preview()?.text}</pre>
-                </>
-              )
-            )}
+            <Show
+              when={preview()?.view}
+              keyed
+              fallback={
+                preview() && (
+                  <>
+                    <For each={preview()?.images}>
+                      {(src) => (
+                        <img
+                          class="chat-question-panel__resource-image"
+                          src={src}
+                          alt={props.question!.header}
+                        />
+                      )}
+                    </For>
+                    <pre class="chat-question-panel__resource-preview">{preview()?.text}</pre>
+                  </>
+                )
+              }
+            >
+              {(view) => <view.View sessionKey={props.sessionKey} viewId={view.id} />}
+            </Show>
           </div>
         )}
       </>

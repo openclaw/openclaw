@@ -213,6 +213,7 @@ export function createUiBrowserVitestConfig(
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
         "@panzoom/panzoom",
+        "@solidjs/testing-library",
         "@tanstack/lit-virtual",
         "@tanstack/virtual-core",
         "dompurify",

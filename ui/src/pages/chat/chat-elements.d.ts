@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import type { McpAppViewElement } from "../../components/mcp-app-view-controller.ts";
 import "../../components/modal-dialog.ts";
 import type { ChatPane } from "./chat-pane-render.ts";
 import type { ChatSubagentActivityLive } from "./components/chat-subagent-activity-live.ts";
@@ -20,7 +19,6 @@ declare module "@solidjs/web" {
         "prop:onOpenSubagent"?: ChatSubagentActivityLive["onOpenSubagent"];
         "prop:onOpenSession"?: ChatSubagentActivityLive["onOpenSession"];
       };
-      "mcp-app-view": Attributes<McpAppViewElement>;
       "openclaw-elapsed-time": Attributes<HTMLElement> & {
         "prop:startMs"?: number | null;
         "prop:endMs"?: number | null;
