@@ -3720,7 +3720,6 @@
 ["src/auto-reply/reply/commands-core.test.ts","./commands-handlers.runtime.js","e9d0731e7760968b642e8c31af22b42b33a901c07cc05cc056f24eb879c06420",1]
 ["src/auto-reply/reply/commands-core.test.ts","./commands-reset.js","0eaabde7400a0a1f0bd5672e198aea80c6a0cde24b44f2aff7eb99221729941c",1]
 ["src/auto-reply/reply/commands-export-session.test.ts","../../acp/runtime/session-meta-readonly.js","28a9b023ba9622a26247516917eb432e0a9183aba72ade29ebe9885830d7a408",1]
-["src/auto-reply/reply/commands-export-session.test.ts","../../config/sessions/paths.js","80aad9e8413d150dbd18229b5e96c9fdc1702221500e8fed724859b31aebfeb2",1]
 ["src/auto-reply/reply/commands-export-session.test.ts","../../config/sessions/session-accessor.js","bc38ba1aa9a13acb811bd3ea85df741e308355f3de81a3ba75a0b3a6524bc28a",1]
 ["src/auto-reply/reply/commands-export-session.test.ts","./commands-export-session-file.js","c6f58e3d835e369132520e42a9a36824270a6b67d40de8e32b7524853aa9ad8c",1]
 ["src/auto-reply/reply/commands-export-session.test.ts","./commands-system-prompt.js","4ab270425e45da210e62875f030fc45ae81a78be389e7f12a3ebdea0083cffdd",1]
