@@ -189,7 +189,9 @@ it("shares capacity across timer, manual, stream, and consumed exit requests", a
     }
     expect(await cron.waitForManualRun(manualAck.runId, 60_000, signal)).toBe(true);
     expect(peakActive).toBe(8);
-    expect(executed.map((job) => job.id).sort()).toEqual([exit.id, manual.id, timed.id].sort());
+    expect(executed.map((job) => job.id).toSorted()).toEqual(
+      [exit.id, manual.id, timed.id].toSorted(),
+    );
     expect(executed.find((job) => job.id === exit.id)).toMatchObject({
       enabled: false,
       payload: { kind: "command", argv: ["synthetic", "accepted exit"] },

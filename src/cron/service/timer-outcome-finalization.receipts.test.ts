@@ -15,19 +15,17 @@ import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-job
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceiptAsync,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { createCronRunHandle } from "./run-history.js";
 import { createCronServiceState } from "./state.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { authorCronRunCompletion } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receipts-" });

@@ -476,6 +476,8 @@ describe("cron service run admission cleanup", () => {
         ).rejects.toThrow(errorText);
         expect(failureInjected).toBe(true);
         expect(activationPersisted).toBe(terminal);
+        // Keep the storage fault active until every stopped launch cleanup has settled.
+        await state.schedulerDrain;
       } finally {
         stopObserving();
         database.exec("DROP TRIGGER fail_cron_activation_or_cleanup");

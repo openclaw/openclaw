@@ -25,8 +25,9 @@ import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
 import * as runtimeMutation from "./runtime-mutation.js";
 import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { authorCronRunCompletion, runMissedJobs } from "./timer.js";
+import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-service-batch-finalization-" });

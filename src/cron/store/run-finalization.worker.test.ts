@@ -12,10 +12,12 @@ import { cronStoreKey } from "./key.js";
 import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
 import {
   CronRunReceiptRevisionError,
-  prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "./run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "./run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  prepareCronRunReceiptClaim,
+} from "./run-receipt-store.test-support.js";
 
 it.each(["confirmed", "aborted-open"] as const)(
   "reports a finalization receipt revision only after a usable rollback: %s",

@@ -13,13 +13,13 @@ import {
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStore } from "../store.js";
 import {
-  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob as makeJob,
+  finishCronRunReceiptAsync,
 } from "../store/run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";

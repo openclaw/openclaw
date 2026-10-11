@@ -42,7 +42,8 @@ import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { run as runManualCronJob } from "./ops-run.js";
 import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
-import { executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
+import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
+import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
@@ -93,9 +94,13 @@ async function occupyWorkerSlots(state: CronServiceState, count: number) {
   const started = createDeferred();
   let countStarted = 0;
   state.deps.runIsolatedAgentJob = async (params) => {
-    if (!ids.has(params.job.id)) return original(params);
+    if (!ids.has(params.job.id)) {
+      return original(params);
+    }
     params.onExecutionStarted?.();
-    if (++countStarted === count) started.resolve();
+    if (++countStarted === count) {
+      started.resolve();
+    }
     await release.promise;
     return { status: "ok" };
   };
@@ -669,7 +674,9 @@ describe("cron service timer regressions", () => {
     const activeRun = runManualCronJob(state, activeManualJob.id, "force");
     const queued = createDeferred();
     const stopObserving = observeCronJobCommits(catchupJob.id, ({ queuedAtMs }) => {
-      if (queuedAtMs !== undefined) queued.resolve();
+      if (queuedAtMs !== undefined) {
+        queued.resolve();
+      }
     });
     let catchupRun: ReturnType<typeof runMissedJobs> | undefined;
     try {

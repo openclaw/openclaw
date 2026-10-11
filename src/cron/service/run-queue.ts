@@ -57,6 +57,7 @@ type CronLaunchContext = {
   generation: number;
   batch: { notified: boolean };
   started?: boolean;
+  removeCancellation?: () => void;
   completion: ReturnType<typeof createDeferredCore<CronRunResult>>;
 };
 
@@ -76,6 +77,28 @@ function launchState(state: CronServiceState): LaunchState {
 }
 
 export type RequestedCronRun = CronQueuedRun & { completion: Promise<CronRunResult> };
+
+function watchCronRunCancellation(state: CronServiceState, pending: CronLaunchContext): void {
+  const signal = pending.options.onExit?.signal;
+  if (!signal) {
+    return;
+  }
+  const cancel = () => {
+    void cancelCronRunRequests(
+      state,
+      [pending.receipt.receiptId],
+      "cron on-exit request cancelled",
+    ).catch((error: unknown) => {
+      pending.completion.reject(error);
+      state.deps.log.warn({ err: String(error) }, "cron: queued cancellation failed");
+    });
+  };
+  pending.removeCancellation = () => signal.removeEventListener("abort", cancel);
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) {
+    cancel();
+  }
+}
 
 export async function commitCronRunRequests(
   state: CronServiceState,
@@ -147,6 +170,7 @@ export async function commitCronRunRequests(
     void launch.completion.promise.catch(() => {});
     launchState(state).contexts.set(entry.runReceipt.receiptId, launch);
     claimLocalCronRunReceiptOwnership(entry.runReceipt);
+    watchCronRunCancellation(state, launch);
     return Object.assign({}, entry, { completion: launch.completion.promise });
   });
   if (accepted.length > 0) {
@@ -174,6 +198,11 @@ export async function requestCronRuns(
 async function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
   const pending = launchState(state).contexts.get(skipped.runReceipt.receiptId);
   applyCronRuntimeRowsToState(state, skipped.job ? [skipped.job] : []);
+  if (!pending) {
+    return;
+  }
+  pending.removeCancellation?.();
+  launchState(state).contexts.delete(skipped.runReceipt.receiptId);
   // The worker writes skipped history with the same receipt; events are best effort.
   emit(state, {
     jobId: skipped.runReceipt.jobId,
@@ -193,7 +222,9 @@ async function publishSkipped(state: CronServiceState, skipped: CronSkippedReque
     ok: true,
     ran: false,
     reason:
-      state.stopped || (pending && pending.generation !== state.lifecycleGeneration)
+      state.stopped ||
+      pending.generation !== state.lifecycleGeneration ||
+      pending.options.onExit?.signal.aborted
         ? "stopped"
         : "not-due",
   });
@@ -318,6 +349,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             );
           } finally {
             launch.completion.reject(error);
+            launch.removeCancellation?.();
             launchState(state).contexts.delete(entry.runReceipt.receiptId);
             releaseLocalCronRunReceiptOwnership(entry.runReceipt);
           }
@@ -416,6 +448,7 @@ async function launchCronRun(
     }
     return;
   }
+  pending.removeCancellation?.();
   pending.started = true;
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
@@ -486,6 +519,7 @@ async function launchCronRun(
       job: executionJob,
     });
   }
+  pending.removeCancellation?.();
   pending.completion.resolve({ ok: true, ran: true });
   launchState(state).contexts.delete(entry.runReceipt.receiptId);
 }

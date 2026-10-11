@@ -6,8 +6,7 @@ import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import {
@@ -25,8 +24,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import type * as deliveryTarget from "../cron/isolated-agent/delivery-target.js";
 import { CronService } from "../cron/service.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
-import { loadCronStore } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   OutboundDeliveryError,
@@ -42,7 +39,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -53,6 +49,7 @@ import {
   registerGatewayCronMutationAuthorityTests,
   registerGatewayCronStreamMutationTests,
 } from "./server-cron.mutation-lifecycle.test-support.js";
+import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
 import {
   registerGatewayCronHandoffTests,
   registerGatewayCronReceiptTests,
@@ -2907,48 +2904,6 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("does not resurrect a startup agent missing from the runtime roster", async () => {
-    const startupCfg = createCronConfig("server-cron-agent-workspace");
-    const tmpDir = path.dirname((startupCfg.cron as { store: string }).store);
-    startupCfg.agents = {
-      defaults: { workspace: path.join(tmpDir, "workspace") },
-      entries: {
-        main: {},
-        yinze: { workspace: path.join(tmpDir, "workspace-yinze") },
-      },
-    };
-    const reloadedCfg = {
-      ...startupCfg,
-      agents: { ...startupCfg.agents, entries: { main: {} } },
-    } as OpenClawConfig;
-    await withCronService(startupCfg, async (state) => {
-      const job = await addAgentTurnJob(state, "isolated-subagent-workspace", "read SOW.md", {
-        agentId: "yinze",
-      });
-
-      loadConfigMock.mockReturnValue(reloadedCfg);
-      await expect(state.cron.run(job.id, "force")).resolves.toEqual({
-        ok: true,
-        ran: false,
-        reason: "not-due",
-      });
-      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-      const skipped = openOpenClawStateDatabase()
-        .db.prepare(
-          "SELECT status, error_text FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
-        )
-        .get(cronStoreKey(getCronState(state).deps.storePath), job.id);
-      const skippedJob = await state.cron.readJob(job.id);
-      expect(skippedJob?.state.queuedAtMs).toBeUndefined();
-      expect(skippedJob?.state.runningAtMs).toBeUndefined();
-      expect(skippedJob?.state.runningReceiptId).toBeUndefined();
-      expect(skipped).toMatchObject({
-        status: "skipped",
-        error_text: expect.stringContaining("cron job agent is unavailable: yinze"),
-      });
-    });
-  });
-
   it("removes only one agent's cron jobs and restores them if roster commit fails", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-delete-${Date.now()}`);
     const cfg = {
@@ -3179,96 +3134,15 @@ describe("buildGatewayCronService", () => {
     requestHeartbeatAndWaitMock,
   });
 
-  it("retries a failed scheduled activation using the committed request", async ({ signal }) => {
-    vi.useFakeTimers();
-    const now = Date.parse("2026-08-13T18:15:00.000Z");
-    vi.setSystemTime(now);
-    const clock = createGatewaySchedulerClock(now);
-    const cfg = createCronConfig("server-cron-activation-write-failure");
-    const state = loadCronService(cfg, { scheduler: createTestGatewayScheduler(clock.clock) });
-    const cronState = getCronState(state);
-    try {
-      const database = openOpenClawStateDatabase().db;
-      try {
-        await state.cron.start();
-        const job = await addAgentTurnJob(state, "activation-failure", "run it", {
-          agentId: "main",
-          deleteAfterRun: false,
-          delivery: { mode: "none" },
-          schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
-        });
-        const storeKey = cronStoreKey(cronState.deps.storePath);
-        const receipts = () =>
-          database
-            .prepare(
-              "SELECT receipt_id, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY receipt_id",
-            )
-            .all(storeKey, job.id);
-        expect(receipts()).toEqual([]);
-        // Real request/activation writes; only this synthetic fault is injected.
-        database.exec(`
-          CREATE TRIGGER fail_gateway_cron_activation
-          AFTER UPDATE OF state_json ON cron_jobs
-          WHEN NEW.store_key = '${storeKey.replaceAll("'", "''")}'
-            AND NEW.job_id = '${job.id}'
-            AND json_extract(OLD.state_json, '$.queuedAtMs') IS NOT NULL
-            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
-          BEGIN
-            SELECT RAISE(ABORT, 'injected scheduled activation failure');
-          END;
-        `);
-        vi.setSystemTime(now + 60_000);
-        clock.setTime(Date.now());
-        // The timer-test entry calls the real scheduler.
-        await expect(onCronTimer(cronState)).rejects.toThrow(
-          "injected scheduled activation failure",
-        );
-        const failedReceipts = receipts();
-        expect(failedReceipts).toHaveLength(1);
-        expect(failedReceipts[0]).toMatchObject({ status: "running" });
-        expect(cronState.activeTimerTicks).toBe(0);
-        const afterFailure = (await loadCronStore(cronState.deps.storePath)).jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect(afterFailure?.state.queuedAtMs).toBe(now + 60_000);
-        expect(afterFailure?.state.runningReceiptId).toBeUndefined();
-        expect(afterFailure?.state.runningAtMs).toBeUndefined();
-        expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-        database.exec("DROP TRIGGER fail_gateway_cron_activation");
-
-        const completed = createDeferred();
-        const stopObserving = observeCronJobCommits(job.id, (runtime) => {
-          if (runtime.lastRunStatus === "ok" && runtime.runningAtMs === undefined) {
-            completed.resolve();
-          }
-        });
-        try {
-          vi.setSystemTime(now + 120_000);
-          clock.setTime(Date.now());
-          await onCronTimer(cronState);
-          await withinTest(completed.promise, signal);
-        } finally {
-          stopObserving();
-        }
-        expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce();
-        expectIsolatedRunFields({ job: expect.objectContaining({ id: job.id }) });
-        const afterTick = (await loadCronStore(cronState.deps.storePath)).jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect(afterTick?.state).toMatchObject({ lastRunStatus: "ok" });
-        expect(afterTick?.state.queuedAtMs).toBeUndefined();
-        expect(afterTick?.state.runningAtMs).toBeUndefined();
-        expect(receipts()).toEqual([
-          expect.objectContaining({ receipt_id: failedReceipts[0]?.receipt_id, status: "ok" }),
-        ]);
-        expect(cronState.activeTimerTicks).toBe(0);
-      } finally {
-        database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation");
-      }
-    } finally {
-      state.cron.stop();
-      vi.useRealTimers();
-    }
+  registerGatewayCronQueueTests({
+    createCronConfig,
+    loadCronService,
+    withCronService,
+    getCronState,
+    addAgentTurnJob,
+    loadConfigMock,
+    runCronIsolatedAgentTurnMock,
+    expectIsolatedRunFields,
   });
 
   // Retain holny's execution-failure sibling control separately from activation failure.

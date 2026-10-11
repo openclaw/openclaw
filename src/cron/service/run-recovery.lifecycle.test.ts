@@ -28,15 +28,15 @@ import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";

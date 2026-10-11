@@ -38,7 +38,7 @@ describe("cron service ops persist rollback", () => {
 
   async function withCronJobWriteFailure(
     storePath: string,
-    run: () => Promise<void>,
+    mutate: () => Promise<void>,
   ): Promise<void> {
     const database = openOpenClawStateDatabase().db;
     const storeKey = cronStoreKey(storePath).replaceAll("'", "''");
@@ -56,7 +56,7 @@ describe("cron service ops persist rollback", () => {
       return name;
     });
     try {
-      await run();
+      await mutate();
     } finally {
       for (const name of triggers) {
         database.exec(`DROP TRIGGER ${name}`);
