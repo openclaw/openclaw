@@ -1,0 +1,119 @@
+title: Silent-token strip in delivered DM replies
+
+scenario:
+  id: dm-silent-token-strip
+  surface: channel
+  coverage:
+    primary:
+      - channels.qa-channel-final-reply
+    secondary:
+      - channels.dm-final-reply
+  objective: Verify NO_REPLY control text never reaches DM recipients while substantive reply text is delivered intact.
+  successCriteria:
+    - A standalone mid-text NO_REPLY line is removed from the delivered reply.
+    - A punctuation-closed trailing NO_REPLY is removed from the delivered reply.
+    - An in-sentence NO_REPLY mention is delivered verbatim.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/auto-reply/tokens.ts
+    - src/auto-reply/reply/normalize-reply.ts
+    - src/auto-reply/reply/route-reply.ts
+  execution:
+    kind: flow
+    summary: Drive four agent turns and assert the recipient-visible transcript text.
+    config:
+      sessionKey: agent:qa:dm-silent-token-strip
+      midPrompt: |
+        qa silent strip check mid. Reply exactly `QA-STRIP-MID-7F3A first line stays.
+        NO_REPLY
+        QA-STRIP-MID-7F3A last line stays.`
+      trailPrompt: |
+        qa silent strip check trail. Reply exactly `QA-STRIP-TRAIL-9B2E report is done.
+
+        NO_REPLY!`
+      keepPrompt: |
+        qa silent strip check keep. Reply exactly `QA-STRIP-KEEP-4C5D: the NO_REPLY token means the bot stayed silent.`
+
+flow:
+  steps:
+    - name: strips a standalone mid-text token line from the delivered reply
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - call: reset
+        - set: startCursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey: { ref: config.sessionKey }
+              message: { ref: config.midPrompt }
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          saveAs: midOutbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startCursor).filter((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes('QA-STRIP-MID-7F3A last line stays')).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - assert:
+            expr: "!String(midOutbound.text ?? '').includes('NO_REPLY')"
+            message:
+              expr: "`mid-text NO_REPLY line leaked into the delivered reply: ${midOutbound.text}`"
+        - assert:
+            expr: "String(midOutbound.text ?? '').includes('QA-STRIP-MID-7F3A first line stays') && String(midOutbound.text ?? '').includes('QA-STRIP-MID-7F3A last line stays')"
+            message:
+              expr: "`substantive lines were dropped with the token line: ${midOutbound.text}`"
+      detailsExpr: midOutbound.text
+
+    - name: strips a punctuation-closed trailing token from the delivered reply
+      actions:
+        - set: startCursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey: { ref: config.sessionKey }
+              message: { ref: config.trailPrompt }
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          saveAs: trailOutbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startCursor).filter((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes('QA-STRIP-TRAIL-9B2E report is done')).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - assert:
+            expr: "!String(trailOutbound.text ?? '').includes('NO_REPLY')"
+            message:
+              expr: "`punctuated trailing NO_REPLY leaked into the delivered reply: ${trailOutbound.text}`"
+      detailsExpr: trailOutbound.text
+
+    - name: keeps an in-sentence token mention verbatim
+      actions:
+        - set: startCursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey: { ref: config.sessionKey }
+              message: { ref: config.keepPrompt }
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          saveAs: keepOutbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startCursor).filter((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes('QA-STRIP-KEEP-4C5D')).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - assert:
+            expr: "String(keepOutbound.text ?? '').includes('the NO_REPLY token means the bot stayed silent.')"
+            message:
+              expr: "`in-sentence token mention was mangled: ${keepOutbound.text}`"
+      detailsExpr: keepOutbound.text

@@ -227,6 +227,24 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("some text **NO_REPLY")).toBe("some text");
     expect(stripSilentToken("reasoning**NO_REPLY")).toBe("reasoning");
   });
+
+  it("strips a token closed out by sentence punctuation (#138662)", () => {
+    expect(stripSilentToken("Not addressed to me.\n\nNO_REPLY.")).toBe("Not addressed to me.");
+    expect(stripSilentToken("Done.\n\nNO_REPLY!")).toBe("Done.");
+  });
+
+  it("strips a standalone token line mid-text (#138662)", () => {
+    expect(stripSilentToken("Not addressed to me.\nNO_REPLY\nNothing further.")).toBe(
+      "Not addressed to me.\nNothing further.",
+    );
+    expect(stripSilentToken("Done.\nNO_REPLY.\nNoted.")).toBe("Done.\nNoted.");
+    expect(stripSilentToken("a\nNO_REPLY\nNO_REPLY\nb")).toBe("a\nb");
+  });
+
+  it("keeps in-sentence token mentions", () => {
+    const text = "The NO_REPLY token means the bot stayed silent.";
+    expect(stripSilentToken(text)).toBe(text);
+  });
 });
 
 describe("custom silent tokens", () => {

@@ -37,8 +37,16 @@ const getSilentExactRegex = createTokenRegex(
 // Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
 // can be visible text. Consume repeated tokens only after a real delimiter.
 // Start at the end so ordinary replies never scan for an absent suffix.
+// Sentence punctuation after the token ("NO_REPLY.") rides along: the
+// boundary stays strict, but a closed-out control token must not ship either.
 const getSilentTrailingRegex = createTokenRegex(
-  (escaped) => new RegExp(`$(?<=((?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*))`, "i"),
+  (escaped) => new RegExp(`$(?<=((?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*[.!?]*\\s*))`, "i"),
+);
+
+// A token alone on its own line mid-text is a control line, not prose: drop
+// the whole line. In-sentence mentions ("the NO_REPLY token") are untouched.
+const getSilentOwnLineRegex = createTokenRegex(
+  (escaped) => new RegExp(`(\\r?\\n)[ \\t]*${escaped}[.!?]*[ \\t]*(?=\\r?\\n|$)`, "gi"),
 );
 
 function stripEdgePunctuation(text: string): string {
@@ -210,7 +218,10 @@ export function isSilentReplyPayloadText(
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
   const tail = getSilentTrailingRegex(token).exec(text)?.[1]?.length ?? 0;
-  return text.slice(0, text.length - tail).trim();
+  return text
+    .slice(0, text.length - tail)
+    .replace(getSilentOwnLineRegex(token), "")
+    .trim();
 }
 
 // Match one or more leading occurrences of the token where the final token
