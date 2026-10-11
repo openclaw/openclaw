@@ -1,3 +1,4 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -25,6 +26,8 @@ import { jsonError, runProfileRouteOperation, toStringOrEmpty } from "./utils.js
 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
+// Each check is a host DNS lookup on the libuv pool (4 threads by default); leave one free.
+const TAB_URL_CHECK_CONCURRENCY = 3;
 
 async function runTabsProfileRoute(params: {
   req: BrowserRequest;
@@ -89,33 +92,39 @@ async function ensureBrowserRunning(
 async function redactBlockedTabUrls(params: {
   tabs: Awaited<ReturnType<ProfileContext["listTabs"]>>;
   navigationPolicy: ReturnType<typeof browserNavigationPolicyForProfile>;
+  signal: AbortSignal;
 }): Promise<Awaited<ReturnType<ProfileContext["listTabs"]>>> {
   if (!params.navigationPolicy.ssrfPolicy) {
     return params.tabs;
   }
 
-  const redactedTabs: Awaited<ReturnType<ProfileContext["listTabs"]>> = [];
-  for (const tab of params.tabs) {
-    try {
-      await assertBrowserNavigationResultAllowed({
-        url: tab.url,
-        ...params.navigationPolicy,
-      });
-      redactedTabs.push(tab);
-    } catch (error) {
-      const failure = toBrowserErrorResponse(error);
-      // Preserve safe tab management without turning a DNS failure into a policy denial.
-      redactedTabs.push({
-        ...tab,
-        url: "",
-        urlUnavailableReason:
-          failure && "reason" in failure && failure.reason === "navigation_blocked"
-            ? "navigation_blocked"
-            : "navigation_check_failed",
-      });
-    }
-  }
-  return redactedTabs;
+  type Tab = Awaited<ReturnType<ProfileContext["listTabs"]>>[number];
+  // Serial checks cost one lookup latency per tab, which outlasts the client budget on a slow resolver.
+  const { results } = await runTasksWithConcurrency<Tab>({
+    limit: TAB_URL_CHECK_CONCURRENCY,
+    tasks: params.tabs.map((tab) => async () => {
+      try {
+        await assertBrowserNavigationResultAllowed({
+          url: tab.url,
+          ...params.navigationPolicy,
+          signal: params.signal,
+        });
+        return tab;
+      } catch (error) {
+        const failure = toBrowserErrorResponse(error);
+        // Preserve safe tab management without turning a DNS failure into a policy denial.
+        return {
+          ...tab,
+          url: "",
+          urlUnavailableReason:
+            failure && "reason" in failure && failure.reason === "navigation_blocked"
+              ? "navigation_blocked"
+              : "navigation_check_failed",
+        };
+      }
+    }),
+  });
+  return results;
 }
 
 function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): string | null {
@@ -195,6 +204,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     const tabs = await redactBlockedTabUrls({
       tabs: await profileCtx.listTabs({ signal }),
       navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
+      signal,
     });
     signal.throwIfAborted();
     return { running: true, tabs };

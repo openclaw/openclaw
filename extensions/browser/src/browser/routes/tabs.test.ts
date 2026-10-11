@@ -7,7 +7,7 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(
-    async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+    async (_opts?: { url: string; ssrfPolicy?: unknown; signal?: AbortSignal }) => {},
   ),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
@@ -575,6 +575,68 @@ describe("browser tab routes", () => {
       });
     },
   );
+
+  it("checks tab URLs concurrently and keeps the listing in tab order", async () => {
+    const tabs = Array.from({ length: 7 }, (_, index) =>
+      publicTab({ targetId: `T${index + 1}`, url: `https://host-${index + 1}.example` }),
+    );
+    const release: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => {
+        release.push(resolve);
+      });
+      active -= 1;
+    });
+
+    const pending = callTabsList({
+      profileCtx: createProfileWithTabs(tabs),
+      ssrfPolicy: {},
+    });
+    // Finish the newest check first so completion order differs from tab order.
+    let unreleased = tabs.length;
+    while (unreleased > 0) {
+      // Let the pool fill before each release.
+      for (let tick = 0; tick < 50; tick += 1) {
+        await Promise.resolve();
+      }
+      release.pop()?.();
+      unreleased -= 1;
+    }
+    const response = await pending;
+
+    expect(response.body).toEqual({ running: true, tabs });
+    expect(peak).toBe(3);
+  });
+
+  it("starts no further tab URL checks after the listing request is cancelled", async () => {
+    const abort = new AbortController();
+    const tabs = Array.from({ length: 7 }, (_, index) =>
+      publicTab({ targetId: `T${index + 1}`, url: `https://host-${index + 1}.example` }),
+    );
+    let started = 0;
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(async (opts) => {
+      const signal = opts?.signal;
+      signal?.throwIfAborted();
+      started += 1;
+      if (started === 3) {
+        abort.abort(new Error("cancelled"));
+      }
+      signal?.throwIfAborted();
+    });
+
+    const response = await callTabsList({
+      profileCtx: createProfileWithTabs(tabs),
+      ssrfPolicy: {},
+      signal: abort.signal,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(started).toBe(3);
+  });
 
   it("blocks /tabs/focus when target tab URL fails SSRF checks", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
