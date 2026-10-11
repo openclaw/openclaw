@@ -1285,6 +1285,7 @@ src/plugins/compat/native-exec-approval-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
+src/plugins/compat/sqlite-runtime-records.ts
 src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
@@ -1499,6 +1500,7 @@ src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
 src/plugins/runtime.ts
+src/plugins/sdk-deprecation.ts
 src/plugins/runtime/execution-frame.ts
 src/plugins/runtime/gateway-context-binding-owner.ts
 src/plugins/runtime/gateway-context-binding.ts

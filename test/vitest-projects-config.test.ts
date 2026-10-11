@@ -107,12 +107,42 @@ describe("projects vitest config", () => {
     });
   });
 
-  it("resolves the complete root watch project graph", () => {
+  it("keeps the resolved root and generated projects in their explicit environments", () => {
     const result = spawnNodeEvalSync(
       `
+        import assert from "node:assert/strict";
         import { resolveConfig } from "vitest/node";
         import rootConfig from "./vitest.config.ts";
+        import { sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
         const resolved = await resolveConfig({ config: false }, rootConfig);
+        const generated = await resolveConfig({ config: false }, {
+          plugins: sharedVitestConfig.plugins,
+          test: {
+            projects: [undefined, "jsdom", "happy-dom"].map(environment => ({
+              extends: false,
+              plugins: sharedVitestConfig.plugins,
+              test: {
+                name: environment ? "ui-" + environment : "generated-node",
+                ...(environment ? { environment } : {}),
+              },
+            })),
+          },
+        });
+        const projects = [
+          resolved.test,
+          ...resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+          generated.test,
+          ...generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+        ];
+        for (const project of projects) {
+          if (!/^ui(?:-|$)/u.test(project.name ?? "")) {
+            assert.equal(project.environment, "node", project.name || "root");
+          }
+        }
+        assert.deepEqual(
+          generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig.environment),
+          ["node", "jsdom", "happy-dom"],
+        );
         console.log("ROOT_PROJECT_RESOLUTION " + resolved.test.resolvedProjects.length);
       `,
       {

@@ -279,6 +279,24 @@ event append wrappers live in test support, outside the core accessor exports.
 
 ## Committed facts and completeness
 
+The private SQLite SDK's `openOpenClawAgentSqliteWorkerStoreV2` captures the
+existing agent executor without opening a host writer. Its required live
+authority remains bound through preparation, transaction, commit, and close;
+explicit preparation can create storage, while existing-only commands preserve
+absence. Memory Core sends lineage-origin, standing-intent, and Forget commands
+through that owner.
+Logbook and Workboard already keep native SQL inside their worker backends.
+
+Released raw SQLite and opaque approval callbacks remain named native
+compatibility adapters, with a shared warning on actual legacy use and removal
+at the next Plugin SDK major. Test-labeled SQLite/state barrels are limited to
+isolated fixtures, read-only QA trajectory inspection, and offline recovery
+fixtures. Workspace deletion already uses the shared-state `workspace.delete`
+command with alias and deletion custody. Worktree run-lease release remains
+synchronous only at process exit; normal release awaits its worker. Registry
+discard/path rewrite remains Doctor/offline migration work. These exceptions
+are not ordinary runtime writer routes and are not replaced by unawaited promises.
+
 Host-bound approval requests use workers, including reads that expire rows.
 The final exec-policy SELECT, current
 placement/parent checks, and released opaque callback guards remain current

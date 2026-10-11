@@ -10,7 +10,7 @@ import { renderDiarySection } from "./view-diary.tsx";
 import { renderScene } from "./view-scene.tsx";
 import type { DreamingProps, DreamingViewState } from "./view-types.ts";
 
-export type { DreamingPhaseInfo, DreamingProps, DreamingViewState } from "./view-types.ts";
+export type { DreamingProps, DreamingViewState } from "./view-types.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
