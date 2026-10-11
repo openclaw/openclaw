@@ -227,6 +227,7 @@ describe("deliverDiscordInteractionReply", () => {
     "preserves native attachments and embeds with shared presentation: %j",
     async ({ includeMedia, includeEmbeds }) => {
       const interaction = createInteraction();
+      const onDelivered = vi.fn(async () => {});
       const embeds = [{ title: "Status" }];
       if (includeMedia) {
         loadWebMediaMock.mockResolvedValue({
@@ -256,6 +257,7 @@ describe("deliverDiscordInteractionReply", () => {
         textLimit: 2000,
         preferFollowUp: false,
         chunkMode: "length",
+        onDelivered,
       });
 
       expect(interaction.reply).toHaveBeenCalledWith({
@@ -268,12 +270,29 @@ describe("deliverDiscordInteractionReply", () => {
           : {}),
       });
       expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
+      expect(onDelivered).toHaveBeenCalledOnce();
+      expect(onDelivered).toHaveBeenCalledWith(
+        ["x".repeat(2_000), ...(includeEmbeds ? ["Status"] : []), "x".repeat(100)].join("\n"),
+      );
     },
   );
 
   it("omits legacy content and embeds from native Components V2 replies", async () => {
     const interaction = createInteraction();
-    const components = [{ type: 17, components: [{ type: 10, content: "Choose" }] }];
+    const onDelivered = vi.fn(async () => {});
+    const components = [
+      {
+        type: 17,
+        components: [
+          { type: 10, content: "Choose" },
+          {
+            type: 9,
+            components: [{ type: 10, content: "Actions" }],
+            accessory: { type: 2, style: 1, label: "Read", custom_id: "private-action-id" },
+          },
+        ],
+      },
+    ];
 
     await deliverDiscordInteractionReply({
       interaction: interaction as never,
@@ -286,10 +305,12 @@ describe("deliverDiscordInteractionReply", () => {
       textLimit: 2000,
       preferFollowUp: false,
       chunkMode: "length",
+      onDelivered,
     });
 
     expect(interaction.reply).toHaveBeenCalledWith({ components });
     expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(onDelivered).toHaveBeenCalledExactlyOnceWith("Choose\nActions\nRead");
   });
 
   it.each([

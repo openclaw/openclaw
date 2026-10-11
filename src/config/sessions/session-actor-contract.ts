@@ -37,6 +37,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,

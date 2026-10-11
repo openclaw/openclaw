@@ -170,6 +170,7 @@ describe("memory actor metadata storage", () => {
           agentId: scope.agentId,
           sessionKey,
           options: {
+            sessionFile: sessionKey,
             expectedSessionId: sessionId,
             messages: [
               { message: { role: "assistant", content: "Intervening" }, eventId: "assistant-1" },

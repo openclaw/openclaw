@@ -68,7 +68,7 @@ suite.define(() => {
 
       const response = await page.goto(suite.server.baseUrl);
       expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-agent-card").waitFor();
+      await page.locator(".sidebar-rail").waitFor();
       expect(await page.locator(".sidebar-footer-branch").count()).toBe(0);
     });
   });
