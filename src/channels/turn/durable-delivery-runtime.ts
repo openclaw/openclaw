@@ -13,6 +13,26 @@ import {
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../../plugins/runtime/load-context.js";
 
+// Admitted configs can carry account-resolved overlays with explicit `undefined` keys
+// (WhatsApp sets an unset textChunkLimit); for config, undefined and absent are the same.
+function withoutUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutUndefined);
+  }
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, withoutUndefined(entry)]),
+    );
+  }
+  return value;
+}
+
+function sameConfigValue(a: unknown, b: unknown): boolean {
+  return isDeepStrictEqual(withoutUndefined(a), withoutUndefined(b));
+}
+
 /** Final delivery is a new operation of the admitting Gateway, not of the completed model turn. */
 export function withDurableDeliveryRuntime<T>(
   input: {
@@ -59,11 +79,11 @@ export function withDurableDeliveryRuntime<T>(
     admittedChannel.plugin === channel.plugin;
   if (
     !cfg ||
-    !isDeepStrictEqual(cfg.channels?.[input.channel], input.cfg.channels?.[input.channel]) ||
-    !isDeepStrictEqual(cfg.channels?.defaults, input.cfg.channels?.defaults) ||
+    !sameConfigValue(cfg.channels?.[input.channel], input.cfg.channels?.[input.channel]) ||
+    !sameConfigValue(cfg.channels?.defaults, input.cfg.channels?.defaults) ||
     !channel ||
     !retainedChannel ||
-    !isDeepStrictEqual(
+    !sameConfigValue(
       cfg.plugins?.entries?.[channel.pluginId],
       input.cfg.plugins?.entries?.[channel.pluginId],
     )

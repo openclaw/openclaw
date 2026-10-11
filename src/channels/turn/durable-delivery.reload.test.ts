@@ -137,13 +137,21 @@ describe("final delivery after plugin replacement", () => {
   });
 
   it.each([
-    { sameGeneration: true, structured: false },
-    { sameGeneration: false, structured: true },
+    { sameGeneration: true, structured: false, resolvedOverlay: false },
+    { sameGeneration: false, structured: true, resolvedOverlay: false },
+    // WhatsApp admits replies with account-resolved config that spells unset keys as undefined.
+    { sameGeneration: false, structured: false, resolvedOverlay: true },
   ])(
-    "settles final custody through its Gateway without sender preparation (sameGeneration=$sameGeneration, structured=$structured)",
-    async ({ sameGeneration, structured }) => {
+    "settles final custody through its Gateway without sender preparation (sameGeneration=$sameGeneration, structured=$structured, resolvedOverlay=$resolvedOverlay)",
+    async ({ sameGeneration, structured, resolvedOverlay }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
       const fixture = await replacementFixture({ sameGeneration });
+      if (resolvedOverlay) {
+        fixture.request.cfg = {
+          ...cfg,
+          channels: { telegram: { ...cfg.channels?.telegram, textChunkLimit: undefined } },
+        };
+      }
       const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
       fixture.setConfig(successorConfig);
       const locator = {
