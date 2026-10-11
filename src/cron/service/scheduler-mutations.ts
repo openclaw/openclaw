@@ -187,6 +187,7 @@ export async function deferCronStartupJobs(params: {
     return;
   }
   const deferredJobIds = new Set(params.deferredJobs.map(({ jobId }) => jobId));
+  let notifications: Parameters<typeof runPostPersistCronNotifications>[1];
   await runCronRuntimeMutation({
     context: source.context,
     type: "cron.deferStartupJobs",
@@ -217,10 +218,11 @@ export async function deferCronStartupJobs(params: {
         noteCronJobsStoreCommit(source.storeKey);
       }
       applyCronRuntimeRowsToState(state, outcome.jobs);
-      runPostPersistCronNotifications(state, outcome.notifications);
+      notifications = outcome.notifications;
       for (const entry of outcome.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }
     },
   });
+  await runPostPersistCronNotifications(state, notifications);
 }

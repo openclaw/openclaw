@@ -155,11 +155,11 @@ async function recoverManualRunPreflight(state: CronServiceState, id: string): P
         },
       ],
       {
-        onRecovery(_proposal, result) {
+        async onRecovery(_proposal, result) {
           if (result.kind === "repaired") {
             repaired = true;
             removeForeignReceipt(state, id);
-            runPostPersistCronNotifications(state, result.notifications);
+            await runPostPersistCronNotifications(state, result.notifications);
             if (result.interrupted) {
               interrupted.push(result.interrupted);
             }
