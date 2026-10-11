@@ -687,7 +687,7 @@ describe("append-only assistant errors with deferred display", () => {
       { role: "toolResult", toolCallId: toolCall.id },
       { role: "assistant", content: [{ type: "text", text: "Recovered" }] },
     ]);
-    expect(normalizeAssistantReplayContent([emitted, messages[1]!, messages[2]!])).toEqual(
+    expect(normalizeAssistantReplayContent([failed, messages[1]!, messages[2]!])).toEqual(
       normalized,
     );
   });
