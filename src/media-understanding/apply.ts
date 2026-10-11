@@ -90,15 +90,18 @@ function enableLocalPathSelfServe(
 
 function renderMediaAttachmentMarkers(params: {
   attachments: MediaAttachment[];
+  capabilities: MediaUnderstandingCapability[];
   decisions: MediaUnderstandingDecision[];
   outputs: MediaUnderstandingOutput[];
   deliveredImageIndexes?: ReadonlySet<number>;
 }): AttachmentContextBlock[] {
   const handledIndexes = new Set(params.outputs.map((output) => output.attachmentIndex));
-  const decisions = new Map(params.decisions.map((decision) => [decision.capability, decision]));
   return params.attachments.flatMap((attachment) => {
     const capability = resolveAttachmentKind(attachment);
-    if (capability !== "image" && capability !== "audio" && capability !== "video") {
+    if (
+      (capability !== "image" && capability !== "audio" && capability !== "video") ||
+      !params.capabilities.includes(capability)
+    ) {
       return [];
     }
     // The ACP caller resolved these exact indexes into native turn attachments;
@@ -106,7 +109,12 @@ function renderMediaAttachmentMarkers(params: {
     if (capability === "image" && params.deliveredImageIndexes?.has(attachment.index)) {
       return [];
     }
-    const decision = decisions.get(capability);
+    // A later pass can consume preflight selection without recording new dispositions.
+    const decision = params.decisions.findLast(
+      (candidate) =>
+        candidate.capability === capability &&
+        candidate.attachmentDispositions?.[attachment.index] !== undefined,
+    );
     if (!decision || handledIndexes.has(attachment.index)) {
       return [];
     }
@@ -326,7 +334,8 @@ export async function applyMediaUnderstanding(params: {
     // add markers for image/video inputs still owned by the native harness.
     const mediaMarkers = renderMediaAttachmentMarkers({
       attachments,
-      decisions,
+      capabilities: decisions.map((decision) => decision.capability),
+      decisions: ctx.MediaUnderstandingDecisions ?? [],
       outputs,
       deliveredImageIndexes: params.deliveredImageIndexes,
     });

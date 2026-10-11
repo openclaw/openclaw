@@ -203,28 +203,66 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
     },
   );
   it.each([
-    { name: "default limit", emptyFirst: false, attachments: undefined, expected: ["first.wav"] },
+    {
+      name: "default limit",
+      emptyFirst: false,
+      attachments: undefined,
+      expected: ["first.wav"],
+      markers: ["[Audio attachment not processed: attachment limit reached]"],
+    },
     {
       name: "last preference",
       emptyFirst: false,
       attachments: { prefer: "last" as const },
       expected: ["second.wav"],
+      markers: ["[Audio attachment not processed: attachment limit reached]"],
     },
     {
       name: "all attachments",
       emptyFirst: false,
       attachments: { mode: "all" as const, maxAttachments: 2 },
       expected: ["first.wav", "second.wav"],
+      markers: [],
     },
     {
       name: "partial success",
       emptyFirst: true,
       attachments: { mode: "all" as const, maxAttachments: 2 },
       expected: ["first.wav", "second.wav"],
+      markers: ["[Audio attachment could not be analyzed]"],
+    },
+    {
+      name: "bounded dropped-attachment warnings",
+      emptyFirst: false,
+      attachments: undefined,
+      attachmentCount: 8,
+      expected: ["first.wav"],
+      markers: [
+        ...Array.from(
+          { length: 5 },
+          () => "[Audio attachment not processed: attachment limit reached]",
+        ),
+        "[2 more attachments skipped]",
+      ],
+    },
+    {
+      name: "audio-only capability scope",
+      emptyFirst: false,
+      attachments: { mode: "all" as const, maxAttachments: 2 },
+      previousImageFailure: true,
+      expected: ["first.wav", "second.wav"],
+      markers: [],
     },
   ])(
     "preserves configured $name through internal preflight and later enrichment",
-    async ({ attachments, expected, emptyFirst }) => {
+    async ({
+      attachments,
+      expected,
+      emptyFirst,
+      markers,
+      attachmentCount,
+      previousImageFailure,
+    }) => {
       await withTestDir({ prefix: "openclaw-audio-selection-" }, async (dir) => {
         const calls: string[] = [];
         runExecMock.mockImplementation(async (_command, args: string[]) => {
@@ -240,7 +278,9 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
           };
         });
         const media = await Promise.all(
-          ["first.wav", "second.wav"].map(async (name) => {
+          Array.from({ length: attachmentCount ?? 2 }, (_, index) =>
+            index === 0 ? "first.wav" : index === 1 ? "second.wav" : `note-${index}.wav`,
+          ).map(async (name) => {
             const filePath = path.join(dir, name);
             await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
             return { path: filePath, contentType: "audio/wav", workspaceDir: dir };
@@ -258,11 +298,33 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
                   capabilities: ["audio"],
                 },
               ],
-              audio: { attachments },
+              audio: { attachments, echoTranscript: true },
             },
           },
         };
-        const ctx: MsgContext = { Body: "typed caption", media: [{}, ...media] };
+        const ctx: MsgContext = {
+          Body: "typed caption",
+          RawBody: "typed caption",
+          CommandBody: "typed caption",
+          Surface: "webchat",
+          From: "fixture-user",
+          media: [{}, ...media],
+        };
+        if (previousImageFailure) {
+          ctx.media = [
+            { url: "https://example.test/photo.jpg", contentType: "image/jpeg" },
+            ...media,
+          ];
+          ctx.MediaUnderstandingDecisions = [
+            {
+              capability: "image",
+              outcome: "failed",
+              attachments: [],
+              attachmentDispositions: { 0: { kind: "failed" } },
+              nativeVisionActive: false,
+            },
+          ];
+        }
         const transcript = await transcribeAudioAttachments({ ctx, cfg });
         expect(transcript).toBe(
           emptyFirst
@@ -273,12 +335,16 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         );
         expect(ctx.media?.map((fact) => fact.transcribed === true)).toEqual([
           false,
-          !emptyFirst && expected.includes("first.wav"),
-          expected.includes("second.wav"),
+          ...media.map(
+            (fact) =>
+              (!emptyFirst || path.basename(fact.path) !== "first.wav") &&
+              expected.includes(path.basename(fact.path)),
+          ),
         ]);
         expect(transcript).toBeDefined();
         const preparedText = formatAudioTranscriptForAgent(transcript ?? "");
         ctx.agentText = preparedText;
+        ctx.BodyForAgent = preparedText;
         await applyMediaUnderstanding({
           ctx,
           cfg,
@@ -286,7 +352,11 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
           processingMode: "audio-only",
         });
         expect(calls).toEqual(expected);
-        expect(ctx.agentText).toBe(preparedText);
+        const expectedAgentText = [preparedText, ...markers].join("\n\n");
+        expect(ctx.agentText).toBe(expectedAgentText);
+        expect(ctx.BodyForAgent).toBe(expectedAgentText);
+        expect(ctx.RawBody).toBe("typed caption");
+        expect(ctx.CommandBody).toBe("typed caption");
         expect(ctx.MediaUnderstanding).toBeUndefined();
       });
     },
