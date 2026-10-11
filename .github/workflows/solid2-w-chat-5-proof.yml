@@ -1,0 +1,82 @@
+name: Composer queue recovery proof
+on:
+  push:
+    branches: [solid2/w-chat-5]
+permissions:
+  contents: read
+concurrency:
+  group: composer-queue-proof-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  queue-recovery:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+      - name: Pin comparison source
+        shell: bash
+        run: |
+          set -euo pipefail
+          g() { python3 -I -S "$CI_GIT_OWNER" --git 0 "$@"; }
+          test "$(g rev-parse HEAD)" = "$GITHUB_SHA"
+          base=cbe0b272883c68210aee33b67e4bdf66d9106587
+          directory="$RUNNER_TEMP/composer-queue-base-$GITHUB_RUN_ID"
+          proof="$RUNNER_TEMP/composer-queue-proof-$GITHUB_RUN_ID"
+          mkdir -p "$proof"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$directory" "$base"
+          printf 'QUEUE_BASE=%s\nQUEUE_PROOF=%s\n' "$directory" "$proof" >> "$GITHUB_ENV"
+          printf 'head=%s\nbase=%s\n' "$GITHUB_SHA" "$base" > "$proof/source.txt"
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          cache-mode: restore
+          install-bun: "false"
+      - uses: ./.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
+      - name: Compare recovery behavior
+        shell: bash
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: "1"
+          OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+        run: |
+          set -euo pipefail
+          g() { python3 -I -S "$CI_GIT_OWNER" --git 0 "$@"; }
+          failed=0
+          printf 'revision\texit\n' > "$QUEUE_PROOF/results.tsv"
+          for revision in head base; do
+            directory="$GITHUB_WORKSPACE"
+            if [[ "$revision" == base ]]; then
+              directory="$QUEUE_BASE"
+              (cd "$directory" && pnpm install --frozen-lockfile) > "$QUEUE_PROOF/base-install.log" 2>&1
+            fi
+            mkdir -p "$QUEUE_PROOF/$revision-artifacts" "$QUEUE_PROOF/$revision-diagnostics"
+            set +e
+            (cd "$directory"
+             export OPENCLAW_UI_E2E_ARTIFACT_DIR="$QUEUE_PROOF/$revision-artifacts"
+             export OPENCLAW_UI_E2E_DIAGNOSTIC_DIR="$QUEUE_PROOF/$revision-diagnostics"
+             node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --maxWorkers 1 ui/src/e2e/chat-queue-update-reload.e2e.test.ts
+            ) > "$QUEUE_PROOF/$revision.log" 2>&1
+            result=$?
+            set -e
+            printf '%s\t%s\n' "$revision" "$result" | tee -a "$QUEUE_PROOF/results.tsv"
+            if ((result != 0)); then failed=1; tail -65 "$QUEUE_PROOF/$revision.log"; fi
+          done
+          test "$(g rev-parse HEAD)" = "$GITHUB_SHA"
+          g diff --exit-code HEAD
+          g -C "$QUEUE_BASE" diff --exit-code HEAD
+          exit "$failed"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: composer-queue-${{ github.sha }}
+          path: ${{ runner.temp }}/composer-queue-proof-${{ github.run_id }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
