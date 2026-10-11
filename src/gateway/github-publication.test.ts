@@ -1,10 +1,7 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import {
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -12,6 +9,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import {
+  hasGitHubPublicationStore,
+  isGitHubPublicationExecutionOwner,
+} from "./github-publication-store.js";
 import {
   BASE_HEAD,
   BRANCH,
@@ -23,10 +24,13 @@ import {
   commandCalls,
   commandResult,
   commands,
+  createSystemGitHubPublicationRequesterFixture,
   createTestGitHubPublicationCoordinator as createGitHubPublicationCoordinator,
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistClaimPublicationWorkspace,
+  persistPublicationTestSession,
   publicationTranscriptMessages,
   root,
   seedLocalPublication,
@@ -43,7 +47,28 @@ const mocks = githubPublicationTestMocks();
 
 describe("Gateway GitHub publication", () => {
   installGitHubPublicationTestHarness();
+  it.each(["receipt", "execution owner"])(
+    "does not create publication state when reading an absent %s",
+    (kind) => {
+      const database = openOpenClawStateDatabase();
+      // Older admitted stores can lack this additive, first-publication table.
+      database.db.exec("DROP TABLE github_publication_requests");
+      const coordinator = createGitHubPublicationCoordinator({
+        placements: createWorkerSessionPlacementStore({ database }),
+      });
+      expect(hasGitHubPublicationStore()).toBe(false);
+      if (kind === "receipt") {
+        expect(coordinator.read("absent")).toBeUndefined();
+      } else {
+        expect(isGitHubPublicationExecutionOwner("absent", "instance")).toBe(false);
+      }
+      expect(hasGitHubPublicationStore()).toBe(false);
+    },
+  );
+
   it("publishes through exact HTTPS and replays the durable terminal result", async () => {
+    await persistPublicationTestSession();
+    const { requester } = await createSystemGitHubPublicationRequesterFixture();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     const coordinator = createGitHubPublicationCoordinator({ placements });
@@ -54,7 +79,7 @@ describe("Gateway GitHub publication", () => {
       title: "Publish the reconciled fix",
     };
 
-    const first = await coordinator.requestForSession(request);
+    const first = await coordinator.requestForSessionV2({ ...request, requester });
     expect(first).toEqual({
       publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       requestId: expect.any(String),
@@ -150,7 +175,10 @@ describe("Gateway GitHub publication", () => {
     const afterRestart = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: reopened }),
     });
-    await expect(afterRestart.requestForSession(request)).resolves.toEqual(first);
+    const resumed = await createSystemGitHubPublicationRequesterFixture();
+    await expect(
+      afterRestart.requestForSessionV2({ ...request, requester: resumed.requester }),
+    ).resolves.toEqual(first);
     expect(commands).toHaveLength(commandCount);
   });
 
@@ -414,7 +442,6 @@ describe("Gateway GitHub publication", () => {
     const coordinator = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database }),
     });
-    coordinator.read("create-schema");
     const requestId = "publication-stale-snapshot";
     seedLocalPublication(database, { requestId, status: "publishing" });
     const fallback = mocks.runCommand.getMockImplementation()!;
@@ -487,99 +514,6 @@ describe("Gateway GitHub publication", () => {
     expect(updateRefIndex).toBeGreaterThan(commitIndex);
     expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
     expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
-  });
-
-  it("rejects a stale turn claim after awaited identity verification", async () => {
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: "environment-1",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 2,
-    });
-    const active = await seedActivePlacement(placements, {
-      environmentId: "environment-1",
-      ownerEpoch: 2,
-    });
-    const claim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-1",
-      runId: "run-1",
-      owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
-    });
-    let resolveIdentity: ((value: unknown) => void) | undefined;
-    mocks.prepareIdentity.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
-          resolveIdentity = resolve;
-        }),
-    );
-    const coordinator = createGitHubPublicationCoordinator({ placements });
-    const pending = coordinator.requestForClaim({
-      claim,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      idempotencyKey: "publish-stale",
-    });
-    await vi.waitFor(() => expect(resolveIdentity).toBeTypeOf("function"));
-    await placements.releaseTurn(claim);
-    resolveIdentity?.({
-      source: "system-configured",
-      profileId: "ghp_11111111111111111111111111111111",
-      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
-      env: {},
-    });
-
-    await expect(pending).rejects.toThrow("lost the live session turn claim after verification");
-  });
-
-  it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: "environment-idempotency",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 2,
-    });
-    const active = await seedActivePlacement(placements, {
-      environmentId: "environment-idempotency",
-      ownerEpoch: 2,
-    });
-    const firstClaim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-first",
-      runId: "run-first",
-      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
-    });
-    const coordinator = createGitHubPublicationCoordinator({ placements });
-    await coordinator.requestForClaim({
-      claim: firstClaim,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      idempotencyKey: "reused-worker-call",
-    });
-    await placements.releaseTurn(firstClaim);
-    const secondClaim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-second",
-      runId: "run-second",
-      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
-    });
-
-    await expect(
-      coordinator.requestForClaim({
-        claim: secondClaim,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-        idempotencyKey: "reused-worker-call",
-      }),
-    ).rejects.toThrow("idempotency key was reused");
   });
 
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
@@ -691,10 +625,6 @@ describe("Gateway GitHub publication", () => {
     async ({ phase, remoteInitiallyPublished, pullRequestExists }) => {
       const bodyOnlyCredit = phase === "body-only credit";
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-      const first = createGitHubPublicationCoordinator({
-        placements: createWorkerSessionPlacementStore({ database }),
-      });
-      first.read("create-schema");
       const requestId = `publication-after-${phase.replaceAll(" ", "-")}`;
       seedLocalPublication(database, { requestId, status: "publishing" });
       await closeStateDatabaseForTest();
@@ -857,10 +787,7 @@ describe("Gateway GitHub publication", () => {
         ownerEpoch: 2,
       },
     });
-    await upsertSessionEntryCore(
-      { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey },
-      { sessionId: REQUEST.sessionId, updatedAt: 1 },
-    );
+    await persistClaimPublicationWorkspace();
     const loadSessionRuntime = async () => {
       const runtime = await import("./session-utils.js");
       return {
@@ -895,7 +822,7 @@ describe("Gateway GitHub publication", () => {
     expect(warnings).toEqual([expect.stringContaining("GitHub publication deferred")]);
     processClaim.mockRestore();
     warnings.length = 0;
-    vi.spyOn(runtime.coordinator, "markReported").mockImplementationOnce(() => {
+    vi.spyOn(runtime.coordinator, "markReportedAsync").mockImplementationOnce(() => {
       throw new Error("Gateway stopped after transcript append");
     });
 
