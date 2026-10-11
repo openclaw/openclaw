@@ -643,7 +643,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           !plan.pluginLifecycle &&
           !plan.disposeMcpRuntimes &&
           !plan.restartGmailWatcher &&
-          channelReloadTargets().size === 0)
+          !(channelsToRestart.size || restartChannelAccounts.size))
       ) {
         // The successor rebuilds stale owners even when its own edit is model-neutral.
         modelRuntime.defer();
