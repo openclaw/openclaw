@@ -79,7 +79,18 @@ async function writeAgentE2eRecipe(
 }
 
 describe("live transport suite runtime", () => {
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+
+  async function expectQaFailure(args: string[], message: string | RegExp) {
+    await parseQa("discord", ...args);
+    expect(stderrWrite).toHaveBeenCalledWith(expect.stringMatching(message));
+    expect(process.exitCode).toBe(1);
+  }
+
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", "");
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_ROLE", "");
     vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
@@ -91,6 +102,8 @@ describe("live transport suite runtime", () => {
   });
 
   afterEach(() => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
     vi.unstubAllEnvs();
   });
 
@@ -219,7 +232,9 @@ describe("live transport suite runtime", () => {
         expect(runFlowWorkers).not.toHaveBeenCalled();
         if (outcome === "failed") {
           initialization.reject(failure);
-          expect(await settled).toBe(failure);
+          expect(await settled).toBeUndefined();
+          expect(stderrWrite).toHaveBeenCalledWith(`${failure.message}\n`);
+          expect(process.exitCode).toBe(1);
           expect(runFlowWorkers).not.toHaveBeenCalled();
           for (const name of priorArtifacts) {
             await expect(fs.stat(path.join(outputDir, "proof", name))).rejects.toMatchObject({
@@ -485,7 +500,7 @@ describe("live transport suite runtime", () => {
         adapterFactories: [discordQaCliRegistration.adapterFactory!],
       }),
     );
-    await expect(parseQa("discord", "--scenario-file", file)).rejects.toBe(boundary);
+    await expectQaFailure(["--scenario-file", file], boundary.message);
     expect(selected).toMatchObject([
       {
         id: "discord-e2e-doctor",
@@ -535,12 +550,11 @@ describe("live transport suite runtime", () => {
     const file = fixture.missing
       ? path.join(directory, "missing.yaml")
       : await writeAgentE2eRecipe(directory, "invalid", fixture.execution, fixture.includeFlow);
-    await expect(parseQa("discord", "--scenario-file", file)).rejects.toThrow(fixture.expected);
+    await expectQaFailure(["--scenario-file", file], fixture.expected);
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });
 
   it.each([
-    { args: ["--scenario-file", " "], expected: /non-empty YAML file path/u },
     { args: ["--doctor", "--scenario-file", "unused.yaml"], expected: /cannot be combined/u },
     {
       args: ["--scenario-file", "unused.yaml", "--scenario", "discord-canary"],
@@ -551,7 +565,7 @@ describe("live transport suite runtime", () => {
       expected: /require the live channel driver/u,
     },
   ])("rejects conflicting or empty explicit selection: $args", async ({ args, expected }) => {
-    await expect(parseQa("discord", ...args)).rejects.toThrow(expected);
+    await expectQaFailure(args, expected);
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });
 
@@ -560,9 +574,17 @@ describe("live transport suite runtime", () => {
     const secondDir = tempDirs.make("agent-e2e-second-");
     const first = await writeAgentE2eRecipe(firstDir, "collision");
     const second = await writeAgentE2eRecipe(secondDir, "collision", { timeoutMs: 9999 });
-    await expect(
-      parseQa("discord", "--scenario-file", first, "--scenario-file", second),
-    ).rejects.toThrow(/duplicate QA scenario id/u);
+    await expectQaFailure(
+      ["--scenario-file", first, "--scenario-file", second],
+      /duplicate QA scenario id/u,
+    );
+    expect(runQaSuiteCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty scenario file in the argument parser before dispatch", async () => {
+    await expect(parseQa("discord", "--scenario-file", " ")).rejects.toThrow(
+      /non-empty YAML file path/u,
+    );
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });
 
