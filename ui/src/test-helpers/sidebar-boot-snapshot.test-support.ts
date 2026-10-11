@@ -10,6 +10,7 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     navigationScope: "all",
     scopesEquivalent: false,
     pages: [],
+    pageScopeId: null,
     pinnedSessions: [],
     entries: ["sessions"],
     sessions: [],

@@ -81,6 +81,7 @@ export function captureSidebarSnapshotModel(
       ),
       presentation,
     ),
+    pageScopeId: context.agentSelection.state.scopeId,
     pinnedSessions: snapshotSessions(
       zone.sidebarEntries.flatMap((value) => {
         const entry = parseSidebarEntry(value);

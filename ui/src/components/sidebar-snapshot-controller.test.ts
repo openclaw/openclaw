@@ -36,6 +36,7 @@ const model: SidebarSnapshotModel = {
   navigationScope: "all",
   scopesEquivalent: false,
   pages: [],
+  pageScopeId: null,
   pinnedSessions: [],
   entries: ["online", "sessions"],
   sessions: [],
@@ -55,8 +56,9 @@ const model: SidebarSnapshotModel = {
   brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
 };
 
-function fixture(initialAgentId = "main") {
+function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
   let selectedAgentId = initialAgentId;
+  let pageScopeId = initialPageScopeId;
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "connecting",
@@ -96,7 +98,14 @@ function fixture(initialAgentId = "main") {
   const capture = vi.fn(() => captured);
   const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
     sidebarSnapshot: null,
-    sessionDataContext: { gateway },
+    sessionDataContext: {
+      gateway,
+      agentSelection: {
+        get state() {
+          return { scopeId: pageScopeId };
+        },
+      },
+    },
     expandedAgentId: () => selectedAgentId,
     captureSidebarSnapshot: capture,
     sidebarSnapshotSettled: () => settled,
@@ -123,6 +132,10 @@ function fixture(initialAgentId = "main") {
     host,
     controller,
     restored: restored.promise,
+    selectPageScope(scopeId: string | null) {
+      pageScopeId = scopeId;
+      controller.synchronize();
+    },
     selectAgent(agentId: string) {
       selectedAgentId = agentId;
       controller.synchronize();
@@ -307,6 +320,55 @@ describe("sidebar snapshot lifecycle", () => {
     stalled.resolve(model);
     await vi.dynamicImportSettled();
     expect(test.host.sidebarSnapshot).toBeNull();
+  });
+
+  it.each(["before", "after"] as const)(
+    "rejects a Pages snapshot when its agent filter changes %s restoration",
+    async (timing) => {
+      const store = new SessionSnapshotStore();
+      store.connect();
+      disposers.push(() => store.disconnect());
+      const pages = { ...model, navigationView: "pages" as const, pageScopeId: "main" };
+      await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
+      const test = fixture("main", timing === "before" ? "other" : "main");
+      disposers.push(
+        admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+        () => test.controller.disconnect(),
+      );
+      test.controller.connect();
+      if (timing === "before") {
+        await new Promise<void>((resolve) => {
+          const stop = test.controller.subscribe(() => {
+            if (!test.controller.pending) {
+              stop();
+              resolve();
+            }
+          });
+        });
+      } else {
+        await test.restored;
+        test.selectPageScope("other");
+      }
+      expect(test.host.sidebarSnapshot).toBeNull();
+      expect(test.controller.saved).toBe(false);
+    },
+  );
+
+  it("keeps an all-agent Pages snapshot when only the selected chat agent changes", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    const pages: SidebarSnapshotModel = { ...model, navigationView: "pages", pageScopeId: null };
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
+    const test = fixture();
+    disposers.push(
+      admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+      () => test.controller.disconnect(),
+    );
+    test.controller.connect();
+    await test.restored;
+    test.selectAgent("other");
+    expect(test.host.sidebarSnapshot).toEqual(pages);
   });
 
   it("restores before hello and saves only after rendering the settled live projection", async () => {

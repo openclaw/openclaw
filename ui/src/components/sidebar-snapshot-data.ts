@@ -49,6 +49,7 @@ export const sidebarSnapshotSchema = z.object({
   navigationScope: z.enum(["mine", "all"]),
   scopesEquivalent: z.boolean(),
   pages: session.array(),
+  pageScopeId: z.string().nullable(),
   pinnedSessions: session.array(),
   entries: text
     .refine(

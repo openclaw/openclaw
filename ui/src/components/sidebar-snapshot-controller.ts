@@ -15,7 +15,10 @@ import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snaps
 
 type SidebarSnapshotHost = {
   sidebarSnapshot: SidebarSnapshotModel | null;
-  readonly sessionDataContext?: { gateway: ApplicationGateway };
+  readonly sessionDataContext?: {
+    gateway: ApplicationGateway;
+    agentSelection: { readonly state: { readonly scopeId: string | null } };
+  };
   expandedAgentId(): string;
   captureSidebarSnapshot(): SidebarSnapshotModel | null;
   sidebarSnapshotSettled(): boolean;
@@ -196,7 +199,11 @@ export class SidebarSnapshotController {
   }
 
   private matchesAgent(model: SidebarSnapshotModel): boolean {
-    return model.mode !== "chip" || model.roster?.agentId === this.host.expandedAgentId();
+    return (
+      (model.mode !== "chip" || model.roster?.agentId === this.host.expandedAgentId()) &&
+      (model.navigationView !== "pages" ||
+        model.pageScopeId === this.host.sessionDataContext?.agentSelection.state.scopeId)
+    );
   }
 
   private captureScope(): () => boolean {

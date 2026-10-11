@@ -17,6 +17,7 @@ const model: SidebarSnapshotModel = {
   navigationScope: "all",
   scopesEquivalent: false,
   pages: [],
+  pageScopeId: null,
   pinnedSessions: [],
   entries: [],
   sessions: [],
