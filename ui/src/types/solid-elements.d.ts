@@ -19,10 +19,6 @@ declare module "@solidjs/web" {
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
       };
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
