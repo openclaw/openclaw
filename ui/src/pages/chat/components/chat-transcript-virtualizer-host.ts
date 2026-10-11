@@ -105,8 +105,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   // Keep one ref per root and row so redraws do not repeat attachment work.
   readonly scrollElementRef = (element?: Element) => {
-    const next = element instanceof HTMLDivElement ? element : null;
-    this.threadInnerElement = next;
+    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
     // A retained root can move to another host without changing its identity.
     this.queueScrollElementAttach();
   };
@@ -372,7 +371,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   };
 
   disconnect(): void {
-    this.renderer.dispose();
+    // A same-task pane move reconnects before this runs and keeps its rendered rows.
+    queueMicrotask(() => !this.connected && this.renderer.dispose());
     this.layout.disconnect();
     this.endAnchor.disconnect();
     this.entryAnimations.disconnect();
@@ -406,6 +406,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   dispose(): void {
     this.disconnect();
+    this.renderer.dispose();
     this.rowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
