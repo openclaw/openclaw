@@ -442,6 +442,7 @@ describe("talk realtime gateway relay", () => {
     const bridgeAudioSends: Array<ReturnType<typeof vi.fn>> = [];
     const bridgeRequests: RealtimeVoiceBridgeCreateRequest[] = [];
     const bridgeToolResults: Array<ReturnType<typeof vi.fn>> = [];
+    const lateConnect = createDeferred();
     const provider = createIdleRelayProvider((request) => {
       const bridgeIndex = bridgeCloses.length;
       const close = vi.fn();
@@ -452,11 +453,7 @@ describe("talk realtime gateway relay", () => {
       bridgeAudioSends.push(sendAudio);
       bridgeToolResults.push(submitToolResult);
       return makeRelayTransport({
-        connect: vi.fn(async () => {
-          if (bridgeIndex === 1) {
-            throw new Error("late connect failure");
-          }
-        }),
+        connect: vi.fn(() => (bridgeIndex === 1 ? lateConnect.promise : Promise.resolve())),
         sendAudio,
         submitToolResult,
         close,
@@ -495,8 +492,8 @@ describe("talk realtime gateway relay", () => {
       });
 
       expect(() => cleanupTalkConnection("conn-owner", logGateway)).not.toThrow();
-      await Promise.resolve();
-      await Promise.resolve();
+      lateConnect.reject(new Error("late connect failure"));
+      await Promise.allSettled([lateConnect.promise]);
 
       expect(bridgeCloses[0]).toHaveBeenCalledOnce();
       expect(bridgeCloses[1]).toHaveBeenCalledOnce();
