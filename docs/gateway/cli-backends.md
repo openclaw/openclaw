@@ -211,6 +211,12 @@ receives it as a native hook attachment, while OpenClaw history preserves the or
 native session retains the context for resume. Imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
 
+Local plugin-managed Claude turns also receive the renderer-owned Runtime facts
+through this private hook context on every turn. Session identity stays out of the
+appended system prompt, so otherwise identical conversations can share its stable
+prefix. Policy and workspace instructions remain in the system prompt; process
+and paired-node transports keep their existing Runtime delivery.
+
 Saved session notes also reach fresh and resumed turns as quoted reference data.
 OpenClaw replays eligible notes from the active reset/compaction window, with a
 total limit of 2,000 weighted characters including framing. Newer notes take
