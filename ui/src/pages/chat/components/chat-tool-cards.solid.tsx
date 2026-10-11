@@ -152,7 +152,7 @@ function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCar
   return [summary.label, summary.name].filter(Boolean).join(" ");
 }
 
-export function ToolIcon(props: {
+function ToolIcon(props: {
   name: string;
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
 }) {
@@ -323,7 +323,7 @@ function progressReceiptLabel(card: ToolCard, outcome: ToolCardOutcome) {
             : t("sessionProgressCard.receipt.cleared");
 }
 
-export function ToolApprovalReviews(props: { card: ToolCard }) {
+function ToolApprovalReviews(props: { card: ToolCard }) {
   const reviews = createMemo(() => readToolApprovalReviews(props.card.details));
   return (
     <Show when={reviews().length > 0}>
@@ -388,7 +388,7 @@ type ToolCardProps = {
   children?: JSX.Element;
 };
 
-export function ToolCardView(props: ToolCardProps) {
+function ToolCardView(props: ToolCardProps) {
   const card = createMemo(() => resolveToolCardDisplay(props.card), { equals: false });
   const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
   const view = createMemo(() =>
@@ -550,7 +550,7 @@ export function ToolCardView(props: ToolCardProps) {
   );
 }
 
-export const ToolCardHost = defineSolidBridge<{
+defineSolidBridge<{
   card: ToolCard | null;
   options: ToolCardOptions;
   hasChildren: boolean;
@@ -576,7 +576,7 @@ export const ToolCardHost = defineSolidBridge<{
     },
   },
 );
-export const ToolIconHost = defineSolidBridge<{
+defineSolidBridge<{
   name: string;
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
 }>("openclaw-chat-tool-icon", (props) => <ToolIcon name={props.name} tool={props.tool} />, {
@@ -585,7 +585,7 @@ export const ToolIconHost = defineSolidBridge<{
     tool: { default: undefined, attribute: false },
   },
 });
-export const ToolReviewsHost = defineSolidBridge<{ card: ToolCard | null }>(
+defineSolidBridge<{ card: ToolCard | null }>(
   "openclaw-chat-tool-reviews",
   (props) => <Show when={props.card}>{(card) => <ToolApprovalReviews card={card()} />}</Show>,
   { properties: { card: { default: null, attribute: false } } },

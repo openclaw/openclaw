@@ -75,8 +75,8 @@ export async function settleTooltip(tooltip: TooltipElement) {
     () => import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
   );
   await tooltip.updateComplete;
-  const rendered = webAwesomeTooltip(tooltip);
-  await rendered?.updateComplete;
-  await rendered?.popup?.updateComplete;
-  await rendered?.updateComplete;
+  const popup = webAwesomeTooltip(tooltip);
+  await popup?.updateComplete;
+  await popup?.popup?.updateComplete;
+  await popup?.updateComplete;
 }

@@ -29,6 +29,7 @@ declare module "@solidjs/web" {
         "prop:active": string;
         activation: "auto" | "manual";
         "without-scroll-controls": boolean;
+        "onWa-tab-show"?: (event: CustomEvent<{ name: string }>) => void;
       };
       "wa-tab": HTMLAttributes<WaTab> & {
         panel: string;
@@ -38,6 +39,17 @@ declare module "@solidjs/web" {
       "wa-tab-panel": HTMLAttributes<WaTabPanel> & {
         name: string;
         "prop:active": boolean;
+      };
+      "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
+        "prop:orientation": "horizontal" | "vertical";
+        "prop:label": string;
+        "prop:splitRatio": number;
+        "prop:minRatio": number;
+        "prop:maxRatio": number;
+        "prop:measureRatio": () => number;
+        "prop:measureSize": () => number;
+        onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
+        "onResize-end": () => void;
       };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
