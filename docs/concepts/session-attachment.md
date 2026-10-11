@@ -67,7 +67,8 @@ the Gateway resolves the short ID without constraining it to that URL agent.
 
 The Gateway method `sessions.resolve` owns resolution for exact keys, raw
 session IDs, labels, and short IDs. Discovery selectors are filtered by the
-calling client's session visibility. Short-ID ambiguity results contain at most
+calling client's session visibility and use current session metadata without
+waiting for unrelated session display rows to refresh. Short-ID ambiguity results contain at most
 ten recent candidates, so clients can ask you for a longer prefix without
 guessing. See [Control UI URLs](/web/urls) for the complete literal encoding and
 stability contract.

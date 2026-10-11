@@ -122,6 +122,35 @@ const entry = {
   model: "qwen3:7b",
 };
 
+it("resolves discovery from current metadata before unrelated display rows drain", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    replaceSessionEntrySync(scope, entry);
+    addUnrelatedSessions();
+    const projection = await createSessionRowProjection({ cfg });
+    const release = retainSessionListForegroundWork();
+    try {
+      for (const p of [
+        { sessionId: entry.sessionId },
+        { label: entry.label },
+        { shortId: "12345678" },
+        { reference: { key } },
+      ]) {
+        await projection.ensureMaterialized();
+        sessionChanges.emit({ all: true, scope: "catalog" });
+        const resolved = await withPreparedSessionResolve(
+          { client: null, projection, p },
+          (result) => ({ result, dirtyRows: projection.dirtyRowCount }),
+        );
+        expect(resolved.result).toMatchObject({ ok: true, key, agentId: "main" });
+        expect(resolved.dirtyRows).toBeGreaterThan(0);
+      }
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
+
 it.each(["exact", "broad"] as const)(
   "resolves replaced IDs immediately after a %s committed publication",
   async (publication) => {
