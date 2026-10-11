@@ -207,17 +207,6 @@ export async function finalizeCronCompletionAnnouncement(params: {
     return finish(true);
   } catch (err) {
     const deliveryError = formatErrorMessage(err);
-    if (deliveryState.delivered) {
-      diagnostics = mergeCronRunDiagnostics(
-        diagnostics,
-        createCronRunDiagnosticsFromError(
-          "delivery",
-          `result was delivered but was not added to the conversation: ${deliveryError}`,
-          { severity: "warn" },
-        ),
-      );
-      return finish(true);
-    }
     if (mayHaveReachedRecipient) {
       deliveryState.status = "unknown";
       deliveryState.delivered = undefined;

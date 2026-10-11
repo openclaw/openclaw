@@ -198,32 +198,35 @@ export async function deliverOutboundPayloadsCore(
         error: formatErrorMessage(error),
       });
     }
+    let diagnostic: string | undefined;
     try {
+      const threadChanged =
+        preparedTarget.threadId != null &&
+        String(preparedTarget.threadId) !==
+          String(params.transcriptRoute?.threadId ?? params.threadId);
       const result = await commitConfirmedVisibleMessage({
         config: cfg,
         channel,
         to,
         accountId,
         threadId: preparedTarget.threadId ?? undefined,
-        route: params.transcriptRoute,
+        route: threadChanged ? undefined : params.transcriptRoute,
         producer: params.session,
         payload,
         deliveryId: transcriptDeliveryId,
         payloadIndex,
         signal: abortSignal,
-        expectedGeneration: params.transcriptExpectedGeneration,
+        expectedGeneration: threadChanged ? undefined : params.transcriptExpectedGeneration,
         assertCurrent: params.assertTranscriptCurrent,
       });
-      const diagnostic = result.ok
+      diagnostic = result.ok
         ? result.diagnostics
         : `result was delivered but was not added to the conversation: ${result.reason}`;
-      if (diagnostic) {
-        log.warn(`Confirmed outbound transcript: ${diagnostic}`, { channel, to });
-        params.onTranscriptDiagnostic?.(diagnostic);
-      }
     } catch (error) {
-      const diagnostic = `result was delivered but was not added to the conversation: ${formatErrorMessage(error)}`;
-      log.warn(`Confirmed outbound transcript commit failed: ${diagnostic}`, { channel, to });
+      diagnostic = `result was delivered but was not added to the conversation: ${formatErrorMessage(error)}`;
+    }
+    if (diagnostic) {
+      log.warn(`Confirmed outbound transcript: ${diagnostic}`, { channel, to });
       try {
         params.onTranscriptDiagnostic?.(diagnostic);
       } catch {
@@ -404,12 +407,7 @@ export async function deliverOutboundPayloadsCore(
           );
         }
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
-        deliveredPayload = {
-          ...effectivePayload,
-          text: fallbackText,
-          mediaUrl: undefined,
-          mediaUrls: [],
-        };
+        deliveredPayload = { text: fallbackText };
       } else {
         // Media observers use final adapter identities, not intermediate progress
         // results that may also remain in the reconciled delivery list.

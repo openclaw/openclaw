@@ -192,9 +192,11 @@ export async function commitConfirmedVisibleMessage(
     return await commitBackgroundResultToSession({
       agentId,
       sessionKey: destinationKey,
-      expectedGeneration: params.expectedGeneration ?? {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
+      expectedGeneration: {
+        sessionId: params.expectedGeneration?.sessionId ?? entry.sessionId,
+        lifecycleRevision: params.expectedGeneration
+          ? params.expectedGeneration.lifecycleRevision
+          : entry.lifecycleRevision,
       },
       text,
       idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,

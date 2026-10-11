@@ -104,14 +104,14 @@ function formatWorkshopChangeNotice(
     text,
     presentation,
     marker: { kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND, agentId, runId, skills },
-    undoContext: `A background skill review just changed your learned skills and told the user: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
+    undoContext: `A background skill review changed your learned skills: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
   };
 }
 
 /**
- * Posts the notice into the originating conversation: external channels get a durable send
- * mirrored into the session transcript; channel-less sessions (Control UI) get a transcript
- * entry. The next foreground turn also gets a system event naming the exact revert call,
+ * Posts the notice into the originating conversation: confirmed external sends enter the
+ * transcript through outbound delivery; channel-less sessions (Control UI) get a transcript
+ * entry directly. The next foreground turn also gets a system event naming the exact revert call,
  * because an assistant line the model did not write is weak evidence that "undo" means it.
  * A conversation reset or replaced since the review started gets none of it.
  */
@@ -176,12 +176,16 @@ export async function postWorkshopChangeNotice(params: {
           threadId: threadId ?? target.threadId,
           // Channels with buttons run the Undo command; plain-text channels show it to copy.
           payloads: [presentation ? { text, presentation } : { text }],
-          session: buildOutboundSessionContext({ cfg: params.config, sessionKey, agentId }),
-          mirror: {
-            sessionKey,
+          // This notice has no producing conversation; retain only the target's policy identity.
+          session: buildOutboundSessionContext({
+            cfg: params.config,
+            policySessionKey: sessionKey,
             agentId,
-            idempotencyKey,
-            expectedSessionId: generation.sessionId,
+          }),
+          deliveryIntentId: idempotencyKey,
+          transcriptExpectedGeneration: {
+            sessionId: generation.sessionId,
+            lifecycleRevision: generation.lifecycleRevision ?? undefined,
           },
           bestEffort: true,
         },

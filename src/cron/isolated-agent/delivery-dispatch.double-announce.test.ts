@@ -72,13 +72,6 @@ vi.mock("../../infra/outbound/identity.js", () => ({
   resolveAgentOutboundIdentity: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock("../../infra/outbound/session-context.js", () => ({
-  buildOutboundSessionContext: vi.fn((params: { sessionKey?: string; agentId?: string }) => ({
-    key: params.sessionKey,
-    agentId: params.agentId,
-  })),
-}));
-
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof SessionAccessor>()),
   loadSessionEntryReadOnly: loadSessionEntryReadOnlyMock,
@@ -1256,7 +1249,7 @@ describe("dispatchCronDelivery", () => {
   );
 
   it.each([false, true])(
-    "commits the finalized current-target media projection with descendant=%s",
+    "hands the finalized current-target media projection to outbound with descendant=%s",
     async (descendant) => {
       const params = makeBaseParams({
         sessionTarget: "current",
@@ -1275,16 +1268,8 @@ describe("dispatchCronDelivery", () => {
       }
       const state = await dispatchCronDelivery(params);
       expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
-      if (descendant) {
-        expect(commitBackgroundResultToSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
-          text: "Final descendant reply",
-        });
-      } else {
-        expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-          expect.objectContaining({ text: "report.png" }),
-        );
-        expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-      }
+      expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
       expectDeliveryCall(0, {
         payloads: descendant
           ? [{ text: "Final descendant reply" }]
@@ -1321,13 +1306,7 @@ describe("dispatchCronDelivery", () => {
       const state = await dispatchCronDelivery(params);
       expectDelivered(state);
       expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledOnce();
-      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:telegram:direct:123456",
-          text: "message-tool completion",
-        }),
-      );
+      expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
     },
   );

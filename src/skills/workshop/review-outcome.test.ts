@@ -144,9 +144,12 @@ describe("postWorkshopChangeNotice", () => {
     ]);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
+        cfg: {},
         channel: "telegram",
         to: "42",
+        accountId: undefined,
+        threadId: undefined,
         payloads: [
           {
             text: '💾 Learned: updated `actual-budget-operations` (tightened reconciliation step); created `release-notes` (drafting release notes). Say "undo" to revert this skill change.',
@@ -165,8 +168,18 @@ describe("postWorkshopChangeNotice", () => {
             },
           },
         ],
-        mirror: expect.objectContaining({ sessionKey: "agent:main:telegram:direct:42" }),
-      }),
+        session: {
+          policyKey: "agent:main:telegram:direct:42",
+          conversationType: "direct",
+          agentId: "main",
+        },
+        deliveryIntentId: `skill-workshop-notice:${runId}`,
+        transcriptExpectedGeneration: {
+          sessionId: "reviewed-session",
+          lifecycleRevision: "reviewed-revision",
+        },
+        bestEffort: true,
+      },
       undefined,
       undefined,
       generation("agent:main:telegram:direct:42"),
@@ -187,6 +200,28 @@ describe("postWorkshopChangeNotice", () => {
     );
   });
 
+  it("retains undo context without claiming delivery when the external notice fails", async () => {
+    mocks.extractDeliveryInfo.mockReturnValue({
+      deliveryContext: { channel: "telegram", to: "42" },
+      threadId: undefined,
+    });
+    mocks.sendDurableMessageBatchCore.mockRejectedValueOnce(new Error("send failed"));
+
+    await post([change({})]);
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'skill_workshop action=archive name=actual-budget-operations reason="undo"',
+      ),
+      expect.anything(),
+    );
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.not.stringContaining("told the user"),
+      expect.anything(),
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("marks a channel-less transcript notice with each skill's net change", async () => {
     mocks.extractDeliveryInfo.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
     await post([
@@ -205,7 +240,12 @@ describe("postWorkshopChangeNotice", () => {
     // The Control UI renders this marker natively: a later edit of a created skill stays "created".
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "main",
         sessionKey: "agent:main:telegram:direct:42",
+        storePath: "/tmp/sessions.json",
+        expectedSessionId: "reviewed-session",
+        expectedLifecycleRevision: "reviewed-revision",
+        idempotencyKey: `skill-workshop-notice:${runId}`,
         text: expect.stringContaining("💾 Learned: updated `actual-budget-operations`"),
         deliveryMirror: {
           kind: "skill-workshop-change",

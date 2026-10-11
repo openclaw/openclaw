@@ -20,6 +20,7 @@ import { deliverCompletionDirect } from "./subagent-announce-completion-delivery
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 
 const content = "Long child result. ".repeat(180).trim();
+let nextDeliveryId = 0;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -27,6 +28,7 @@ afterEach(() => {
 });
 
 function setup(outcome: "rejected" | "aborted" | "sent" = "sent", cfg: OpenClawConfig = {}) {
+  const deliveryId = `chunked-text-completion-${++nextDeliveryId}`;
   const controller = new AbortController();
   const onDeliveryResult =
     vi.fn<NonNullable<Parameters<typeof deliverCompletionDirect>[0]["onDeliveryResult"]>>();
@@ -85,7 +87,7 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent", cfg: OpenClawC
         const result = await deliverCompletionDirect({
           cfg,
           requesterSessionKey: "agent:main:discord:dm:U123",
-          directIdempotencyKey: "chunked-text-completion",
+          directIdempotencyKey: deliveryId,
           deliveryTarget: { deliver: true, channel: "discord", to: "dm:U123" },
           internalEvents: taskCompletionEvents({ result: content }),
           contentKind: "completed_result",
@@ -150,17 +152,17 @@ describe("direct completion text delivery", () => {
 
   it("reports complete delivery before destination conversation publication settles", async () => {
     const fixture = setup();
-    const mirrorEntered = createDeferredCore();
-    const releaseMirror = createDeferredCore();
+    const publicationEntered = createDeferredCore();
+    const releasePublication = createDeferredCore();
     vi.spyOn(transcript, "commitConfirmedVisibleMessage").mockImplementation(async () => {
-      mirrorEntered.resolve();
-      await releaseMirror.promise;
+      publicationEntered.resolve();
+      await releasePublication.promise;
       return { ok: true };
     });
     const delivery = fixture.deliver();
     try {
       await Promise.race([
-        mirrorEntered.promise,
+        publicationEntered.promise,
         delivery.then(() => {
           throw new Error("Delivery settled without publishing its destination conversation");
         }),
@@ -172,7 +174,7 @@ describe("direct completion text delivery", () => {
         expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
       );
     } finally {
-      releaseMirror.resolve();
+      releasePublication.resolve();
       await delivery;
     }
     await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
@@ -183,10 +185,13 @@ describe("direct completion text delivery", () => {
     async (failure) => {
       const fixture = setup();
       const error = new Error("post-send bookkeeping failed");
-      vi.spyOn(transcript, "commitConfirmedVisibleMessage").mockResolvedValue({ ok: true });
-      if (failure === "publication") {
-        vi.spyOn(transcript, "commitConfirmedVisibleMessage").mockRejectedValue(error);
-      } else {
+      vi.spyOn(transcript, "commitConfirmedVisibleMessage").mockImplementation(async () => {
+        if (failure === "publication") {
+          throw error;
+        }
+        return { ok: true };
+      });
+      if (failure === "report") {
         fixture.onDeliveryResult.mockRejectedValue(error);
       }
 

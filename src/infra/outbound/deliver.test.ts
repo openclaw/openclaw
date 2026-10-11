@@ -18,6 +18,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import type { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -151,7 +152,8 @@ async function ackDeliveryMock(
   return queueMocks.ackDelivery(id, stateDir, hasOptions ? legacyOptions : undefined);
 }
 
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -2710,13 +2712,18 @@ describe("deliverOutboundPayloads", () => {
           reason: "session locked",
         });
       }
+      const onTranscriptDiagnostic = vi.fn(() => {
+        throw new Error("diagnostic consumer failed");
+      });
       const results = await deliverMatrix({
         payloads: [{ text: "done" }],
         deps: { matrix: sendMatrix },
         deliveryIntentId: "idem-89626",
+        onTranscriptDiagnostic,
       });
       expect(sendMatrix).toHaveBeenCalledTimes(1);
       expect(results).toHaveLength(1);
+      expect(onTranscriptDiagnostic).toHaveBeenCalledOnce();
       const warnCall = requireMockCall(logMocks.warn, "warn");
       expect(warnCall[0]).toContain("Confirmed outbound transcript");
       expect(warnCall[1]).toMatchObject({ channel: "matrix" });
@@ -3076,7 +3083,9 @@ describe("deliverOutboundPayloads", () => {
     );
     const delivery = deliverMatrix({
       to: "!room:1",
-      payloads: [{ text, mediaUrl: "https://example.com/file.png" }],
+      payloads: [
+        { text, mediaUrl: "https://example.com/file.png", spokenText: "Unsent speech transcript" },
+      ],
       ...(hasFallback ? { onDeliveredPayload } : {}),
     });
     if (hasFallback) {
@@ -3089,12 +3098,17 @@ describe("deliverOutboundPayloads", () => {
       expect(
         requireMockCallArg(afterDeliverPayload, "after delivered payload").payload,
       ).toMatchObject({ text: "caption", mediaUrl: "https://example.com/file.png" });
+      expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledOnce();
+      expect(mocks.commitConfirmedVisibleMessage.mock.calls[0]?.[0].payload).toEqual({
+        text: "caption",
+      });
     } else {
       await expect(delivery).rejects.toThrow(
         "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia and no text fallback is available for media payload",
       );
       expect(sendText).not.toHaveBeenCalled();
       expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+      expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
     }
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(

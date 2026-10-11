@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import type { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { deliverOutboundPayloadsCore } from "./deliver-core.js";
@@ -10,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   commit: vi.fn<typeof commitConfirmedVisibleMessage>(async () => ({ ok: true })),
 }));
 
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commit,
 }));
 
@@ -60,6 +63,46 @@ describe("confirmed outbound logical payloads", () => {
         payload,
       });
     }
+  });
+
+  it("publishes an adapter-created thread without reusing the prepared route or generation", async () => {
+    setTestOutbound({
+      sendText: async () => ({
+        channel: "matrix",
+        messageId: "thread-message",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "matrix", messageId: "thread-message" }],
+          threadId: "created-thread",
+        }),
+      }),
+      adoptTargetFromDelivery: ({ result }) =>
+        result.receipt?.threadId ? { threadId: result.receipt.threadId } : null,
+    });
+    const payloads = [{ text: "thread reply" }];
+    await deliverOutboundPayloadsCore({
+      cfg: {},
+      channel: "matrix",
+      to: "!destination:example",
+      payloads,
+      preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
+      transcriptRoute: {
+        sessionKey: "agent:main:matrix:group:destination",
+        baseSessionKey: "agent:main:matrix:group:destination",
+        peer: { kind: "group", id: "destination" },
+        chatType: "group",
+        from: "matrix:destination",
+        to: "!destination:example",
+      },
+      transcriptExpectedGeneration: { sessionId: "prepared-session", lifecycleRevision: "old" },
+    });
+    expect(mocks.commit).toHaveBeenCalledOnce();
+    expect(mocks.commit.mock.calls[0]?.[0]).toMatchObject({
+      to: "!destination:example",
+      threadId: "created-thread",
+      payload: { text: "thread reply" },
+    });
+    expect(mocks.commit.mock.calls[0]?.[0].route).toBeUndefined();
+    expect(mocks.commit.mock.calls[0]?.[0].expectedGeneration).toBeUndefined();
   });
 
   it("does not commit a logical payload containing an identityless physical part", async () => {

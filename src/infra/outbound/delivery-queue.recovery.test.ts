@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import {
   OutboundDeliveryError,
@@ -1385,7 +1386,7 @@ describe("delivery-queue recovery", () => {
     expect(afterCommit).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
-  it("replays stored delivery options during recovery", async () => {
+  it("replays live delivery options while retaining legacy mirror data only in storage", async () => {
     const storedOptions = {
       reply: { replyToId: "root-message", source: "implicit", mode: "first" } as const,
       formatting: {
@@ -1419,11 +1420,27 @@ describe("delivery-queue recovery", () => {
         requesterSenderE164: "+15551234567",
       },
     } satisfies Partial<Parameters<typeof enqueueDelivery>[0]>;
-    await enqueueRecoveryDelivery(storedOptions);
+    const id = await enqueueRecoveryDelivery(storedOptions);
+    const legacyEntry = {
+      ...readQueuedEntry(tmpDir(), id),
+      id,
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      mirror: storedOptions.mirror,
+    };
+    seedDeliveryQueueEntry({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      stateDir: tmpDir(),
+      entry: legacyEntry,
+    });
+    const stored = await loadPendingDeliveries(tmpDir());
+    expect(stored).toEqual([expect.objectContaining({ id, ...storedOptions })]);
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
     const deliverInput = mockCallRecord(deliver);
-    expect(deliverInput).toEqual(expect.objectContaining(storedOptions));
+    const { mirror: _legacyMirror, ...liveOptions } = storedOptions;
+    expect(deliverInput).toEqual(expect.objectContaining(liveOptions));
+    expect(deliverInput).not.toHaveProperty("mirror");
   });
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();

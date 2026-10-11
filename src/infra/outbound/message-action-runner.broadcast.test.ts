@@ -12,6 +12,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -30,7 +31,8 @@ import { workspaceConfig, workspaceTestPlugin } from "./message-action-runner.te
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
 
 // Broadcast cancellation owns delivery outcomes, not destination transcript storage.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));
 

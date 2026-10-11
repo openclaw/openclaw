@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
+import {
+  projectPluginMessageDeliveryFact,
+  type EmbeddedMessageDeliveryFact,
+} from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -87,7 +90,7 @@ async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
   reply?: OutboundReplyFacts;
-  onHandled?: (outcome: { partialDelivery: boolean; confirmed: boolean }) => Promise<void> | void;
+  onHandled?: (deliveryFact: EmbeddedMessageDeliveryFact | undefined) => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
     return null;
@@ -125,10 +128,7 @@ async function tryHandleWithPluginAction(params: {
   }
   const deliveryFact = projectPluginMessageDeliveryFact(handled);
   if (!deliveryFact || deliveryFact.status === "settled") {
-    await params.onHandled?.({
-      partialDelivery: deliveryFact?.partialDelivery === true,
-      confirmed: deliveryFact?.status === "settled",
-    });
+    await params.onHandled?.(deliveryFact);
   }
   return {
     handledBy: "plugin",
@@ -201,19 +201,27 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         ctx: pluginCtx,
         action: "send",
         reply: params.reply,
-        onHandled: async ({ partialDelivery, confirmed }) => {
+        onHandled: async (deliveryFact) => {
           try {
             await params.ctx.onSendAccepted?.();
-            if (partialDelivery || !confirmed) {
+            if (!deliveryFact || deliveryFact.partialDelivery) {
               return;
             }
+            if (deliveryFact.createdThreadIds.length > 1) {
+              log.warn("Confirmed plugin outbound transcript skipped: multiple delivery threads");
+              return;
+            }
+            const threadId = deliveryFact.createdThreadIds[0] ?? params.threadId;
+            const threadChanged =
+              threadId != null &&
+              String(threadId) !== String(params.ctx.transcriptRoute?.threadId ?? params.threadId);
             const result = await commitConfirmedVisibleMessage({
               config: params.ctx.cfg,
               channel: params.ctx.channel,
               to: params.to,
               accountId: params.ctx.accountId ?? undefined,
-              threadId: params.threadId,
-              route: params.ctx.transcriptRoute,
+              threadId,
+              route: threadChanged ? undefined : params.ctx.transcriptRoute,
               producer: buildOutboundSessionContext({
                 cfg: params.ctx.cfg,
                 sessionKey: params.ctx.input.sessionKey,

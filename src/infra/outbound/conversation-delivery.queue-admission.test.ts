@@ -28,6 +28,7 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -55,7 +56,8 @@ import {
 import * as messageActionRunner from "./message-action-runner.js";
 
 // This suite exercises queue/completion admission; transcript storage has its own owner tests.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));
 

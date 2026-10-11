@@ -1,5 +1,5 @@
 ---
-summary: "Proposed single owner for transcript entries: every visible message is in its chat's model history once"
+summary: "Single ownership of transcript entries: every visible message is in its chat's model history once"
 read_when:
   - Changing where automation results, message-tool sends, or alerts are written into session transcripts
   - Adding a new path that posts messages into a chat
@@ -9,10 +9,10 @@ title: "Conversation transcript ownership"
 
 # Conversation transcript ownership
 
-**Proposal, partly implemented.** A chat's model-visible transcript is the log of
-what that chat showed. One owner writes that log for every outbound message.
-Scheduled jobs either run inside a chat or run in the background; they never do
-both. Step 1 shipped in [#168996](https://github.com/openclaw/openclaw/pull/168996).
+**Partly implemented.** A chat's model-visible transcript is the log of what that
+chat showed. One owner writes that log for every outbound message. Scheduled jobs
+either run inside a chat or run in the background; they never do both. Steps 1
+and 2 are implemented; the job-mode migration remains.
 
 ## Problem
 
@@ -112,13 +112,17 @@ remains transcript-only for UI display when the runtime did not persist a final.
    ([#168685](https://github.com/openclaw/openclaw/issues/168685)), so "stop this"
    on a delivered message needs no lookup.
 
-## Risks to check before step 2
+## Limits and risks
 
-- **Repeated assistant turns.** A result appended after the chat's last assistant
-  reply creates two adjacent assistant messages. This has shipped for `current`
-  jobs since #126860 without a known failure, but Hermes broke on the same pattern
-  ([hermes-agent#2221](https://github.com/NousResearch/hermes-agent/issues/2221)).
-  Add a provider replay test for each supported provider family.
+- **Repeated assistant turns.** Canonical results survive replay even when their
+  text matches the previous assistant message. Transcript-only delivery mirrors
+  remain excluded. See [#169369](https://github.com/openclaw/openclaw/pull/169369).
+- **Recovery.** A recovered send enters history only for a single accepted,
+  normalized-text payload. Multi-payload batches and media, presentation, or
+  native batches are skipped with a warning because the queue cannot confirm
+  their final delivered content.
+- **Native projections.** Polls are native-only and are not added to the
+  conversation; see [#169297](https://github.com/openclaw/openclaw/issues/169297).
 - **Session key parity.** The write must land in the exact session that an
   inbound reply uses. X has a known mismatch
   ([#168686](https://github.com/openclaw/openclaw/issues/168686)).

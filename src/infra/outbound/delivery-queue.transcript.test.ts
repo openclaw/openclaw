@@ -96,6 +96,9 @@ describe("delivery-queue confirmed transcript recovery", () => {
     ["media", false],
     ["presentation", false],
     ["stale-generation", false],
+    ["empty-text", false],
+    ["native", false],
+    ["empty-kinds", false],
     ["other-generation", false],
     ["multiple-payloads", false],
   ] as const)(
@@ -103,7 +106,7 @@ describe("delivery-queue confirmed transcript recovery", () => {
     async (state, previouslyCommitted) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
         const id = `transcript-recovery-${state}`;
-        const payload = { text: "Effective visible result" };
+        const payload = { text: "Accepted normalized result" };
         const scope = await createConversationRecoveryFixture(
           id,
           {
@@ -131,7 +134,7 @@ describe("delivery-queue confirmed transcript recovery", () => {
                 {
                   status: "accepted",
                   sourceIndex: 2,
-                  payload: { text: "Prepared content, not the delivered projection" },
+                  payload: { text: state === "empty-text" ? " " : payload.text },
                   replyHookChanged: true,
                   messageHookChanged: false,
                   preparedMediaCount: 0,
@@ -161,8 +164,15 @@ describe("delivery-queue confirmed transcript recovery", () => {
               items: [
                 {
                   index: 0,
-                  kinds: state === "presentation" ? ["presentation"] : ["text"],
-                  text: payload.text,
+                  kinds:
+                    state === "presentation"
+                      ? ["presentation"]
+                      : state === "native"
+                        ? ["interactive"]
+                        : state === "empty-kinds"
+                          ? []
+                          : ["text"],
+                  text: "Rendered projection, not the accepted normalized content",
                   mediaUrls: state === "media" ? ["https://example.invalid/visible.png"] : [],
                 },
                 ...(state === "multiple-payloads"

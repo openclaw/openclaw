@@ -9,6 +9,7 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
@@ -21,7 +22,8 @@ import {
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 // Durable media replay is independent of destination transcript storage.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));
 

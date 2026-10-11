@@ -379,7 +379,7 @@ export async function dispatchCronDelivery(
         runStartedAt: params.runStartedAt,
         conversation,
         payloads: deliveryPayloads,
-        text: params.resolvedDelivery.ok || sentByTool ? undefined : synthesizedText,
+        text: synthesizedText,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });
@@ -404,7 +404,7 @@ export async function dispatchCronDelivery(
         { severity: "warn" },
       ),
     );
-  } else if (conversation && !params.resolvedDelivery.ok && !sentByTool) {
+  } else if (conversation) {
     record("delivered");
   }
   return finish();

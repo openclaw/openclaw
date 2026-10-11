@@ -1,10 +1,20 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import {
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { createExactAssistantMessage } from "../../config/sessions/transcript-message.test-support.js";
+import * as transcript from "../../config/sessions/transcript.js";
 import { installDeliveryQueueTmpDirHooks } from "../../infra/outbound/delivery-queue.test-helpers.js";
+import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -94,6 +104,103 @@ describe("prepared reply routing", () => {
     },
   );
 
+  it.each([
+    { relation: "different", mirror: true },
+    { relation: "different", mirror: false },
+    { relation: "key", mirror: true },
+    { relation: "context", mirror: true },
+  ] as const)(
+    "records only destination-owned model history for $relation routing (mirror=$mirror)",
+    async ({ relation, mirror }) => {
+      const storePath = path.join(fixtures.tmpDir(), "sessions.json");
+      const cfg = { session: { store: storePath, dmScope: "per-channel-peer" as const } };
+      const route = await resolveOutboundSessionRoute({
+        cfg,
+        channel: "matrix",
+        agentId: "main",
+        target: "!room:example.invalid",
+      });
+      if (!route) {
+        throw new Error("Expected a routed destination");
+      }
+      const sessionKey = relation === "key" ? route.sessionKey : "agent:main:producer";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionId: "producer-session",
+          updatedAt: 1,
+          ...(relation === "context"
+            ? {
+                delivery: {
+                  kind: "external" as const,
+                  context: { channel: "matrix", to: route.to },
+                  route: { channel: "matrix", target: { to: route.to } },
+                  origin: { provider: "matrix", to: route.to },
+                },
+              }
+            : {}),
+        },
+      );
+      await transcript.appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        config: cfg,
+        message: createExactAssistantMessage({ text: "Original producer answer" }),
+      });
+
+      const result = await routeReply({
+        cfg,
+        payload: { text: "Delivered answer" },
+        channel: "matrix",
+        to: "!room:example.invalid",
+        sessionKey,
+        replyKind: "final",
+        mirror,
+      });
+
+      expect(result).toMatchObject({ ok: true, delivered: true });
+      expect(visible).toEqual([{ text: "Delivered answer transformed" }]);
+      const readMessages = async (key: string) => {
+        const entry = loadSessionEntryReadOnly({ sessionKey: key, storePath });
+        if (!entry) {
+          return [];
+        }
+        return (
+          await loadTranscriptEvents({ sessionKey: key, sessionId: entry.sessionId, storePath })
+        )
+          .map(readTranscriptEventMessage)
+          .filter((message) => message?.role === "assistant");
+      };
+      const sourceMessages = await readMessages(sessionKey);
+      expect(sourceMessages.filter(isTranscriptOnlyOpenClawAssistantMessage)).toHaveLength(
+        mirror ? 1 : 0,
+      );
+      expect(
+        sourceMessages.filter((message) => !isTranscriptOnlyOpenClawAssistantMessage(message)),
+      ).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "Original producer answer" }] }),
+      ]);
+      const destinationMessages = (await readMessages(route.sessionKey)).filter(
+        (message) => !isTranscriptOnlyOpenClawAssistantMessage(message),
+      );
+      expect(destinationMessages).toEqual(
+        relation === "different"
+          ? [
+              expect.objectContaining({
+                model: "automation-result",
+                content: [{ type: "text", text: "Delivered answer transformed" }],
+              }),
+            ]
+          : relation === "key"
+            ? [
+                expect.objectContaining({
+                  content: [{ type: "text", text: "Original producer answer" }],
+                }),
+              ]
+            : [],
+      );
+    },
+  );
+
   it("rejects a producer retired during its final delivery preparation", async () => {
     let current = true;
     const beforeDeliver = vi.fn(async () => {
@@ -120,7 +227,6 @@ describe("prepared reply routing", () => {
   });
 
   it("rejects a writer retired after prepared routing and awaited channel work", async () => {
-    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
     const session = {
       storePath: path.join(fixtures.tmpDir(), "sessions.json"),
       sessionKey: "agent:main:prepared-route",

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { executeSendAction } from "./outbound-send-service.js";
 
@@ -13,7 +15,8 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));
 
@@ -109,6 +112,56 @@ describe("accepted plugin delivery outcomes", () => {
       });
       expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
       expect(mocks.sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([["created-thread"], ["created-thread", "another-thread"]])(
+    "uses only an unambiguous native receipt thread: %j",
+    async (...threadIds) => {
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: [{ channel: "demo-outbound", messageId: "thread-message" }],
+        threadId: threadIds[0],
+      });
+      receipt.parts = threadIds.map((threadId, index) => ({
+        platformMessageId: `thread-message-${index}`,
+        kind: "text",
+        index,
+        threadId,
+      }));
+      mocks.dispatchChannelMessageAction.mockResolvedValue({
+        content: [],
+        details: { messageId: "thread-message", receipt },
+      });
+      await expect(
+        executeSendAction({
+          ctx: createContext({
+            transcriptRoute: {
+              sessionKey: "agent:main:demo-outbound:channel:123:thread:prepared-thread",
+              baseSessionKey: "agent:main:demo-outbound:channel:123",
+              peer: { kind: "channel", id: "123" },
+              chatType: "channel",
+              from: "demo-outbound:channel:123",
+              to: "channel:123",
+              threadId: "prepared-thread",
+            },
+          }),
+          to: "channel:123",
+          message: "native thread reply",
+          threadId: "prepared-thread",
+        }),
+      ).resolves.toMatchObject({ handledBy: "plugin" });
+      if (threadIds.length > 1) {
+        expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledOnce();
+        expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            threadId: "created-thread",
+            route: undefined,
+            payload: expect.objectContaining({ text: "native thread reply" }),
+          }),
+        );
+      }
     },
   );
 });

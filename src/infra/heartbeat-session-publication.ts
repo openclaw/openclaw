@@ -194,7 +194,6 @@ export async function publishHeartbeatSessionReply(params: {
                 content,
                 api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
                 provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-                // Unlike delivery mirrors, completion notifications remain model context.
                 model: "automation-result",
                 usage: makeZeroUsageSnapshot(),
                 stopReason: "stop",

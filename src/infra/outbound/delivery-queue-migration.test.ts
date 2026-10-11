@@ -5,6 +5,7 @@ import { createMessageReceiptFromOutboundResults } from "../../channels/message/
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -68,7 +69,8 @@ vi.mock("./delivery-completion.js", async (importOriginal) => {
 });
 
 // These migration fixtures exercise delivery custody, not destination transcripts.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));
 

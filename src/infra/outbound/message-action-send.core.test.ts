@@ -9,6 +9,7 @@ import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { OutboundDeliveryError } from "./deliver-types.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -22,7 +23,8 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 }));
 
 // These tests own send routing and payloads, not destination transcript storage.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
+vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));
 
