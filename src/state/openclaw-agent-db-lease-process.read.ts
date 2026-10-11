@@ -1,16 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import type { ProcessAgentDatabaseLease } from "./openclaw-agent-db-contract.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-
-/** A shared-state agent-database lease row still attributed to the reading process. */
-export type ProcessAgentDatabaseLease = {
-  leaseId: string;
-  agentId: string;
-  openedAt: number;
-};
 
 /** Rows owned by one process incarnation; an unknown start time on either side matches by pid. */
 export function readProcessAgentDatabaseLeasesInDatabase(

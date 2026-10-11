@@ -133,8 +133,10 @@ import type {
   GitHubPublicationSessionLifecycle,
 } from "./github-publication-read.types.js";
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
-import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
-import type { ProcessAgentDatabaseLease } from "./openclaw-agent-db-lease-process.read.js";
+import type {
+  OpenClawAgentDatabaseRegistryReadResult,
+  ProcessAgentDatabaseLease,
+} from "./openclaw-agent-db-contract.js";
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
 import type {
   RegisteredStateReadCommand,
