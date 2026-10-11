@@ -103,7 +103,7 @@ function DetailHeader(
         <div class="cron-detail-title">{title()}</div>
         {description() ? (
           <div class="cron-detail-description" data-test-id="cron-detail-description">
-            <span class="cron-detail-description__label">{t("cron.form.description")}:</span>
+            <span class="cron-detail-description__label">{t("cron.form.description")}:</span>{" "}
             {description()}
           </div>
         ) : undefined}
