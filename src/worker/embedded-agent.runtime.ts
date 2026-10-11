@@ -395,10 +395,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
       const fragments = params.runtimeContext
         ? [
-            ...(await buildExecutionHostRuntimeFacts({
-              ...params,
-              capabilityToolNames: activeToolNames,
-            })),
+            ...buildExecutionHostRuntimeFacts({ ...params, capabilityToolNames: activeToolNames }),
             ...params.runtimeContext,
           ]
         : [];

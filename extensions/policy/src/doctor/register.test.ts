@@ -14,7 +14,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
   return {
     ...actual,
     resolveExecApprovalsDisplayPath: displayPath,
-    readExecApprovalsSnapshotAsync: async () => {
+    readExecApprovalsSnapshot: () => {
       const fixtureRoot =
         process.env.OPENCLAW_STATE_DIR?.trim() ?? process.env.OPENCLAW_HOME?.trim() ?? "";
       const directFixturePath = nodePath.join(fixtureRoot, "exec-approvals.json");

@@ -10,7 +10,7 @@ import {
   resolveCodexMcpToolOverridesForAgent,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { buildNativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
@@ -98,10 +98,9 @@ export async function prepareCanonicalCodexFork(params: {
     execPolicy: resolveOpenClawExecPolicyForCodexAppServer({
       config,
       agentId: created.agentId,
-      approvals: await loadExecApprovalsReadOnlyAsync(),
+      approvals: loadExecApprovals(),
     }),
   });
-  assertCurrent();
   // Creation cannot provision a role-required environment. For supported local
   // children, the catalog owns the connection and run policy owns permissions.
   const appServer = { ...runtime, start: context.appServer.start };

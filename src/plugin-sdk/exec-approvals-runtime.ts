@@ -8,8 +8,3 @@ export {
   resolveExecModePolicy,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
-
-export {
-  loadExecApprovalsReadOnlyAsync,
-  readExecApprovalsSnapshotAsync,
-} from "../infra/exec-approvals-store.js";

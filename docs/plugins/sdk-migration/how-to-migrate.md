@@ -9,15 +9,7 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
-## Await native exec and approval preparation
-
-Node plugins await `context.prepareExecAuthorizationAsync(source)` and consume
-its returned synchronous guard immediately before dispatch, after their last
-await. The guard still checks current policy, command scope, configuration, and
-invocation lifetime. Use `loadExecApprovalsReadOnlyAsync` or
-`readExecApprovalsSnapshotAsync` for policy preparation. The released synchronous
-`prepareExecAuthorization`, policy readers, and opaque approval commit guards
-remain deprecated adapters until the next Plugin SDK major.
+## Use worker-owned approval requests
 
 Use host-bound `api.runtime.gateway.request` for approval requests, reads,
 history, grant operations, resolution, and waiting. Reads that expire rows are
@@ -25,6 +17,7 @@ worker operations too. The host's method classification does not enlarge the
 internal principal's allowed methods. A released opaque approval commit guard
 selects its native compatibility adapter before execution, preserving its
 transaction-local visibility; worker failure never selects that adapter.
+The adapter remains deprecated until the next Plugin SDK major.
 
 The shared warning budget is per plugin and capability family, on legacy use.
 Current effect-time authority checks remain synchronous. Schemas, stored bytes,

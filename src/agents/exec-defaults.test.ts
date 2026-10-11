@@ -20,7 +20,7 @@ function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(execApprovals, "loadExecApprovalsReadOnly").mockReturnValue({
+    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
       version: 1,
       agents: {},
     });
@@ -93,7 +93,7 @@ describe("resolveExecDefaults", () => {
   );
 
   it("ignores host approval defaults when auto resolves to sandbox", () => {
-    vi.mocked(execApprovals.loadExecApprovalsReadOnly).mockReturnValue({
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,
       defaults: {
         security: "full",
@@ -121,11 +121,11 @@ describe("resolveExecDefaults", () => {
     expect(defaults.mode).toBe("deny");
     expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
-    expect(execApprovals.loadExecApprovalsReadOnly).not.toHaveBeenCalled();
+    expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
   });
 
   it("reports host approval floors after normalized exec modes", () => {
-    vi.mocked(execApprovals.loadExecApprovalsReadOnly).mockReturnValue({
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,
       defaults: {
         security: "deny",
@@ -155,7 +155,7 @@ describe("resolveExecDefaults", () => {
   });
 
   it("reports agent-scoped host approval floors", () => {
-    vi.mocked(execApprovals.loadExecApprovalsReadOnly).mockReturnValue({
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,
       agents: {
         "agent-a": {
@@ -186,7 +186,7 @@ describe("resolveExecDefaults", () => {
   });
 
   it("keeps an explicit full session at full/off despite host approval floors", () => {
-    vi.mocked(execApprovals.loadExecApprovalsReadOnly).mockReturnValue({
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,
       defaults: {
         security: "full",

@@ -54,7 +54,6 @@ describe("plugin node-host registry", () => {
         expect(handle).toHaveBeenCalledWith(payload, undefined, {
           ...context,
           prepareExecAuthorization: expect.any(Function),
-          prepareExecAuthorizationAsync: expect.any(Function),
         });
         await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
       } else {

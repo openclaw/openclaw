@@ -1,7 +1,7 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
-import * as execApprovals from "../../../infra/exec-approvals-store.js";
+import * as execApprovals from "../../../infra/exec-approvals.js";
 import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -146,13 +146,11 @@ afterEach(async () => {
 describe("prepareEmbeddedAttemptPromptContext", () => {
   it("carries current Windows approval hints without changing system or user prompt bytes", () =>
     withMockedPlatform("win32", async () => {
-      const load = vi
-        .spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync")
-        .mockResolvedValue({ version: 1 });
+      const load = vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({ version: 1 });
       const fixture = createInput();
       fixture.input.capabilityToolNames.add("exec");
       const before = await prepareEmbeddedAttemptPromptContext(fixture.input);
-      load.mockResolvedValue({
+      load.mockReturnValue({
         version: 1,
         agents: { "agent-1": { allowlist: [{ pattern: "C:\\Tools\\node.exe" }] } },
       });

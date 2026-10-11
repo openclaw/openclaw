@@ -66,8 +66,8 @@ read enters its snapshot before policy reads, avoiding discarded probes.
 
 ## Committed facts and completeness
 
-Node exec policy preparation and host-bound approval requests use workers,
-including reads that expire rows. The final exec-policy SELECT, current
+Host-bound approval requests use workers, including reads that expire rows.
+The final exec-policy SELECT, current
 placement/parent checks, and released opaque callback guards remain current
 authority boundaries. This cutover adds no freshness probes, persistent schema,
 stored-byte, durability, retention, or update migration.

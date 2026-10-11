@@ -13,7 +13,6 @@ import type {
 } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
   OpenClawPluginNodeHostCommandAvailabilityContext,
   OpenClawPluginNodeHostCommandIo,
@@ -22,10 +21,7 @@ import type {
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
-import {
-  preparePluginExecAuthorization,
-  preparePluginExecAuthorizationAsync,
-} from "./plugin-exec-policy.js";
+import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
   () => import("../plugins/loader.js"),
@@ -276,23 +272,8 @@ export async function invokeRegisteredNodeHostCommand(
   const invokeContext = context
     ? {
         ...context,
-        prepareExecAuthorization: (source: "human-approved" | "session-full") => {
-          assertActive();
-          warnPluginSdkDeprecation({
-            pluginId: match.pluginId,
-            family: "node-exec-sync-preparation",
-            method: "OpenClawPluginNodeHostCommandContext.prepareExecAuthorization",
-            replacement: "await context.prepareExecAuthorizationAsync(source)",
-          });
-          return preparePluginExecAuthorization({
-            source,
-            command,
-            sessionKey: context.sessionKey,
-            assertActive,
-          });
-        },
-        prepareExecAuthorizationAsync: (source: "human-approved" | "session-full") =>
-          preparePluginExecAuthorizationAsync({
+        prepareExecAuthorization: (source: "human-approved" | "session-full") =>
+          preparePluginExecAuthorization({
             source,
             command,
             sessionKey: context.sessionKey,

@@ -4,8 +4,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import {
+  loadExecApprovals,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
@@ -321,14 +321,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         host === "sandbox" || defaults?.bypassHostApprovalFloors === true
           ? undefined
           : resolveExecApprovalsFromFile({
-              file: await loadExecApprovalsReadOnlyAsync(),
+              file: loadExecApprovals(),
               agentId,
               overrides: {
                 security: "full",
                 ask: "off",
               },
             }).agent;
-      assertSourceActive();
       const security = minSecurity(
         modePolicy.security,
         approvalPolicy?.security ?? modePolicy.security,

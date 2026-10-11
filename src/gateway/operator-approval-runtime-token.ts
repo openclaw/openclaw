@@ -1,7 +1,7 @@
 // Operator approval runtime token.
 // Uses an existing shared socket token when available, with a process-local fallback.
 import { createHmac, randomBytes } from "node:crypto";
-import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
 const APPROVAL_RUNTIME_TOKEN_CONTEXT = "openclaw:gateway-approval-runtime-token:v1";
@@ -15,7 +15,7 @@ function deriveApprovalRuntimeToken(socketToken: string): string {
 }
 
 function readSharedApprovalRuntimeToken(): string | null {
-  const token = loadExecApprovalsReadOnly().socket?.token?.trim();
+  const token = loadExecApprovals().socket?.token?.trim();
   return token ? deriveApprovalRuntimeToken(token) : null;
 }
 

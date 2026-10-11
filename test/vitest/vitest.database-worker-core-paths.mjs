@@ -353,7 +353,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/node-host/invoke-system-run.socket.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/node-host/invoke.test.ts",
-  "src/node-host/plugin-exec-policy.test.ts",
   "src/node-host/worker-runtime.test.ts",
   "src/channels/message-access/operator-authority.test.ts",
   "src/auto-reply/reply/commands-allowlist.owner.test.ts",

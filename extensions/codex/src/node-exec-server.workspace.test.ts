@@ -44,7 +44,7 @@ function invocation() {
           signal: owner.signal,
           sendNodeEvent: async () => {},
           acquireManagedWorkspaceAsync: acquire,
-          prepareExecAuthorizationAsync: async () => () => {},
+          prepareExecAuthorization: () => () => {},
         },
       ),
   };

@@ -54,7 +54,7 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
     acquireManagedWorkspaceAsync,
-    prepareExecAuthorizationAsync: async () => () => {},
+    prepareExecAuthorization: () => () => {},
   } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
   return { placement, context, acquireManagedWorkspaceAsync, release };
 }
@@ -204,20 +204,20 @@ describe("Codex node exec-server", () => {
   it("checks node-local authorization before starting the pinned process", async () => {
     const frames = createNodeFrames();
     const workspace = createManagedWorkspaceInvocation(process.cwd());
-    const prepareExecAuthorizationAsync = vi.fn(async () => {
+    const prepareExecAuthorization = vi.fn(() => {
       throw new Error("node-local execution denied");
     });
     const invocation = createCodexNodeExecServerCommand().handle(
       JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
       frames.io,
-      { ...workspace.context, prepareExecAuthorizationAsync },
+      { ...workspace.context, prepareExecAuthorization },
     );
     void invocation.catch(() => {});
     try {
       await expect(Promise.race([frames.ready, invocation])).rejects.toThrow(
         "node-local execution denied",
       );
-      expect(prepareExecAuthorizationAsync).toHaveBeenCalledOnce();
+      expect(prepareExecAuthorization).toHaveBeenCalledOnce();
     } finally {
       frames.controller.abort(new Error("policy fixture closed"));
       await invocation.catch(() => {});
@@ -268,7 +268,7 @@ describe("Codex node exec-server", () => {
       await expect(
         createCodexNodeExecServerCommand().handle(encoded, frames.io, {
           ...workspace.context,
-          prepareExecAuthorizationAsync: async () => assertCurrent,
+          prepareExecAuthorization: () => assertCurrent,
         }),
       ).rejects.toThrow("node policy tightened");
       expect(assertCurrent).toHaveBeenCalledOnce();
@@ -276,7 +276,7 @@ describe("Codex node exec-server", () => {
       await expect(
         createCodexNodeExecServerCommand().handle(encoded, frames.io, {
           ...workspace.context,
-          prepareExecAuthorizationAsync: undefined,
+          prepareExecAuthorization: undefined,
         }),
       ).rejects.toThrow("update the node");
       expect(spawn).not.toHaveBeenCalled();

@@ -14,7 +14,7 @@ import {
   loadCodexBundleMcpApprovalConfig,
   resolveCodexMcpToolOverridesForAgent,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
@@ -185,14 +185,10 @@ export async function runCodexAppServerSideQuestion(
     execOverrides: params.sessionEntry.permissionMode
       ? { mode: CODEX_SESSION_PERMISSION_EXEC_MODES[params.sessionEntry.permissionMode] }
       : undefined,
-    approvals:
-      params.sessionEntry.permissionMode === "full"
-        ? undefined
-        : await loadExecApprovalsReadOnlyAsync(),
+    approvals: params.sessionEntry.permissionMode === "full" ? undefined : loadExecApprovals(),
     config: params.cfg,
     agentId: sessionAgentId,
   });
-  assertCurrent();
   const usesSupervisionConnection = binding.connectionScope === "supervision";
   const supervisionModelSelection = usesSupervisionConnection
     ? requireCodexSupervisionModelSelection(binding)

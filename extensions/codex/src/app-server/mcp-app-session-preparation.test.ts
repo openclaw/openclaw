@@ -38,10 +38,7 @@ vi.mock("./config-exec-approvals.js", () => ({
   resolveOpenClawExecPolicyForCodexAppServer: () => ({}),
 }));
 vi.mock("./config-requirements.js", () => ({ readCodexRequirementsToml: () => undefined }));
-vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>()),
-  loadExecApprovalsReadOnlyAsync: async () => ({}),
-}));
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({ loadExecApprovals: () => ({}) }));
 vi.mock("./launch-args.js", () => ({ isCodexAppServerProxyLaunch: () => false }));
 vi.mock("./client-runtime.js", () => ({ ensureCodexAppServerClientRuntime: mocks.ensure }));
 vi.mock("./plugin-app-cache-key.js", () => ({

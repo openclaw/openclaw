@@ -89,7 +89,7 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
       sessionKey: placement.sessionKey,
       sendNodeEvent: async () => {},
       acquireManagedWorkspaceAsync: async () => ({ workspaceDir: placement.cwd, release }),
-      prepareExecAuthorizationAsync: async () => assertExecAuthorized,
+      prepareExecAuthorization: () => assertExecAuthorized,
     },
   );
   const outcome = invocation.catch((error: unknown) => error);

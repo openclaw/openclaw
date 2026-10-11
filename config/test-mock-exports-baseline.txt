@@ -370,6 +370,7 @@
 ["extensions/codex/src/app-server/mcp-app-session-preparation.test.ts","./thread-ownership.js","1a3f17156bd473005feb4c59995198b5bbb3a08bf1daece68833a935c0df10a3",1]
 ["extensions/codex/src/app-server/mcp-app-session-preparation.test.ts","openclaw/plugin-sdk/agent-harness-runtime","e22a62e8ab7028fcc6be381925f853e195a7d379b0e66b88ff76b538d5cb2e0e",1]
 ["extensions/codex/src/app-server/mcp-app-session-preparation.test.ts","openclaw/plugin-sdk/codex-mcp-projection","aae5f0bf658947760fa7b0a79274249d1bd8d6c3fd8f5d7ce35996df72ce1755",1]
+["extensions/codex/src/app-server/mcp-app-session-preparation.test.ts","openclaw/plugin-sdk/exec-approvals-runtime","faab3ab39d2b89db01564aa2022fecb5706fad91bd98c0c45d16cf87c1a16318",1]
 ["extensions/codex/src/app-server/model-catalog.test.ts","./auth-profile.js","365e2eb419bf1e019efdbadb14a05d7ff8815f5857d43eb2902e885a95d0e016",1]
 ["extensions/codex/src/app-server/model-catalog.test.ts","./native-auth.js","8ff7ecfd6c05d32b0913819084d8ecf14f5bd7ec3774ebf544d2e0d321a01ac7",1]
 ["extensions/codex/src/app-server/model-catalog.test.ts","./request.js","b2bf608af550c8973cc89cd508c9274c7758a7b14d83fcc694c15b23db6c1c63",1]

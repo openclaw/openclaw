@@ -5,7 +5,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecToolConfig } from "../config/types.tools.js";
 import {
-  loadExecApprovalsReadOnly,
+  loadExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
   type ExecHost,
@@ -238,7 +238,7 @@ export function resolveExecDefaults(params: ResolveExecDefaultsParams): Resolved
   const preparation = prepareExecDefaults(params);
   return preparation.kind === "resolved"
     ? preparation.defaults
-    : preparation.resolve(preparation.suppliedApprovals ?? loadExecApprovalsReadOnly());
+    : preparation.resolve(preparation.suppliedApprovals ?? loadExecApprovals());
 }
 
 /** Called inside retained session-reader scopes, before synchronous tool construction. */
