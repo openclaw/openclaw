@@ -7524,7 +7524,6 @@
 ["src/gateway/server-methods/session-discussion.test.ts","../../auto-reply/reply/conversation-label-generator.js","906b88cb9f5a70c220be1cea9592b7963e9325c5779518d54d3935b7f0ff35f0",1]
 ["src/gateway/server-methods/session-discussion.test.ts","../../config/sessions/session-accessor.js","54ad6f3349c30a440f010255b3ebb27a62801ef069dd9a1c39c140ec2d0b316c",1]
 ["src/gateway/server-methods/session-discussion.test.ts","../../plugins/session-discussion-registry.js","67af200a4b8bac999e85f49ae415f8019dffb95c4b154e13fa8fcfb57d6ec0ae",1]
-["src/gateway/server-methods/session-discussion.test.ts","../session-transcript-title-reader.js","70ef850d808cb24e770cc6ab2ccadf87949096561a906d969e7273db1ab86b62",1]
 ["src/gateway/server-methods/session-discussion.test.ts","./session-change-event.js","59f0dbca2e020baedfb6d85ff2ccff7f594c183b986da9de85811888337b5e3e",1]
 ["src/gateway/server-methods/session-discussion.test.ts","./sessions-shared.js","04e127d91c3029a6045a03edf1fdaaed58001203287d131b16d8eb7287429aaf",1]
 ["src/gateway/server-methods/sessions-diff.test.ts","../session-utils.js","0875564a1958fd9dc2bec8185483fecb64133794f48ef2234cf28bddb5a9be88",1]
