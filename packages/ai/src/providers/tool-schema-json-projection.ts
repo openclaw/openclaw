@@ -108,7 +108,7 @@ function projectToolInputSchema(
     reportToolSchemaTruncation(value, toolName);
   }
   const schema = inheritToolSchemaTruncation(
-    value,
+    undefined,
     JSON.parse(text) as RuntimeToolInputSchemaJson,
     truncated,
   );

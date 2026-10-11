@@ -1,3 +1,4 @@
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -18,6 +19,40 @@ import {
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
+  it("preserves truncation when a provider rewrites a sibling union", () => {
+    const definitions: Record<string, unknown> = { leaf: { type: "string" } };
+    let target = "leaf";
+    for (let depth = 0; depth < 5000; depth++) {
+      const name = `node${depth}`;
+      definitions[name] = { $ref: `#/$defs/${target}` };
+      target = name;
+    }
+    const parameters = normalizeToolParameterSchema({
+      type: "object",
+      properties: {
+        value: { $ref: `#/$defs/${target}` },
+        choice: {
+          anyOf: [
+            { type: "string", const: "a" },
+            { type: "string", const: "b" },
+          ],
+        },
+      },
+      required: ["value", "choice"],
+      additionalProperties: false,
+      $defs: definitions,
+    });
+    const rewritten = expectDefined(
+      normalizeDeepSeekToolSchemas(deepSeekContext([tool(parameters)]))[0],
+      "rewritten tool",
+    );
+    expect(rewritten.parameters).toMatchObject({
+      properties: { value: {}, choice: { enum: ["a", "b"] } },
+    });
+    expect(findOpenAIStrictSchemaViolations(rewritten.parameters, "tool.parameters")).toEqual([
+      "tool.parameters.depth",
+    ]);
+  });
   type ProviderContextOptions = {
     provider?: string;
     modelId?: string;

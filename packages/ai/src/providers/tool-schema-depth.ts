@@ -83,6 +83,9 @@ export function truncateToolSchemaDepth(schema: unknown, toolName?: string): unk
     if (!position) {
       return node;
     }
+    if (position.kind === "schema" && wasToolSchemaTruncated(node)) {
+      truncated = true;
+    }
     if (position.kind === "schema" && position.depth > MAX_TOOL_SCHEMA_DEPTH) {
       truncated = true;
       return {};

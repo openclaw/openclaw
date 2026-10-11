@@ -6,6 +6,7 @@ import {
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   normalizeOpenAIStrictCompatSchema,
+  inheritToolSchemaTruncation,
   SCHEMA_MAP_KEYS,
   SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
@@ -99,10 +100,8 @@ function normalizeToolSchemasIfChanged(
     if (!tool.parameters || typeof tool.parameters !== "object") {
       return tool;
     }
-    const parameters = normalizeSchema(
-      truncateToolSchemaDepth(tool.parameters, tool.name),
-      tool.name,
-    );
+    const bounded = truncateToolSchemaDepth(tool.parameters, tool.name);
+    const parameters = inheritToolSchemaTruncation(bounded, normalizeSchema(bounded, tool.name));
     return parameters === tool.parameters
       ? tool
       : {

@@ -167,6 +167,26 @@ describe("shared tool schema depth budget", () => {
       materialized = next;
       expect(convertResponsesToolPayload(tools, { strict: true })[0]?.strict).toBe(strict);
     }
+    const nested = normalizeToolParameterSchema({
+      type: "object",
+      properties: { nested: parameters },
+      required: ["nested"],
+      additionalProperties: false,
+    });
+    expect(
+      convertResponsesToolPayload([{ name: "nested", description: "Nested", parameters: nested }], {
+        strict: true,
+      })[0]?.strict,
+    ).toBe(false);
+
+    const markedWithToJSON = normalizeToolParameterSchema({ ...schema });
+    Object.defineProperty(markedWithToJSON, "toJSON", { value: () => freshSchema });
+    expect(
+      convertResponsesToolPayload(
+        [{ name: "recovered", description: "Recovered", parameters: markedWithToJSON }],
+        { strict: true },
+      )[0]?.strict,
+    ).toBe(true);
   });
 
   it("keeps deep provider tools and observes source edits and toJSON once per payload", () => {
