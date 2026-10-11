@@ -68,6 +68,7 @@ export function prepareGroupedMessage(
     disclosure?.expanded && disclosure.message
       ? prepareChatMessageRender(disclosure.message)
       : preparation;
+  // SAFETY: The group render boundary supplies transcript message records; fields remain unknown.
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);

@@ -245,7 +245,7 @@ function StreamingMessage(props: {
       source,
       parts: part().isStreaming
         ? toStreamingMarkdownParts(source, options, part().key)
-        : ([toSanitizedMarkdownHtml(source, options), ""] as [string, string]),
+        : ([toSanitizedMarkdownHtml(source, options), ""] satisfies [string, string]),
     };
   });
   const actions = createMemo(() =>

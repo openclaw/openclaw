@@ -546,7 +546,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           this.renderer.afterCommit(effect);
         },
       },
-      // The gate retains only this session's Solid root while MCP views retire.
+      // SAFETY: Both gate branches return this session's Solid root while MCP views retire.
     ) as HTMLDivElement;
   }
 

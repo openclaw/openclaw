@@ -114,10 +114,12 @@ export function extractGroupMeta(
   let maxPromptTokens = 0;
 
   for (const { message } of group.messages) {
+    // SAFETY: Grouped transcript entries are admitted message objects; the role is checked below.
     const m = message as Record<string, unknown>;
     if (m.role !== "assistant") {
       continue;
     }
+    // SAFETY: The message producer supplies numeric token counts under these usage field names.
     const usage = m.usage as Record<string, number> | undefined;
     if (usage) {
       hasUsage = true;
@@ -135,7 +137,9 @@ export function extractGroupMeta(
     // shape); a bare message.cost never exists, so reading only it left the
     // popover's $ line permanently dead.
     const c =
+      // SAFETY: Assistant usage stores a structured cost separately from its numeric token fields.
       (usage as { cost?: { total?: number } } | undefined)?.cost ??
+      // SAFETY: The fallback reads the same total-only cost shape as the usage metadata above.
       (m.cost as Record<string, number> | undefined);
     if (c?.total) {
       cost += c.total;

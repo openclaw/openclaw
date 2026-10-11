@@ -107,6 +107,7 @@ export function RewindButton(props: { onRewind: () => void }) {
           class="chat-group-rewind"
           aria-label={label()}
           onClick={(event: Event) =>
+            // SAFETY: This handler is registered on the native button rendered here.
             openChatRewindConfirmation(event.currentTarget as HTMLElement, () => props.onRewind())
           }
         >

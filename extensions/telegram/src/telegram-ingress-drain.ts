@@ -27,7 +27,6 @@ import {
 import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
-  prepareTelegramPollAnswerContext,
   prepareTelegramPollAnswerContextAsync,
   recordPreparedTelegramPollAnswer,
   settleTelegramPollAnswerContext,
@@ -324,12 +323,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     TelegramSpooledUpdatePayload
   >({
     queue: params.queue,
-    inspect: (update, context) => {
-      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
-        prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
-      }
-      return inspect(update, context);
-    },
+    inspect,
     inspectAsync: async (update, context) => {
       if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });

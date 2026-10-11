@@ -151,5 +151,6 @@ const renderSolidContent = directive(SolidContent);
 
 /** A stable component receives new props without replacing its owned DOM. */
 export function solidContent<P extends Record<string, unknown>>(component: Component<P>, props: P) {
+  // SAFETY: The directive passes this same P value to its paired component; only the generic is erased.
   return renderSolidContent(component as Component<Record<string, unknown>>, props);
 }

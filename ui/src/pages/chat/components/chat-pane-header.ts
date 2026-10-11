@@ -87,6 +87,7 @@ type ChatPaneHeaderProps = {
   renameDisabledReason?: string;
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
+  detailsControl?: TemplateResult | typeof nothing;
   runAction?: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
@@ -377,6 +378,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
       <div class="chat-pane__header-trailing">
+        ${props.detailsControl ?? nothing}
         ${
           !props.catalog && props.branches.length > 1
             ? html`

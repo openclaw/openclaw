@@ -357,7 +357,8 @@ require("node:module").syncBuiltinESMExports();
         "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
       );
       expect(result.stderr).not.toContain("ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED");
-      expect(readFileSync(join(root, "compat-checked"), "utf8")).toBe("yes");
+      // Live npm updater coverage is not a packaging gate.
+      expect(existsSync(join(root, "compat-checked"))).toBe(false);
       expect(readFileSync(join(root, "package.json"), "utf8")).toBe(packageJson);
       expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(changelog);
       expect(existsSync(join(root, "dist/postinstall-inventory.json"))).toBe(true);
