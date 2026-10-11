@@ -16,7 +16,10 @@ import {
 } from "./cron-creator-authority-context.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { shouldIncludePrimarySessionToolForOpenClawTools } from "./openclaw-tools.registration.js";
+import {
+  shouldIncludePrimarySessionToolForOpenClawTools,
+  shouldIncludeProgressCardToolForOpenClawTools,
+} from "./openclaw-tools.registration.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
@@ -176,6 +179,17 @@ describe("openclaw-tools progress_card gating", () => {
     ).toContain("ask_user");
   });
 
+  it("keeps message tool in embedded message-tool-only completions", () => {
+    setEmbeddedMode(true);
+    const tools = createTestOpenClawTools({
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(toolNames(tools)).toContain("message");
+  });
+
   it("exposes delegation only to regular unsandboxed gateway agents", () => {
     const regular = createFastToolNames({
       agentSessionKey: "agent:main:main",
@@ -261,6 +275,14 @@ describe("openclaw-tools progress_card gating", () => {
     expect(toolNames(fromRuntimeAllowlist)).toContain("message");
     expect(toolNames(fromGlobalAlsoAllow)).toContain("message");
     expect(toolNames(denied)).not.toContain("message");
+  });
+
+  it("lets an explicit updatePlan false override an allowlist that includes the tool", () => {
+    expect(
+      shouldIncludeProgressCardToolForOpenClawTools({
+        config: { tools: { updatePlan: false, allow: ["update_plan"] } },
+      }),
+    ).toBe(false);
   });
 });
 

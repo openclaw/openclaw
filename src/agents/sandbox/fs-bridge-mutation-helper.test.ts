@@ -170,6 +170,34 @@ const FORCED_EXDEV_WITH_SOURCE_REPLACEMENT_MUTATION_PYTHON = FORCED_EXDEV_MUTATI
 );
 
 describe("sandbox pinned mutation helper", () => {
+  it("writes through a pinned directory fd", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["write", workspace, "nested/deeper", "note.txt", "1"], "hello");
+
+      expect(result.status).toBe(0);
+      await expect(
+        fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
+      ).resolves.toBe("hello");
+    });
+  });
+
+  it("creates a new file through a pinned directory fd", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["create", workspace, "nested", "note.txt", "1"], "hello");
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(path.join(workspace, "nested", "note.txt"), "utf8")).resolves.toBe(
+        "hello",
+      );
+    });
+  });
+
   it("creates a file whose basename approaches the filesystem component limit", async () => {
     await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
@@ -236,6 +264,20 @@ describe("sandbox pinned mutation helper", () => {
     });
   });
 
+  it("refuses to create over an existing file and leaves it untouched", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(filePath, "keep me", "utf8");
+
+      const result = runMutation(["create", workspace, "", "note.txt", "0"], "replacement");
+
+      expect(result.status).toBe(GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("keep me");
+    });
+  });
+
   it("removes private staging when writing fails before publication", async () => {
     await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
@@ -291,6 +333,26 @@ describe("sandbox pinned mutation helper", () => {
       await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves existing target file mode while writing",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const filePath = path.join(workspace, "note.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(filePath, "before", "utf8");
+        await fs.chmod(filePath, 0o644);
+
+        const result = runMutation(["write", workspace, "", "note.txt", "0"], "after");
+
+        expect(result.status).toBe(0);
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("after");
+        const fileStat = await fs.stat(filePath);
+        expect(fileStat.mode & 0o777).toBe(0o644);
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "keeps restrictive existing target file mode while writing",
@@ -461,6 +523,19 @@ describe("sandbox pinned mutation helper", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")("rejects non-regular files while reading", async () => {
+    await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.mkdir(path.join(workspace, "folder"), { recursive: true });
+
+      const result = runMutation(["read", workspace, "", "folder"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/only regular files are allowed/i);
+    });
+  });
+
   it.runIf(process.platform !== "win32")("rejects FIFO reads without blocking", async () => {
     await withTestDir({ prefix: "openclaw-mutation-helper-fifo-" }, async (root) => {
       const workspace = path.join(root, "workspace");
@@ -588,6 +663,36 @@ describe("sandbox pinned mutation helper", () => {
           "payload",
         );
         await expectPathMissing(path.join(outside, "escape.txt"));
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "copies directories across different mount roots during rename fallback",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        await fs.mkdir(path.join(sourceRoot, "dir", "nested"), { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "payload", "utf8");
+
+        const result = runMutationWithSource(FORCED_EXDEV_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "dir",
+          destRoot,
+          "",
+          "moved",
+          "1",
+        ]);
+
+        expect(result.status).toBe(0);
+        await expect(
+          fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
+        ).resolves.toBe("payload");
+        await expectPathMissing(path.join(sourceRoot, "dir"));
       });
     },
   );

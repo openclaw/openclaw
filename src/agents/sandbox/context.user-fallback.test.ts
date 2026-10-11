@@ -25,6 +25,26 @@ describe("resolveSandboxDockerUser", () => {
     expect(resolved.user).toBe("2000:2000");
   });
 
+  it("falls back to workspace ownership when docker.user is unset", async () => {
+    const resolved = await resolveSandboxDockerUser({
+      backend: "docker",
+      docker: baseDocker,
+      workspaceDir: "/tmp/workspace",
+      stat: async () => ({ uid: 1001, gid: 1002 }),
+    });
+    expect(resolved.user).toBe("1001:1002");
+  });
+
+  it("falls back to workspace ownership for mixed-case Docker backend ids", async () => {
+    const resolved = await resolveSandboxDockerUser({
+      backend: "Docker",
+      docker: baseDocker,
+      workspaceDir: "/tmp/workspace",
+      stat: async () => ({ uid: 1001, gid: 1002 }),
+    });
+    expect(resolved.user).toBe("1001:1002");
+  });
+
   it("falls back to workspace ownership for rootless Podman", async () => {
     const resolved = await resolveSandboxDockerUser({
       backend: "podman",

@@ -145,6 +145,73 @@ describe("optional media tool factory planning", () => {
     vi.unstubAllEnvs();
   });
 
+  it("uses the prepared media family for image-tool availability", () => {
+    const config: OpenClawConfig = {};
+    const snapshot = installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["media-owner"] },
+        setupProviders: [{ id: "media-owner" }],
+      }),
+    ]);
+    const base = {
+      config,
+      agentDir: "/agent",
+      authStore: createAuthStore(["media-owner"]),
+    };
+
+    expect(
+      resolveImageToolFactoryAvailable({
+        ...base,
+        preparedModelRuntime: {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+        } as never,
+      }),
+    ).toBe(false);
+    expect(
+      resolveImageToolFactoryAvailable({
+        ...base,
+        preparedModelRuntime: {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: {
+            mediaUnderstandingProviders: [{ id: "media-owner", capabilities: ["image"] }],
+          },
+        } as never,
+      }),
+    ).toBe(true);
+  });
+
+  it("requires image capability and auth on the same prepared provider", () => {
+    const config: OpenClawConfig = {};
+    const snapshot = installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: {
+          mediaUnderstandingProviders: ["audio-auth", "image-no-auth"],
+        },
+        setupProviders: [{ id: "audio-auth" }, { id: "image-no-auth" }],
+      }),
+    ]);
+
+    expect(
+      resolveImageToolFactoryAvailable({
+        config,
+        agentDir: "/agent",
+        authStore: createAuthStore(["audio-auth"]),
+        preparedModelRuntime: {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: {
+            mediaUnderstandingProviders: [
+              { id: "audio-auth", capabilities: ["audio"] },
+              { id: "image-no-auth", capabilities: ["image"] },
+            ],
+          },
+        } as never,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps config vision routes while gating OpenAI subscription auth on prepared Codex", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const config = {

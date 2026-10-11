@@ -177,6 +177,7 @@ it("orders final steering preparation through the actual session enqueue", async
 });
 
 it.each([
+  { surface: "registry", changePolicy: false },
   { surface: "registry", changePolicy: true },
   { surface: "talk", changePolicy: false },
   { surface: "talk", changePolicy: true },
@@ -482,7 +483,13 @@ it.each([
   },
 );
 
-it.each(["current", "revoked", "notification-failed", "cleanup-and-notification-failed"] as const)(
+it.each([
+  "current",
+  "revoked",
+  "cleanup-failed",
+  "notification-failed",
+  "cleanup-and-notification-failed",
+] as const)(
   "enqueues inside final admission and notifies after settlement: %s",
   async (outcome) => {
     const { session } = await createTestSession();
@@ -490,7 +497,8 @@ it.each(["current", "revoked", "notification-failed", "cleanup-and-notification-
     const release = createDeferredCore();
     const cleanupError = new Error("admission cleanup failed");
     const notificationError = new Error("queue notification failed");
-    const cleanupFails = outcome === "cleanup-and-notification-failed";
+    const cleanupFails =
+      outcome === "cleanup-failed" || outcome === "cleanup-and-notification-failed";
     const notificationFails =
       outcome === "notification-failed" || outcome === "cleanup-and-notification-failed";
     let insideAdmission = false;
@@ -577,7 +585,7 @@ it.each(["current", "revoked", "notification-failed", "cleanup-and-notification-
   },
 );
 
-it.each(["current", "both", "refused"] as const)(
+it.each(["current", "notification", "preflight", "both", "refused"] as const)(
   "retains streaming prompt custody after %s feedback",
   async (feedback) => {
     const { session } = await createTestSession();
@@ -597,13 +605,13 @@ it.each(["current", "both", "refused"] as const)(
       if (
         event.type === "queue_update" &&
         event.steering.includes("streamed prompt") &&
-        feedback === "both"
+        (feedback === "notification" || feedback === "both")
       ) {
         throw notificationError;
       }
     });
     const preflightResult = vi.fn((accepted: boolean) => {
-      if (accepted && feedback === "both") {
+      if (accepted && (feedback === "preflight" || feedback === "both")) {
         throw preflightError;
       }
     });
@@ -621,7 +629,12 @@ it.each(["current", "both", "refused"] as const)(
       } else {
         await expect(pending).rejects.toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
         await expect(pending).rejects.toMatchObject({
-          cause: { errors: [notificationError, preflightError] },
+          cause:
+            feedback === "both"
+              ? { errors: [notificationError, preflightError] }
+              : feedback === "notification"
+                ? notificationError
+                : preflightError,
         });
       }
       expect(preflightResult).toHaveBeenCalledExactlyOnceWith(feedback !== "refused");

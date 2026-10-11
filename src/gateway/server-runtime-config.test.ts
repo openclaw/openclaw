@@ -65,6 +65,22 @@ describe("resolveGatewayRuntimeConfig", () => {
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       );
     });
+
+    it("allows loopback binding with non-loopback trusted proxies", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["10.0.0.1"],
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.authMode).toBe("trusted-proxy");
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
   });
 
   describe("token/password auth modes", () => {
@@ -259,6 +275,28 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.bindHost).toBe("0.0.0.0");
     });
 
+    it("rejects container auto-bind with auth but without allowedOrigins (origin check preserved)", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: { gateway: { auth: TOKEN_AUTH } },
+          port: 18789,
+        }),
+      ).rejects.toThrow(/non-loopback Control UI requires gateway\.controlUi\.allowedOrigins/);
+    });
+
+    it("rejects container auto-bind without auth (security invariant preserved)", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: { gateway: { auth: { mode: "none" } } },
+          port: 18789,
+        }),
+      ).rejects.toThrow(/refusing to bind gateway/);
+    });
+
     it("rejects tailscale serve with explicit no-auth", async () => {
       await expect(
         resolveGatewayRuntimeConfig({
@@ -271,6 +309,16 @@ describe("resolveGatewayRuntimeConfig", () => {
           port: 18789,
         }),
       ).rejects.toThrow("gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve");
+    });
+
+    it("respects explicit loopback config even inside a container", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: { gateway: { bind: "loopback", auth: { mode: "none" } } },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
     });
 
     it("falls back to loopback inside a container when tailscale serve is enabled", async () => {
@@ -303,6 +351,22 @@ describe("resolveGatewayRuntimeConfig", () => {
         port: 18789,
       });
       expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("respects explicit lan config inside a container (requires auth)", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: TOKEN_AUTH,
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("0.0.0.0");
     });
   });
 });

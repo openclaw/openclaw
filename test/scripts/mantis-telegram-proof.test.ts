@@ -113,18 +113,24 @@ describe("Complete canonical recorder observations", () => {
       }),
     ).toThrow();
   });
-  it.each(["wrong reply"])("records %s without declaring a semantic pass", async (reply) => {
-    const input = await capture(reply);
-    const facts = normalizeTelegramCapture(input);
-    expect(facts["telegram-reply.json"].events.some((event) => event.text === reply)).toBe(true);
-    expect(facts["provider-request.json"].requests).toEqual(input.provider);
-    const encoded = Object.fromEntries(
-      Object.entries(facts).map(([k, v]) => [k, Buffer.from(JSON.stringify(v)).toString("base64")]),
-    );
-    expect(verifyTelegramProofFiles(identity, encoded).assertion_outcome).toBe("inconclusive");
-    const wrong = { ...identity, plan_sha256: "0".repeat(64) };
-    expect(() => verifyTelegramProofFiles(wrong, encoded)).toThrow();
-  });
+  it.each(["reply", "wrong reply"])(
+    "records %s without declaring a semantic pass",
+    async (reply) => {
+      const input = await capture(reply);
+      const facts = normalizeTelegramCapture(input);
+      expect(facts["telegram-reply.json"].events.some((event) => event.text === reply)).toBe(true);
+      expect(facts["provider-request.json"].requests).toEqual(input.provider);
+      const encoded = Object.fromEntries(
+        Object.entries(facts).map(([k, v]) => [
+          k,
+          Buffer.from(JSON.stringify(v)).toString("base64"),
+        ]),
+      );
+      expect(verifyTelegramProofFiles(identity, encoded).assertion_outcome).toBe("inconclusive");
+      const wrong = { ...identity, plan_sha256: "0".repeat(64) };
+      expect(() => verifyTelegramProofFiles(wrong, encoded)).toThrow();
+    },
+  );
   it("redacts known private values and rejects incomplete or oversized recordings", async () => {
     const input = await capture();
     const raw = input.raw.replaceAll("reply", "private-token");

@@ -341,6 +341,20 @@ describe("control-plane update restart sentinel", () => {
     },
   );
 
+  it.each([undefined, "agent:main:main"])(
+    "does not infer a continuation from an update's session route (%s)",
+    (sessionKey) => {
+      const payload = buildUpdateRestartSentinelPayload({
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+        meta: sessionKey ? { sessionKey } : {},
+        nowMs: 1,
+      });
+
+      expect(payload.sessionKey).toBe(sessionKey);
+      expect(payload.continuation).toBeUndefined();
+    },
+  );
+
   it("preserves advisory step classification through the typed sentinel round trip", async () => {
     await withRestartSentinelStateDir(async () => {
       await writeRestartSentinel(
@@ -374,6 +388,31 @@ describe("control-plane update restart sentinel", () => {
       expect(JSON.stringify(steps)).not.toContain("private advisory detail");
     });
   });
+
+  it.each([
+    { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
+    {
+      serviceRestartSafe: true,
+      version: "1.0.0",
+      buildId: "restored-git-build",
+      service: "healthy",
+    },
+    { serviceRestartSafe: false, reason: "state-migration-started" },
+  ] as const)(
+    "preserves recovery through the typed sentinel round trip ($serviceRestartSafe)",
+    async (recovery) => {
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+            meta: {},
+          }),
+        );
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
+      });
+    },
+  );
 
   it.each([
     { service: "failed", reason: "channel-errors", health: "failed" },
@@ -458,6 +497,36 @@ describe("control-plane update restart sentinel", () => {
           reason: "runtime-verification-failed",
         });
       });
+    },
+  );
+
+  it.each(["ok", "skipped"] as const)(
+    "preserves the same-revision Git producer's %s outcome",
+    (status) => {
+      const payload = buildUpdateRestartSentinelPayload({
+        result: {
+          status,
+          ...(status === "skipped" ? { reason: "already-current" } : {}),
+          mode: "git",
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "aaaaaaaa" },
+          steps: [],
+          durationMs: 42,
+        },
+        meta: { continuationMessage: "Verify the completed runtime maintenance." },
+        nowMs: 1,
+      });
+
+      expect(payload.status).toBe(status);
+      expect(payload.stats?.reason).toBe(status === "skipped" ? "already-current" : null);
+      expect(payload.continuation).toEqual(
+        status === "ok"
+          ? {
+              kind: "agentTurn",
+              message: "Verify the completed runtime maintenance.",
+            }
+          : undefined,
+      );
     },
   );
 

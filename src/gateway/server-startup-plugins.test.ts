@@ -360,6 +360,13 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     runGatewaySessionStartupMaintenance.mockClear();
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
   });
+  it("does not run startup maintenance", async () => {
+    await prepareBootstrapWithRuntimeConfig({});
+
+    expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
+    expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
+    expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
+  });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
@@ -490,6 +497,17 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
     },
   );
+
+  it("threads durable worker provider ids into startup lookup planning", async () => {
+    await prepareBootstrapWithRuntimeConfig({ channels: {} } as OpenClawConfig, {
+      workerProviderIds: ["static-ssh"],
+    });
+
+    const lookupInput = firstCallArg<{ workerProviderIds?: readonly string[] }>(
+      loadPluginLookUpTable,
+    );
+    expect(lookupInput.workerProviderIds).toEqual(["static-ssh"]);
+  });
 
   it("preserves an explicitly empty manifest snapshot for ambient channel planning", async () => {
     const emptyManifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
@@ -794,4 +812,80 @@ describe("loadGatewayStartupPluginRuntime", () => {
       }
     },
   );
+});
+
+describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
+  async function warnFor(config: OpenClawConfig, providerIds: string[]) {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config,
+      pluginRegistry: {
+        embeddingProviders: providerIds.map((id) => ({ provider: { id } })),
+      } as never,
+      log,
+    });
+    return log;
+  }
+
+  it("warns when a configured memory embedding fallback is not registered", async () => {
+    const log = await warnFor(
+      {
+        memory: { search: { provider: "openai", fallback: "ollama" } },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      ["openai"],
+    );
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.fallback="ollama"');
+  });
+
+  it("does not warn when the configured memory embedding fallback is registered", async () => {
+    const log = await warnFor(
+      {
+        memory: { search: { provider: "openai", fallback: "ollama" } },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      ["openai", "ollama"],
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for core generic memory embedding providers", async () => {
+    const log = await warnFor(
+      {
+        memory: { search: { provider: "openai-compatible" } },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      [],
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  function customOllamaConfig(): OpenClawConfig {
+    return {
+      memory: { search: { provider: "openai", fallback: "ollama-5080" } },
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://gpu-box.local:11435",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  it("does not warn for custom fallback entries whose api-owner plugin is registered", async () => {
+    const log = await warnFor(customOllamaConfig(), ["openai", "ollama"]);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns for custom fallbacks whose api-owner plugin is not registered", async () => {
+    const log = await warnFor(customOllamaConfig(), ["openai"]);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memory.search.fallback="ollama-5080"');
+  });
 });

@@ -50,6 +50,40 @@ function hasSite(
 }
 
 describe("native app i18n inventory", () => {
+  it("keeps live tool-display translations inventoried after UI call sites disappear", () => {
+    const entries = collectNativeI18nEntriesFromSources([
+      {
+        repoPath: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+        surface: "android",
+        source: JSON.stringify({
+          tools: { read: { title: "Read", actions: [{ label: "open", icon: "ignored" }] } },
+        }),
+      },
+    ]);
+    expect(entries.map(({ source, surface, sites }) => ({ source, surface, sites }))).toEqual([
+      {
+        source: "Read",
+        surface: "android",
+        sites: [
+          {
+            kind: "tool-display",
+            path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+          },
+        ],
+      },
+      {
+        source: "open",
+        surface: "android",
+        sites: [
+          {
+            kind: "tool-display",
+            path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("serializes one extraction site per line in contiguous source-file clusters", () => {
     const entries = [
       {
@@ -175,6 +209,80 @@ describe("native app i18n inventory", () => {
     }
   });
 
+  it("carries bounded nearby owner code without changing stable inventory data", () => {
+    const source = [
+      `// distant prefix ${"x".repeat(2000)}`,
+      "fun statusRow(runPending: Boolean) {",
+      "  Button(enabled = !runPending) {",
+      '    Text("Run Pending")',
+      "  }",
+      `// trailing owner text ${"💡".repeat(1000)}`,
+      "}",
+    ].join("\n");
+    const candidates = extractNativeI18nCandidates("android", "apps/android/Status.kt", source);
+    const secondary = extractNativeI18nCandidates(
+      "android",
+      "apps/android/ZStatus.kt",
+      'Text("Run Pending")',
+    );
+    const entries = assignNativeI18nIds([...secondary, ...candidates]);
+    const entry = expectDefined(
+      entries.find((item) => item.source === "Run Pending"),
+      "status label",
+    );
+
+    expect(entry.sourceContext).toContain("Button(enabled = !runPending)");
+    expect(entry.sourceContext).toContain('Text("Run Pending")');
+    expect(entry.sourceContext?.length).toBeLessThanOrEqual(1200);
+    expect(assignNativeI18nIds([...candidates, ...secondary])).toEqual(entries);
+    expect(serializeNativeI18nInventory(entries)).not.toContain("sourceContext");
+    expect(serializeNativeI18nInventory(entries)).not.toContain("Button(enabled");
+  });
+
+  it("merges sites and hashes only surface plus source", () => {
+    const source = "Gateway status";
+    const entries = assignNativeI18nIds([
+      {
+        kind: "ui-modifier",
+        line: 20,
+        path: "apps/ios/Zeta.swift",
+        source,
+        surface: "apple",
+      },
+      {
+        kind: "ui-call",
+        line: 10,
+        path: "apps/ios/Alpha.swift",
+        source,
+        surface: "apple",
+      },
+    ]);
+    const expectedId = `native.apple.${createHash("sha256").update(`apple ${source}`).digest("hex").slice(0, 16)}`;
+
+    expect(entries).toEqual([
+      {
+        id: expectedId,
+        source,
+        surface: "apple",
+        sites: [
+          { kind: "ui-call", path: "apps/ios/Alpha.swift" },
+          { kind: "ui-modifier", path: "apps/ios/Zeta.swift" },
+        ],
+      },
+    ]);
+    expect(
+      assignNativeI18nIds([
+        {
+          kind: "ui-call-multiline",
+          line: 99,
+          path: "apps/ios/Moved.swift",
+          source,
+          surface: "apple",
+        },
+      ])[0]?.id,
+    ).toBe(expectedId);
+  });
+
   it("detects conditional branch identifiers without regex backtracking", () => {
     expect(isConditionalBranchIdentifier("isEnabled")).toBe(true);
     expect(isConditionalBranchIdentifier("hasFA2Enabled")).toBe(true);
@@ -183,7 +291,41 @@ describe("native app i18n inventory", () => {
     expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
   });
 
-  it.each([{ surface: "apple", value: 'Before \\(format(")", "escaped \\")")) after' }] as const)(
+  it.each([
+    { surface: "apple", value: String.raw`agent:\(owner):global` },
+    { surface: "android", value: "agent:$agentId:global" },
+    { surface: "apple", value: String.raw`cache:\(scope.path):\(makeKey(value: token)):entry` },
+    { surface: "apple", value: String.raw`cache:\(makeKey(name: "local")):entry` },
+    { surface: "android", value: "cache:${scope.path}:$entryId" },
+    { surface: "android", value: "cache:${keys.getOrElse(index) { fallback }}:$entryId" },
+  ] as const)(
+    "excludes $surface interpolated identifiers but preserves explicit UI copy: $value",
+    ({ surface, value }) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const branch = (text: string) =>
+        surface === "apple"
+          ? `let key = enabled ? "${text}" : fallback`
+          : `val key = if (enabled) "${text}" else fallback`;
+
+      expect(extractNativeI18nCandidates(surface, repoPath, branch(value))).toEqual([]);
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, `Text("${value}")`).map(
+          (entry) => entry.source,
+        ),
+      ).toEqual([value]);
+      const prose = `Current route: ${value}`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, branch(prose)).map((entry) => entry.source),
+      ).toEqual([prose]);
+    },
+  );
+
+  it.each([
+    { surface: "apple", value: "Before \\(outer(inner(value))) after" },
+    { surface: "apple", value: 'Before \\(format(")", "escaped \\")")) after' },
+    { surface: "android", value: "Before ${outer({ inner(value) })} after" },
+    { surface: "android", value: 'Before ${format("}", "escaped \\"}")} after' },
+  ] as const)(
     "preserves $surface nested and quoted interpolation delimiters: $value",
     ({ surface, value }) => {
       const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
@@ -194,11 +336,34 @@ describe("native app i18n inventory", () => {
     },
   );
 
-  it.each([{ surface: "android", value: "Before ${outer(value)" }] as const)(
-    "rejects $surface unclosed interpolation",
-    ({ surface, value }) => {
-      const repoPath = `apps/${surface}/Fixture.kt`;
-      expect(extractNativeI18nCandidates(surface, repoPath, `Text("${value}")`)).toEqual([]);
+  it.each([
+    { surface: "apple", value: "Before \\(outer(value)" },
+    { surface: "android", value: "Before ${outer(value)" },
+  ] as const)("rejects $surface unclosed interpolation", ({ surface, value }) => {
+    const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+    expect(extractNativeI18nCandidates(surface, repoPath, `Text("${value}")`)).toEqual([]);
+  });
+
+  it.each(["apple", "android"] as const)(
+    "preserves compact %s prose and the candidate length boundary",
+    (surface) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const value = surface === "apple" ? String.raw`\(hours)h` : "${hours}h";
+      const source =
+        surface === "apple"
+          ? `let label = enabled ? "${value}" : fallback`
+          : `val label = if (enabled) "${value}" else fallback`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, source).map((entry) => entry.source),
+      ).toEqual([value]);
+      for (const length of [500, 501]) {
+        const text = "a".repeat(length);
+        expect(
+          extractNativeI18nCandidates(surface, repoPath, `Text("${text}")`).map(
+            (entry) => entry.source,
+          ),
+        ).toEqual(length === 500 ? [text] : []);
+      }
     },
   );
 
@@ -219,6 +384,16 @@ describe("native app i18n inventory", () => {
     expect(catalog.strings?.["Expires in %lld minutes"]?.localizations?.en?.stringUnit?.value).toBe(
       "Expires in %lld minutes",
     );
+  });
+
+  it("inventories SwiftUI Tab titles as UI calls", () => {
+    const sources = extractNativeI18nCandidates(
+      "apple",
+      "apps/macos/Fixture.swift",
+      `Tab("Connection", systemImage: "network", value: FixtureTab.connection) { EmptyView() }`,
+    ).map((entry) => entry.source);
+
+    expect(sources).toEqual(["Connection"]);
   });
 
   it("joins adjacent literals across supported Swift and Kotlin UI expressions", () => {
@@ -318,6 +493,144 @@ describe("native app i18n inventory", () => {
         ].includes(source),
       ),
     ).toBe(false);
+  });
+
+  it("preserves Kotlin return order, locations, and complete literal values", () => {
+    const repoPath = "apps/android/Fixture.kt";
+    const source = [
+      "fun statusText(mode: Int, detail: String): String {",
+      '  if (mode == 0) { return "Gateway " + "ready" }',
+      '  if (mode == 1) return "Gateway " + detail',
+      '  if (mode == 2) return "Gateway waiting"',
+      '  if (mode == 3) return "Gateway ready"',
+      '  return "Gateway closed"',
+      "}",
+    ].join("\n");
+
+    expect(extractNativeI18nCandidates("android", repoPath, source)).toEqual(
+      [
+        { value: "Gateway ready", line: 5 },
+        { value: "Gateway waiting", line: 4 },
+        { value: "Gateway closed", line: 6 },
+      ].map(({ value, line }) => ({
+        kind: "conditional-branch",
+        line,
+        path: repoPath,
+        source: value,
+        sourceContext: source,
+        surface: "android",
+      })),
+    );
+  });
+
+  it("ignores generated Android resource entries", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/strings.xml",
+      `<resources>
+        <string name="manual_status">Gateway ready</string>
+        <string name="native_0123456789abcdef">Generated feedback</string>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
+  });
+
+  it("extracts only localizable usage descriptions from Apple plists", () => {
+    const entries = extractNativeI18nCandidates(
+      "apple",
+      "apps/ios/Fixture/Info.plist",
+      `<plist><dict>
+        <key>CFBundleDisplayName</key>
+        <string>OpenClaw Fixture</string>
+        <key>NSCameraUsageDescription</key>
+        <string>OpenClaw uses the camera to scan setup codes &amp; documents.</string>
+        <key>OpenClawFixtureValue</key>
+        <string>Runtime configuration value</string>
+      </dict></plist>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "OpenClaw uses the camera to scan setup codes & documents.",
+    ]);
+  });
+
+  it("respects non-translatable Android collections and retains lowercase choices", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/wear.xml",
+      `<resources>
+        <string-array name="capabilities" translatable="false">
+          <item>@string/native_capability</item>
+          <item>openclaw_wear_companion_v1</item>
+          <item>Visible choice</item>
+        </string-array>
+        <string-array name="modes">
+          <item>@string/native_mode</item>
+          <item>off</item>
+          <item>Visible choice</item>
+        </string-array>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
+  });
+
+  it("shares discovered UI helpers across files only within the same platform", () => {
+    const entries = collectNativeI18nEntriesFromSources([
+      {
+        surface: "android",
+        repoPath: "apps/android/Screen.kt",
+        source: `
+          AndroidBadge("Android badge")
+          Text("Android built-in")
+          SharedCard("Not an Android view")
+          request.header("Cookie", cookie)
+            .header("Cf-Access-Metadata-Request", "true")
+            .header("Cf-Access-Token", token)
+            .header("User-Agent", agent)
+            .header("Accept", contentType)
+          response.header("Location")
+        `,
+      },
+      {
+        surface: "apple",
+        repoPath: "apps/ios/Screen.swift",
+        source: `
+          header("iOS heading")
+          SharedCard("Shared card")
+          Text("Apple built-in")
+          AndroidBadge("Not an Apple view")
+        `,
+      },
+      {
+        surface: "apple",
+        repoPath: "apps/macos/Sources/Screen.swift",
+        source: 'header("macOS heading")',
+      },
+      {
+        surface: "apple",
+        repoPath: "apps/shared/OpenClawKit/Sources/Views.swift",
+        source: `
+          func header(_ text: String) -> some View { Text(text) }
+          struct SharedCard: View { var body: some View { EmptyView() } }
+        `,
+      },
+      {
+        surface: "android",
+        repoPath: "apps/android/Components.kt",
+        source: "@Composable fun AndroidBadge(text: String) { Text(text) }",
+      },
+    ]);
+
+    expect(entries.map(({ surface, source }) => ({ surface, source }))).toEqual([
+      { surface: "android", source: "Android badge" },
+      { surface: "android", source: "Android built-in" },
+      { surface: "apple", source: "Apple built-in" },
+      { surface: "apple", source: "Shared card" },
+      { surface: "apple", source: "iOS heading" },
+      { surface: "apple", source: "macOS heading" },
+    ]);
   });
 
   it("extracts shared auth problem copy without translating commands or URLs", () => {
@@ -835,6 +1148,79 @@ describe("native app i18n inventory", () => {
     expect(translatorReturned).toBe(false);
   });
 
+  it("retranslates existing native strings only when a full refresh is requested", async () => {
+    const translationsDir = tempDirs.make("openclaw-native-i18n-");
+    const entry = testEntry("native.apple.open", "apple", "Open");
+    await syncNativeLocale("sv", [entry], {
+      glossary: [],
+      translationsDir,
+      translate: async () => new Map([[entry.id, "Tidigare"]]),
+    });
+    const refreshed = await syncNativeLocale("sv", [entry], {
+      force: true,
+      glossary: [],
+      translationsDir,
+      translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
+    });
+    expect(refreshed.translated).toBe(1);
+    expect(
+      JSON.parse(await readFile(path.join(translationsDir, "sv.json"), "utf8")).translations,
+    ).toEqual({ [entry.id]: "Öppna" });
+  });
+
+  it.each(["clean", "missing", "glossary", "legacy", "legacy-missing", "legacy-glossary"])(
+    "adds selected refresh to ordinary %s locale work",
+    async (scenario) => {
+      const translationsDir = tempDirs.make("openclaw-native-i18n-");
+      const selected = testEntry("native.apple.open", "apple", "Open");
+      const other = testEntry("native.apple.close", "apple", "Close");
+      const artifactPath = path.join(translationsDir, "sv.json");
+      await syncNativeLocale("sv", [selected, other], {
+        glossary: [],
+        translationsDir,
+        translate: async () =>
+          new Map([
+            [selected.id, "Tidigare"],
+            [other.id, "Stäng"],
+          ]),
+      });
+      const previous = JSON.parse(await readFile(artifactPath, "utf8"));
+      if (scenario === "missing") {
+        delete previous.translations[other.id];
+      }
+      if (scenario.startsWith("legacy")) {
+        previous.version = 1;
+        previous.entries = [
+          { id: selected.id, source: selected.source, translated: "Tidigare" },
+          { id: other.id, source: other.source, translated: "Stäng" },
+        ];
+        if (scenario === "legacy-missing") {
+          previous.entries.pop();
+        }
+        delete previous.translations;
+      }
+      await writeFile(artifactPath, JSON.stringify(previous));
+      const pendingIds: string[] = [];
+      await syncNativeLocale("sv", [selected, other], {
+        refreshIds: [selected.id, selected.id],
+        glossary: scenario.endsWith("glossary") ? [{ source: "Close", target: "Stäng" }] : [],
+        translationsDir,
+        translate: async (pending) => {
+          pendingIds.push(...pending.map((entry) => entry.id));
+          return new Map(pending.map((entry) => [entry.id, "Uppdaterad"]));
+        },
+      });
+      const refreshOther = scenario !== "clean" && scenario !== "legacy";
+      expect(pendingIds.toSorted()).toEqual(
+        (refreshOther ? [selected.id, other.id] : [selected.id]).toSorted(),
+      );
+      expect(JSON.parse(await readFile(artifactPath, "utf8")).translations).toEqual({
+        [selected.id]: "Uppdaterad",
+        [other.id]: refreshOther ? "Uppdaterad" : "Stäng",
+      });
+    },
+  );
+
   it("rejects unknown refresh IDs before provider calls or artifact writes", async () => {
     const translationsDir = tempDirs.make("openclaw-native-i18n-");
     const artifactPath = path.join(translationsDir, "sv.json");
@@ -901,6 +1287,40 @@ describe("native app i18n inventory", () => {
     ]) {
       expect(() => parseNativeI18nCommand([...args, "--refresh-id", firstId])).toThrow(
         "requires `sync --write --locale",
+      );
+    }
+  });
+
+  it("rejects native printf placeholder drift", async () => {
+    const translationsDir = tempDirs.make("openclaw-native-i18n-");
+    const cases = [
+      {
+        entry: testEntry(
+          "native.android.certificate",
+          "android",
+          "Old fingerprint: %1$s\nNew fingerprint: %2$s",
+        ),
+        translated: "Gammalt fingeravtryck: %1$s",
+      },
+      {
+        entry: testEntry("native.apple.failure", "apple", "Send failed: %@"),
+        translated: "Sändningen misslyckades",
+      },
+      {
+        entry: testEntry("native.apple.percent", "apple", "Context %@%% used"),
+        translated: "Kontext %@ används",
+      },
+    ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
+
+    for (const { entry, translated } of cases) {
+      await expect(
+        syncNativeLocale("sv", [entry], {
+          glossary: [],
+          translationsDir,
+          translate: async () => new Map([[entry.id, translated]]),
+        }),
+      ).rejects.toThrow(
+        `native translation changed placeholders or line breaks for sv:${entry.id}`,
       );
     }
   });

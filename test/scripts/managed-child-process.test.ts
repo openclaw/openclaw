@@ -612,6 +612,30 @@ sendReceipt(process.argv[2], "ready");
     expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
+  it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["lint:scripts", "--", "scripts"],
+        bin: "pnpm.cmd",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        platform: "win32",
+        shell: true,
+      }),
+    ).toEqual({
+      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: {},
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: true,
+      },
+    });
+  });
+
   it("uses Windows shell normalization when the platform override is win32", () => {
     expect(
       createManagedCommandSpawnSpec({
@@ -640,6 +664,28 @@ sendReceipt(process.argv[2], "ready");
     });
   });
 
+  it("preserves explicit non-shell Windows subprocesses", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["--version"],
+        bin: "node.exe",
+        platform: "win32",
+        shell: false,
+      }),
+    ).toEqual({
+      args: ["--version"],
+      command: "node.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: undefined,
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: undefined,
+      },
+    });
+  });
+
   it("rejects unsafe Windows shell argv instead of passing them to Node shell mode", () => {
     expect(() =>
       createManagedCommandSpawnSpec({
@@ -649,6 +695,37 @@ sendReceipt(process.argv[2], "ready");
         shell: true,
       }),
     ).toThrow("unsafe Windows cmd.exe argument detected");
+  });
+
+  it("signals Windows managed process trees with taskkill", () => {
+    withDefaultWindowsSystemRoot(() => {
+      const child = {
+        kill: vi.fn(),
+        pid: 12345,
+      };
+      const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+      });
+
+      terminateManagedChild(child, "SIGKILL", {
+        platform: "win32",
+        runTaskkill,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+      });
+      expect(child.kill).not.toHaveBeenCalled();
+    });
   });
 
   it.each<{
@@ -761,6 +838,21 @@ sendReceipt(process.argv[2], "ready");
     ).toEqual({ processTreeState: "signaled" });
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(runTaskkill).not.toHaveBeenCalled();
+  });
+
+  it("signals POSIX process groups without signaling their leaders twice", () => {
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const child = { kill: vi.fn(), pid: 12345 };
+
+    try {
+      expect(terminateManagedChild(child, "SIGTERM", { platform: "linux" })).toEqual({
+        processTreeState: "signaled",
+      });
+      expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it.each([
@@ -2184,6 +2276,34 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
 
     expect(injectedLiveGroup).toBe(true);
     expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  it("allows bounded retry output to complete", async () => {
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: [
+          "-e",
+          "process.stderr.write('network retry 1\\n'); setTimeout(() => process.exit(0), 100)",
+        ],
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(0);
+  });
+
+  posixIt("allows strict normal long-running work to complete", async () => {
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => process.exit(0), 200)"],
+        requireProcessTreeExit: true,
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(0);
   });
 
   it("cleans up the child when onReady throws", async () => {

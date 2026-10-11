@@ -107,7 +107,7 @@ describe("Docker source namespace", () => {
     expect(vi.mocked(execContainer).mock.calls[1]?.[1].at(-1)).toBe(id);
   });
 
-  it.each(["/gateway/workspace"])(
+  it.each(["/gateway/workspace", "/gateway/workspace/data"])(
     "rejects Docker --tmpfs at %s even when .Mounts only reports its bind ancestor",
     async (destination) => {
       vi.mocked(execContainer).mockResolvedValueOnce({
@@ -131,10 +131,12 @@ describe("Docker source namespace", () => {
     },
   );
 
-  it.each(["wrong-namespace", "invalid-id", "missing-mounts"])(
+  it.each(["wrong-boot", "wrong-namespace", "invalid-id", "missing-mounts", "unavailable"])(
     "rejects %s without a wrong-path fallback and retries after recovery",
     async (failure) => {
-      if (failure === "invalid-id" || failure === "missing-mounts") {
+      if (failure === "unavailable") {
+        vi.mocked(execContainer).mockRejectedValueOnce(new Error("daemon unavailable"));
+      } else if (failure === "invalid-id" || failure === "missing-mounts") {
         vi.mocked(execContainer).mockResolvedValueOnce({
           stdout: JSON.stringify({
             Id: failure === "invalid-id" ? "short-id" : id,
@@ -151,7 +153,9 @@ describe("Docker source namespace", () => {
             code: 0,
           }))
           .mockResolvedValueOnce({
-            stdout: JSON.stringify(["test-boot", "mnt:[456]"]),
+            stdout: JSON.stringify(
+              failure === "wrong-boot" ? ["other-boot", "mnt:[123]"] : ["test-boot", "mnt:[456]"],
+            ),
             stderr: "",
             code: 0,
           });
@@ -175,6 +179,23 @@ describe("Docker source namespace", () => {
 });
 
 describe("managed source translation", () => {
+  it("keeps literal backslashes in inspected sources and Gateway mount selection", () => {
+    const mounts = parseInspectedSandboxMounts([
+      { ...wireMount, Source: "/host/a\\b", Destination: "/gateway/a\\b" },
+      { ...wireMount, Source: "/host/a/b", Destination: "/gateway/a/b" },
+    ]);
+    for (const suffix of ["a\\b", "a/b"]) {
+      expect(
+        translateSandboxMountSource({
+          readOnly: false,
+          source: `/gateway/${suffix}/leaf`,
+          allowedRoots: [`/gateway/${suffix}`],
+          mounts,
+        }),
+      ).toBe(`/host/${suffix}/leaf`);
+    }
+  });
+
   it("uses the longest segment prefix and preserves spaces", () => {
     const mounts = parseInspectedSandboxMounts([
       wireMount,
@@ -198,6 +219,20 @@ describe("managed source translation", () => {
     ).toThrow("not backed by a Gateway bind mount");
   });
 
+  it("does not reinterpret volume storage as a host bind", () => {
+    const mounts = parseInspectedSandboxMounts([
+      { ...wireMount, Type: "volume", Source: "/var/lib/docker/private" },
+    ]);
+    expect(() =>
+      translateSandboxMountSource({
+        readOnly: false,
+        source: "/gateway/workspace",
+        allowedRoots: ["/gateway/workspace"],
+        mounts,
+      }),
+    ).toThrow("unsupported volume mount");
+  });
+
   it("rejects relative daemon sources", () => {
     expect(() => parseInspectedSandboxMounts([{ ...wireMount, Source: "relative" }])).toThrow(
       "invalid mount entry",
@@ -216,6 +251,13 @@ describe("managed source translation", () => {
         mounts: parseInspectedSandboxMounts([{ ...wireMount, Destination: "/" }]),
       }),
     ).toBe("/host/project/workspace");
+  });
+
+  it("preserves Windows drive sources in container inspection", () => {
+    expect(
+      parseInspectedSandboxMounts([{ ...wireMount, Source: "c:\\Users\\Example\\project" }])[0]
+        ?.source,
+    ).toBe("C:/Users/Example/project");
   });
 
   it("does not grant writes through a read-only Gateway bind", () => {

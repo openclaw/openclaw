@@ -128,6 +128,42 @@ describe("gateway tool", () => {
     expect(JSON.stringify(bridged)).not.toContain(secret);
   });
 
+  it("scopes both config.get result representations to the requested path", async () => {
+    const result = await createGatewayTool().execute("call-config-get", {
+      action: "config.get",
+      path: "tools.exec",
+    });
+
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        hash: "hash-1",
+        path: "tools.exec",
+        config: { ask: "on-miss", security: "allowlist" },
+      },
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ok: true,
+            result: {
+              hash: "hash-1",
+              path: "tools.exec",
+              config: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
+  });
+
   it.each([
     ["tools.missing", "config path not found: tools.missing"],
     ["...", "config path not found: ..."],

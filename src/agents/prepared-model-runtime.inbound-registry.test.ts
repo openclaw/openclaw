@@ -298,7 +298,7 @@ describe("prepared reply dispatch runtime", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
   });
 
-  it.each(["disabled", "not-imported"] as const)(
+  it.each(["disabled", "error", "not-imported"] as const)(
     "preserves a selected provider's %s outcome when borrowing its parent lease",
     async (outcome) => {
       mocks.configuredAgentIds = ["default"];
@@ -321,6 +321,7 @@ describe("prepared reply dispatch runtime", () => {
           status: outcome === "not-imported" ? "loaded" : outcome,
           enabled: outcome !== "disabled",
           imported: false,
+          error: outcome === "error" ? "provider fixture failed to load" : undefined,
         }),
       );
       mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
@@ -380,6 +381,11 @@ describe("prepared reply dispatch runtime", () => {
             const nested = await borrowing;
             expect(nested.snapshot).toBe(parent.snapshot);
             expect(registryContainsRuntimePluginIds(registry, ["qwen"])).toBe(false);
+            if (outcome === "error") {
+              expect(nested.snapshot.pluginRegistry?.plugins[0]?.error).toBe(
+                "provider fixture failed to load",
+              );
+            }
             await nested[Symbol.asyncDispose]();
           },
           () => (active ? parent.snapshot : undefined),

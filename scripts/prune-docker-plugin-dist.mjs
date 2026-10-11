@@ -8,7 +8,7 @@ import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 
-function parseDockerPluginKeepList(value) {
+export function parseDockerPluginKeepList(value) {
   if (typeof value !== "string") {
     return new Set();
   }

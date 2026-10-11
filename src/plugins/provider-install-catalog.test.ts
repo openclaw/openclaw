@@ -458,6 +458,69 @@ describe("provider install catalog", () => {
     ).toStrictEqual([]);
   });
 
+  it("surfaces official external provider install metadata when the provider plugin is not installed", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/codex",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "codex", label: "Codex" },
+          providers: [
+            {
+              id: "codex",
+              name: "Codex",
+              authChoices: [
+                {
+                  method: "app-server",
+                  choiceId: "codex",
+                  choiceLabel: "Codex app-server",
+                  choiceHint: "Use the Codex app-server runtime.",
+                  groupId: "codex",
+                  groupLabel: "Codex",
+                  onboardingScopes: ["text-inference"],
+                },
+              ],
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/codex",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("codex")).toEqual({
+      pluginId: "codex",
+      providerId: "codex",
+      methodId: "app-server",
+      choiceId: "codex",
+      choiceLabel: "Codex app-server",
+      choiceHint: "Use the Codex app-server runtime.",
+      groupId: "codex",
+      groupLabel: "Codex",
+      onboardingScopes: ["text-inference"],
+      label: "Codex",
+      origin: "bundled",
+      install: {
+        npmSpec: "@openclaw/codex",
+        defaultChoice: "npm",
+      },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/codex",
+          packageName: "@openclaw/codex",
+          selectorKind: "none",
+          exactVersion: false,
+          pinState: "floating-without-integrity",
+        },
+        warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
+      },
+    });
+  });
+
   it("surfaces the pinned Telnyx auth choice before the plugin is installed", () => {
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {

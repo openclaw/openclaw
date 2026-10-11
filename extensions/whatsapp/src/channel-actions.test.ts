@@ -41,6 +41,35 @@ describe("whatsapp channel action helpers", () => {
     expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBeUndefined();
   });
 
+  it("omits reaction guidance when reactionLevel disables agent reactions", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBeUndefined();
+  });
+
+  it("advertises react when agent reactions are enabled", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+      "react",
+      "poll",
+      "upload-file",
+    ]);
+  });
+
   it("returns null when WhatsApp is not configured", () => {
     expect(
       describeWhatsAppMessageActions({ cfg: {} as OpenClawConfig, accountId: "default" }),
@@ -58,6 +87,28 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
 
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+      "poll",
+      "upload-file",
+    ]);
+  });
+
+  it("uses the active account reactionLevel for discovery", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              reactionLevel: "minimal",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(describeWhatsAppMessageActions({ cfg, accountId: "work" })?.actions).toEqual([
+      "react",
       "poll",
       "upload-file",
     ]);

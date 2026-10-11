@@ -49,7 +49,10 @@ describe("SettingsManager scoped persistence", () => {
         canonical: { retry: { provider: { maxRetryDelayMs: 12_000 } } },
         guidance: "retry.provider.maxRetryDelayMs",
       },
-    ].map((settings) => Object.assign({ scope: "project" }, settings)),
+    ].flatMap((settings) => [
+      { ...settings, scope: "global" },
+      { ...settings, scope: "project" },
+    ]),
   )(
     "refuses retired $scope settings with $guidance guidance and preserves bytes",
     async ({ retired, canonical, guidance, scope }) => {
@@ -142,7 +145,13 @@ describe("SettingsManager scoped persistence", () => {
     expect(settingsManager.getThemePaths()).toEqual(["external-theme"]);
   });
 
-  it.each([{ input: "true", error: TypeError, expected: true }])(
+  it.each([
+    { input: "{", error: SyntaxError, expected: undefined },
+    { input: "null", error: TypeError, expected: null },
+    { input: "42", error: TypeError, expected: 42 },
+    { input: "true", error: TypeError, expected: true },
+    { input: '"invalid"', error: TypeError, expected: "invalid" },
+  ])(
     "isolates invalid settings $input to the affected scope",
     async ({ input, error, expected }) => {
       const storage = new InspectableSettingsStorage();

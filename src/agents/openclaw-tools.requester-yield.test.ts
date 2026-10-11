@@ -56,6 +56,8 @@ it.each([
     acknowledgment: "  PAUSE-MARKER\nneeds direction  ",
     expected: "PAUSE-MARKER\nneeds direction",
   },
+  { acknowledgment: undefined, expected: "Paused awaiting continuation." },
+  { acknowledgment: "x".repeat(12_001), expected: "x".repeat(12_000) },
 ])(
   "retains the announcing child's bounded message-wait notice (case %#)",
   async ({ acknowledgment, expected }) => {
@@ -151,6 +153,8 @@ describe("requester yield ownership", () => {
 
   it.each([
     { kind: "visible child", key: "dashboard:visible", child: true },
+    { kind: "hidden child", key: "subagent:hidden", child: true },
+    { kind: "dashboard root", key: "dashboard:root", child: false },
     { kind: "Home-linked root", key: "dashboard:home", child: false },
   ])("uses native task ownership for $kind message waits", async ({ key, child }) => {
     const workspace = sessionDirs.make();
@@ -202,21 +206,23 @@ describe("requester yield ownership", () => {
     }
   });
 
-  it.each(["terminal", "stopped", "collector", "foreign-agent"] as const)(
+  it.each(["missing", "terminal", "stopped", "collector", "foreign-agent"] as const)(
     "rejects an ineligible %s message wait",
     async (kind) => {
       const sessionKey = "agent:main:subagent:invalid";
-      await seedRequiredChild("agent:main:main", {
-        runId: "invalid",
-        childSessionKey: sessionKey,
-        childAgentId: kind === "foreign-agent" ? "peer" : "main",
-        requesterTurnRunId: undefined,
-        ...(kind === "terminal"
-          ? { execution: { status: "terminal", endedAt: 2000, outcome: { status: "ok" } } }
-          : {}),
-        ...(kind === "stopped" ? { suppressCompletionDelivery: true } : {}),
-        ...(kind === "collector" ? { collect: true } : {}),
-      });
+      if (kind !== "missing") {
+        await seedRequiredChild("agent:main:main", {
+          runId: "invalid",
+          childSessionKey: sessionKey,
+          childAgentId: kind === "foreign-agent" ? "peer" : "main",
+          requesterTurnRunId: undefined,
+          ...(kind === "terminal"
+            ? { execution: { status: "terminal", endedAt: 2000, outcome: { status: "ok" } } }
+            : {}),
+          ...(kind === "stopped" ? { suppressCompletionDelivery: true } : {}),
+          ...(kind === "collector" ? { collect: true } : {}),
+        });
+      }
       const onYield = vi.fn();
       const tool = createYieldToolForTurn({
         requesterSessionKey: sessionKey,
@@ -231,7 +237,10 @@ describe("requester yield ownership", () => {
   );
 
   it.each([
+    { announcing: true, sameTask: true, successorAgent: "main" },
+    { announcing: false, sameTask: true, successorAgent: "main" },
     { announcing: true, sameTask: false, successorAgent: "main" },
+    { announcing: false, sameTask: false, successorAgent: "main" },
     { announcing: true, sameTask: true, successorAgent: "peer" },
   ])(
     "keeps message waits task- and agent-scoped ($announcing/$sameTask/$successorAgent)",
@@ -459,7 +468,7 @@ describe("requester yield ownership", () => {
     },
   );
 
-  it.each(["finished"])(
+  it.each(["running", "finished"])(
     "ignores another session's %s background exec for subagent self-yield",
     async (state) => {
       await seedRequiredChild("agent:main:main", {
@@ -482,6 +491,28 @@ describe("requester yield ownership", () => {
       assert.isDefined(tool);
 
       expect((await tool.execute("yield-watcher", { waitFor: "message" })).details).toMatchObject({
+        status: "yielded",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["runtime"])(
+    "preserves a %s completion claim with an owned background exec",
+    async (owner) => {
+      const sessionKey = "agent:main:subagent:watcher";
+      backgroundProcess(sessionKey);
+      const onYield = vi.fn();
+      const tool = createTestOpenClawTools({
+        sessionKey,
+        sessionId: "watcher-session",
+        runId: "run-requester",
+        claimYieldCompletion: () => owner === "runtime",
+        onYield,
+      }).find((candidate) => candidate.name === "sessions_yield");
+      assert.isDefined(tool);
+
+      expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
         status: "yielded",
       });
       expect(onYield).toHaveBeenCalledOnce();
@@ -720,6 +751,23 @@ describe("requester yield ownership", () => {
     });
     expect(turn2Yield).not.toHaveBeenCalled();
     expect(getSubagentRunByRunId(child.runId)).toEqual(beforeContinuation);
+  });
+
+  it("reports a child an earlier turn spawned without yielding", async () => {
+    const requesterSessionKey = "agent:main:main";
+    await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: "run-turn-2",
+      onYield,
+    });
+    expect((await tool.execute("yield-turn-2", {})).details).toMatchObject({
+      status: "already_pending",
+      message: expect.stringContaining("already spawned 1 child session"),
+      pendingChildren: [{ runId: "run-child", state: "running", wakeArmed: false }],
+    });
+    expect(onYield).not.toHaveBeenCalled();
   });
 
   it("reports runtime-owned earlier-turn children beside registry children", async () => {

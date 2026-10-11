@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -7,12 +8,19 @@ import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   loadTranscriptEvents,
+  readSessionTranscriptVisibleMessageDeltaCore,
+  readSessionTranscriptWatermark,
+  readTranscriptRawDelta,
+  SessionTranscriptProjectionUnavailableError,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.transcript-target.js";
-import { SYNC_REBUILD_MAX_BYTES } from "../../config/sessions/session-transcript-index.js";
+import {
+  SYNC_REBUILD_MAX_BYTES,
+  SYNC_REBUILD_MAX_ROWS,
+} from "../../config/sessions/session-transcript-index.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
@@ -23,6 +31,18 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { SessionManager } from "./session-manager.js";
+
+const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomUUID: () =>
+      (uuidQueue.shift() ??
+        actual.randomUUID()) as `${string}-${string}-${string}-${string}-${string}`,
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -65,6 +85,47 @@ function buildAssistantMessage(text: string) {
     timestamp: Date.now(),
   };
 }
+
+afterEach(() => {
+  uuidQueue.length = 0;
+});
+
+it("keeps generated entry ids unique outside a bounded transcript tail", async () => {
+  const { dir, scope } = await createSessionScope("bounded-id-session");
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "deadbeef",
+    message: { role: "user", content: "omitted" },
+  });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "tail",
+    parentId: "deadbeef",
+    message: { role: "user", content: "retained" },
+  });
+
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  expect(manager.getEntry("deadbeef")).toBeUndefined();
+
+  const messageId = "deadbeef-0000-4000-8000-000000000000";
+  const thinkingId = "deadbeef-0000-4000-8000-000000000001";
+  uuidQueue.push(messageId);
+  const appended = manager.appendMessageWithTranscriptAnchor(makeUserMessage("persisted", 2));
+
+  expect(appended).toMatchObject({ entryId: messageId, anchor: { effectiveParentId: "tail" } });
+  uuidQueue.push(thinkingId);
+  expect(await manager.appendThinkingLevelChange("high")).toBe(thinkingId);
+  await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: messageId, parentId: "tail" }),
+      expect.objectContaining({ id: thinkingId, parentId: messageId }),
+    ]),
+  );
+});
 
 it("retries a stale bounded append without parsing transcript rows outside the bounded context", async () => {
   const { dir, scope } = await createSessionScope("bounded-stale-append");
@@ -112,6 +173,65 @@ it("retries a stale bounded append without parsing transcript rows outside the b
       .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 1")
       .get(scope.sessionId),
   ).toEqual({ event_json: "{excluded-row-is-not-json" });
+});
+
+it("accepts a prepared assistant whose parent is the admitted user", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-admitted-assistant-");
+  const scope = {
+    agentId: "main",
+    sessionId: "admitted-assistant",
+    sessionKey: "agent:main:admitted-assistant",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(scope, dir);
+  const admitted = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "current",
+    timestamp: 1,
+  });
+  if (!admitted.anchor) {
+    throw new Error("missing admission anchor");
+  }
+
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+  const reads = trackSqliteStatementExecutions(database.db, ["identity"], (sql) =>
+    /^select\b/iu.test(sql) &&
+    /from "transcript_event_identities" where/iu.test(sql) &&
+    /"event_id" = \?/u.test(sql)
+      ? "identity"
+      : null,
+  );
+  const reply = buildAssistantMessage("reply");
+  let replyId: string;
+  try {
+    replyId = runWithSessionTranscriptReadFence(
+      { ...admitted.anchor, logicalTurnId: "current", role: "user" },
+      () => manager.appendMessage(reply),
+    );
+  } finally {
+    reads.restore();
+  }
+
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
+  await closeOpenClawAgentDatabasesAsync(dir);
+  closeOpenClawAgentDatabasesForTest(dir);
+  const reopened = SessionManager.open(scope, dir);
+  expect(reopened.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
+  expect(reopened.getEntry(replyId)).toMatchObject({
+    type: "message",
+    parentId: admitted.entryId,
+    message: reply,
+  });
+  expect(reopened.buildSessionContext().messages).toMatchObject([
+    { role: "user", content: "current", timestamp: 1 },
+    reply,
+  ]);
+  expect(reads.counts.identity).toBeGreaterThan(0);
+  expect(reads.counts.identity).toBeLessThanOrEqual(2);
 });
 
 it.each(["sync", "async"] as const)(
@@ -288,62 +408,67 @@ it("excludes interleaved display payloads without inventing events or losing fen
   expect(SessionManager.open(scope, dir).getBranch().at(-1)?.id).toBe(appended.entryId);
 });
 
-it.each(["sync"])("keeps appended display payloads out of a bounded view (%s)", async (mode) => {
-  const { dir, scope } = await createSessionScope(`display-append-${mode}`);
-  const manager = await SessionManager.openBoundedAsync(scope, {
-    cwd: dir,
-    maxBytes: 4096,
-    maxEvents: 10,
-  });
-  const user = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("keep", 1));
-  const side = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("side", 2));
-  await manager.appendLeafControlAsync({
-    targetId: user.entryId,
-    appendParentId: side.entryId,
-    appendMode: "side",
-  });
-  const displayIds: string[] = [];
-  for (let index = 0; index < 3; index++) {
-    const message = {
-      role: "custom" as const,
-      customType: "display-test",
-      content: `display-${index}:` + "x".repeat(20_000),
-      display: true,
-      excludeFromContext: true as const,
-      timestamp: index + 2,
-    };
-    const appended =
-      mode === "async"
-        ? await manager.appendMessageWithTranscriptAnchorAsync(message)
-        : manager.appendMessageWithTranscriptAnchor(message);
-    displayIds.push(appended.entryId);
-    expect(manager.getEntry(appended.entryId)).toBeUndefined();
-    expect(manager.getAppendParentId()).toBe(appended.entryId);
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId]);
-  }
-  const answer = await manager.appendMessageWithTranscriptAnchorAsync(
-    buildAssistantMessage("reply"),
-  );
-  expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: resolveSessionTranscriptDatabasePath(scope),
-  });
-  const reopened = await SessionManager.openBoundedAsync(scope, {
-    maxBytes: 4096,
-    maxEvents: 10,
-  });
-  expect(manager.getBranch()).toEqual(reopened.getBranch());
-  const events = await loadTranscriptEvents(scope);
-  expect(events.filter((entry) => displayIds.includes((entry as { id: string }).id))).toHaveLength(
-    3,
-  );
-  expect(
-    [...displayIds, answer.entryId].map((id) =>
-      events.find((entry) => (entry as { id: string }).id === id),
-    ),
-  ).toEqual([side.entryId, ...displayIds].map((parentId) => expect.objectContaining({ parentId })));
-});
+it.each(["sync", "async"])(
+  "keeps appended display payloads out of a bounded view (%s)",
+  async (mode) => {
+    const { dir, scope } = await createSessionScope(`display-append-${mode}`);
+    const manager = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxBytes: 4096,
+      maxEvents: 10,
+    });
+    const user = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("keep", 1));
+    const side = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("side", 2));
+    await manager.appendLeafControlAsync({
+      targetId: user.entryId,
+      appendParentId: side.entryId,
+      appendMode: "side",
+    });
+    const displayIds: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      const message = {
+        role: "custom" as const,
+        customType: "display-test",
+        content: `display-${index}:` + "x".repeat(20_000),
+        display: true,
+        excludeFromContext: true as const,
+        timestamp: index + 2,
+      };
+      const appended =
+        mode === "async"
+          ? await manager.appendMessageWithTranscriptAnchorAsync(message)
+          : manager.appendMessageWithTranscriptAnchor(message);
+      displayIds.push(appended.entryId);
+      expect(manager.getEntry(appended.entryId)).toBeUndefined();
+      expect(manager.getAppendParentId()).toBe(appended.entryId);
+      expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId]);
+    }
+    const answer = await manager.appendMessageWithTranscriptAnchorAsync(
+      buildAssistantMessage("reply"),
+    );
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: scope.agentId,
+      path: resolveSessionTranscriptDatabasePath(scope),
+    });
+    const reopened = await SessionManager.openBoundedAsync(scope, {
+      maxBytes: 4096,
+      maxEvents: 10,
+    });
+    expect(manager.getBranch()).toEqual(reopened.getBranch());
+    const events = await loadTranscriptEvents(scope);
+    expect(
+      events.filter((entry) => displayIds.includes((entry as { id: string }).id)),
+    ).toHaveLength(3);
+    expect(
+      [...displayIds, answer.entryId].map((id) =>
+        events.find((entry) => (entry as { id: string }).id === id),
+      ),
+    ).toEqual(
+      [side.entryId, ...displayIds].map((parentId) => expect.objectContaining({ parentId })),
+    );
+  },
+);
 
 it("rejects a fenced assistant when a later hidden user has advanced the turn", async () => {
   const { dir, scope } = await createSessionScope("fenced-assistant");
@@ -366,6 +491,38 @@ it("rejects a fenced assistant when a later hidden user has advanced the turn", 
       expect(() => fenced.appendMessage(buildAssistantMessage("stale reply"))).toThrow(
         "SQLite transcript changed while preparing rewrite",
       );
+    },
+  );
+});
+
+it("rejects a fenced tool result when a later hidden user has advanced the turn", async () => {
+  const { dir, scope } = await createSessionScope("fenced-tool-result");
+  const manager = SessionManager.open(scope, dir);
+  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
+  const admission = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "admitted",
+    timestamp: 2,
+  });
+  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
+  if (!admission.anchor) {
+    throw new Error("missing current-turn anchor");
+  }
+
+  runWithSessionTranscriptReadFence(
+    { ...admission.anchor, logicalTurnId: "fenced-tool-result", role: "user" },
+    () => {
+      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
+      expect(() =>
+        fenced.appendMessage({
+          role: "toolResult",
+          toolCallId: "stale-tool-call",
+          toolName: "test_tool",
+          content: [{ type: "text", text: "stale result" }],
+          isError: false,
+          timestamp: 4,
+        }),
+      ).toThrow("SQLite transcript changed while preparing rewrite");
     },
   );
 });
@@ -400,6 +557,103 @@ it("rejects suffix cleanup when the admission fence hides later transcript rows"
   await expect(loadTranscriptEvents(scope)).resolves.toEqual(raw);
 });
 
+it("retains the forward cut after consecutive excluded first-kept entries", async () => {
+  const count = 2;
+  const { dir, scope } = await createSessionScope("excluded-cut", "openclaw-agent.sqlite");
+  const manager = SessionManager.open(scope, dir);
+  manager.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
+  const excluded = Array.from({ length: count }, () =>
+    manager.appendMessage({
+      role: "custom",
+      customType: "display-test",
+      content: "display only",
+      display: true,
+      excludeFromContext: true,
+      timestamp: 2,
+    }),
+  );
+  const firstKept = excluded.at(0);
+  if (!firstKept) {
+    throw new Error("missing first-kept fixture");
+  }
+  manager.appendMessage({ role: "user", content: "retained", timestamp: 3 });
+  manager.appendCompaction("summary", firstKept, 100);
+  const expected = manager.buildSessionContext();
+  expect(expected.messages).toMatchObject([
+    { role: "compactionSummary", summary: "summary" },
+    { role: "user", content: "retained" },
+  ]);
+  const bounded = SessionManager.openBounded(scope, { maxEvents: 4, maxBytes: 4096 });
+  expect(bounded.buildSessionContext()).toEqual(expected);
+  bounded.appendMessage({ role: "user", content: "after reopen", timestamp: 4 });
+  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
+    ...expected.messages,
+    { role: "user", content: "after reopen" },
+  ]);
+});
+
+it("preserves the durable leaf when bounded cleanup removes the whole selected window", async () => {
+  const { dir, scope } = await createSessionScope("whole-window-session");
+  const seed = SessionManager.open(scope, dir);
+  const durableId = seed.appendMessage({ role: "user", content: "durable", timestamp: 1 });
+  const removableId = seed.appendMessage(buildAssistantMessage("temporary"));
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: path.join(dir, "openclaw-agent.sqlite"),
+  });
+
+  const bounded = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
+  expect(bounded.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
+  const reopened = SessionManager.open(scope, dir);
+  expect(reopened.getAppendParentId()).toBe(durableId);
+  expect(reopened.buildSessionContext().messages).toMatchObject([{ content: "durable" }]);
+  reopened.appendMessage({ role: "user", content: "after cleanup", timestamp: 2 });
+  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
+    { content: "durable" },
+    { content: "after cleanup" },
+  ]);
+});
+
+it("bounds runtime hydration while preserving older durable transcript rows on rewrites", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-");
+  const storePath = path.join(dir, "sessions.json");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-runtime-session",
+    sessionKey: "agent:main:bounded-runtime-session",
+    storePath,
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  for (const content of ["oldest", "middle", "latest"]) {
+    await appendTranscriptMessage(scope, { cwd: dir, message: { role: "user", content } });
+  }
+
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 2,
+  });
+
+  expect(manager.buildSessionContext().messages).toMatchObject([
+    { content: "middle" },
+    { content: "latest" },
+  ]);
+  expect(manager.getEntries()).toHaveLength(2);
+  expect(
+    manager.removeTrailingEntries(
+      (entry) =>
+        entry.type === "message" &&
+        "content" in entry.message &&
+        entry.message.content === "latest",
+    ),
+  ).toBe(1);
+  await expect(loadTranscriptEvents(scope)).resolves.toMatchObject([
+    { type: "session" },
+    { message: { content: "oldest" } },
+    { message: { content: "middle" } },
+  ]);
+});
+
 it("rejects bounded cleanup across opaque hydration-boundary rows", async () => {
   const { dir, scope } = await createSessionScope("bounded-opaque-boundary");
   const seed = SessionManager.open(scope, dir);
@@ -432,6 +686,38 @@ it("rejects bounded cleanup across opaque hydration-boundary rows", async () => 
         entry.message.content === "remove",
     ),
   ).toThrow("Bounded transcript cleanup cannot cross the hydrated removal window");
+});
+
+it("ignores inactive matching rows before the bounded active cleanup window", async () => {
+  const { dir, scope } = await createSessionScope("bounded-inactive-boundary");
+  const root = await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "root",
+    message: { role: "user", content: "retained" },
+  });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "inactive-remove",
+    message: { role: "assistant", content: "remove" },
+    parentId: root.messageId,
+  });
+  const branchManager = SessionManager.open(scope, dir);
+  branchManager.branch(root.messageId);
+  const activeId = branchManager.appendMessage(buildAssistantMessage("remove"));
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  expect(manager.removeTrailingEntries((entry) => entry.id === activeId)).toBe(1);
+  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
+    { content: "retained" },
+  ]);
 });
 
 it("keeps the original hydration boundary after a partial bounded trim", async () => {
@@ -491,6 +777,120 @@ it("keeps an all-preserved bounded window as a no-op", async () => {
 });
 
 it.each([
+  { corruptSeq: 1, name: "older raw prefix" },
+  { corruptSeq: 2, name: "newly exposed bounded row" },
+])("removes a bounded tail without parsing a $name", async ({ corruptSeq }) => {
+  const dir = tempDirs.make("openclaw-session-manager-unparsed-prefix-");
+  const scope = {
+    agentId: "main",
+    sessionId: `unparsed-prefix-session-${corruptSeq}`,
+    sessionKey: `agent:main:unparsed-prefix-session-${corruptSeq}`,
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const seed = SessionManager.open(scope, dir);
+  seed.appendMessage({ role: "user", content: "older", timestamp: 1 });
+  seed.appendMessage({ role: "user", content: "middle", timestamp: 2 });
+  seed.appendMessage({ role: "user", content: "retained", timestamp: 3 });
+  const removableId = seed.appendMessage(buildAssistantMessage("temporary"));
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: path.join(dir, "openclaw-agent.sqlite"),
+  });
+  const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 2 });
+
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+  database.db
+    .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?")
+    .run("{excluded-row-is-not-json", scope.sessionId, corruptSeq);
+
+  expect(manager.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
+  expect(manager.buildSessionContext().messages).toMatchObject([{ content: "retained" }]);
+  expect(
+    database.db
+      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = ?")
+      .get(scope.sessionId, corruptSeq),
+  ).toEqual({ event_json: "{excluded-row-is-not-json" });
+});
+
+it("invalidates raw and visible cursors while keeping the projection available", async () => {
+  const { dir, scope } = await createSessionScope("cursor-rewrite-session");
+  const manager = SessionManager.open(scope, dir);
+  manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
+  const removableId = manager.appendMessage(buildAssistantMessage("temporary"));
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: path.join(dir, "openclaw-agent.sqlite"),
+  });
+  const raw = readTranscriptRawDelta(scope);
+  const visible = readSessionTranscriptVisibleMessageDeltaCore(scope);
+  if (raw.kind !== "page" || visible.kind !== "page") {
+    throw new Error("missing cursor fixture");
+  }
+
+  expect(manager.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
+  manager.appendMessage(buildAssistantMessage("replacement"));
+
+  expect(readTranscriptRawDelta(scope, { cursor: raw.cursor })).toMatchObject({
+    kind: "reset",
+    reason: "generation_mismatch",
+  });
+  expect(
+    readSessionTranscriptVisibleMessageDeltaCore(scope, { cursor: visible.cursor }),
+  ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+  expect(() =>
+    SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 }),
+  ).not.toThrow();
+});
+
+it("keeps a long transcript projection available when removing a trailing entry", async () => {
+  const { dir, scope } = await createSessionScope("long-suffix-session");
+  const events = [
+    {
+      type: "session",
+      version: 3,
+      id: scope.sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: dir,
+    },
+    ...Array.from({ length: SYNC_REBUILD_MAX_ROWS }, (_value, index) => ({
+      type: "message",
+      id: `message-${index}`,
+      parentId: index === 0 ? null : `message-${index - 1}`,
+      timestamp: new Date(index + 1).toISOString(),
+      message: { role: index % 2 === 0 ? "user" : "assistant", content: `message ${index}` },
+    })),
+  ];
+  expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: path.join(dir, "openclaw-agent.sqlite"),
+  });
+  const generationBefore = readSessionTranscriptWatermark(scope)?.generation;
+
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 4,
+  });
+  expect(
+    manager.removeTrailingEntries((entry) => entry.id === `message-${SYNC_REBUILD_MAX_ROWS - 1}`),
+  ).toBe(1);
+
+  expect(readSessionTranscriptWatermark(scope)?.generation).not.toBe(generationBefore);
+  expect(() =>
+    SessionManager.openBounded(scope, {
+      cwd: dir,
+      maxBytes: 4096,
+      maxEvents: 4,
+    }),
+  ).not.toThrow();
+});
+
+it.each([
   { oversized: "retained prefix", temporaryContent: "temporary" },
   { oversized: "removed suffix", temporaryContent: "x".repeat(SYNC_REBUILD_MAX_BYTES + 1) },
 ])("removes a trailing entry with an oversized $oversized", async ({ temporaryContent }) => {
@@ -519,6 +919,54 @@ it.each([
   expect(() =>
     SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 }),
   ).not.toThrow();
+});
+
+it("preserves inactive siblings when the bounded active branch fits its limits", async () => {
+  const { dir, scope } = await createSessionScope("bounded-branch-session");
+  const root = await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "root",
+    message: { role: "user", content: "root" },
+  });
+  const inactive = await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "inactive",
+    message: { role: "assistant", content: "inactive" },
+    parentId: root.messageId,
+  });
+  const branchManager = SessionManager.open(scope, dir);
+  branchManager.branch(root.messageId);
+  const activeId = branchManager.appendMessage({ role: "user", content: "active", timestamp: 3 });
+
+  const openBounded = () =>
+    SessionManager.openBounded(scope, {
+      cwd: dir,
+      maxBytes: 4096,
+      maxEvents: 3,
+    });
+  expect(openBounded).toThrow(SessionTranscriptProjectionUnavailableError);
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: path.join(dir, "openclaw-agent.sqlite"),
+  });
+  const manager = openBounded();
+  const generationBefore = readSessionTranscriptWatermark(scope).generation;
+
+  expect(manager.buildSessionContext().messages).toMatchObject([
+    { content: "root" },
+    { content: "active" },
+  ]);
+  expect(manager.removeTrailingEntries((entry) => entry.id === activeId)).toBe(1);
+  expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
+  expect(openBounded).not.toThrow();
+  await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: inactive.messageId,
+        message: { role: "assistant", content: "inactive" },
+      }),
+    ]),
+  );
 });
 
 it("preserves explicit reset retention of excluded user input in a bounded reopen", async () => {

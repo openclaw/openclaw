@@ -95,7 +95,7 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
     expect(layout.scopeKey).toMatch(/^agent:research:workspace:[a-f0-9]{32}$/);
   });
 
-  it.each(["shared"] as const)(
+  it.each(["agent", "session", "shared"] as const)(
     "isolates different required-sandbox principals with %s scope",
     (scope) => {
       const layoutForPrincipal = (sandboxPrincipalId: string) => {
@@ -125,4 +125,22 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
       expect(guestB.workspaceDir).not.toBe(guestB.agentWorkspaceDir);
     },
   );
+
+  it("preserves the shared writable agent workspace without a required-sandbox principal", () => {
+    const layoutForSession = (rawSessionKey: string) =>
+      resolveSandboxWorkspaceLayoutPaths({
+        cfg: { scope: "agent", workspaceAccess: "rw", workspaceRoot: "/tmp/openclaw-sandboxes" },
+        rawSessionKey,
+        agentId: "shared",
+        workspaceDir: workspaceA,
+      });
+
+    const firstSession = layoutForSession("agent:shared:first-session");
+    const secondSession = layoutForSession("agent:shared:second-session");
+
+    expect(firstSession.scopeKey).toBe(secondSession.scopeKey);
+    expect(firstSession.workspaceDir).toBe(workspaceA);
+    expect(secondSession.workspaceDir).toBe(workspaceA);
+    expect(firstSession.workspaceSource).toBe("agent");
+  });
 });

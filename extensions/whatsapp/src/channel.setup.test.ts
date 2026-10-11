@@ -284,6 +284,36 @@ describe("whatsapp setup wizard", () => {
     expectWhatsAppDefaultAccountAccessNote(harness);
   });
 
+  it("updates an existing mixed-case default-account key during setup", async () => {
+    hoisted.hasWebCredsSync.mockReturnValue(true);
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "open"],
+    });
+
+    const result = await runConfigureWithHarness({
+      harness,
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              Default: {
+                authDir: "/tmp/default-auth",
+              },
+              work: {
+                authDir: "/tmp/work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.cfg.channels?.whatsapp?.accounts?.Default?.authDir).toBe("/tmp/default-auth");
+    expect(result.cfg.channels?.whatsapp?.accounts?.Default?.dmPolicy).toBe("open");
+    expect(result.cfg.channels?.whatsapp?.accounts?.Default?.allowFrom).toEqual(["*"]);
+    expect(result.cfg.channels?.whatsapp?.accounts?.default).toBeUndefined();
+  });
+
   it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
     const result = await checkWhatsAppHeartbeatReady({
       cfg: {

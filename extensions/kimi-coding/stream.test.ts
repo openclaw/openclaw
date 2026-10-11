@@ -27,6 +27,8 @@ function createFakeStream(params: { events: unknown[]; resultMessage: unknown })
 
 const KIMI_TOOL_TEXT =
   ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_calls_section_end|>';
+const KIMI_MULTI_TOOL_TEXT =
+  ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_call_begin|> functions.write:1 <|tool_call_argument_begin|> {"file_path":"./out.txt","content":"done"} <|tool_call_end|> <|tool_calls_section_end|>';
 const KIMI_MODEL = {
   api: "anthropic-messages",
   provider: "kimi",
@@ -209,6 +211,28 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it("parses multiple tagged tool calls in one section", async () => {
+    const finalMessage = createAssistantTextMessage(KIMI_MULTI_TOOL_TEXT);
+    const baseStreamFn = createResultStreamFn(finalMessage);
+
+    const wrapped = wrapKimiStream(baseStreamFn);
+    const stream = await callKimiStream(wrapped);
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        createReadToolCall(),
+        {
+          type: "toolCall",
+          id: "functions.write:1",
+          name: "functions.write",
+          arguments: { file_path: "./out.txt", content: "done" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
   it("keeps tagged tool-call conversion when one wrapper changes thinking modes", async () => {
     const baseStreamFn: StreamFn = () =>
       createFakeStream({
@@ -248,18 +272,103 @@ describe("kimi tool-call markup wrapper", () => {
     expect(getCapturedModel()?.compat).toMatchObject({ allowEmptySignature: true });
   });
 
-  it.each([{ extra_body: { chat_template_kwargs: { reasoning_effort: "low" } } }])(
-    "does not shadow explicit K3 template effort with a generated root effort",
-    (extraParams) => {
-      const { getCapturedPayload } = captureKimiPayload({
-        modelId: "kimi-k3",
-        api: "openai-completions",
-        thinkingLevel: "max",
-        extraParams,
-      });
-      expect(getCapturedPayload()).toEqual({ thinking: { type: "enabled" } });
+  it.each([
+    ["minimal", "low"],
+    ["medium", "high"],
+    ["adaptive", "high"],
+    ["xhigh", "max"],
+  ] as const)("maps K3 %s thinking to %s effort", (thinkingLevel, effort) => {
+    const { getCapturedPayload } = captureKimiPayload({ modelId: "k3", thinkingLevel });
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort },
+    });
+  });
+
+  it.each([
+    { modelId: "k3", extraParams: undefined, thinkingLevel: "off" },
+    { modelId: "k3-256k", extraParams: { thinking: "off" }, thinkingLevel: "max" },
+  ] as const)("honors $modelId thinking off", ({ modelId, extraParams, thinkingLevel }) => {
+    const { getCapturedPayload } = captureKimiPayload(
+      { modelId, extraParams, thinkingLevel },
+      {
+        thinking: { type: "adaptive" },
+        output_config: { effort: "max", format: { type: "json_schema" } },
+        reasoning: { effort: "max" },
+        reasoning_effort: "max",
+        reasoningEffort: "max",
+      },
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "disabled" },
+      output_config: { format: { type: "json_schema" } },
+    });
+  });
+
+  it("lets explicit K3 thinking enablement override session off", () => {
+    const { getCapturedPayload } = captureKimiPayload({
+      modelId: "k3",
+      extraParams: { thinking: "enabled" },
+      thinkingLevel: "off",
+    });
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
+  });
+
+  it.each([
+    ["off", undefined],
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "high"],
+    ["high", "high"],
+    ["adaptive", "high"],
+    ["xhigh", "max"],
+    ["max", "max"],
+  ] as const)("sends OpenAI-compatible K3 %s as %s effort", (thinkingLevel, effort) => {
+    const { getCapturedPayload } = captureKimiPayload(
+      { modelId: "Kimi-K3", api: "openai-completions", thinkingLevel },
+      { reasoning_effort: "medium", reasoningEffort: "medium", reasoning: { effort: "medium" } },
+    );
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: thinkingLevel === "off" ? "disabled" : "enabled" },
+      ...(effort ? { reasoning_effort: effort } : {}),
+    });
+  });
+
+  it.each([
+    { thinkingLevel: "max", thinking: "off", expected: { thinking: { type: "disabled" } } },
+    {
+      thinkingLevel: "off",
+      thinking: "enabled",
+      expected: { thinking: { type: "enabled" }, reasoning_effort: "high" },
     },
-  );
+  ] as const)("honors explicit OpenAI-compatible K3 thinking $thinking", (row) => {
+    const { getCapturedPayload } = captureKimiPayload({
+      modelId: "kimi-k3",
+      api: "openai-completions",
+      thinkingLevel: row.thinkingLevel,
+      extraParams: { thinking: row.thinking },
+    });
+    expect(getCapturedPayload()).toEqual(row.expected);
+  });
+
+  it.each([
+    { chat_template_kwargs: { reasoning_effort: "low" } },
+    { chatTemplateKwargs: { reasoning_effort: "low" } },
+    { extra_body: { chat_template_kwargs: { reasoning_effort: "low" } } },
+  ])("does not shadow explicit K3 template effort with a generated root effort", (extraParams) => {
+    const { getCapturedPayload } = captureKimiPayload({
+      modelId: "kimi-k3",
+      api: "openai-completions",
+      thinkingLevel: "max",
+      extraParams,
+    });
+    expect(getCapturedPayload()).toEqual({ thinking: { type: "enabled" } });
+  });
 
   it("strips Anthropic cache_control markers before Kimi requests are sent", () => {
     const text = { type: "text", text: "hello" };
@@ -299,6 +408,34 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it.each([
+    {
+      name: "lets explicit model params disable session thinking",
+      extraParams: { thinking: "off" },
+      thinkingLevel: "high",
+      reasoning: "max",
+      expected: { thinking: { type: "disabled" } },
+    },
+    {
+      name: "lets explicit model params enable thinking when the session disables it",
+      extraParams: { thinking: "enabled" },
+      thinkingLevel: "off",
+      reasoning: "off",
+      expected: {
+        max_tokens: 16000,
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      },
+    },
+  ] as const)("$name", ({ extraParams, thinkingLevel, reasoning, expected }) => {
+    const { getCapturedPayload } = captureKimiPayload(
+      { modelId: "kimi-code", extraParams, thinkingLevel },
+      {},
+      { reasoning },
+    );
+
+    expect(getCapturedPayload()).toEqual(expected);
+  });
+
   it("backfills Kimi OpenAI-compatible tool-call reasoning_content when thinking is enabled", () => {
     const user = { role: "user", content: "run pwd" };
     const toolCall = {
@@ -333,6 +470,29 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it("strips Kimi OpenAI-compatible replay reasoning_content when thinking is disabled", () => {
+    const toolCall = {
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "exec", arguments: '{"command":"pwd"}' },
+        },
+      ],
+    };
+    const { getCapturedPayload } = captureKimiPayload(
+      { modelId: "kimi-for-coding", api: "openai-completions", extraParams: { thinking: "off" } },
+      { messages: [{ ...toolCall, reasoning_content: "old reasoning" }] },
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      messages: [toolCall],
+      thinking: { type: "disabled" },
+    });
+  });
+
   it("adds the default Kimi Anthropic thinking budget for explicit enabled params", () => {
     const cases = ["enabled", true, { type: "enabled" }] as const;
 
@@ -347,6 +507,19 @@ describe("kimi tool-call markup wrapper", () => {
         thinking: { type: "enabled", budget_tokens: 1024 },
       });
     }
+  });
+
+  it("uses the session Kimi Anthropic budget for explicit enabled params when available", () => {
+    const { getCapturedPayload } = captureKimiPayload({
+      modelId: "kimi-code",
+      extraParams: { thinking: "enabled" },
+      thinkingLevel: "medium",
+    });
+
+    expect(getCapturedPayload()).toEqual({
+      max_tokens: 16000,
+      thinking: { type: "enabled", budget_tokens: 4096 },
+    });
   });
 
   it("preserves explicit Kimi Anthropic thinking budgets", () => {

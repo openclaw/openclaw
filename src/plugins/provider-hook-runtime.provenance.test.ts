@@ -614,6 +614,51 @@ describe("provider runtime physical ownership", () => {
     }
   });
 
+  it("matches physical manifests before reusing a bounded active registry", () => {
+    const snapshot = loadFixture("old");
+    const old = registry(snapshot);
+    setActivePluginRegistry(old, "old");
+    const resolve = (selected: ReturnType<typeof metadata>) =>
+      getLoadedRuntimePluginRegistry({
+        requiredPluginIds: ["same-id"],
+        loadOptions: {
+          onlyPluginIds: ["same-id"],
+          manifestRegistry: selected.manifestRegistry,
+        },
+      });
+    expect(resolve(snapshot) === old).toBe(true);
+    expect(resolve(metadata("/synthetic/new")) === undefined).toBe(true);
+  });
+
+  it("does not reuse an active registry for another raw discovery selection", () => {
+    const snapshot = loadFixture("old");
+    const old = registry(snapshot);
+    const options = (selected: ReturnType<typeof metadata>) => ({
+      config,
+      env: {},
+      installRecords: {},
+      onlyPluginIds: ["same-id"],
+      discovery: {
+        candidates: createPluginCandidatesFromManifestRegistry(selected.manifestRegistry),
+        diagnostics: [],
+      },
+    });
+    const oldOptions = options(snapshot);
+    setActivePluginRegistry(old, resolvePluginLoadCacheContext(oldOptions).cacheKey);
+    expect(
+      getLoadedRuntimePluginRegistry({
+        loadOptions: oldOptions,
+        requiredPluginIds: ["same-id"],
+      }) === old,
+    ).toBe(true);
+    expect(
+      getLoadedRuntimePluginRegistry({
+        loadOptions: options(metadata("/synthetic/new")),
+        requiredPluginIds: ["same-id"],
+      }) === undefined,
+    ).toBe(true);
+  });
+
   it("uses the loaded owner rather than a later disabled duplicate record", () => {
     const old = loadFixture("old");
     const next = loadFixture("new");

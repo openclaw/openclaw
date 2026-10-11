@@ -81,6 +81,45 @@ describe("resolveQuestionOverGateway", () => {
     ]);
   });
 
+  it("maps the rendered option value to the canonical question id", async () => {
+    hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord }).mockResolvedValueOnce({
+      status: "answered",
+      answers: { answers: { deploy_target: ["Production"] } },
+    });
+
+    await expect(
+      resolveQuestionOverGateway({
+        cfg: {} as never,
+        questionId: recordId,
+        optionValue: "Production",
+        senderId: "telegram:42",
+      }),
+    ).resolves.toEqual({
+      status: "answered",
+      questionId: "deploy_target",
+      optionValue: "Production",
+    });
+    expect(hoisted.callGateway.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          method: "question.get",
+          params: { id: recordId },
+          scopes: ["operator.questions"],
+        }),
+      ],
+      [
+        expect.objectContaining({
+          method: "question.resolve",
+          params: {
+            id: recordId,
+            answers: { answers: { deploy_target: ["Production"] } },
+            resolvedBy: "telegram:42",
+          },
+        }),
+      ],
+    ]);
+  });
+
   it.each([
     ["question.get", "QUESTION_NOT_FOUND", "not-found"],
     ["question.resolve", "QUESTION_ALREADY_TERMINAL", "already-terminal"],

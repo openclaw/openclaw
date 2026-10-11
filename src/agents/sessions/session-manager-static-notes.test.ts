@@ -7,6 +7,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
+  inspectTranscriptEventsSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -20,6 +21,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
+import type { Message } from "../../llm/types.js";
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
@@ -33,10 +35,67 @@ import * as stateResources from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { appendSessionTranscriptNote } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 
 describe("released agent-sessions SDK static append", () => {
+  const cases: Array<{
+    name: string;
+    message: Message | CustomMessage | BashExecutionMessage;
+  }> = [
+    { name: "ordinary", message: makeUserMessage("SDK user message", 1) },
+    {
+      name: "custom",
+      message: {
+        role: "custom",
+        customType: "sdk-note",
+        content: "SDK custom message",
+        display: true,
+        timestamp: 2,
+      },
+    },
+    {
+      name: "bash",
+      message: {
+        role: "bashExecution",
+        command: "echo synthetic",
+        output: "synthetic",
+        exitCode: 0,
+        cancelled: false,
+        truncated: false,
+        timestamp: 3,
+      },
+    },
+  ];
+  it.each(cases)(
+    "returns a synchronous ID with immediately persisted $name content",
+    async ({ message }) => {
+      await withOpenClawTestState({ label: "sdk-static-append-contract" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId: "sdk-static",
+          sessionKey: "agent:main:sdk-static",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+          env: { OPENCLAW_STATE_DIR: state.stateDir },
+        };
+        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const id: string = SdkSessionManager.appendMessageToTranscript(target, message);
+        try {
+          expect(typeof id).toBe("string");
+          expect(inspectTranscriptEventsSync(target).events.at(-1)).toMatchObject({
+            type: "message",
+            id,
+            message,
+          });
+        } finally {
+          // Join the broken asynchronous implementation when exercising the regression.
+          await Promise.resolve(id);
+        }
+      });
+    },
+  );
+
   it("awaits direct static writes while preserving keyed custom replay and admitted user custody", async () => {
     await withOpenClawTestState({ label: "sdk-static-async-parity" }, async (state) => {
       const target = {

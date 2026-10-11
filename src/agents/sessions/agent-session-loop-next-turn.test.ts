@@ -909,6 +909,61 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.getAllTools().map((tool) => tool.name)).toEqual([readTool.name]);
   });
 
+  it("preserves explicit updates from an existing next-turn hook", async () => {
+    const hookModel = { ...testModel, id: "hook-model" };
+    const hookTool: AgentTool = {
+      name: "hook_tool",
+      label: "Hook tool",
+      description: "provided by the existing turn hook",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text", text: "done" }], details: {} }),
+    };
+    const hookContext = {
+      systemPrompt: "hook prompt",
+      messages: [],
+      tools: [hookTool],
+    };
+    let returnedUpdate = false;
+    const { session } = await createTestSession();
+    session.agent.prepareNextTurn = () => {
+      if (returnedUpdate) {
+        return undefined;
+      }
+      returnedUpdate = true;
+      return { context: hookContext, model: hookModel, thinkingLevel: "high" };
+    };
+    const contextualHook = session.agent.prepareNextTurnWithContext;
+    if (!contextualHook) {
+      throw new Error("context-aware next-turn hook was not installed");
+    }
+    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
+    const newMessages = [message];
+
+    const firstUpdate = await contextualHook({
+      message,
+      toolResults: [],
+      context: { systemPrompt: "loop prompt", messages: [], tools: [] },
+      newMessages,
+    });
+    const secondUpdate = await contextualHook({
+      message,
+      toolResults: [],
+      context: firstUpdate?.context ?? hookContext,
+      newMessages,
+    });
+
+    for (const update of [firstUpdate, secondUpdate]) {
+      expect(update).toMatchObject({
+        context: {
+          systemPrompt: "hook prompt",
+          tools: [expect.objectContaining({ name: "hook_tool" })],
+        },
+        model: hookModel,
+        thinkingLevel: "high",
+      });
+    }
+  });
+
   it("preserves fields omitted by an existing next-turn context replacement", async () => {
     const sessionTool: AgentTool = {
       name: "session_tool",

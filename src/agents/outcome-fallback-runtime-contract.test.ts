@@ -43,7 +43,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     });
   });
 
-  const fallbackClassificationCases = [["reasoning-only", "reasoning_only_result"]] as const;
+  const fallbackClassificationCases = [
+    ["empty", "empty_result"],
+    ["reasoning-only", "reasoning_only_result"],
+    ["planning-only", "planning_only_result"],
+  ] as const;
 
   it.each(fallbackClassificationCases)(
     "maps harness classification %s to a format fallback code",
@@ -115,6 +119,44 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(result.attempts[0]?.model).toBe(primaryModel);
     expect(result.attempts[0]?.reason).toBe("format");
     expect(result.attempts[0]?.code).toBe("empty_result");
+  });
+
+  it("preserves a tool-authored summary when fallback candidates are exhausted", async () => {
+    const terminalSummary =
+      "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
+      "Agent couldn't generate a response.";
+    const incomplete = createContractRunResult({
+      payloads: [{ text: terminalSummary, isError: true }],
+      meta: {
+        durationMs: 1,
+        toolSummary: { calls: 1, tools: ["web_fetch"] },
+        error: {
+          kind: "incomplete_turn",
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+    });
+
+    const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
+      ...contractRunOptions,
+      fallbacksOverride: [],
+      run: vi.fn().mockResolvedValue(incomplete),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+    });
+
+    expect(result.outcome).toBe("exhausted");
+    expect(result.result).toBe(incomplete);
+    expect(result.result.payloads).toEqual([{ text: terminalSummary, isError: true }]);
+    expect(result.attempts).toMatchObject([
+      {
+        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+        reason: "format",
+        code: "incomplete_result",
+      },
+    ]);
   });
 
   it("preserves the latest structured summary after all fallback candidates are exhausted", async () => {

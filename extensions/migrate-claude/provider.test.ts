@@ -11,8 +11,9 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHomePath } from "./helpers.js";
+import { buildMemoryItems } from "./memory.js";
 import { buildClaudeMigrationProvider } from "./provider.js";
-import { CLAUDE_AUTO_MEMORY_MAX_FILES, discoverClaudeSource } from "./source.js";
+import { CLAUDE_AUTO_MEMORY_MAX_FILES, type ClaudeSource, discoverClaudeSource } from "./source.js";
 import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
@@ -54,11 +55,25 @@ describe("Claude migration provider", () => {
 
   it.each([
     {
+      name: "project CLAUDE.md",
+      sourceDir: "project-root",
+      sourceFile: "CLAUDE.md",
+      itemId: "workspace:CLAUDE.md",
+      targetFile: "AGENTS.md",
+    },
+    {
       name: "project .claude/CLAUDE.md",
       sourceDir: "project-root",
       sourceFile: path.join(".claude", "CLAUDE.md"),
       itemId: "workspace:.claude/CLAUDE.md",
       targetFile: "AGENTS.md",
+    },
+    {
+      name: "user ~/.claude/CLAUDE.md",
+      sourceDir: ".claude",
+      sourceFile: "CLAUDE.md",
+      itemId: "memory:user-CLAUDE.md",
+      targetFile: "USER.md",
     },
   ])("keeps repeated $name imports byte-identical", async (testCase) => {
     const source = path.join(root, testCase.sourceDir);
@@ -189,6 +204,21 @@ describe("Claude migration provider", () => {
     expect(imported?.target).toContain(path.join("memory", "imports", "claude-code"));
     await expect(fs.readFile(imported?.target ?? "", "utf8")).resolves.toBe("# API facts\n");
     await expect(fs.access(path.join(targetWorkspace, "USER.md"))).rejects.toThrow();
+  });
+
+  it("discovers a user-configured Claude Code auto-memory directory", async () => {
+    const source = path.join(root, ".claude");
+    const customMemory = path.join(root, "custom-memory");
+    await writeFile(
+      path.join(source, "settings.json"),
+      JSON.stringify({ autoMemoryDirectory: customMemory }),
+    );
+    await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
+
+    const plan = await provider.plan(contextFor(source, { itemKinds: ["memory"] }));
+
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]?.source).toBe(path.join(customMemory, "MEMORY.md"));
   });
 
   it("honors CLAUDE_CONFIG_DIR for a relocated Claude home", async () => {
@@ -347,6 +377,35 @@ describe("Claude migration provider", () => {
       });
     },
   );
+
+  it("fails planning when a discovered Claude Code memory directory cannot be read", async () => {
+    const missingMemory = path.join(root, "missing-memory");
+    await writeFile(missingMemory, "not a directory\n");
+    const source: ClaudeSource = {
+      root,
+      confidence: "medium",
+      autoMemorySources: [
+        {
+          id: "missing",
+          label: "missing",
+          path: missingMemory,
+        },
+      ],
+      archivePaths: [],
+    };
+
+    await expect(
+      buildMemoryItems({
+        source,
+        targets: {
+          workspaceDir,
+          stateDir,
+          agentDir: path.join(root, "state", "agents", "main", "agent"),
+        },
+        includeInstructions: false,
+      }),
+    ).rejects.toThrow("Unable to read Claude Code auto-memory directory");
+  });
 
   it("rejects oversized Claude Code auto-memory instead of returning a partial plan", async () => {
     const source = path.join(root, ".claude");
@@ -535,7 +594,7 @@ describe("Claude migration provider", () => {
     ).toBe(backupPath);
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "reports a removed command source without changing its generated skill (overwrite: %s)",
     async (overwrite) => {
       const source = path.join(root, "project");

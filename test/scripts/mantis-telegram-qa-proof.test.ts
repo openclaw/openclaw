@@ -43,6 +43,14 @@ describe("owned Telegram QA network cleanup", () => {
     }, "mantis-qa-fixture");
     expect(calls).toEqual([["network", "rm", "mantis-qa-fixture"]]);
   });
+  it("skips only an uncreated network and preserves genuine removal failures", async () => {
+    const failure = new Error("network still in use");
+    const podman = async () => {
+      throw failure;
+    };
+    await expect(removeTelegramQaNetwork(podman, undefined)).resolves.toBeUndefined();
+    await expect(removeTelegramQaNetwork(podman, "mantis-qa-fixture")).rejects.toBe(failure);
+  });
 });
 
 const identity = requestIdentitySchema.parse({
@@ -179,6 +187,7 @@ describe("protected workflow admission", () => {
     main = "b".repeat(40);
   it.each([
     "complete",
+    "main",
     "advanced-main",
     "wrong-main-base",
     "unprotected",
@@ -186,6 +195,7 @@ describe("protected workflow admission", () => {
     "not-ancestor",
     "moved-main",
     "missing-protection",
+    "api-denied",
     "redirect",
   ])("handles %s without auto-trusting main changes", async (fault) => {
     let mainReads = 0;

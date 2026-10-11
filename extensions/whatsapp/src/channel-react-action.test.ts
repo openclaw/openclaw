@@ -126,12 +126,106 @@ describe("whatsapp react action messageId resolution", () => {
     hoisted.sendMessageWhatsApp.mockClear();
   });
 
+  it("sends upload-file through the WhatsApp media send path", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
+
+    const result = await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        filePath: "/tmp/pic.png",
+        caption: "picture caption",
+        forceDocument: "true",
+        gifPlayback: true,
+        asVoice: "true",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+    });
+
+    expect(hoisted.resolveAuthorizedWhatsAppOutboundTarget).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      chatJid: "+1555",
+      accountId: "default",
+      actionLabel: "upload-file",
+    });
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("+1555", "picture caption", {
+      verbose: false,
+      cfg: baseCfg,
+      mediaUrl: "/tmp/pic.png",
+      mediaAccess: undefined,
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+      gifPlayback: true,
+      audioAsVoice: true,
+      forceDocument: true,
+      accountId: "default",
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      channel: "whatsapp",
+      action: "upload-file",
+      messageId: "msg-media-1",
+      toJid: "1555@s.whatsapp.net",
+    });
+  });
+
   it.each([
+    {
+      sourceKey: "filePath",
+      source: "/tmp/generated-attachment.bin",
+      filenameKey: "filename",
+      filename: "Quarterly Report.pdf",
+    },
+    {
+      sourceKey: "mediaUrl",
+      source: "https://example.com/download?id=42",
+      filenameKey: "fileName",
+      filename: "Invoice.pdf",
+    },
+  ])(
+    "preserves the requested $filenameKey for an upload-file $sourceKey",
+    async ({ sourceKey, source, filenameKey, filename }) => {
+      await handleWhatsAppMessageAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          [sourceKey]: source,
+          [filenameKey]: filename,
+          forceDocument: true,
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      });
+
+      expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+        "+1555",
+        "",
+        expect.objectContaining({ mediaUrl: source, fileName: filename }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "a local path's contentType",
+      source: { filePath: "/tmp/generated-attachment.bin" },
+      metadata: { contentType: "image/png" },
+      expectedContentType: "image/png",
+    },
     {
       name: "a URL's mimeType alias",
       source: { mediaUrl: "https://example.com/video" },
       metadata: { mimeType: "video/mp4" },
       expectedContentType: "video/mp4",
+    },
+    {
+      name: "contentType before a URL's mimeType alias",
+      source: { mediaUrl: "https://example.com/document" },
+      metadata: { contentType: "application/pdf", mimeType: "image/png" },
+      expectedContentType: "application/pdf",
     },
   ])("preserves $name for upload-file", async ({ source, metadata, expectedContentType }) => {
     await handleWhatsAppMessageAction({
@@ -145,8 +239,45 @@ describe("whatsapp react action messageId resolution", () => {
       "+1555",
       "",
       expect.objectContaining({
-        mediaUrl: source.mediaUrl,
+        mediaUrl: source.filePath ?? source.mediaUrl,
         contentType: expectedContentType,
+      }),
+    );
+  });
+
+  it("uses toolContext current chat for same-chat upload-file", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
+
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        filePath: "/tmp/pic.png",
+        caption: "picture caption",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+
+    expect(hoisted.resolveAuthorizedWhatsAppOutboundTarget).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      chatJid: "+1555",
+      accountId: "default",
+      actionLabel: "upload-file",
+    });
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "picture caption",
+      expect.objectContaining({
+        accountId: "default",
+        mediaReadFile,
+        mediaUrl: "/tmp/pic.png",
       }),
     );
   });
@@ -210,6 +341,21 @@ describe("whatsapp react action messageId resolution", () => {
       metadata: {},
       expectedContentType: "image/png",
     },
+    {
+      name: "an explicit contentType",
+      metadata: { contentType: "application/pdf" },
+      expectedContentType: "application/pdf",
+    },
+    {
+      name: "an explicit mimeType alias",
+      metadata: { mimeType: "image/jpeg" },
+      expectedContentType: "image/jpeg",
+    },
+    {
+      name: "contentType before its mimeType alias",
+      metadata: { contentType: "application/pdf", mimeType: "image/jpeg" },
+      expectedContentType: "application/pdf",
+    },
   ])(
     "resolves upload-file buffer MIME metadata from $name",
     async ({ metadata, expectedContentType }) => {
@@ -257,17 +403,20 @@ describe("whatsapp react action messageId resolution", () => {
     );
   });
 
-  it.each(["SGVsbG8=!"])("rejects malformed upload-file buffer %s", async (buffer) => {
-    await expect(
-      handleWhatsAppMessageAction({
-        action: "upload-file",
-        params: { to: "+1555", buffer },
-        cfg: baseCfg,
-        accountId: "default",
-      }),
-    ).rejects.toThrow("must be valid base64 or a base64 data URL");
-    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
-  });
+  it.each(["SGVsbG8=!", "data:text/plain,hello", "data:text/plain;base64"])(
+    "rejects malformed upload-file buffer %s",
+    async (buffer) => {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: { to: "+1555", buffer },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("must be valid base64 or a base64 data URL");
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects upload-file buffers above the WhatsApp media limit", async () => {
     hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValueOnce(4);
@@ -328,6 +477,35 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it("converts numeric toolContext messageId to string", async () => {
+    await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "🎉", to: "+1555" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: 12345,
+      },
+    });
+    expectReactionForwarded({
+      messageId: "12345",
+      emoji: "🎉",
+    });
+  });
+
+  it("throws ToolInputError when messageId missing and no toolContext", async () => {
+    const err = await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: "default",
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
   it("uses context fallback when target matches current chat", async () => {
     await handleWhatsAppMessageAction({
       action: "react",
@@ -347,6 +525,45 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it("keeps direct-chat reactions without an inferred participant", async () => {
+    await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "123@lid",
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expectReactionForwarded({});
+  });
+
+  it("prefers explicit participant over inferred current-message participant", async () => {
+    await handleWhatsAppMessageAction({
+      action: "react",
+      params: {
+        emoji: "👍",
+        to: "12345@g.us",
+        participant: "555@s.whatsapp.net",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "123@lid",
+      toolContext: {
+        currentChannelId: "whatsapp:12345@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      participant: "555@s.whatsapp.net",
+    });
+  });
+
   it("does not reuse the current-chat participant for cross-chat reactions", async () => {
     const err = await handleWhatsAppMessageAction({
       action: "react",
@@ -363,6 +580,41 @@ describe("whatsapp react action messageId resolution", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("ToolInputError");
     expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
+  });
+
+  it("does not infer participant when messageId is explicitly provided", async () => {
+    await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "👍", to: "12345@g.us", messageId: "older-msg-7" },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "123@lid",
+      toolContext: {
+        currentChannelId: "whatsapp:12345@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      messageId: "older-msg-7",
+    });
+  });
+
+  it("skips context fallback when source is another provider", async () => {
+    const err = await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "telegram:-1003841603622",
+        currentChannelProvider: "telegram",
+        currentMessageId: "tg-msg-99",
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
   });
 
   it("skips context fallback when currentChannelId is missing with explicit target", async () => {

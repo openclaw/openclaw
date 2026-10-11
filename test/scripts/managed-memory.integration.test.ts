@@ -48,7 +48,7 @@ it.runIf(available)(
   25_000,
 );
 
-it.runIf(available).for([true])(
+it.runIf(available).for([false, true])(
   "returns the workload result through a verified bounded launcher (shell: %s)",
   { timeout: 20_000 },
   async (shell, { signal }) => {

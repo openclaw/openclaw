@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -24,28 +26,28 @@ function collectorTools(options: NonNullable<Parameters<typeof createOpenClawCod
 }
 
 describe("Swarm registration", () => {
-  it.each([{ profile: "coding", wait: true }] as const)(
-    "keeps default Swarm within the $profile tool profile",
-    ({ profile, wait }) => {
-      const tools = createOpenClawCodingTools({
-        sessionKey: "agent:main:main",
-        config: { agents: { entries: { main: {} } }, tools: { profile } },
-      });
-      expect(tools.some((tool) => tool.name === "agents_wait")).toBe(wait);
-      const spawn = tools.find((tool) => tool.name === "sessions_spawn");
-      expect(spawn?.parameters).toHaveProperty("properties.fastMode");
-      for (const field of ["collect", "outputSchema", "groupId"]) {
-        if (wait) {
-          expect(spawn?.parameters).toHaveProperty(`properties.${field}`);
-        } else {
-          expect(spawn?.parameters).not.toHaveProperty(`properties.${field}`);
-        }
+  it.each([
+    { profile: "coding", wait: true },
+    { profile: "messaging", wait: false },
+  ] as const)("keeps default Swarm within the $profile tool profile", ({ profile, wait }) => {
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:main",
+      config: { agents: { entries: { main: {} } }, tools: { profile } },
+    });
+    expect(tools.some((tool) => tool.name === "agents_wait")).toBe(wait);
+    const spawn = tools.find((tool) => tool.name === "sessions_spawn");
+    expect(spawn?.parameters).toHaveProperty("properties.fastMode");
+    for (const field of ["collect", "outputSchema", "groupId"]) {
+      if (wait) {
+        expect(spawn?.parameters).toHaveProperty(`properties.${field}`);
+      } else {
+        expect(spawn?.parameters).not.toHaveProperty(`properties.${field}`);
       }
-      if (!wait) {
-        expect(JSON.stringify(spawn?.parameters)).not.toContain("collect=true");
-      }
-    },
-  );
+    }
+    if (!wait) {
+      expect(JSON.stringify(spawn?.parameters)).not.toContain("collect=true");
+    }
+  });
 
   it("uses the effective requester override for the agents_wait gate", () => {
     const base = { agentSessionKey: "agent:worker:main", requesterAgentIdOverride: "worker" };
@@ -58,6 +60,27 @@ describe("Swarm registration", () => {
         },
       });
       expect(tools.some((tool) => tool.name === "agents_wait")).toBe(enabled);
+    }
+  });
+
+  it("advertises sessions_spawn from agents_wait only when spawn is available", () => {
+    setEmbeddedMode(true);
+    try {
+      for (const available of [false, true]) {
+        const tools = applyToolAvailabilityDescriptions(
+          createSwarmTools({
+            agentSessionKey: "agent:main:main",
+            allowGatewaySubagentBinding: available,
+            config: { tools: { swarm: true } },
+          }),
+        );
+        expect(tools.some((tool) => tool.name === "sessions_spawn")).toBe(available);
+        expect(
+          tools.find((tool) => tool.name === "agents_wait")?.description.includes("sessions_spawn"),
+        ).toBe(available);
+      }
+    } finally {
+      setEmbeddedMode(false);
     }
   });
 

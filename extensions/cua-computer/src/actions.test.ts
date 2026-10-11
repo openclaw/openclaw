@@ -5,14 +5,18 @@ import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 const normalizeKey = (input: string) => parseKeyChord(input, "linux").key;
 
 describe("cua-computer key normalization", () => {
-  it.each([["win+mod1", "darwin", ["cmd", "alt"]]] as const)(
-    "normalizes modifier aliases in %s on %s",
-    (input, platform, expected) => {
-      expect(normalizeModifiers(input, platform)).toEqual(expected);
-    },
-  );
+  it.each([
+    ["Super+Control+Option", "linux", ["meta", "ctrl", "alt"]],
+    ["win+mod1", "darwin", ["cmd", "alt"]],
+  ] as const)("normalizes modifier aliases in %s on %s", (input, platform, expected) => {
+    expect(normalizeModifiers(input, platform)).toEqual(expected);
+  });
 
-  it.each([["F12", "f12"]])("normalizes key %s", (input, expected) => {
+  it.each([
+    ["Esc", "escape"],
+    ["F12", "f12"],
+    ["Z", "z"],
+  ])("normalizes key %s", (input, expected) => {
     expect(normalizeKey(input)).toBe(expected);
   });
 
@@ -27,7 +31,7 @@ describe("cua-computer key normalization", () => {
   // Digits and punctuation are shifted on some keyboard layouts, and cua-driver
   // drops that shift state, so they must be rejected toward the type action
   // rather than silently degraded.
-  it.each(["+", "é"])("rejects layout-shifted key %s toward the type action", (input) => {
+  it.each(["1", "+", "?", "é"])("rejects layout-shifted key %s toward the type action", (input) => {
     expect(() => normalizeKey(input)).toThrow("COMPUTER_UNSUPPORTED_KEY");
   });
 

@@ -64,7 +64,10 @@ function observations(wrongMessage = false) {
 }
 
 describe("request proof finalization", () => {
-  it.each([[true, "fail"]] as const)(
+  it.each([
+    [false, "pass"],
+    [true, "fail"],
+  ] as const)(
     "derives assertions from complete independent observations (wrong=%s)",
     (wrong, outcome) => {
       const receipt = createRequestReceipt(identity, "completed", evidence, observations(wrong));
@@ -80,11 +83,14 @@ describe("request proof finalization", () => {
       });
     },
   );
-  it.each(["failed"] as const)("does not turn %s into product evidence", (outcome) => {
-    expect(
-      createRequestReceipt(identity, outcome, evidence, observations()).assertion_outcome,
-    ).toBe("inconclusive");
-  });
+  it.each(["failed", "cancelled", "timed_out", "skipped"] as const)(
+    "does not turn %s into product evidence",
+    (outcome) => {
+      expect(
+        createRequestReceipt(identity, outcome, evidence, observations()).assertion_outcome,
+      ).toBe("inconclusive");
+    },
+  );
   it("retains missing evidence and stale-head reasons without inventing a digest or pass", () => {
     expect(createRequestReceipt(identity, "completed", null, observations())).toMatchObject({
       assertion_outcome: "inconclusive",
@@ -183,7 +189,7 @@ describe("consumer dispatch contract", () => {
 
 describe("archive boundary", () => {
   const parser = path.resolve("scripts/mantis/read-request-archive.py");
-  it.each(["traversal", "symlink", "missing", "oversized", "duplicate", "nul-path"])(
+  it.each(["complete", "traversal", "symlink", "missing", "oversized", "duplicate", "nul-path"])(
     "handles %s ZIP without unsafe extraction",
     async (fault) => {
       const temp = mkdtempSync(path.join(os.tmpdir(), "mantis-archive-"));
@@ -255,12 +261,14 @@ describe("trusted finalizer CLI", () => {
   const finalizer = path.resolve("scripts/mantis/finalize-request-proof.mts");
   const parser = path.resolve("scripts/mantis/read-request-archive.py");
   it.each([
+    "complete",
     "qualified-path",
     "wrong-path-ref",
     "redirect",
     "digest-mismatch",
     "wrong-run",
     "stale-head",
+    "stale-head-and-digest-mismatch",
     "wrong-attempt",
     "timed-out",
     "wrong-title",

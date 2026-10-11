@@ -134,6 +134,36 @@ describe("manifest auth choice dispatch", () => {
   });
 });
 
+function createSglangWizardProvider(params?: {
+  includeSetup?: boolean;
+  includeModelPicker?: boolean;
+}) {
+  return makeProvider({
+    id: "sglang",
+    label: "SGLang",
+    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+    wizard: {
+      ...((params?.includeSetup ?? true)
+        ? {
+            setup: {
+              choiceLabel: "SGLang setup",
+              groupId: "sglang",
+              groupLabel: "SGLang",
+            },
+          }
+        : {}),
+      ...(params?.includeModelPicker
+        ? {
+            modelPicker: {
+              label: "SGLang server",
+              methodId: "server",
+            },
+          }
+        : {}),
+    },
+  });
+}
+
 function createSglangConfig() {
   return {
     plugins: {
@@ -342,6 +372,18 @@ describe("provider wizard boundaries", () => {
         hint: "OpenAI-compatible local runtime",
       },
     ]);
+  });
+
+  it("resolves providers in setup mode for the model picker", () => {
+    const provider = createSglangWizardProvider({ includeModelPicker: true });
+    const config = {};
+    const env = createHomeEnv();
+    setResolvedProviders(provider);
+
+    const runtimeParams = createWizardRuntimeParams({ config, env });
+    expect(resolveProviderModelPickerEntries(runtimeParams)).toHaveLength(1);
+
+    expectProviderResolutionCall({ config, env });
   });
 
   it("uses the prepared matching provider when the runtime inventory does not contain it", async () => {

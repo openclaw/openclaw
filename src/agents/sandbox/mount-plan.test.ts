@@ -134,6 +134,31 @@ describe("managed mount plan", () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
+  it.each(["none", "ro", "rw"] as const)(
+    "maps all managed roots with %s permissions",
+    async (access) => {
+      const plan = await prepareSandboxMountPlan(params(access));
+      if (access === "none") {
+        expect(plan.binds).toEqual([
+          "/host/state/private:/workspace:z",
+          "/host/state/private/skills:/workspace/skills:ro,z",
+        ]);
+      } else if (access === "ro") {
+        expect(plan.binds).toEqual([
+          "/host/state/private:/workspace:ro,z",
+          "/host/agent:/agent:ro,z",
+        ]);
+      } else {
+        expect(plan.binds).toEqual([
+          "/host/agent:/workspace:z",
+          "/host/agent/skills:/workspace/skills:ro,z",
+          "/host/agent/.agents/skills:/workspace/.agents/skills:ro,z",
+          "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+        ]);
+      }
+    },
+  );
+
   it("preserves custom daemon sources while keeping protected skill mounts authoritative", async () => {
     const plan = await prepareSandboxMountPlan({
       ...params("rw"),
@@ -181,6 +206,16 @@ describe("managed mount plan", () => {
         { Type: "bind", Source: "/daemon/B ", Destination: "/data ", RW: true },
       ]),
     ).resolves.toBe(true);
+  });
+
+  it("honors a normalized custom override without translating the replaced source", async () => {
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([]);
+    const plan = await prepareSandboxMountPlan({
+      ...params("ro"),
+      workspaceDir: path.join(root, "agent"),
+      binds: ["/custom/project:/workspace/:ro"],
+    });
+    expect(plan.binds).toEqual(["/custom/project:/workspace/:ro"]);
   });
 
   it.each(["ro", "rw"] as const)(
@@ -258,6 +293,21 @@ describe("managed mount plan", () => {
     expect(plan.binds).toContain("/custom/data:/workspace/data/:ro");
     expect(plan.binds.some((bind) => bind.startsWith("/host/hidden:"))).toBe(false);
   });
+
+  it("keeps protected skills read-only on a read-only Gateway source", async () => {
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
+      { type: "bind", source: "/host/state", destination: root, writable: true },
+      {
+        type: "bind",
+        source: "/host/skills",
+        destination: path.join(root, "materialized"),
+        writable: false,
+      },
+    ]);
+    expect((await prepareSandboxMountPlan(params("rw"))).binds).toContain(
+      "/host/skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+    );
+  });
 });
 
 describe("retained mount identity", () => {
@@ -278,7 +328,39 @@ describe("retained mount identity", () => {
     },
   );
 
+  it.each(["tmpfs", "volume"])(
+    "distinguishes configured tmpfs removal from implicit %s below a bind",
+    async (type) => {
+      const plan = await prepareSandboxMountPlan({
+        ...params("none"),
+        workspaceDir: path.join(root, "empty"),
+      });
+      expect(
+        await matchesContainer(
+          plan,
+          [
+            { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+            ...(type === "tmpfs"
+              ? []
+              : [
+                  {
+                    Type: type,
+                    Source: "/engine/storage",
+                    Destination: "/workspace/cache",
+                    RW: true,
+                  },
+                ]),
+          ],
+          type === "tmpfs" ? { "/workspace/cache": "rw" } : null,
+        ),
+      ).toBe(type !== "tmpfs");
+    },
+  );
+
   it.each([
+    { configured: "ro,size=64m", actual: "nosuid,nodev,ro,size=65536k", matches: true },
+    { configured: "", actual: "rw", matches: true },
+    { configured: "ro,rw", actual: "rw", matches: true },
     { configured: "rw,ro", actual: "ro", matches: true },
     { configured: "ro", actual: "rw", matches: false },
   ])(

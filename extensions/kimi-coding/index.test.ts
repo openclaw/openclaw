@@ -56,6 +56,10 @@ describe("kimi provider plugin", () => {
   });
 
   it.each([
+    ["weekly limit", "You've reached your weekly usage limit.", "rate_limit"],
+    ["weekly window", "You've reached your weekly (7-day) usage limit.", "rate_limit"],
+    ["seven-day limit", "Your seven-day usage limit has been reached.", "rate_limit"],
+    ["7-day limit", "You've reached your 7-day usage limit.", "rate_limit"],
     [
       "agent access restriction",
       "Kimi For Coding is currently only available for Coding Agents such as Kimi CLI, Claude Code, Roo Code, Kilo Code, etc.",
@@ -74,7 +78,7 @@ describe("kimi provider plugin", () => {
     ).toBe(expected);
   });
 
-  it.each(["kimi-coding"])(
+  it.each([" KIMI ", "kimi-code", "kimi-coding"])(
     "declares and classifies quota exhaustion for provider %s",
     async (providerId) => {
       const provider = await registerSingleProviderPlugin(plugin);
@@ -93,6 +97,7 @@ describe("kimi provider plugin", () => {
   it.each([
     { providerId: "kimi", status: 401 },
     { providerId: "other-provider", status: 403 },
+    { providerId: undefined, status: 403 },
   ])("preserves non-quota ownership for $providerId/$status", async ({ providerId, status }) => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -107,7 +112,9 @@ describe("kimi provider plugin", () => {
 
   it.each([
     { modelId: "k3", defaultLevel: "high" },
+    { modelId: "K3-256K", defaultLevel: "high" },
     { modelId: "kimi-k3", defaultLevel: "off" },
+    { modelId: " Kimi-K3 ", defaultLevel: "off" },
   ])(
     "exposes K3 thinking levels and the $defaultLevel default for $modelId",
     async ({ modelId, defaultLevel }) => {
@@ -150,7 +157,15 @@ describe("kimi provider plugin", () => {
   });
 
   it.each([
+    { thinkingLevelMap: undefined, compat: undefined, selected: "max", effort: "max" },
+    { thinkingLevelMap: { max: "low" }, compat: undefined, selected: "max", effort: "low" },
     { thinkingLevelMap: { max: null }, compat: undefined, selected: "xhigh", effort: "max" },
+    {
+      thinkingLevelMap: undefined,
+      compat: { reasoningEffortMap: { max: "low", low: "high" } },
+      selected: "max",
+      effort: "low",
+    },
   ] as const)(
     "keeps K3 model capabilities through selection and OpenAI serialization: $effort",
     async (row) => {
@@ -213,7 +228,7 @@ describe("kimi provider plugin", () => {
     },
   );
 
-  it.each(["wrapSimpleCompletionStreamFn"] as const)(
+  it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
     "resolves per-call K3 thinking through one %s wrapper",
     async (hook) => {
       const provider = await registerSingleProviderPlugin(plugin);

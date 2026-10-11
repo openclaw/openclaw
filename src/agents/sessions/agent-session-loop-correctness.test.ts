@@ -15,6 +15,7 @@ import {
   createAutoCompactionSettings,
   createOverflowAssistant,
   createTestSession,
+  mockInvalidThenTextSummary,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -318,6 +319,24 @@ describe("AgentSession loop correctness", () => {
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 
+  it("emits agent_settled once after a normal run", async () => {
+    const lifecycleEvents: string[] = [];
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["agent_end", [async () => lifecycleEvents.push("agent_end")]],
+      ["agent_settled", [async () => lifecycleEvents.push("agent_settled")]],
+    ]);
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
+      ),
+    );
+    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+
+    await session.prompt("new prompt");
+
+    expect(lifecycleEvents).toEqual(["agent_end", "agent_settled"]);
+  });
+
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
     await appendHistory(
@@ -341,6 +360,41 @@ describe("AgentSession loop correctness", () => {
       type: "compaction",
       summary: "condensed history",
     });
+  });
+
+  it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
+    const settingsManager = createAutoCompactionSettings();
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(session.messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "complete answer" }],
+      }),
+    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
   it("surfaces threshold safeguard rejection without appending compaction state", async () => {
@@ -433,6 +487,38 @@ describe("AgentSession loop correctness", () => {
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     expect(compactionEvents).toEqual([]);
     expect(session.getLastAssistantText()).toBe("complete answer");
+  });
+
+  it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
   });
 
   it.each([
@@ -628,6 +714,51 @@ describe("AgentSession loop correctness", () => {
     expect(session.getLastAssistantText()).toBe("complete retry");
   });
 
+  it("shares invalid-summary recovery with caller-owned automatic compaction", async () => {
+    const sessionManager = SessionManager.inMemory();
+    await appendHistory(
+      sessionManager,
+      createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
+    );
+    const settingsManager = createAutoCompactionSettings();
+    const summary = "recovered caller-owned summary";
+    const getSummaryRequests = mockInvalidThenTextSummary(summary);
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(),
+    });
+
+    const result = await session[agentSessionAutomaticCompaction]();
+
+    expect(getSummaryRequests()).toBe(2);
+    expect(result.status === "completed" && result.result.summary).toContain(summary);
+    const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
+    expect(compactions).toHaveLength(1);
+  });
+
+  it("keeps public manual compaction one-shot for invalid summary output", async () => {
+    const sessionManager = SessionManager.inMemory();
+    await appendHistory(
+      sessionManager,
+      createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
+    );
+    const settingsManager = createAutoCompactionSettings();
+    const getSummaryRequests = mockInvalidThenTextSummary("must not be requested");
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(),
+    });
+
+    await expect(session.compact()).rejects.toThrow(
+      "Turn prefix summarization failed: model returned no summary text",
+    );
+
+    expect(getSummaryRequests()).toBe(1);
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+  });
+
   it("does not replay a length-stopped empty summary and leaves the selected route usable", async () => {
     const model: Model = { ...testModel, reasoning: true, maxTokens: 4_096 };
     const sessionManager = SessionManager.inMemory();
@@ -787,6 +918,49 @@ describe("AgentSession loop correctness", () => {
       );
     },
   );
+
+  it("does not retry provider errors during default auto-compaction", async () => {
+    const settingsManager = createAutoCompactionSettings();
+    const compactionEvents: AgentSessionEvent[] = [];
+    let agentRequests = 0;
+    let summaryRequests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        summaryRequests += 1;
+        return createAssistantResultStream({
+          ...createAssistant(activeModel, [], "error"),
+          errorMessage: "provider unavailable",
+        });
+      }
+      agentRequests += 1;
+      return createAssistantResultStream(createOverflowAssistant(activeModel));
+    });
+    const { session, sessionManager } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect({ agentRequests, summaryRequests }).toEqual({ agentRequests: 1, summaryRequests: 1 });
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({
+        type: "compaction_end",
+        reason: "overflow",
+        outcome: {
+          status: "failed",
+          reason:
+            "Context overflow recovery failed: Turn prefix summarization failed: provider unavailable",
+        },
+      }),
+    );
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+  });
 
   it("leaves reactive overflow recovery to the caller when configured", async () => {
     const settingsManager = createAutoCompactionSettings();

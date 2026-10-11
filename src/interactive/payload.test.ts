@@ -24,12 +24,13 @@ function buttonPresentation<const T extends unknown[]>(...buttons: T) {
 }
 
 describe("hasReplyChannelData", () => {
-  it.each([{ value: {}, expected: false }] as const)(
-    "rejects empty or non-object channel data: %j",
-    ({ value, expected }) => {
-      expect(hasReplyChannelData(value)).toBe(expected);
-    },
-  );
+  it.each([
+    { value: undefined, expected: false },
+    { value: {}, expected: false },
+    { value: [], expected: false },
+  ] as const)("rejects empty or non-object channel data: %j", ({ value, expected }) => {
+    expect(hasReplyChannelData(value)).toBe(expected);
+  });
 });
 
 describe("hasReplyContent", () => {
@@ -43,9 +44,23 @@ describe("hasReplyContent", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts shared interactive blocks", () => {
+    expect(
+      hasReplyContent({ interactive: buttonPresentation({ label: "Retry", value: "retry" }) }),
+    ).toBe(true);
+  });
 });
 
 describe("hasReplyPayloadContent", () => {
+  it("treats portable locations as content", () => {
+    expect(
+      hasReplyPayloadContent({
+        location: { latitude: 1, longitude: 2 },
+      }),
+    ).toBe(true);
+  });
+
   it("trims text and falls back to channel data by default", () => {
     expect(
       hasReplyPayloadContent({
@@ -56,6 +71,16 @@ describe("hasReplyPayloadContent", () => {
   });
 
   it.each([
+    {
+      name: "explicit channel-data overrides",
+      payload: {
+        text: "   ",
+        channelData: {},
+      },
+      options: {
+        hasChannelData: true,
+      },
+    },
     {
       name: "extra content",
       payload: {
@@ -88,6 +113,17 @@ describe("interactive payload helpers", () => {
       ],
     });
     expect(resolveInteractiveTextFallback({ interactive })).toBe("First\n\nSecond");
+  });
+
+  it("preserves URL-only presentation buttons for native link renderers and fallback text", () => {
+    const presentation = buttonPresentation({ label: "Docs", url: "https://example.com/docs" });
+
+    expect(presentationToInteractiveReply(presentation)).toEqual(
+      buttonPresentation({ label: "Docs", url: "https://example.com/docs" }),
+    );
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      "- Docs: https://example.com/docs",
+    );
   });
 
   it("preserves web app presentation buttons for channel-native renderers", () => {
@@ -372,6 +408,7 @@ describe("interactive payload helpers", () => {
 
   it.each([
     { type: "Question", questionId: "ask_1", optionValue: "Yes" },
+    { type: "question", questionId: "", optionValue: "Yes" },
     { type: "question", questionId: "ask_\ud800", optionValue: "Yes" },
     { type: "question", questionId: "ask_1", optionValue: "   " },
   ])("rejects malformed question action %#", (action) => {
@@ -410,6 +447,17 @@ describe("interactive payload helpers", () => {
         ],
       }),
     ).toBeUndefined();
+  });
+
+  it("preserves protocol-valid boundary whitespace in typed approval actions", () => {
+    const action = {
+      type: "approval",
+      approvalId: "\uFEFF",
+      approvalKind: "exec",
+      decision: "deny",
+    } as const;
+    const expected = buttonPresentation({ label: "Deny", action });
+    expect(normalizeMessagePresentation(structuredClone(expected))).toEqual(expected);
   });
 
   it("converts only presentation controls for native component renderers", () => {
@@ -578,6 +626,19 @@ describe("interactive payload helpers", () => {
         series: [{ name: "Revenue", values: [1] }],
       },
     },
+    {
+      name: "duplicate series names",
+      block: {
+        type: "chart",
+        chartType: "line",
+        title: "Invalid",
+        categories: ["Q1"],
+        series: [
+          { name: "Revenue", values: [1] },
+          { name: "Revenue", values: [2] },
+        ],
+      },
+    },
   ])("drops chart blocks with $name instead of changing their data", ({ block }) => {
     expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
   });
@@ -625,9 +686,17 @@ describe("interactive payload helpers", () => {
 
   const table = { type: "table", caption: "Report", headers: ["Name"], rows: [["Acme"]] };
   it.each([
+    { name: "missing caption", block: { ...table, caption: undefined } },
     { name: "empty headers", block: { ...table, headers: [] } },
+    {
+      name: "duplicate headers",
+      block: { ...table, headers: ["Name", "Name"], rows: [["Acme", "Won"]] },
+    },
+    { name: "empty rows", block: { ...table, rows: [] } },
     { name: "mismatched row width", block: { ...table, headers: ["Name", "Stage"] } },
+    { name: "empty string cell", block: { ...table, rows: [[" "]] } },
     { name: "non-finite numeric cell", block: { ...table, headers: ["ARR"], rows: [[Infinity]] } },
+    { name: "non-scalar cell", block: { ...table, rows: [[true]] } },
     { name: "out-of-range row header column", block: { ...table, rowHeaderColumnIndex: 1 } },
   ])("drops table blocks with $name instead of repairing their data", ({ block }) => {
     expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();

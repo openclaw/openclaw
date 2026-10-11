@@ -17,8 +17,6 @@ describe("sanitizeEnvVars", () => {
       ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-api-live-xxx", // pragma: allowlist secret
       FOO: "bar",
       GITHUB_TOKEN: "gh-token", // pragma: allowlist secret
-      MY_TOKEN: "abc",
-      MY_SECRET: "def",
     });
 
     expect(result.allowed).toEqual({
@@ -31,9 +29,18 @@ describe("sanitizeEnvVars", () => {
       "ANTHROPIC_ADMIN_KEY",
       "ANTHROPIC_ADMIN_API_KEY",
       "GITHUB_TOKEN",
-      "MY_TOKEN",
-      "MY_SECRET",
     ]);
+  });
+
+  it("blocks credentials even when suffix pattern matches", () => {
+    const result = sanitizeEnvVars({
+      MY_TOKEN: "abc",
+      MY_SECRET: "def",
+      USER: "alice",
+    });
+
+    expect(result.allowed).toEqual({ USER: "alice" });
+    expect(result.blocked).toStrictEqual(["MY_TOKEN", "MY_SECRET"]);
   });
 
   it("adds warnings for suspicious values", () => {
@@ -71,6 +78,25 @@ describe("sanitizeEnvVars", () => {
     });
 
     expect(result.allowed).toEqual({ NODE_ENV: "test" });
+    expect(result.blocked).toStrictEqual([]);
+  });
+
+  it("allows explicit configured sandbox env names that look like credentials", () => {
+    // Explicit sandbox env config is operator intent; value validation still
+    // runs, but name-based credential blocking does not.
+    const result = sanitizeExplicitSandboxEnvVars({
+      GEMINI_API_KEY: "dummy-gemini-api-key",
+      GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+      HIMALAYA_PASSWORD: "dummy-himalaya-password",
+      RESEND_API_KEY: "dummy-resend-api-key",
+    });
+
+    expect(result.allowed).toEqual({
+      GEMINI_API_KEY: "dummy-gemini-api-key",
+      GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+      HIMALAYA_PASSWORD: "dummy-himalaya-password",
+      RESEND_API_KEY: "dummy-resend-api-key",
+    });
     expect(result.blocked).toStrictEqual([]);
   });
 

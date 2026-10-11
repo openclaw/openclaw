@@ -3,7 +3,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { pruneDockerPluginDist } from "../../scripts/prune-docker-plugin-dist.mjs";
+import {
+  parseDockerPluginKeepList,
+  pruneDockerPluginDist,
+} from "../../scripts/prune-docker-plugin-dist.mjs";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
@@ -48,6 +51,14 @@ afterEach(() => {
 });
 
 describe("pruneDockerPluginDist", () => {
+  it("parses space and comma separated Docker plugin keep lists", () => {
+    expect([...parseDockerPluginKeepList("diagnostics-otel feishu,discord")]).toEqual([
+      "diagnostics-otel",
+      "feishu",
+      "discord",
+    ]);
+  });
+
   it("removes package-excluded plugin runtime artifacts unless Docker explicitly opts it in", () => {
     const repoRoot = makeRepoRoot("openclaw-docker-plugin-dist-");
     writeJsonFile(path.join(repoRoot, "package.json"), {

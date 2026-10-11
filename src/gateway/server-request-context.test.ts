@@ -33,7 +33,7 @@ import {
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import type { GatewayRequestHandler } from "./server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import {
   makeContextParams,
@@ -258,6 +258,16 @@ describe("createGatewayRequestContext", () => {
     });
   });
 
+  it("reuses the canonical connection liveness predicate", () => {
+    const isConnectionActive = vi.fn(() => true);
+    const params = makeContextParams();
+    Object.assign(params.runtime, { isConnectionActive });
+
+    const context = createGatewayRequestContext(params);
+
+    expect(context.isConnectionActive).toBe(isConnectionActive);
+  });
+
   it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
     const order: string[] = [];
     const unsubscribeAllSessionEvents = vi.fn(() => order.push("session-events"));
@@ -285,6 +295,28 @@ describe("createGatewayRequestContext", () => {
     expect(unsubscribePullRequests).toHaveBeenCalledWith("conn-control-ui");
     expect(unsubscribeViewerPresence).toHaveBeenCalledWith("conn-control-ui");
     expect(order).toEqual(["session-events", "messages", "observer", "pull-requests", "presence"]);
+  });
+
+  it("reads the portal service after its transport becomes available", () => {
+    let portalService: GatewayRequestContext["portalService"];
+    const params = makeContextParams();
+    params.runtime.transportBridge.getPortalService = () => portalService;
+    const context = createGatewayRequestContext(params);
+
+    expect(context.portalService).toBeUndefined();
+    portalService = {
+      open: vi.fn(async () => {
+        throw new Error("unused");
+      }),
+      list: vi.fn(() => []),
+      listWorkerPortals: vi.fn(() => []),
+      close: vi.fn(async () => {}),
+      closeWorkerPortals: vi.fn(async () => {}),
+      closeAll: vi.fn(async () => {}),
+    };
+    expect(context.portalService).toBe(portalService);
+    portalService = undefined;
+    expect(context.portalService).toBeUndefined();
   });
 
   it("reads cron state live from runtime state", () => {
@@ -335,6 +367,25 @@ describe("createGatewayRequestContext", () => {
 
     params.runtime.lifecycle.closePreludeStarted = true;
     expect(context.getDeferredChannelReloads?.()).toEqual([]);
+  });
+
+  it("publishes worker services through the kernel bridge", () => {
+    const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const repositoryWorkspaceMutationService = { mutate: vi.fn() };
+    const context = createGatewayRequestContext(
+      makeContextParams({
+        workerPlacementRuntime: {
+          diskSpace: workerPlacementDiskSpaceReader,
+          runnerAvailability: undefined,
+          repositoryWorkspaceMutationService,
+        },
+      }),
+    );
+
+    expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
+    expect(context.workerRepositoryWorkspaceMutationService).toBe(
+      repositoryWorkspaceMutationService,
+    );
   });
 
   it("does not treat scoped CLI or backend callers as approval delivery routes", () => {

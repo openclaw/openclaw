@@ -1,6 +1,10 @@
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -105,6 +109,19 @@ describe("opencode provider plugin", () => {
     vi.restoreAllMocks();
   });
 
+  it("registers only the Zen auth choice from its own provider manifest", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.id).toBe("opencode");
+    expect(provider.envVars).toEqual(["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["opencode-zen"]);
+    expect(provider.auth[0]?.wizard).toMatchObject({
+      choiceLabel: "OpenCode Zen catalog",
+      groupId: "opencode",
+      groupHint: "Shared API key infrastructure for Zen + Go",
+    });
+  });
+
   it("classifies client-restricted free models without cooling down valid credentials", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     for (const error of [
@@ -131,6 +148,34 @@ describe("opencode provider plugin", () => {
         errorMessage: "Insufficient account funds",
       }),
     ).toBeUndefined();
+  });
+
+  it("registers image media understanding through the OpenCode plugin", async () => {
+    const { mediaProviders } = await registerProviderPlugin({
+      plugin,
+      id: "opencode",
+      name: "OpenCode Zen Provider",
+    });
+    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
+
+    expect(mediaProvider?.capabilities).toEqual(["image"]);
+    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(typeof mediaProvider?.describeImage).toBe("function");
+    expect(typeof mediaProvider?.describeImages).toBe("function");
+  });
+
+  it("owns Gemini-only passthrough replay policy", async () => {
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "opencode",
+      modelId: "gemini-2.5-pro",
+      sanitizeThoughtSignatures: true,
+    });
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "opencode",
+      modelId: "claude-opus-4.6",
+    });
   });
 
   it("keeps the offline manifest seed resolvable without downloading metadata", async () => {
@@ -301,6 +346,7 @@ describe("opencode provider plugin", () => {
   });
 
   it.each([
+    { authProvider: "opencode", apiKey: NON_ENV_SECRETREF_MARKER },
     { authProvider: "opencode-go", apiKey: NON_ENV_SECRETREF_MARKER },
     { authProvider: "opencode", apiKey: undefined },
   ])("keeps $authProvider catalog credentials and profile together ($apiKey)", async (fixture) => {
@@ -541,57 +587,110 @@ describe("opencode provider plugin", () => {
     ]);
   });
 
-  it.each([[["gpt-5.6-sol"], undefined]])(
-    "selects only the advertised preferred onboarding model %#",
-    async (modelIds, expected) => {
-      const fetchGuard = vi.fn(async () =>
-        guardedResponse(MODELS_URL, {
-          data: modelIds.map((id) => ({ id, object: "model" })),
-        }),
-      );
+  it("reports failed discovery instead of returning the offline seed", async () => {
+    const fetchGuard = vi.fn(async () => {
+      throw new Error("network unavailable");
+    });
+    await expect(
+      buildOpencodeZenLiveProviderConfig({
+        apiKey: "runtime-key",
+        discoveryApiKey: "discovery-key",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("network unavailable");
+  });
 
-      await expect(
-        resolveOpencodeZenStarterModel({
-          apiKey: "resolved-opencode-key",
-          preferredModelRef: "opencode/claude-opus-5",
-          fetchGuard,
-        }),
-      ).resolves.toBe(expected);
-    },
-  );
-
-  it.each([["off", undefined]] as const)(
-    "keeps Kimi K3 reasoning %s exact",
-    async (thinkingLevel, expectedEffort) => {
+  it.each(["failed", "filtered"] as const)(
+    "keeps refreshed metadata separate from %s model advertising",
+    async (advertising) => {
+      const retiredId = "big-pickle";
       const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
-      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload: Record<string, unknown> = { model: "kimi-k3", reasoning_effort: "max" };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
-        return {} as never;
-      };
-      const streamFn = provider.wrapStreamFn?.({
-        streamFn: baseStreamFn as never,
-        providerId: "opencode",
-        modelId: "kimi-k3",
-        thinkingLevel,
-      } as never);
+      const fetchGuard = createCatalogFetchGuard({
+        metadata: [{ id: retiredId, status: "deprecated" }],
+        advertised: () => {
+          if (advertising === "failed") {
+            throw new Error("model advertising unavailable");
+          }
+          return [retiredId];
+        },
+      });
 
-      await streamFn?.(
-        { provider: "opencode", id: "kimi-k3", api: "openai-completions" } as never,
-        {} as never,
-        {},
-      );
-      expect(capturedPayloads).toEqual([
-        expectedEffort === undefined
-          ? { model: "kimi-k3" }
-          : { model: "kimi-k3", reasoning_effort: expectedEffort },
-      ]);
+      try {
+        expectSeedModels((await buildOpencodeZenLiveProviderConfig()).models);
+        const discovery = buildOpencodeZenLiveProviderConfig({
+          apiKey: "runtime-key",
+          discoveryApiKey: "discovery-key",
+          fetchGuard,
+        });
+
+        if (advertising === "failed") {
+          await expect(discovery).rejects.toThrow("model advertising unavailable");
+        } else {
+          await expect(discovery).resolves.toMatchObject({ models: [] });
+        }
+        expect(provider.resolveDynamicModel?.({ modelId: retiredId } as never)).toMatchObject({
+          id: retiredId,
+        });
+      } finally {
+        clearLiveCatalogCacheForTests();
+        await prepareOpencodeZenModel({
+          modelId: retiredId,
+          fetchGuard: createCatalogFetchGuard({ metadata: [], advertised: [] }),
+        });
+        clearLiveCatalogCacheForTests();
+      }
     },
   );
+
+  it.each([
+    [["claude-opus-5"], "opencode/claude-opus-5"],
+    [["gpt-5.6-sol"], undefined],
+  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
+    const fetchGuard = vi.fn(async () =>
+      guardedResponse(MODELS_URL, {
+        data: modelIds.map((id) => ({ id, object: "model" })),
+      }),
+    );
+
+    await expect(
+      resolveOpencodeZenStarterModel({
+        apiKey: "resolved-opencode-key",
+        preferredModelRef: "opencode/claude-opus-5",
+        fetchGuard,
+      }),
+    ).resolves.toBe(expected);
+  });
+
+  it.each([
+    ["off", undefined],
+    ["max", "max"],
+  ] as const)("keeps Kimi K3 reasoning %s exact", async (thinkingLevel, expectedEffort) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload: Record<string, unknown> = { model: "kimi-k3", reasoning_effort: "max" };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode",
+      modelId: "kimi-k3",
+      thinkingLevel,
+    } as never);
+
+    await streamFn?.(
+      { provider: "opencode", id: "kimi-k3", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayloads).toEqual([
+      expectedEffort === undefined
+        ? { model: "kimi-k3" }
+        : { model: "kimi-k3", reasoning_effort: expectedEffort },
+    ]);
+  });
 
   it("canonicalizes stale OpenCode Zen base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

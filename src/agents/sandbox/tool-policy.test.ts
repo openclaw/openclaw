@@ -49,7 +49,58 @@ function formatSandboxToolPolicyBlockedMessage(
 }
 
 describe("sandbox/tool-policy", () => {
-  it.each([["image*"]] as const)(
+  it("merges sandbox alsoAllow into the default sandbox allowlist", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+        entries: {
+          tavern: {
+            tools: {
+              sandbox: {
+                tools: {
+                  alsoAllow: ["message", "tts"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "tavern");
+    expect(resolved.allow).toContain("message");
+    expect(resolved.allow).toContain("tts");
+    expect(resolved.sources.allow).toEqual({
+      source: "agent",
+      key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
+    });
+  });
+
+  it("lets explicit sandbox allow remove entries from the default sandbox denylist", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            allow: ["browser"],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
+    expect(resolved.allow).toContain("browser");
+    expect(resolved.deny).not.toContain("browser");
+    expect(isToolAllowed(resolved, "browser")).toBe(true);
+  });
+
+  it.each([["image"], ["image*"]] as const)(
     "keeps legacy %s denies fail-closed for view_image until Doctor migrates them",
     (legacyDeny) => {
       const cfg: OpenClawConfig = {
@@ -249,6 +300,30 @@ describe("sandbox/tool-policy", () => {
     expect(runtime.toolPolicy.deny).toContain("sessions_list");
   });
 
+  it("recognizes the classification agent's main session in non-main mode", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: { sandbox: { mode: "non-main", scope: "agent" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const runtime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      classificationSessionKey: "agent:worker:main",
+      classificationAgentId: "worker",
+    });
+
+    expect(runtime.agentId).toBe("main");
+    expect(runtime.classificationAgentId).toBe("worker");
+    expect(runtime.sandboxed).toBe(false);
+  });
+
   it.each([
     { classificationSessionKey: "agent:worker:main", classificationAgentId: "main" },
     { classificationSessionKey: "global", classificationAgentId: undefined },
@@ -273,7 +348,7 @@ describe("sandbox/tool-policy", () => {
     },
   );
 
-  it.each(["agent:work:telegram:default:direct:42"])(
+  it.each(["agent:work:telegram:default:direct:42", "global"])(
     "keeps %s ownership as the sandbox classification when none is supplied",
     (sessionKey) => {
       const cfg = {
@@ -405,6 +480,16 @@ describe("sandbox/tool-policy", () => {
   });
 
   it.each([
+    {
+      boundary: "prefix",
+      sessionKey: `abcde\u{1f600}middle123456`,
+      expectedLabel: "abcde…123456",
+    },
+    {
+      boundary: "suffix",
+      sessionKey: `abcdefmiddle\u{1f600}12345`,
+      expectedLabel: "abcdef…12345",
+    },
     {
       boundary: "both",
       sessionKey: `abcde\u{1f600}middle\u{1f600}12345`,

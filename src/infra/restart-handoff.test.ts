@@ -222,6 +222,19 @@ describe("gateway restart handoff", () => {
     }
   });
 
+  it("keeps truncated restart reasons free of lone surrogates", async () => {
+    const env = createHandoffEnv();
+    const handoff = await expectWrittenHandoff({
+      env,
+      pid: 1,
+      reason: `${"a".repeat(199)}😀tail`,
+    });
+
+    expect(handoff.reason).toHaveLength(199);
+    expect(Buffer.from(handoff.reason ?? "").toString()).toBe(handoff.reason);
+    expect(readGatewayRestartHandoffSync(env)?.reason).toBe(handoff.reason);
+  });
+
   it("formats a concise, single-line diagnostic", () => {
     expect(
       formatGatewayRestartHandoffDiagnostic(
@@ -242,6 +255,21 @@ describe("gateway restart handoff", () => {
     ).toBe(
       "Recent restart handoff: full-process via external; source=operator-restart; reason=ok Fake: bad; pid=12345; age=2s; expiresIn=57s",
     );
+  });
+
+  it("keeps persisted intent IDs free of lone surrogates", () => {
+    const env = createHandoffEnv();
+    const expectedIntentId = "a".repeat(119);
+    insertHandoffRow(env, {
+      intentId: ` ${expectedIntentId}😀tail `,
+      createdAt: 1_000,
+      expiresAt: 61_000,
+    });
+
+    const handoff = readGatewayRestartHandoffSync(env, 1_500);
+
+    expect(handoff?.intentId).toBe(expectedIntentId);
+    expect(Buffer.from(handoff?.intentId ?? "").toString()).toBe(handoff?.intentId);
   });
 
   it("canonicalizes fractional restart trace timing before persistence", async () => {
@@ -281,6 +309,37 @@ describe("gateway restart handoff", () => {
       last_type: "integer",
       restart_trace_last_at: 10_250,
     });
+  });
+
+  it("keeps restart trace timing for slow but valid drains", async () => {
+    const env = createHandoffEnv();
+
+    const handoff = await expectWrittenHandoff({
+      env,
+      supervisorMode: "launchd",
+      createdAt: 1_000,
+      restartTrace: {
+        startedAt: 10_000,
+        lastAt: 310_000,
+      },
+    });
+
+    expect(handoff.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 310_000,
+    });
+    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 310_000,
+    });
+  });
+
+  it("rejects malformed handoff payloads", () => {
+    const env = createHandoffEnv();
+
+    insertHandoffRow(env, { intentId: "bad", source: "bad-source" });
+
+    expect(readGatewayRestartHandoffSync(env, 1_001)).toBeNull();
   });
 
   it("rejects expired handoff rows", async () => {
@@ -327,6 +386,37 @@ describe("gateway restart handoff", () => {
     });
     expect(readGatewayRestartHandoffSync(env)?.pid).toBe(67_890);
     expect(fs.existsSync(legacyHandoffPath(env))).toBe(false);
+  });
+
+  it("atomically accepts and removes a matching handoff", async () => {
+    const env = createHandoffEnv();
+    const handoff = await expectWrittenHandoff({
+      env,
+      reason: "gateway.restart",
+      createdAt: 1_000,
+    });
+
+    expect(
+      consumeGatewayRestartHandoffSync({
+        env,
+        expectedPid: 12_345,
+        now: 1_500,
+      }),
+    ).toStrictEqual({
+      status: "accepted",
+      handoff,
+    });
+    expect(readHandoffRow(env)).toBeUndefined();
+    expect(
+      consumeGatewayRestartHandoffSync({
+        env,
+        expectedPid: 12_345,
+        now: 1_500,
+      }),
+    ).toStrictEqual({
+      status: "none",
+      reason: "missing",
+    });
   });
 
   it("retains a PID-mismatched handoff for the matching consumer", async () => {

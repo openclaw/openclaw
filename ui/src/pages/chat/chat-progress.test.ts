@@ -13,7 +13,7 @@ describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
   afterEach(() => resetWorkingProgress());
 
-  it.each(["waiting-idle"] as const)(
+  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
     "does not let an older %s send identify an unknown active turn",
     (sendState) => {
       expect(
@@ -39,6 +39,40 @@ describe("resolveWorkingProgress", () => {
     },
   );
 
+  it("uses only the matching reconnect send when restoring an active turn", () => {
+    const queue = ["other-run", "active-run"].map((sendRunId, index) => ({
+      id: sendRunId,
+      text: "Reconnect send",
+      createdAt: (index + 1) * 1_000,
+      sendRunId,
+      sendState: "waiting-reconnect" as const,
+      sendAttempts: 1,
+    }));
+    expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+      runId: "active-run",
+      startedAt: 2_000,
+    });
+  });
+
+  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+    "retains matching durable timing from a %s send after the run is identified",
+    (sendState) => {
+      const queue = ["old-run", "active-run"].map((sendRunId, index) => ({
+        id: sendRunId,
+        text: "Retained attempted send",
+        createdAt: (index + 1) * 1_000,
+        sendRunId,
+        sendState,
+        sendAttempts: 1,
+        sendError: "Review required",
+      }));
+      expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+        runId: "active-run",
+        startedAt: 2_000,
+      });
+    },
+  );
+
   it("keeps a submitted turn's identity and timing across a delayed foreign preamble", () => {
     const queue = [
       {
@@ -57,7 +91,15 @@ describe("resolveWorkingProgress", () => {
     expect(submitted).toMatchObject({ runId: "new-run", startedAt: 60_000 });
   });
 
-  it.each([undefined])(
+  it("preserves anonymous progress when the same turn gains an identity", () => {
+    const anonymous = resolveWorkingProgress(SESSION, null, null, [], [{ ts: 1_000 }], []);
+    expect(resolveWorkingProgress(SESSION, "active-run", 2_000, [], [{ ts: 1_000 }], [])).toEqual({
+      ...anonymous,
+      runId: "active-run",
+    });
+  });
+
+  it.each(["other-run", undefined])(
     "ignores stream and tool timing without matching ownership (%s)",
     (runId) => {
       expect(
@@ -78,6 +120,28 @@ describe("resolveWorkingProgress", () => {
       ).toMatchObject({ runId: "active-run", startedAt: 2_000 });
     },
   );
+
+  it("prefers observed stream identity over a future queued send", () => {
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        1_000,
+        [
+          {
+            id: "future-send",
+            text: "Run next",
+            createdAt: 500,
+            sendRunId: "future-run",
+            sendState: "waiting-reconnect",
+            sendAttempts: 1,
+          },
+        ],
+        [{ ts: 1_000, runId: "active-run" }],
+        [],
+      ),
+    ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
+  });
 });
 
 describe("resolveTurnRecap", () => {
@@ -92,6 +156,18 @@ describe("resolveTurnRecap", () => {
 
   beforeEach(() => {
     host = { turnRecapWatch: null };
+  });
+
+  it("matches the watched run instead of inferring identity from session-row values", () => {
+    expect(watch()).toBeNull();
+    expect(
+      resolve({ row: { ...doneRow, lastRunId: "previous-run" }, usageByRun: usage(690) }),
+    ).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual({
+      runId,
+      runtimeMs: 14_000,
+      outputTokens: 690,
+    });
   });
 
   it("reconciles usage arriving after the first completed recap", () => {
@@ -129,6 +205,18 @@ describe("resolveTurnRecap", () => {
     ).toEqual(recap);
   });
 
+  it("waits for runtime data without borrowing another run's count", () => {
+    watch();
+    expect(
+      resolve({ row: { lastRunId: runId, status: "done" }, usageByRun: usage(900, "foreign-run") }),
+    ).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(900, "foreign-run") })).toEqual({
+      runId,
+      runtimeMs: 14_000,
+      outputTokens: null,
+    });
+  });
+
   it("reports equal counts on consecutive runs and preserves a known zero", () => {
     watch();
     expect(resolve({ row: doneRow, usageByRun: usage(0) })?.outputTokens).toBe(0);
@@ -156,6 +244,15 @@ describe("resolveTurnRecap", () => {
         outputTokens: 4_356,
       });
     });
+
+    it("never reports a partial token total, or less time than its last run", () => {
+      resolve({ indicator: resumed });
+      expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual({
+        runId,
+        runtimeMs: 14_000,
+        outputTokens: null,
+      });
+    });
   });
 
   it("stays quiet for a watched failed run", () => {
@@ -169,6 +266,12 @@ describe("resolveTurnRecap", () => {
     ).toBeNull();
   });
 
+  it("never invents a watch from history or an unidentified queued indicator", () => {
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
+    expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
+  });
+
   it("clears the previous recap when a new queued turn has no run identity yet", () => {
     watch();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).not.toBeNull();
@@ -176,17 +279,33 @@ describe("resolveTurnRecap", () => {
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
   });
 
-  it("invalidates a settled global recap when its gateway changes", () => {
-    const params = {
-      sessionKey: "global",
-      agentId: "first",
-      gatewayClient: createTestGatewayClient(() => null),
-      usageByRun: usage(695),
-    };
-    resolveTurnRecap(host, { ...params, indicator: { runId } });
-    expect(resolveTurnRecap(host, { ...params, row: doneRow })).not.toBeNull();
-    const replacement = { ...params, gatewayClient: createTestGatewayClient(() => null) };
-    expect(resolveTurnRecap(host, { ...replacement, row: doneRow })).toBeNull();
-    expect(resolveTurnRecap(host, { ...params, row: doneRow })).toBeNull();
+  it.each(["agent", "gateway"])(
+    "invalidates a settled global recap when its %s changes",
+    (owner) => {
+      const params = {
+        sessionKey: "global",
+        agentId: "first",
+        gatewayClient: createTestGatewayClient(() => null),
+        usageByRun: usage(695),
+      };
+      resolveTurnRecap(host, { ...params, indicator: { runId } });
+      expect(resolveTurnRecap(host, { ...params, row: doneRow })).not.toBeNull();
+      const replacement =
+        owner === "agent"
+          ? { ...params, agentId: "second" }
+          : { ...params, gatewayClient: createTestGatewayClient(() => null) };
+      expect(resolveTurnRecap(host, { ...replacement, row: doneRow })).toBeNull();
+      expect(resolveTurnRecap(host, { ...params, row: doneRow })).toBeNull();
+    },
+  );
+
+  it("isolates watches by pane and resets them on session changes", () => {
+    const other = { turnRecapWatch: null };
+    watch();
+    const params = { sessionKey: SESSION, row: doneRow, usageByRun: usage(695) };
+    expect(resolveTurnRecap(other, params)).toBeNull();
+    expect(resolveTurnRecap(host, params)).not.toBeNull();
+    expect(resolveTurnRecap(host, { ...params, sessionKey: "other-session" })).toBeNull();
+    expect(resolveTurnRecap(host, params)).toBeNull();
   });
 });

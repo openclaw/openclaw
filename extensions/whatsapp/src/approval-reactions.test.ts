@@ -97,7 +97,36 @@ describe("WhatsApp approval reactions", () => {
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
-  it.each([undefined] as const)(
+  it("registers reaction state when only allow-always is available", async () => {
+    expect(
+      await registerWhatsAppApprovalReactionTarget({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "msg-allow-always",
+        approvalId: "exec-allow-always",
+        approvalKind: "exec",
+        allowedDecisions: ["allow-always"],
+      }),
+    ).toEqual({
+      approvalId: "exec-allow-always",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-always"],
+    });
+    await expect(
+      resolveWhatsAppApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "msg-allow-always",
+        reactionKey: "♾",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-allow-always",
+      approvalKind: "exec",
+      decision: "allow-always",
+    });
+  });
+
+  it.each([undefined, "invalid"] as const)(
     "rejects reaction targets without a valid explicit approval kind: %s",
     async (approvalKind) => {
       expect(
@@ -113,6 +142,30 @@ describe("WhatsApp approval reactions", () => {
       ).toBeNull();
     },
   );
+
+  it("resolves a registered reaction target", async () => {
+    await registerWhatsAppApprovalReactionTarget({
+      accountId: "default",
+      remoteJid: "15551230000@s.whatsapp.net",
+      messageId: "msg-1",
+      approvalId: "exec-1",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    await expect(
+      resolveWhatsAppApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "msg-1",
+        reactionKey: "👎",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-1",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+  });
 
   it("rejects persisted targets containing an invalid approval decision", async () => {
     const runtime = vi.spyOn(whatsappRuntime, "getOptionalWhatsAppRuntime").mockReturnValue({
@@ -147,7 +200,7 @@ describe("WhatsApp approval reactions", () => {
     }
   });
 
-  it.each(["system-agent"] as const)(
+  it.each(["plugin", "system-agent"] as const)(
     "authorizes %s group reactions using the participant, not the group chat",
     async (approvalKind) => {
       await registerWhatsAppApprovalReactionTarget({
@@ -156,7 +209,10 @@ describe("WhatsApp approval reactions", () => {
         messageId: "approval-message",
         approvalId: "plugin:abc",
         approvalKind,
-        allowedDecisions: ["allow-once", "deny"],
+        allowedDecisions:
+          approvalKind === "plugin"
+            ? ["allow-once", "allow-always", "deny"]
+            : ["allow-once", "deny"],
       });
 
       const cfg = approvalConfig(["+15551230000"]);
@@ -272,11 +328,37 @@ describe("WhatsApp approval reactions", () => {
       reactionRemoteJid: "276853659042038@lid",
       actorId: "+15551230001",
     },
+    {
+      name: "stored LID target from PN event",
+      storedRemoteJid: "276853659042038@lid",
+      eventRemoteJid: "15551230001@s.whatsapp.net",
+      actorId: "+15551230001",
+      lidForPn: "276853659042038@lid",
+    },
+    {
+      name: "stored PN target from LID event",
+      storedRemoteJid: "15551230001@s.whatsapp.net",
+      eventRemoteJid: "276853659042038@lid",
+      actorId: "+15551230001",
+      pnForLid: "15551230001:0@s.whatsapp.net",
+    },
+    {
+      name: "stored PN target from device-qualified PN event",
+      storedRemoteJid: "15551230001@s.whatsapp.net",
+      eventRemoteJid: "15551230001:0@s.whatsapp.net",
+      actorId: "+15551230001",
+    },
+    {
+      name: "stored LID target from device-qualified LID event",
+      storedRemoteJid: "276853659042038@lid",
+      eventRemoteJid: "276853659042038:1@lid",
+      actorId: "+15551230001",
+    },
   ])("resolves direct approval reactions across PN/LID target drift: $name", async (testCase) => {
     await registerExecApprovalTarget({ remoteJid: testCase.storedRemoteJid });
     const lidLookup: LidLookup = {
-      getLIDForPN: vi.fn().mockResolvedValue(null),
-      getPNForLID: vi.fn().mockResolvedValue(null),
+      getLIDForPN: vi.fn().mockResolvedValue(testCase.lidForPn ?? null),
+      getPNForLID: vi.fn().mockResolvedValue(testCase.pnForLid ?? null),
     };
 
     const handled = await maybeResolveWhatsAppApprovalReaction({
@@ -325,6 +407,38 @@ describe("WhatsApp approval reactions", () => {
 
     expect(handled).toBe(false);
     expect(resolverMocks.resolveWhatsAppApproval).not.toHaveBeenCalled();
+  });
+
+  it("unregisters the matched target candidate when an approval expired", async () => {
+    await registerExecApprovalTarget({
+      remoteJid: "15551230000@s.whatsapp.net",
+      approvalId: "exec-expired",
+    });
+    resolverMocks.resolveWhatsAppApproval.mockRejectedValueOnce(
+      new Error("unknown or expired approval id"),
+    );
+    resolverMocks.isApprovalNotFoundError.mockReturnValue(true);
+
+    const handled = await maybeResolveWhatsAppApprovalReaction({
+      cfg: approvalConfig(["+15551230000"]),
+      accountId: "default",
+      msg: buildReactionMessage({ remoteJid: "276853659042038@lid" }),
+      resolveInboundJid: async () => "+15551230000",
+      resolveReactionTargetJids: async (jid) =>
+        resolveEquivalentWhatsAppDirectChatJids(jid, {
+          lidLookup: { getPNForLID: vi.fn().mockResolvedValue("15551230000@s.whatsapp.net") },
+        }),
+    });
+
+    expect(handled).toBe(true);
+    await expect(
+      resolveWhatsAppApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "approval-message",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("retains the target and propagates transient failures for durable replay", async () => {
