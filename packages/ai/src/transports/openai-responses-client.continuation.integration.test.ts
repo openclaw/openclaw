@@ -1,6 +1,9 @@
-import type { Context, Tool } from "@openclaw/llm-core";
+import type { Context, StreamOptions, Tool } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { OPENAI_DEFAULT_MODEL } from "../../../../extensions/openai/default-models.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
   createResponsesLoopbackServer,
   responsesLoopbackModel,
@@ -57,6 +60,69 @@ function responseEvents(first: boolean, responseId = first ? "resp_number" : "re
     },
   ];
 }
+
+it("preserves reasoning controls in concurrent same-session SSE requests", async () => {
+  const server = await createResponsesLoopbackServer((turn) =>
+    responseEvents(false, `resp_${turn}`),
+  );
+  const accepted = createDeferred();
+  const release = createDeferred();
+  const run = async (
+    messages: Context["messages"],
+    reasoningEffort: "low" | "medium" | "high",
+    onResponse?: StreamOptions["onResponse"],
+  ) => {
+    const options: OpenAIResponsesOptions = {
+      apiKey: "synthetic-continuation-key",
+      sessionId: "parallel-reasoning",
+      transport: "sse",
+      reasoningEffort,
+      onResponse,
+    };
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      { ...responsesLoopbackModel, id: OPENAI_DEFAULT_MODEL.split("/")[1], reasoning: true },
+      { messages },
+      options,
+    );
+    return stream.result();
+  };
+  let active: ReturnType<typeof run> | undefined;
+  try {
+    const messages: Context["messages"] = [{ role: "user", content: "First.", timestamp: 1 }];
+    messages.push(await run(messages, "low"), { role: "user", content: "Second.", timestamp: 2 });
+    messages.push(await run(messages, "high"), { role: "user", content: "Third.", timestamp: 3 });
+    expect(server.requests[1]?.input).toContainEqual({
+      type: "configuration_update",
+      reasoning: { effort: "high" },
+    });
+    active = run(messages, "medium", async () => {
+      accepted.resolve();
+      await release.promise;
+    });
+    await awaitGateBeforeSettlement(accepted.promise, active, "Expected active HTTP request");
+    const concurrent = await run(messages, "medium");
+    release.resolve();
+    expect((await active).stopReason).toBe("stop");
+    expect(concurrent.stopReason).toBe("stop");
+    expect(server.requests).toHaveLength(4);
+    expect(server.requests[3]).not.toHaveProperty("previous_response_id");
+    expect(server.requests[3]).toMatchObject({ reasoning: { effort: "low" } });
+    expect(server.requests[3]?.input).toEqual(server.requests[2]?.input);
+    expect(server.requests[3]?.input).toEqual([
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "high" } },
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "medium" } },
+      expect.objectContaining({ role: "user" }),
+    ]);
+  } finally {
+    release.resolve();
+    await active;
+    await server.close();
+  }
+});
 
 it.each([
   ["sse", "none"],

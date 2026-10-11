@@ -321,19 +321,18 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           (params.store === true || supportsResponsesReasoningUpdate(params)) &&
           !params.previous_response_id
         ) {
+          const restoreRequest = () =>
+            restoreResponsesReasoningState(context, model, responsesOptions, params);
           continuationClaim = claimOpenAIResponsesHttpContinuation({
             sessionId,
             apiKey,
             baseUrl: model.baseUrl,
             headers: httpHeaders,
             request: params as ResponsesContinuationRequest,
-            restoreRequest: () =>
-              restoreResponsesReasoningState(context, model, responsesOptions, params),
+            restoreRequest,
           });
-          if (continuationClaim) {
-            // SAFETY: The owner preserves the request; SDK inputs predate configuration_update.
-            params = continuationClaim.fullRequest as typeof params;
-          }
+          // Persisted effort controls still apply when another request owns the cache.
+          params = (continuationClaim?.fullRequest ?? restoreRequest()) as typeof params;
         }
         const observePrompt = createResponsesPromptEgressObserver(
           responsesOptions,
