@@ -29,6 +29,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
+import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -229,9 +230,6 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .limit(1),
     );
     const headerBytes = header?.serialized_bytes ?? 0;
-    if (headerBytes > maxBytes) {
-      throw new RangeError("Session transcript header exceeds the active-context byte limit");
-    }
     // Explicit reset retention wins over ordinary exclusion. The window owner
     // selects paired entries; only its newest candidates can fit this bounded read.
     const retained =
@@ -270,17 +268,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     );
-    const selectedRows: { event_seq: number; active_position: number }[] = [];
-    let serializedBytes = headerBytes;
-    let truncated = false;
-    for (const row of metadata) {
-      if (selectedRows.length >= maxEvents || serializedBytes + row.serialized_bytes > maxBytes) {
-        truncated = true;
-        break;
-      }
-      selectedRows.push(row);
-      serializedBytes += row.serialized_bytes;
-    }
+    const selection = selectBoundedContextRows(metadata, headerBytes, { maxBytes, maxEvents });
+    const { selectedRows } = selection;
+    let { serializedBytes, truncated } = selection;
     const selectedSequences = selectedRows.map((row) => row.event_seq);
     let boundary = executeSqliteQueryTakeFirstSync(
       projection.database.db,

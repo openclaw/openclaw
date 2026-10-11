@@ -72,7 +72,6 @@ export function canonicalMemoryRouteLocation(
   params.delete("tab");
   if (hadLegacySection) {
     params.delete("section");
-    params.delete("advanced");
   }
   const search = params.toString();
   const canonical: RouteLocation = {

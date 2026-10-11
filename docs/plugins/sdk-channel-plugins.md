@@ -386,6 +386,10 @@ a canonical URL alone is not proof of anonymous access.
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
+      `hasReplyPayloadFinalDeliveryCapture(payload)` from the same subpath identifies
+      replies whose confirmed delivery the shared dispatcher will record. Channel
+      adapters must skip their own transcript mirror for those replies, including
+      fallback sends, while still reporting the delivery outcome normally.
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.

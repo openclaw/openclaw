@@ -130,17 +130,14 @@ suite.define(() => {
         let documentProbes = 0;
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
-        await page.route(
-          (url) => url.pathname.startsWith("/chat"),
-          async (route) => {
-            if (route.request().method() === "HEAD") {
-              documentProbes += 1;
-              await route.fulfill({ status: reachable ? 200 : 503, body: "" });
-            } else {
-              await route.continue();
-            }
-          },
-        );
+        await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
+          if (route.request().method() === "HEAD") {
+            documentProbes += 1;
+            await route.fulfill({ status: reachable ? 200 : 503, body: "" });
+          } else {
+            await route.continue();
+          }
+        });
         const fileEditorRequest = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/file-editor-view.ts",
         );

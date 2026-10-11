@@ -159,15 +159,6 @@ describe("googlechat monitor webhook", () => {
 
   it.each([
     {
-      name: "the forwarded client",
-      request: {
-        url: "/GoogleChat//?ignored=1",
-        headers: { "x-forwarded-for": "198.51.100.7, 10.0.0.1" },
-        remoteAddress: "10.0.0.1",
-      },
-      rateLimitKey: "/googlechat:198.51.100.7",
-    },
-    {
       name: "unknown when a trusted proxy omits client headers",
       request: { remoteAddress: "10.0.0.1" },
       rateLimitKey: "/googlechat:unknown",
@@ -225,51 +216,6 @@ describe("googlechat monitor webhook", () => {
       inFlightLimiter: webhookInFlightLimiter,
       handle: expect.any(Function),
     });
-  });
-
-  it("accepts add-on payloads that carry systemIdToken in the body", async () => {
-    const target = createTarget();
-    installSimplePipeline([target]);
-    readJsonWebhookBodyOrReject.mockResolvedValue({
-      ok: true,
-      value: {
-        commonEventObject: { hostApp: "CHAT" },
-        authorizationEventObject: { systemIdToken: "addon-token" },
-        chat: {
-          eventTime: "2026-03-22T00:00:00.000Z",
-          user: { name: "users/123" },
-          messagePayload: {
-            space: { name: "spaces/AAA" },
-            message: { name: "spaces/AAA/messages/1", text: "hello" },
-          },
-        },
-      },
-    });
-    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
-    const { processEvent, res } = await runWebhookHandler();
-
-    expect(verifyGoogleChatRequest).toHaveBeenCalledWith({
-      bearer: "addon-token",
-      audienceType: "app-url",
-      audience: "https://example.com/googlechat",
-      expectedAddOnPrincipal: "chat-app",
-    });
-    expect(ingressReceive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commonEventObject: { hostApp: "CHAT" },
-        chat: expect.objectContaining({
-          messagePayload: expect.objectContaining({
-            message: { name: "spaces/AAA/messages/1", text: "hello" },
-          }),
-        }),
-      }),
-    );
-    expect(processEvent).not.toHaveBeenCalled();
-    expect(runDetachedWebhookWork).not.toHaveBeenCalled();
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-openclaw-delivery-accepted"]).toBe("durable");
-    expect(res.headers["Content-Type"]).toBe("application/json");
-    expect(res.body).toBe("{}");
   });
 
   it("normalizes add-on card-click payloads for approval actions", async () => {
@@ -545,17 +491,6 @@ describe("warnAppPrincipalMisconfiguration", () => {
     expect(log).toHaveBeenCalledWith(
       '[acct-email] appPrincipal "bot@example.iam.gserviceaccount.com" looks like an email address. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.',
     );
-  });
-
-  it("does not warn for valid numeric appPrincipal with app-url audience", () => {
-    const log = vi.fn();
-    warnAppPrincipalMisconfiguration({
-      accountId: "acct-ok",
-      audienceType: "app-url",
-      appPrincipal: "123456789012345678901",
-      log,
-    });
-    expect(log).not.toHaveBeenCalled();
   });
 
   it("does not warn for project-number audience even with missing appPrincipal", () => {

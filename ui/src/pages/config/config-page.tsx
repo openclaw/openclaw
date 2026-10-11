@@ -54,11 +54,7 @@ import { TalkSettingsPage } from "./talk-page.tsx";
 import { UpdatesPage } from "./updates-page.tsx";
 import type { ConfigProps } from "./view-types.ts";
 import { Config } from "./view.tsx";
-export {
-  ConfigPageController,
-  configSelectionFromSearch,
-  extractQuickSettingsSecurity,
-} from "./config-page.ts";
+export { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
 export type { ConfigPageId } from "./config-sections.ts";
 
 function renderConfigPageSubtitle(pageId: ConfigPageId) {

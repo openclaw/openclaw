@@ -241,6 +241,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
   "src/gateway/session-row-projection.accepted-facts.test.ts",
+  "src/gateway/session-row-projection.actor.test.ts",
   "src/gateway/session-row-projection.archived.test.ts",
   "src/gateway/session-row-projection.entry-placement.test.ts",
   "src/gateway/session-row-projection.incognito-actor.test.ts",

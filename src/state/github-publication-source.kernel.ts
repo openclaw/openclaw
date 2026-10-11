@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
@@ -7,7 +8,9 @@ import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { parseSessionEntryJson } from "../config/sessions/session-accessor.sqlite-status.js";
 import { validateCanonicalSessionRowEntry } from "../config/sessions/session-canonical-row.js";
 import { listSessionMembersInDatabase } from "../config/sessions/session-sharing-store.kernel.js";
+import type { PersonalGitHubPublicationRow } from "../gateway/github-personal-publication-store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceFacts,
   GitHubPublicationSourceSelector,
@@ -163,4 +166,75 @@ export function readGitHubPublicationSourceFacts(
     facts.connection = projectUserGitHubConnectionAuthority(connection) ?? undefined;
   }
   return facts;
+}
+
+/** Equality is a source predicate, never a replacement for the requester's live capability. */
+export function assertGitHubPublicationSourceFacts(
+  sourceDb: DatabaseSync,
+  stateDb: DatabaseSync,
+  selector: GitHubPublicationSourceSelector,
+  expected: GitHubPublicationSourceFacts,
+): void {
+  if (!isDeepStrictEqual(readGitHubPublicationSourceFacts(sourceDb, stateDb, selector), expected)) {
+    throw new Error("GitHub publication source authority changed.");
+  }
+}
+
+export function assertGitHubPublicationWorktreeSource(
+  source: GitHubPublicationSourcePredicate,
+  worktree: { id: string; repoFingerprint: string; branch: string },
+): void {
+  const { entry, worktree: current, ownerWorktree } = source.expected;
+  if (
+    source.selector.worktreeId !== worktree.id ||
+    current?.id !== worktree.id ||
+    ownerWorktree?.id !== worktree.id ||
+    current.removedAt !== undefined ||
+    current.ownerKind !== "session" ||
+    current.ownerId !== source.selector.sessionKey ||
+    current.repoFingerprint !== worktree.repoFingerprint ||
+    current.branch !== worktree.branch ||
+    entry?.worktree?.id !== worktree.id ||
+    entry.worktree.branch !== current.branch ||
+    entry.worktree.repoRoot !== current.repoRoot
+  ) {
+    throw new Error("GitHub publication requested worktree changed.");
+  }
+}
+
+export function assertGitHubPublicationConnectionAdmissionSource(
+  source: GitHubPublicationSourcePredicate,
+  row: Pick<
+    PersonalGitHubPublicationRow,
+    | "owner_profile_id"
+    | "connection_generation"
+    | "identity_profile_id"
+    | "identity_account_id"
+    | "identity_source"
+  >,
+) {
+  const connection = source.expected.connection;
+  const selected = connection?.selection;
+  if (
+    source.selector.personalOwnerProfileId !== row.owner_profile_id ||
+    connection?.generation !== row.connection_generation ||
+    selected?.kind !== "connected" ||
+    row.identity_profile_id !== selected.profileId ||
+    row.identity_source !== "personal" ||
+    selected.accountId !== row.identity_account_id
+  ) {
+    throw new Error("GitHub publication requested connection changed.");
+  }
+  return selected;
+}
+
+export function assertGitHubPublicationConnectionSource(
+  source: GitHubPublicationSourcePredicate,
+  row: Parameters<typeof assertGitHubPublicationConnectionAdmissionSource>[1] &
+    Pick<PersonalGitHubPublicationRow, "identity_login">,
+): void {
+  const selected = assertGitHubPublicationConnectionAdmissionSource(source, row);
+  if (selected.login.toLowerCase() !== row.identity_login.toLowerCase()) {
+    throw new Error("GitHub publication requested connection changed.");
+  }
 }

@@ -27,7 +27,7 @@ import {
   mountConfigPage,
   publishConfigSource,
 } from "./config-page.test-support.ts";
-import { configSelectionFromSearch, type ConfigPageId } from "./config-page.tsx";
+import { configSelectionFromSearch, type ConfigPageId } from "./config-sections.ts";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import { pages } from "./route.ts";
 

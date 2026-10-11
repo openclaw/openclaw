@@ -177,7 +177,10 @@ describe("model resolution auth row snapshots", () => {
       const prepare = database.db.prepare.bind(database.db);
       let injected = false;
       const fault = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-        if (sql === 'select "value_json" from "config_machine_state" where "state_key" = ?') {
+        if (
+          sql ===
+          'select "state_key" as "target", "value_json" as "contents" from "config_machine_state" where "state_key" in (?, ?)'
+        ) {
           injected = true;
           throw Object.assign(new Error("database disk image is malformed"), {
             code: "ERR_SQLITE_ERROR",
