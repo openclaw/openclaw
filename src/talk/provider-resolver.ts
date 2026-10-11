@@ -57,7 +57,7 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   noRegisteredProviderMessage?: string;
 };
 
-export function resolveRealtimeVoiceProviderCapabilities(params: {
+function resolveRealtimeVoiceProviderCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   cfg?: OpenClawConfig;
@@ -87,7 +87,7 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   return capabilities || params.provider.capabilities;
 }
 
-export function isRealtimeVoiceProviderConfigured(params: {
+function isRealtimeVoiceProviderConfigured(params: {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;

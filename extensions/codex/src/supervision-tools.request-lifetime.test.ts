@@ -1,12 +1,21 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerAuthProfileIdAtEffect,
-} from "./app-server/auth-profile.js";
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
+
+const { resolveCodexAppServerAuthProfileIdForAgent, resolveCodexAppServerAuthProfileIdAtEffect } =
+  createCodexAuthProfileSelection({
+    ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
+    resolveAuthProfileOrder,
+  });
 
 const sharedClientMocks = vi.hoisted(() => ({
   createIsolatedCodexAppServerClient: vi.fn(),

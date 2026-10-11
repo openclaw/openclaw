@@ -130,7 +130,7 @@ export function isSameOAuthRefreshGeneration(params: {
 }
 
 /** The same secret-free generation identity for a credential and its durable fence. */
-export function readOAuthRefreshGenerationDigest(params: {
+function readOAuthRefreshGenerationDigest(params: {
   profileId: string;
   credential: OAuthCredential;
 }): string {

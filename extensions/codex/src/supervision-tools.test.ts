@@ -3,15 +3,24 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerAuthProfileIdAtEffect,
-} from "./app-server/auth-profile.js";
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
 
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
+
+const { resolveCodexAppServerAuthProfileIdForAgent, resolveCodexAppServerAuthProfileIdAtEffect } =
+  createCodexAuthProfileSelection({
+    ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
+    resolveAuthProfileOrder,
+  });
 
 function createTestSupervisionTools(
   options: Omit<
