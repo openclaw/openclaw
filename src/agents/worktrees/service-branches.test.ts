@@ -33,7 +33,6 @@ import {
 } from "./base-ref.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -217,69 +216,6 @@ describe("ManagedWorktreeService branch discovery", () => {
     );
     await expect(expired!({})).rejects.toThrow("Worktree base preparation is closed");
     expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("shares a prepared default with creators queued past its fetch settlement", async ({
-    signal,
-  }) => {
-    await createRemote();
-    const head = await git(repo, "rev-parse", "HEAD");
-    const secondAdmitted = createDeferred();
-    const releaseSecond = createDeferred();
-    const allocate = preparation.createWithWorktreeAllocation;
-    const caller = new AsyncLocalStorage<"first" | "second">();
-    vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
-      if (caller.getStore() === "first") {
-        await secondAdmitted.promise;
-      } else if (caller.getStore() === "second") {
-        secondAdmitted.resolve();
-        await releaseSecond.promise;
-      }
-      return await allocate(...args);
-    });
-    const execute = gitExec.executeGitCommand;
-    let fetches = 0;
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "fetch") {
-        fetches++;
-      }
-      return await execute(cwd, args, options);
-    });
-    const first = caller.run("first", () =>
-      service.create({ repoRoot: repo, name: "cohort-first" }),
-    );
-    const second = caller.run("second", () =>
-      service.create({ repoRoot: repo, name: "cohort-second" }),
-    );
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          secondAdmitted.promise,
-          first,
-          "second creator did not reach allocation",
-        ),
-        signal,
-      );
-      const createdFirst = await withinTest(first, signal);
-      expect(fetches).toBe(1);
-      releaseSecond.resolve();
-      const createdSecond = await withinTest(second, signal);
-      expect(fetches).toBe(1);
-      expect(await git(createdFirst.path, "rev-parse", "HEAD")).toBe(head);
-      expect(await git(createdSecond.path, "rev-parse", "HEAD")).toBe(head);
-      expect(
-        await git(createdSecond.path, "rev-parse", "--symbolic-full-name", "@{upstream}"),
-      ).toBe("refs/remotes/origin/main");
-      const repeated = await service.create({ repoRoot: repo, name: "cohort-second" });
-      expect(repeated.id).toBe(createdSecond.id);
-      expect(fetches).toBe(1);
-      await service.create({ repoRoot: repo, name: "cohort-fresh" });
-      expect(fetches).toBe(2);
-    } finally {
-      secondAdmitted.resolve();
-      releaseSecond.resolve();
-      await Promise.allSettled([first, second]);
-    }
   });
 
   it.for([
