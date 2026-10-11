@@ -16,6 +16,7 @@ import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
@@ -25,9 +26,12 @@ import {
 const log = createSubsystemLogger("gateway/node-connect");
 
 const MAX_WITHHELD_LOG_NODES = 256;
-// Process-local on purpose: each Gateway start records every node's current
-// outcome once at warn. Eviction only costs one extra warn on that node's reconnect.
-const lastLoggedWithheldCommandsByNode = new Map<string, string[]>();
+// Cleared on Gateway close and in-process restart, so each Gateway start records
+// every node's current outcome once at warn. Eviction only costs one extra warn.
+const lastLoggedWithheldCommandsByNode = resolveGlobalMap<string, string[]>(
+  Symbol.for("openclaw.nodeConnectWithheldCommandLogs"),
+  "close-and-restart",
+);
 
 // Refusing a declared command is an operator-visible decision. Reconnects that
 // repeat an already-logged decision drop to debug so a new or changed one stands out.

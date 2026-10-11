@@ -13,6 +13,7 @@ import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-co
 import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
@@ -620,6 +621,21 @@ describe("reconcileNodePairingOnConnect withheld command logging", () => {
     expect(withheldLogs("warn", "device-cleared")).toHaveLength(2);
     expect(withheldLogs("debug", "device-cleared")).toEqual([]);
   });
+
+  it.each(["close", "restart"] as const)(
+    "warns on the first identical reconnect after Gateway %s",
+    async (event) => {
+      const deviceId = `device-lifecycle-${event}`;
+      const commands = ["ollama.chat", "ollama.models"];
+
+      await connectDevice({ deviceId, commands });
+      await drainGlobalSingletonLifecycleState(event);
+      expect(await connectDevice({ deviceId, commands })).toEqual(commands);
+
+      expect(withheldLogs("warn", deviceId)).toHaveLength(2);
+      expect(withheldLogs("debug", deviceId)).toEqual([]);
+    },
+  );
 
   it("tracks each node's withheld set separately", async () => {
     const commands = ["ollama.chat"];
