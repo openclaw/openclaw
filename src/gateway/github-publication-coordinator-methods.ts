@@ -28,10 +28,7 @@ import {
   digestGitHubPublicationRequest as digestRequest,
   projectGitHubPublicationResult as publicationResult,
 } from "./github-publication-receipt.js";
-import type {
-  GitHubPublicationRequester,
-  GitHubPublicationRequesterV2,
-} from "./github-publication-requester.js";
+import type { GitHubPublicationRequester } from "./github-publication-requester.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import {
   deferGitHubPublicationRequests as deferRequests,
@@ -66,14 +63,6 @@ export type GitHubPublicationSessionRequest = SessionGitHubPublishParams & {
   expectedRunId?: string;
   requester: GitHubPublicationRequester;
 };
-
-export type GitHubPublicationClaimRequestV2 = Omit<GitHubPublicationClaimRequest, "requester"> & {
-  requester: GitHubPublicationRequesterV2;
-};
-export type GitHubPublicationSessionRequestV2 = Omit<
-  GitHubPublicationSessionRequest,
-  "requester"
-> & { requester: GitHubPublicationRequesterV2 };
 
 export function exactClaimForPlacement(
   placement: NonNullable<ReturnType<WorkerSessionPlacementStore["get"]>>,

@@ -34,7 +34,6 @@ import {
 } from "./github-publication-failure.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
-import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import {
   readRepositoryGitHubPublication,
@@ -50,8 +49,6 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   agentId: string;
   lifecycleRevision: string | null;
 };
-export type PersonalGitHubSessionActionV2 = PersonalGitHubSessionAction &
-  Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource">;
 type Selection = { generation: string; account: { accountId: number; login: string } };
 type PersonalPublicationWorkspace = { assertCurrent: () => void; assertCustody: () => void };
 
