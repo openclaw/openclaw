@@ -95,7 +95,7 @@ export type CapturedAgentRunTerminalWriteContext = TerminalWriteContext & {
 };
 
 /** Capture before async session resolution; a replaced candidate revokes this exact capture. */
-export function captureAgentRunTerminalWriteContext(
+function captureAgentRunTerminalWriteContext(
   runId: string,
 ): CapturedAgentRunTerminalWriteContext | undefined {
   const owner = getAgentRunContext(runId);

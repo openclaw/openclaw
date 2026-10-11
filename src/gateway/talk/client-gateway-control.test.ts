@@ -179,7 +179,6 @@ describe("Talk client Gateway control owner", () => {
         entryId: expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
         role: "user",
         text: "check the repository",
-        confirmation: expect.any(Object),
       });
       if (outcome === "cancelled") {
         await nextEventLoopTurn();

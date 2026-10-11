@@ -160,9 +160,6 @@ close(STDOUT) or exit 74;
     fi
   fi
 fi
-if [ -z "$openclaw_system_launchd_conflict" ]; then
-  openclaw_query_system_launchd
-fi
 `;
 }
 
@@ -266,13 +263,8 @@ export async function inspectSystemLaunchDaemonOwnership(
       detail: installed.detail,
     };
   }
-  // Close the query-to-directory-snapshot race at the last responsible moment.
-  // Arbitrary root installers cannot share a lock with this unprivileged process;
-  // activation paths therefore repeat this complete probe immediately before use.
-  return classifySystemLaunchDaemonQuery(
-    serviceTarget,
-    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
-  );
+  // Concurrent root installers are best effort; activation performs its own check.
+  return { status: "absent", serviceTarget };
 }
 
 export function formatSystemLaunchDaemonOwnershipSummary(

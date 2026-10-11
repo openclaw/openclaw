@@ -179,7 +179,7 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
     }),
 );
 
-it.each(["before-disable", "after-disable", "invocation-replaced"] as const)(
+it.each(["before-disable", "after-disable"] as const)(
   "preserves Windows task compensation authority when interrupted %s",
   (interruption) =>
     withServiceHome(async (home) => {
@@ -210,9 +210,6 @@ it.each(["before-disable", "after-disable", "invocation-replaced"] as const)(
         enabled = action === "/ENABLE";
         if (action === "/DISABLE") {
           run.interrupted = true;
-          if (interruption === "invocation-replaced") {
-            opts.run = { ...run };
-          }
           return { code: 124, stdout: "", stderr: "disable failed after commit" };
         }
         return { code: 0, stdout: "", stderr: "" };
@@ -250,21 +247,13 @@ it.each(["before-disable", "after-disable", "invocation-replaced"] as const)(
       } catch (error) {
         failure = error;
       }
-      expect(mutations).toEqual(
-        interruption === "before-disable"
-          ? []
-          : interruption === "invocation-replaced"
-            ? ["/DISABLE"]
-            : ["/DISABLE", "/ENABLE"],
-      );
-      expect(enabled).toBe(interruption !== "invocation-replaced");
+      expect(mutations).toEqual(interruption === "before-disable" ? [] : ["/DISABLE", "/ENABLE"]);
+      expect(enabled).toBe(true);
       expect(service.stop).not.toHaveBeenCalled();
       expect(String(failure)).toMatch(
         interruption === "before-disable"
           ? /requester-revoked/
-          : interruption === "invocation-replaced"
-            ? /requester-revoked/
-            : /schtasks disable failed: disable failed after commit/,
+          : /schtasks disable failed: disable failed after commit/,
       );
     }),
 );

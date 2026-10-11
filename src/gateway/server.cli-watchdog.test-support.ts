@@ -259,7 +259,7 @@ export async function createWatchdogFixture() {
     await gateway.server.startupSettled;
     const backends = resolveRuntimeCliBackends();
     expect(backends.some((backend) => backend.id === "claude-cli")).toBe(true);
-    return { state, gateway, backends, token, controllerScript, cleanup, cleanupFailed: false };
+    return { state, gateway, backends, token, controllerScript, cleanup };
   } catch (error) {
     return await runQaGatewayFixture(async () => {
       throw error;

@@ -12,10 +12,6 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import { withPreparedEmbeddedRunToolAuthority } from "../../../agents/harness/tool-authority.runtime.js";
 import type { AgentSession } from "../../../agents/sessions/agent-session.js";
 import { AuthStorage } from "../../../agents/sessions/auth-storage.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../../agents/tools/gateway-caller-context.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { TalkRealtimeConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -43,6 +39,7 @@ import type {
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection } from "../session-registry.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { talkClientHandlers } from "./client.js";
 
 const nativeUpstream = await vi.hoisted(async () => {
@@ -145,36 +142,6 @@ export function requireString(record: Record<string, unknown>, key: string): str
   return value;
 }
 
-export async function withRegisteredNativeEmbeddedRun<T>(
-  params: Pick<
-    RunEmbeddedAgentParams,
-    "agentId" | "preparedRunAdmission" | "runId" | "sessionId" | "sessionKey"
-  >,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const { agentId, preparedRunAdmission, sessionKey } = params;
-  if (!agentId || !preparedRunAdmission || !sessionKey) {
-    throw new Error("Expected real Talk admission");
-  }
-  const admittedRunContext = await preparedRunAdmission.admit("embedded", "native-test-backend");
-  return await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext,
-      agentId,
-      sessionKey,
-    }),
-    async () => {
-      const handle = createEmbeddedRunHandle({ runId: params.runId });
-      embeddedRuns.setActiveEmbeddedRun(params.sessionId, handle, sessionKey);
-      try {
-        return await run();
-      } finally {
-        embeddedRuns.clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
-      }
-    },
-  );
-}
-
 function requireSuccessfulReply(respond: ReturnType<typeof vi.fn<RespondFn>>) {
   const reply = respond.mock.calls.at(-1);
   if (!reply) {
@@ -208,6 +175,7 @@ type NativePluginFixture = {
 
 export async function withNativePlugin(
   run: (fixture: NativePluginFixture) => Promise<void>,
+  options: { model?: string; nativeEffects?: boolean; onConsult?: () => void } = {},
 ): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
@@ -225,6 +193,7 @@ export async function withNativePlugin(
             other: {},
           },
         },
+        ...(options.nativeEffects ? { tools: { exec: { host: "gateway", mode: "full" } } } : {}),
         talk: { agentId: AGENT_ID, realtime: realtimeConfig },
         plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
       };
@@ -243,7 +212,11 @@ export async function withNativePlugin(
       const client = {
         ...sharingPolicyClient({
           user: profile.id,
-          scopes: ["operator.read", "operator.talk"],
+          scopes: [
+            "operator.read",
+            "operator.talk",
+            ...(options.nativeEffects ? ["operator.write"] : []),
+          ],
         }),
         connId: CONNECTION_ID,
       };
@@ -271,6 +244,22 @@ export async function withNativePlugin(
                 entry,
                 () => capabilityCatalogContext,
               );
+              const createBrowserSession = provider.createBrowserSession;
+              if (createBrowserSession && options.onConsult) {
+                provider.createBrowserSession = (request) => {
+                  const original = request.runAgentConsult;
+                  if (original) {
+                    request.runAgentConsult = Object.assign(
+                      (...args: Parameters<typeof original>) => {
+                        options.onConsult?.();
+                        return original(...args);
+                      },
+                      original,
+                    );
+                  }
+                  return createBrowserSession(request);
+                };
+              }
               registry.realtimeVoiceProviders.push({
                 pluginId: "openai",
                 source: "test",
@@ -284,7 +273,7 @@ export async function withNativePlugin(
         if (!registry.realtimeVoiceProviders.some((entry) => entry.provider.id === "openai")) {
           throw new Error("OpenAI did not register its realtime voice provider");
         }
-        realtimeConfig.model = NATIVE_REALTIME_MODEL;
+        realtimeConfig.model = options.model ?? NATIVE_REALTIME_MODEL;
         setActivePluginRegistry(registry);
         const offerRoute = routes.find((route) => route.path === "/plugins/openai/realtime/calls");
         if (!offerRoute) {
@@ -294,6 +283,7 @@ export async function withNativePlugin(
           { agentId: AGENT_ID, sessionKey: SESSION_KEY },
           {
             sessionId: SESSION_ID,
+            ...(options.nativeEffects ? { permissionMode: "full", execHost: "gateway" } : {}),
             updatedAt: Date.now(),
             createdActor: { type: "human", source: "profile", id: profile.id },
           },

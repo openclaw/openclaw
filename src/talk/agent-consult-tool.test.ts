@@ -31,7 +31,7 @@ describe("realtime voice agent consult tool", () => {
     );
   });
 
-  it("normalizes a server-issued spoken confirmation id", () => {
+  it("does not accept a model-supplied spoken confirmation as authority", () => {
     expect(
       parseRealtimeVoiceAgentConsultArgs({
         question: "Send it now",
@@ -41,7 +41,6 @@ describe("realtime voice agent consult tool", () => {
       question: "Send it now",
       context: undefined,
       responseStyle: undefined,
-      confirmationId: "confirm-123",
     });
   });
 

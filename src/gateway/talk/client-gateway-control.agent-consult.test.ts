@@ -13,15 +13,6 @@ import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  authorizeClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-  deactivateClientVoiceConfirmationSession,
-} from "../../talk/client-voice-confirmation.js";
-import {
-  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
-  resetClientVoiceConfirmationStateForTest,
-} from "../../talk/client-voice-confirmation.test-support.js";
 import { captureClientVoiceSessionSource } from "../../talk/client-voice-session-source.js";
 import { readVoiceSessionRecord } from "../../talk/client-voice-session-store.js";
 import { createOrResumeClientVoiceSession } from "../../talk/client-voice-session.js";
@@ -64,7 +55,6 @@ describe("Talk client agent consult admission", () => {
 
   afterEach(() => {
     embeddedRunsTesting.resetActiveEmbeddedRuns();
-    resetClientVoiceConfirmationStateForTest();
   });
 
   it("waits for backend publication and projects its registered caller authority", async () => {
@@ -154,7 +144,7 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
     );
-    expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).not.toHaveProperty("toolsAllow");
+    expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]?.toolsAllow).toBeUndefined();
   });
 
   it("refreshes steering authority when the admitted run publishes a new attempt", async () => {
@@ -333,12 +323,9 @@ describe("Talk client agent consult admission", () => {
     const secondAnnounced = deferred<void>();
     const releaseFirst = deferred<void>();
     const releaseSecond = deferred<void>();
-    const staleRun = { instanceId: "instance:stale", runId: "run-talk" };
     const currentRun = { instanceId: "instance:current", runId: "run-talk" };
     let invocation = 0;
-    mocks.createOperationalRunInstanceRef
-      .mockReturnValueOnce(staleRun)
-      .mockReturnValueOnce(currentRun);
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(currentRun);
     mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
       invocation += 1;
       await params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
@@ -365,6 +352,8 @@ describe("Talk client agent consult admission", () => {
     try {
       releaseFirst.resolve();
       await expect(first).rejects.toThrow("admission is no longer current");
+      expect(mocks.createOperationalRunInstanceRef).not.toHaveBeenCalled();
+      expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
       releaseSecond.resolve();
       await expect(second).resolves.toEqual({ text: "done" });
       expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledOnce();
@@ -710,9 +699,9 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
   });
 
-  it("rechecks reusable ownership at embedded-run admission", async () => {
+  it("rechecks retained caller authority at embedded-run admission", async () => {
     let current = true;
-    const assertCurrent = vi.fn(() => {
+    const assertSourceCurrent = vi.fn(() => {
       if (!current) {
         throw new Error("Realtime voice session is not active");
       }
@@ -723,9 +712,13 @@ describe("Talk client agent consult admission", () => {
     });
 
     await expect(
-      createRunner().runArgs({ question: "first task" }, undefined, assertCurrent),
+      createConsultRunner({
+        runAuthority: {
+          retainRun: async () => ({ assertSourceCurrent, release: vi.fn() }),
+        } as never,
+      }).runArgs({ question: "first task" }),
     ).rejects.toThrow("not active");
-    expect(assertCurrent).toHaveBeenCalledTimes(4);
+    expect(assertSourceCurrent).toHaveBeenCalledOnce();
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
   });
 
@@ -791,117 +784,5 @@ describe("Talk client agent consult admission", () => {
     ).rejects.toThrow("already cancelled");
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
-  });
-
-  it("returns the current server challenge instead of a model's superseded confirmation id", async () => {
-    let currentChallenge = "";
-    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
-      await params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
-      for (const message of ["first blocked action", "last blocked action"]) {
-        const challenge = checkClientVoiceToolConfirmationPolicy({
-          agentId: "researcher",
-          voiceSessionId: "voice-session",
-          runId: "run-talk",
-          toolName: "message",
-          toolParams: { action: "send", message },
-        });
-        if (challenge.allowed) {
-          throw new Error("expected a blocked action");
-        }
-        currentChallenge = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)![1]!;
-      }
-      return { text: "VOICE_CONFIRMATION_REQUIRED:stale-model-id Say yes, send the message." };
-    });
-    const result = await createRunner().runArgs({ question: "check" });
-    expect(result.text).toContain(`VOICE_CONFIRMATION_REQUIRED:${currentChallenge}`);
-    expect(result.text).toContain('Say "yes"');
-    expect(result.text).not.toContain("stale-model-id");
-  });
-
-  it("continues the admitted run when close invalidates confirmation before registration", async () => {
-    const now = Date.now();
-    const challenge = checkClientVoiceToolConfirmationPolicy({
-      agentId: "researcher",
-      voiceSessionId: "voice-session",
-      runId: "run-original",
-      toolName: "message",
-      toolParams: { action: "send", message: "cancelled action" },
-      now,
-    });
-    if (challenge.allowed) {
-      throw new Error("expected voice confirmation challenge");
-    }
-    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    if (!confirmationId) {
-      throw new Error("missing voice confirmation id");
-    }
-    noteClientVoiceConfirmationUtterance({
-      agentId: "researcher",
-      voiceSessionId: "voice-session",
-      text: "yes",
-      timestamp: now + 1,
-    });
-    authorizeClientVoiceConfirmation({
-      agentId: "researcher",
-      voiceSessionId: "voice-session",
-      confirmationId,
-      now: now + 2,
-    });
-    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
-      deactivateClientVoiceConfirmationSession("researcher", "voice-session");
-      await params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
-      await params.agentRuntime.runEmbeddedAgent(coreParams);
-      return { text: "done" };
-    });
-    const registerRun = vi.fn(async () => ({ release: vi.fn(), isCurrent: () => true }));
-
-    await expect(
-      createRunner(registerRun).runArgs({ question: "check", confirmationId }),
-    ).resolves.toEqual({ text: "done" });
-    expect(registerRun).toHaveBeenCalledWith({
-      runId: "run-talk",
-      assertCurrent: expect.any(Function),
-    });
-    expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce();
-    expect(mocks.close).toHaveBeenCalledOnce();
-  });
-
-  it("carries the exact confirmed call into a tool-call consult", async () => {
-    const now = Date.now();
-    const toolParams = { action: "send", message: "confirmed message" };
-    const challenge = checkClientVoiceToolConfirmationPolicy({
-      agentId: "researcher",
-      voiceSessionId: "voice-session",
-      runId: "run-original",
-      toolName: "message",
-      toolCallId: "blocked-message-call",
-      toolParams,
-      now,
-    });
-    if (challenge.allowed) {
-      throw new Error("expected challenge");
-    }
-    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    noteClientVoiceConfirmationUtterance({
-      agentId: "researcher",
-      voiceSessionId: "voice-session",
-      text: "yes",
-      timestamp: now + 1,
-    });
-    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
-      await params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
-      await params.agentRuntime.runEmbeddedAgent(coreParams);
-      return { text: "done" };
-    });
-    await createRunner().runArgs({ question: "Confirm", confirmationId });
-    expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: false, toolsAllow: ["read"] }),
-    );
-    expect(mocks.runEmbeddedAgentCore.mock.calls[0]?.[0].extraSystemPrompt).toContain(
-      "previously blocked tool call",
-    );
-    expect(mocks.runEmbeddedAgentCore.mock.calls[0]?.[0].extraSystemPrompt).toContain(
-      "blocked-message-call",
-    );
   });
 });

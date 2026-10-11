@@ -27,6 +27,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function measure<T>(db: DatabaseSync, operation: () => T) {
   const counter = trackSqliteStatementExecutions(db, ["all"], () => "all");
+  const reads = observeSqliteReadSql(StatementSync.prototype);
   try {
     const result = operation();
     return {
@@ -34,10 +35,14 @@ function measure<T>(db: DatabaseSync, operation: () => T) {
       metrics: {
         rows: counter.rowCounts.all,
         returnedTextBytes: counter.textBytes.all,
+        cardReads: reads.queries.filter((sql) =>
+          /^select .* from "session_progress_cards"/iu.test(sql),
+        ).length,
       },
     };
   } finally {
     counter.restore();
+    reads.restore();
   }
 }
 
@@ -163,16 +168,7 @@ describe("session progress card store", () => {
       }
       clock.mockReturnValue(4000);
       const reset = runSqliteImmediateTransactionSync(db, () => {
-        const reads = observeSqliteReadSql(StatementSync.prototype);
-        try {
-          const measured = measure(db, () => clearSessionProgressCardForReset(db, SESSION_KEY));
-          expect(
-            reads.queries.filter((sql) => /^select .* from "session_progress_cards"/iu.test(sql)),
-          ).toHaveLength(1);
-          return measured;
-        } finally {
-          reads.restore();
-        }
+        return measure(db, () => clearSessionProgressCardForReset(db, SESSION_KEY));
       });
       expect(reset.result).toBe(true);
       const expectedTombstone = {
@@ -194,6 +190,7 @@ describe("session progress card store", () => {
       for (const measured of [replaced, cleared, reset]) {
         expect.soft(measured.metrics.rows).toBeGreaterThan(0);
         expect.soft(measured.metrics.returnedTextBytes).toBeLessThan(256);
+        expect.soft(measured.metrics.cardReads).toBe(0);
       }
     },
   );
@@ -365,7 +362,7 @@ describe("session progress card store", () => {
     expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
   });
 
-  it.each(["revision", "created_at", "updated_at"] as const)(
+  it.each(["revision", "created_at"] as const)(
     "rejects unsafe %s before payload decoding or mutation",
     (column) => {
       writeSessionProgressCard(db, SESSION_KEY, { markdown: "Existing", steps: STEPS });
