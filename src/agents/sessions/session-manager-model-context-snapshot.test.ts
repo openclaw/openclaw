@@ -115,6 +115,9 @@ it.each(["bounded", "anchors"] as const)(
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const source = await SessionManager.openAsync(target);
       const entryId = await source.appendMessageAsync(makeUserMessage("original", 1));
+      if (!entryId) {
+        throw new Error("Expected the appended message ID");
+      }
       await withSelectedTranscriptReader(
         target,
         async (actor) => {
