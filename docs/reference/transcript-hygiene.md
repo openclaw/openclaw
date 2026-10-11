@@ -45,6 +45,12 @@ Login device codes, pairing codes, login URLs, and sensitive `/config set` or `/
 These rows remain available to later provider requests and chat history without rewriting earlier
 rows. `/btw` and `/side` remain ephemeral.
 
+## Delivered automation results
+
+Canonical `openclaw` / `automation-result` assistant rows remain in model history,
+even when their text matches the preceding assistant reply and their usage is
+zero. The historical duplicate filter still removes marker-free delivery mirrors.
+
 ## Failed attempts and recovery
 
 Text-only assistant errors are buffered until the logical run settles. Recovery

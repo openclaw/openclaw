@@ -322,13 +322,13 @@ async function persistQuarantinedJobs(
  * masquerade as a store-write failure — at startup that keeps the whole
  * scheduler down.
  */
-export function runPostPersistCronNotifications(
+export async function runPostPersistCronNotifications(
   state: CronServiceState,
   notifications: DeferredCronNotifications | undefined,
 ) {
   for (const notification of notifications ?? []) {
     try {
-      dispatchCronNotification(state, notification);
+      await dispatchCronNotification(state, notification);
     } catch (err) {
       state.deps.log.warn(
         { error: err instanceof Error ? err.message : String(err) },
@@ -505,7 +505,6 @@ export async function persistCronJobMutation(params: {
             storeJobs: store.jobs,
             suppressScheduledJobId: params.suppressScheduledJobId,
           });
-          runPostPersistCronNotifications(state, params.postPersistNotifications);
         } finally {
           params.afterPublish?.();
         }
@@ -525,4 +524,5 @@ export async function persistCronJobMutation(params: {
         : new CronJobsStoreChangedError(source.storeKey);
     },
   });
+  await runPostPersistCronNotifications(state, params.postPersistNotifications);
 }

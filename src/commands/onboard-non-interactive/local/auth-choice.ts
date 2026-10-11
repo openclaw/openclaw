@@ -228,7 +228,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         const { isSetupCredentialReplacement, saveSetupCredential } =
           await import("../../../system-agent/setup-inference-credentials.js");
         if (
-          isSetupCredentialReplacement({
+          await isSetupCredentialReplacement({
             provider: result.providerId,
             baseConfig,
             agentDir: params.target.agentDir,
