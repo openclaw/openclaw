@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import { createGatewayBroadcaster } from "../../server-broadcast.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "../../server-constants.js";
+import { GatewayClientRegistry } from "../../server/client-registry.js";
+import type { GatewayWsClient } from "../../server/ws-types.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
 import { cancelTalkRealtimeRelayTurn, stopTalkRealtimeRelaySession } from "./operations.js";
@@ -142,4 +148,76 @@ describe("buffered relay audio completeness", () => {
       delivered.findIndex((event) => event.type === "audioDone"),
     );
   });
+});
+
+
+it("retires a slow audio-completeness consumer before it can receive a completed marker", async () => {
+  vi.useFakeTimers();
+  let request: RealtimeVoiceBridgeCreateRequest | undefined;
+  const sent: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  const socket = Object.assign(new EventEmitter(), {
+    readyState: WebSocket.OPEN,
+    bufferedAmount: 0,
+    close: vi.fn(),
+    terminate: vi.fn(),
+    send: vi.fn((wire: string | Buffer, options: unknown, callback?: (error?: Error) => void) => {
+      sent.push(JSON.parse(String(wire)) as (typeof sent)[number]);
+      // Keep the bounded broadcaster queue occupied until the connection is retired.
+      if (typeof options === "function") {
+        return;
+      }
+      callback?.();
+    }),
+  });
+  const client: GatewayWsClient = {
+    connId: "slow-audio",
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+    usesSharedGatewayAuth: false,
+  };
+  const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry([client]) });
+  const session = createTalkRealtimeRelaySession({
+    clientCapabilities: ["audio-completeness-v1"],
+    connId: client.connId,
+    cfg: { agents: { entries: { main: {} } } },
+    sessionTarget: prepareTalkSessionTarget(
+      { agents: { entries: { main: {} } } },
+      "agent:main:main",
+    ),
+    providerConfig: {},
+    instructions: "brief",
+    tools: [],
+    controlSource: "transcript",
+    provider: createIdleRelayProvider((value) => {
+      request = value;
+      return makeRelayTransport();
+    }),
+    context: {
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: broadcaster.broadcastToConnIds,
+    } as never,
+  });
+  activeRelaySessions.set(session.relaySessionId, client.connId);
+  await Promise.resolve();
+  try {
+    request!.onEvent?.({ direction: "server", type: "response.created", responseId: "response-slow" });
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    request!.onAudio(Buffer.alloc(960));
+
+    expect(socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
+    request!.onResponseDone?.({ responseId: "response-slow", status: "completed" });
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+
+    expect(socket.terminate).toHaveBeenCalledOnce();
+    expect(sent.map(({ payload }) => payload.type)).toContain("audioStarted");
+    expect(sent.map(({ payload }) => payload.type)).not.toContain("audioDone");
+    expect(sent.some(({ payload }) => payload.status === "completed")).toBe(false);
+  } finally {
+    socket.bufferedAmount = 0;
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: client.connId,
+    });
+    vi.useRealTimers();
+  }
 });
