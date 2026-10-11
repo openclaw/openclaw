@@ -197,7 +197,6 @@ describe("admitted lazy session writer", () => {
   it.each([
     { existing: false, incognito: false },
     { existing: true, incognito: false },
-    { existing: true, incognito: true },
   ])(
     "commits actor appends without pre-reads and refuses a replaced writer (existing=$existing, incognito=$incognito)",
     async ({ existing, incognito }) => {
@@ -251,10 +250,13 @@ describe("admitted lazy session writer", () => {
   );
 
   it.each([false, true])(
-    "acknowledges only persisted actor tool results (incognito=%s)",
+    "acknowledges only persisted tool results (incognito=%s)",
     async (incognito) => {
       await withInitialWriter(
-        async ({ manager, runParams, target }) => {
+        async ({ manager, runParams, target, transcript }) => {
+          if (incognito) {
+            expect(transcript.ownedTranscriptWriteContext.sessionActor).toBeUndefined();
+          }
           await manager.appendMessageAsync(userMessage);
           installSessionToolResultGuard(manager);
           const toolCall = (id: string) =>
@@ -350,7 +352,7 @@ describe("admitted lazy session writer", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "uses a stale-version postimage once without replaying a durable append (incognito=%s)",
     async (incognito) => {
       await withInitialWriter(

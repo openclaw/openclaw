@@ -174,41 +174,31 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
         ),
         database,
       };
-    } else if (isIncognitoOpenClawAgentSqlitePath(database.path, database)) {
-      const { captureNativeIncognitoSessionActorTarget } =
-        await import("../../../config/sessions/session-actor-native-incognito.js");
-      assertCurrent();
-      const target = captureNativeIncognitoSessionActorTarget({
-        database,
-        sessionKey: sessionTarget.sessionKey,
-      });
-      if (!target) {
-        throw new Error("Attempt lost its captured native incognito owner");
-      }
-      ownedTranscriptWriteContext.sessionActor = {
-        actor: await createSessionActorFactory(database).acquire(target, lifetime),
-        database,
-      };
-    } else {
+    } else if (!isIncognitoOpenClawAgentSqlitePath(database.path, database)) {
+      // Native incognito retains its existing transcript owner until the worker cutover.
       let identity = readDatabasePathIdentitySync(database.path);
       if (identity.key.startsWith("path:")) {
         await prepareSessionEntryReplacementDatabase(database, assertCurrent);
         assertCurrent();
         identity = readDatabasePathIdentitySync(database.path);
       }
-      ownedTranscriptWriteContext.sessionActor = {
-        actor: await createSessionActorFactory(database).acquire(
-          {
-            database: {
-              kind: "file",
-              physicalIdentity: identity.key.slice("file:".length),
-              birthtime: identity.birthtime,
-              nativeLocation: identity.canonicalPath,
-            },
-            sessionKey: sessionTarget.sessionKey,
+      const actor = await createSessionActorFactory(database).acquire(
+        {
+          database: {
+            kind: "file",
+            physicalIdentity: identity.key.slice("file:".length),
+            birthtime: identity.birthtime,
+            nativeLocation: identity.canonicalPath,
           },
-          lifetime,
-        ),
+          sessionKey: sessionTarget.sessionKey,
+        },
+        lifetime,
+      );
+      if ("kind" in actor) {
+        throw new Error("Durable session actor acquisition was declined");
+      }
+      ownedTranscriptWriteContext.sessionActor = {
+        actor,
         database,
       };
     }
