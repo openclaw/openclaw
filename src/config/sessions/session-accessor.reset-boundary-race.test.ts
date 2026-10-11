@@ -17,6 +17,7 @@ import {
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
 
@@ -236,10 +237,10 @@ describe("reset boundary concurrency", () => {
       ["opaque"],
       JSON.parse(`{"type":"opaque","body":${"[".repeat(1_001)}0${"]".repeat(1_001)}}`) as unknown,
     ];
-    const insert = database.db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    const insert = createTranscriptEventInserter(database.db, sessionId);
+    events.forEach((event, seq) =>
+      insert({ seq, eventJson: JSON.stringify(event), createdAt: seq }),
     );
-    events.forEach((event, seq) => insert.run(sessionId, seq, JSON.stringify(event), seq));
 
     const projected = loadTranscriptEventsFromDatabase(database, sessionId, {
       projection: "reset-boundary",

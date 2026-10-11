@@ -282,7 +282,7 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
             events.map((event, index) => ({
               session_id: scope.sessionId,
               seq: index + 2,
-              event_json: JSON.stringify(event),
+              ...prepareTranscriptPayload(database.db, JSON.stringify(event)),
               created_at: 1,
             })),
           ),

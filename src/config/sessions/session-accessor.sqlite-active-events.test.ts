@@ -1,6 +1,7 @@
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -45,7 +46,11 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
-import { createTranscriptEventInserter } from "./transcript-payload.js";
+import {
+  createTranscriptEventInserter,
+  createTranscriptPayloadUpdater,
+  prepareTranscriptPayload,
+} from "./transcript-payload.js";
 
 const queuedSessionWrite = vi.hoisted(() => vi.fn());
 
@@ -266,12 +271,25 @@ describe("SQLite active transcript event projection", () => {
       touchSessionEntry: false,
     });
     const facts: unknown[] = [];
-    expect(
-      everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
-        facts.push(message);
-        return true;
-      }),
-    ).toBe(true);
+    const reads = observeHostDataSql();
+    try {
+      expect(
+        everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
+          facts.push(message);
+          return true;
+        }),
+      ).toBe(true);
+    } finally {
+      reads.restore();
+    }
+    const inputQueries = reads.queries.filter((query) => /as "message_json"/i.test(query));
+    expect(inputQueries.length).toBeGreaterThan(0);
+    for (const query of inputQueries) {
+      // The bounded SELECT still projects role from JSON; row selection must use columns.
+      const predicate = query.slice(query.toLowerCase().lastIndexOf(" where "));
+      expect(predicate).toMatch(/\bwhere\b/i);
+      expect(predicate).not.toMatch(/json_(?:extract|type|each|tree)\s*\(/i);
+    }
     expect(facts).toEqual([
       { role: "user", idempotencyKey: "source:user", __openclaw: { runId: "source" }, provenance },
       { role: "user", idempotencyKey: "later:user", __openclaw: { runId: null }, provenance: null },
@@ -922,17 +940,21 @@ describe("SQLite active transcript event projection", () => {
     expect(anchor.events).toHaveLength(6);
     expect(anchor.events.at(-1)?.seq).toBe(100_000);
 
-    database.db
-      .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
-      .run(
+    createTranscriptPayloadUpdater(
+      database.db,
+      scope.sessionId,
+    )({
+      ...prepareTranscriptPayload(
+        database.db,
         JSON.stringify({
           type: "message",
           id: "m1",
           parentId: null,
           message: { role: "toolResult", content: "x" },
         }),
-        scope.sessionId,
-      );
+      ),
+      seq: 1,
+    });
     database.db
       .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
       .run(scope.sessionId);

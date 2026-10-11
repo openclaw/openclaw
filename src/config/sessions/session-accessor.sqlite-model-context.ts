@@ -380,7 +380,7 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
-          const role = db.dynamic.ref("message_role");
+          const role = sql.ref<string | null>("message_role");
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {

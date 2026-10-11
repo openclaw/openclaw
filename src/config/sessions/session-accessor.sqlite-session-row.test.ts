@@ -49,6 +49,7 @@ describe("SQLite session row persistence", () => {
       previousSessionId: "previous",
     });
     const database = openOpenClawAgentDatabase(scope);
+    const prepare = vi.spyOn(database.db, "prepare");
     const startedAt = () =>
       [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
         (row) => row.session_key === scope.sessionKey,
@@ -64,6 +65,11 @@ describe("SQLite session row persistence", () => {
     );
     expect(startedAt()).toBe(8);
     expect(references().has("previous")).toBe(false);
+    const queries = prepare.mock.calls.map(([query]) => query);
+    expect(queries.some((query) => query.includes('"session_started_at"'))).toBe(true);
+    expect(queries.some((query) => query.includes('"has_optional_references" ='))).toBe(true);
+    expect(queries.every((query) => !query.includes("$.sessionStartedAt"))).toBe(true);
+    prepare.mockRestore();
   });
 
   it("bounds saved-prompt decoding while publishing identity changes", async () => {

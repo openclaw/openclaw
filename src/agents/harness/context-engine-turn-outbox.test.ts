@@ -833,15 +833,22 @@ describe("context-engine turn outbox", () => {
       input: { engineId: "test", sessionId: "snapshot-session", isHeartbeat: false },
     };
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
-    const statements = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) =>
-      /^select/i.test(sql) && sql.includes("context_engine_turn_outbox") ? "outbox" : null,
-    );
+    const queries: string[] = [];
+    const statements = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) => {
+      if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
+        return null;
+      }
+      queries.push(sql);
+      return "outbox";
+    });
     try {
       expect(backend.execute(command)).toEqual({ warnings: [], pending: true, admitted: false });
       expect(statements.counts.outbox).toBe(1);
       backend.execute({ type: "complete", input: { advancementKey: "snapshot-turn" } });
       expect(backend.execute(command)).toEqual({ warnings: [], pending: false, admitted: false });
       expect(statements.counts.outbox).toBe(2);
+      expect(queries.some((query) => query.includes("payload_state"))).toBe(true);
+      expect(queries.every((query) => !query.includes("json_extract"))).toBe(true);
     } finally {
       statements.restore();
     }

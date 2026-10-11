@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   openOpenClawAgentDatabase,
@@ -405,7 +406,19 @@ describe("SQLite transcript history events", () => {
       "compaction",
     ]);
     expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
-    expect(readSessionTranscriptHistoryEventCount(scope)).toBe(4);
+    const reads = observeHostDataSql();
+    try {
+      expect(readSessionTranscriptHistoryEventCount(scope)).toBe(4);
+    } finally {
+      reads.restore();
+    }
+    const countQueries = reads.queries.filter((query) =>
+      /count\(\*\) as "event_count"/i.test(query),
+    );
+    expect(countQueries.length).toBeGreaterThan(0);
+    for (const query of countQueries) {
+      expect(query).not.toMatch(/json_(?:extract|type|each|tree)\s*\(/i);
+    }
 
     const recent = readRecentSessionTranscriptHistoryEvents(scope, {
       maxBytes: 65_536,

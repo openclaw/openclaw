@@ -29,7 +29,7 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
       stringPart.lastIndex = offset;
       const match = stringPart.exec(json);
       if (!match) {
-        fail();
+        return fail();
       }
       offset = stringPart.lastIndex;
       if (match[0] === '"') {

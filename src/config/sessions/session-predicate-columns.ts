@@ -20,8 +20,8 @@ function sessionStartedAt(token: JsonPredicateToken | undefined): number | bigin
   const value = readJsonPredicateScalar(token);
   let integer: bigint;
   if (token.kind === "string") {
-    const digits = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(String(value));
-    integer = digits ? BigInt(digits[1]) : 0n;
+    const digits = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(String(value))?.[1];
+    integer = digits ? BigInt(digits) : 0n;
   } else if (token.kind === "number") {
     if (/^-?\d+$/.test(token.text)) {
       integer = BigInt(token.text);

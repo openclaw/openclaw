@@ -493,9 +493,18 @@ describe("agent schema 21 migration", () => {
             path: pathname,
           });
         });
-        expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
-          before,
-        );
+        expect(
+          database
+            .prepare("SELECT * FROM session_nodes ORDER BY session_key")
+            .all()
+            .map(
+              ({
+                session_started_at: _sessionStartedAt,
+                has_optional_references: _hasOptionalReferences,
+                ...row
+              }) => row,
+            ),
+        ).toEqual(before);
         expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
           OPENCLAW_AGENT_SCHEMA_VERSION,
