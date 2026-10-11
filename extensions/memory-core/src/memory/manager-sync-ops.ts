@@ -652,7 +652,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         });
       });
 
-      this.resetVectorState();
+      this.resetVectorState(rebuilt.vectorIndexComplete);
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
