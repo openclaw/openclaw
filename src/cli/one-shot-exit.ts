@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime, ExitError } from "../runtime.js";
+import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runtime.js";
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
@@ -67,8 +67,12 @@ export async function runCliWithExitFinalization(params: {
       } else if (requestedCode !== undefined) {
         process.exitCode = requestedCode === "process" ? resolveProcessExitCode() : requestedCode;
       }
-      // Natural exit drains stdio and V8 compiler work. Terminal mutation belongs
-      // to the interactive/runtime-exit owner; ordinary completion must not emit resets.
+      if (signalExitCode !== undefined || requestedCode !== undefined) {
+        // Explicit exits retain runtime.exit's terminal contract after owned cleanup.
+        // Ordinary command completion must not add ANSI bytes to its output.
+        restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
+      }
+      // Node drains stdio and V8 compiler work naturally.
     }
   }
   // A cleanup failure must not replace an embedded runtime's original exit.

@@ -338,15 +338,24 @@ describe("one-shot CLI completion", () => {
   });
 
   it.each([
-    { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
-    { name: "natural successful completion", exitCode: 0, explicitRequest: false },
-  ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
+    { name: "deferred hooks failure", exitCode: 1, explicitRequest: true, signalRequest: false },
+    { name: "explicit successful exit", exitCode: 0, explicitRequest: true, signalRequest: false },
+    {
+      name: "natural successful completion",
+      exitCode: 0,
+      explicitRequest: false,
+      signalRequest: false,
+    },
+    { name: "accepted signal", exitCode: 143, explicitRequest: false, signalRequest: true },
+  ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest, signalRequest }) => {
     const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
     const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
     const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
+    const signalExitUrl = new URL("./signal-exit-barrier.ts", import.meta.url).href;
     const script = `
       import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
       import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
+      import { exitAfterSignalExitBarriers } from ${JSON.stringify(signalExitUrl)};
       import { loggingState } from ${JSON.stringify(loggingStateUrl)};
       Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
       Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
@@ -355,6 +364,11 @@ describe("one-shot CLI completion", () => {
         run: async () => {
           defaultRuntime.writeStdout(JSON.stringify({ ok: ${exitCode === 0} }));
           ${explicitRequest ? `requestExitAfterOneShotOutput(defaultRuntime, ${exitCode});` : ""}
+          ${signalRequest ? `exitAfterSignalExitBarriers(${exitCode});` : ""}
+        },
+        finalize: async () => {
+          await Promise.resolve();
+          process.stderr.write("finalized\\n");
         },
         onError: (error) => { throw error; },
       });
@@ -366,7 +380,12 @@ describe("one-shot CLI completion", () => {
     expect(result.status).toBe(exitCode);
     expect(result.signal).toBeNull();
     expect(JSON.parse(result.stdout)).toEqual({ ok: exitCode === 0 });
-    expect(result.stderr).toBe("");
+    expect(result.stderr.startsWith("finalized\n")).toBe(true);
+    if (explicitRequest || signalRequest) {
+      expect(result.stderr).toContain("\x1b[?25h");
+    } else {
+      expect(result.stderr).toBe("finalized\n");
+    }
   });
 
   it("keeps real dual-TTY JSON clean after a fatal unhandled rejection", () => {
