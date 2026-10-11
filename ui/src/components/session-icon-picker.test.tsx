@@ -63,12 +63,12 @@ it("moves the icon grid tab stop and sends appearance actions through the menu o
   const choices = mounted.container.querySelectorAll<HTMLButtonElement>(
     ".session-menu__icon-choice",
   );
-  choices[0]!.focus();
-  choices[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-  expect(document.activeElement).toBe(choices[1]);
-  expect(choices[0]!.tabIndex).toBe(-1);
-  expect(choices[1]!.tabIndex).toBe(0);
-  choices[1]!.click();
+  choices[1]!.focus();
+  choices[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  expect(document.activeElement).toBe(choices[2]);
+  expect(choices[1]!.tabIndex).toBe(-1);
+  expect(choices[2]!.tabIndex).toBe(0);
+  choices[2]!.click();
   expect(runAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "🚀" });
   mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-remove")!.click();
   expect(runAction).toHaveBeenLastCalledWith({ kind: "reset-appearance" });
