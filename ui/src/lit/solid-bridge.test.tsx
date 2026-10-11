@@ -280,6 +280,26 @@ it("provides the existing Lit application context, rebinds replacements, and uns
   view.unmount();
 });
 
+it("renders reactive Solid children for a lifecycle-only bridge", () => {
+  const PassiveBridge = defineSolidBridge(
+    "openclaw-solid-passive-test",
+    (props) => <>{props.children}</>,
+    { preserveChildren: true, properties: {} },
+  );
+  const [label, setLabel] = createSignal("first");
+  const view = mountSolid(() => (
+    <PassiveBridge>
+      <span>{label()}</span>
+    </PassiveBridge>
+  ));
+  const child = view.container.querySelector("span");
+  expect(child?.textContent).toBe("first");
+  setLabel("second");
+  flush();
+  expect(view.container.querySelector("span")).toBe(child);
+  expect(child?.textContent).toBe("second");
+});
+
 it("releases the old provider when a nearer provider takes over without moving the host", async () => {
   const seen = vi.fn();
   defineSolidBridge(

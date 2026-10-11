@@ -623,6 +623,7 @@ export const SessionProgressHovercard = defineSolidBridge<SessionProgressHoverca
     return props.children;
   },
   {
+    preserveChildren: true,
     properties: {
       client: { default: null, attribute: false },
       context: { default: null, attribute: false },

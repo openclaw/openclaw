@@ -28,6 +28,8 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
   };
 
 type Spec<Props, Methods> = {
+  /** Lifecycle-only Lit hosts keep their callers' live children in place. */
+  preserveChildren?: boolean;
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
@@ -208,8 +210,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     #mount(children?: () => JSX.Element) {
+      const preserveChildren = spec.preserveChildren && !this.#solidOwned;
       let source: JSX.Element;
-      if (!this.#solidOwned) {
+      if (!this.#solidOwned && !preserveChildren) {
         if (!this.#content) {
           this.#content = this.ownerDocument.createDocumentFragment();
           this.#start = this.ownerDocument.createComment("solid-bridge-content");
@@ -219,6 +222,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       }
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
+      const root = preserveChildren ? this.ownerDocument.createDocumentFragment() : this;
       this.#dispose = render(() => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
@@ -254,7 +258,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
               },
             })
           : view();
-      }, this);
+      }, root);
     }
 
     #disposeRoot() {

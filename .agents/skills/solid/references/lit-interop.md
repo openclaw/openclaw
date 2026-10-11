@@ -36,6 +36,8 @@ What the bridge guarantees (all covered by `solid-bridge.test.tsx`):
 
 The bridge is interim. It and its exact-path ratchet exception die with the last Lit caller.
 
+Lifecycle-only providers use `preserveChildren: true`: their Solid effects run in a detached render root while Lit keeps its live children in place. This avoids disconnecting an already-mounted app shell to render a provider that has no visual output. Direct Solid callers still render their children normally.
+
 ## Lit inside Solid
 
 An unported Lit element inside a Solid tree is just a custom element: render its tag, set properties with `prop:`, and listen with camelCase or dashed `on…` handlers. Never let Solid and Lit both own the same DOM children. The Lit element gets its own host node.

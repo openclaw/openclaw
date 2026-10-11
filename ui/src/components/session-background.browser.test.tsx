@@ -1,30 +1,32 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationTheme } from "../app/context.ts";
+import { resetProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
+import { loadProfileAppearancePrefs } from "../app/server-prefs-reconcile.ts";
 import { loadSettings } from "../app/settings.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SessionBackground } from "./session-background.tsx";
 
-// mock-isolation: Keep the process-wide profile preference cache outside the palette fixture.
-vi.mock("../app/server-prefs-profile.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../app/server-prefs-profile.ts")>()),
-  resolveProfileAppearancePrefs: () => ({}),
-}));
-
-// Keep image transport synthetic while sampling real inherited CSS and canvas contrast.
-vi.mock("./session-background-image.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-background-image.ts")>()),
-  readBackgroundImage: async () =>
-    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
-}));
+afterEach(() => {
+  resetProfileAppearancePrefs();
+  vi.restoreAllMocks();
+});
 
 it("samples the inherited palette when a Solid-mounted photo first joins the document", async () => {
+  const gatewayUrl = `${location.origin.replace(/^http/u, "ws")}/ws`;
+  const client = new GatewayBrowserClient({ url: gatewayUrl });
+  vi.spyOn(client, "request").mockImplementation(async (method) => {
+    if (method !== "users.prefs.get") {
+      throw new Error(`Unexpected profile fixture method: ${method}`);
+    }
+    return { status: "ok", entries: {} };
+  });
   const gateway = createApplicationGateway({
-    client: {} as GatewayBrowserClient,
+    client,
     phase: "connected",
     offlineStable: false,
     hello: null,
@@ -35,7 +37,28 @@ it("samples the inherited palette when a Solid-mounted photo first joins the doc
     lastErrorCode: null,
     selfUser: { id: "profile-a" },
   });
-  gateway.gateway.connection.gatewayUrl = `${location.origin.replace(/^http/u, "ws")}/ws`;
+  gateway.gateway.connection.gatewayUrl = gatewayUrl;
+  await loadProfileAppearancePrefs(client, "profile-a", gateway.gateway.connection.gatewayUrl, {
+    configObject: {},
+    canMigrate: false,
+    isCurrent: () => true,
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 2;
+  const pixels = canvas.getContext("2d")!;
+  pixels.fillStyle = "white";
+  pixels.fillRect(0, 0, 2, 2);
+  const photoBlob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg");
+  });
+  expect(photoBlob).not.toBeNull();
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+    return url.pathname === "/__openclaw__/users/background/asset-a"
+      ? Promise.resolve(new Response(photoBlob, { headers: { "content-type": "image/jpeg" } }))
+      : nativeFetch(input, init);
+  });
   const theme: ApplicationTheme = {
     settings: {
       ...loadSettings(),

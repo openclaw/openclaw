@@ -471,7 +471,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                         data-popover="close"
                         aria-pressed={!state().trimmedCwd ? "true" : "false"}
                         disabled={state().submitting}
-                        onClick={() => applyFolder("")}
+                        ref={nativeListener("click", () => applyFolder(""))}
                       >
                         <span class="session-menu__icon" aria-hidden="true">
                           <Icon name="folder" />

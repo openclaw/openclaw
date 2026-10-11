@@ -67,3 +67,31 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
   expect(listDirectory).toHaveBeenCalledExactlyOnceWith("/workspace");
   expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 });
+
+it("clears a saved directory when the agent workspace choice closes the popover", async () => {
+  const submit = vi.fn(async () => null);
+  const completed = fixture.track(
+    showSessionGroupDefaultsDialog({
+      group: "Project",
+      defaults: { cwd: "/workspace/project", worktree: false },
+      listDirectory: async () => ({
+        path: "/workspace",
+        parent: "/",
+        home: "/home/test",
+        entries: [],
+      }),
+      inspectRepository: async () => "not_git",
+      submit,
+    }),
+  );
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!.click();
+  const reset = modal.querySelector<HTMLButtonElement>('[data-value="agent-workspace"]')!;
+  reset.click();
+  await waitForSolid(() => expect(reset.getAttribute("aria-pressed")).toBe("true"));
+  modal
+    .querySelector("form")!
+    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await completed;
+  expect(submit).toHaveBeenCalledExactlyOnceWith({ cwd: "", worktree: false });
+});

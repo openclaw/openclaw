@@ -129,6 +129,27 @@ afterEach(async () => {
 });
 
 describe("progress hovercard provider boundary", () => {
+  it("keeps caller-owned children connected when the passive provider mounts", async () => {
+    let connections = 0;
+    let disconnections = 0;
+    class ConnectionProbe extends HTMLElement {
+      connectedCallback() {
+        connections += 1;
+      }
+      disconnectedCallback() {
+        disconnections += 1;
+      }
+    }
+    customElements.define("openclaw-progress-provider-connection-probe", ConnectionProbe);
+    const h = fixture(progress(1, "Synthetic progress"));
+    const child = document.createElement("openclaw-progress-provider-connection-probe");
+    h.provider.append(child);
+    await h.mount();
+    expect(connections).toBe(1);
+    expect(disconnections).toBe(0);
+    expect(child.parentElement).toBe(h.provider);
+  });
+
   it("enters by Tab, retains the focused progress href on refresh, and returns focus when removed", async () => {
     const { userEvent } = await import("vitest/browser");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -143,6 +164,7 @@ describe("progress hovercard provider boundary", () => {
     const heldPortal = portal();
     expect(document.activeElement).toBe(h.trigger);
     await userEvent.keyboard("{Tab}");
+    await drainTurn();
     expect(document.activeElement?.getAttribute("href")).toBe(buildHref);
 
     // Observe outcomes after the normal full commit; do not invoke or reorder afterCommit.
