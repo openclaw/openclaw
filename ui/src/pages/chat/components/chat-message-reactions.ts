@@ -8,10 +8,7 @@ export type MessageReactionAction = (messageId: string, emoji: string, remove: b
 
 const TOOLTIP_NAME_LIMIT = 3;
 
-export {
-  MessageReactionPicker,
-  type MessageReactionPlacement,
-} from "./chat-message-reactions-view.tsx";
+import "./chat-message-reactions-view.tsx";
 
 export function ownReactionEmoji(
   reactions: readonly MessageReactionSummary[] | undefined,
