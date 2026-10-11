@@ -1006,7 +1006,9 @@ function detachCurrentSharedClient(
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,
 ): () => boolean {
-  return captureSharedClientRegistration(client);
+  const isCurrent = captureSharedClientRegistration(client);
+  const revision = client.getModelCatalogRevision();
+  return () => isCurrent() && client.getModelCatalogRevision() === revision;
 }
 
 /** Registration ends on retirement even when sibling leases keep the process alive. */
