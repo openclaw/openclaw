@@ -552,7 +552,7 @@ export function loadRuntimePluginCandidate(params: {
       const wrongLoaderError = formatBundledChannelWrongLoaderError(record.kind);
       if (wrongLoaderError) {
         params.logger.error(
-          `[plugins] ${record.id} ${wrongLoaderError}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+          `[plugins] ${record.id} ${wrongLoaderError}; check that plugin is loaded via bundled channel discovery, not legacy plugin loader`,
         );
         pushPluginLoadError(wrongLoaderError);
       } else {
