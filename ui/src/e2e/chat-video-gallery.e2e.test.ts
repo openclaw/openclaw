@@ -19,8 +19,7 @@ type NativeControlNode = {
 // CDP is used only to locate Chromium's closed native controls. Input is real mouse input.
 async function nativeVideoControlBox(cdp: CDPSession, control: string) {
   const { result } = await cdp.send("Runtime.evaluate", {
-    expression:
-      'document.querySelector("openclaw-image-lightbox").shadowRoot.querySelector("video")',
+    expression: 'document.querySelector("openclaw-image-lightbox").querySelector("video")',
   });
   if (!result.objectId) {
     throw new Error("Missing expanded native player");

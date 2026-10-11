@@ -25,6 +25,7 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+  propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
       ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
@@ -109,6 +110,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         return;
       }
       this.#values.set(key, value);
+      spec.propertyChanged?.(this.#host, key as keyof Props);
       const property = declarations.get(key);
       if (property?.reflect && property.attribute !== false) {
         const attribute = property.attribute ?? key.toLowerCase();

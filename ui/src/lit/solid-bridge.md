@@ -52,6 +52,11 @@ Declared methods receive the typed host first, preserve arguments/return values,
 and work before connection. Keep stateful behavior in the primitive's owner;
 methods can change declared properties or invoke its native DOM operations.
 
+For owners that must invalidate requests or presentation synchronously, the optional
+`propertyChanged(host, key)` hook runs after a changed value is stored and before
+rendering is scheduled. Equal assignments do not invoke it. Keep cancellation and
+authority in that owner; the hook is not a second render lifecycle.
+
 Host property reads and writes are synchronous. Component updates are batched
 until the microtask commit. The bridge queues its flush during Lit's property
 commit, so awaiting the caller's `updateComplete` sees committed synchronous

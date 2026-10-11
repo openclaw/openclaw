@@ -144,7 +144,7 @@ suite.define(() => {
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
       const readControlContrast = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
-          const root = lightbox.shadowRoot!;
+          const root = lightbox;
           return [".open-original", ".close", '[aria-label="Zoom in"]'].map((selector) => {
             const style = getComputedStyle(root.querySelector(selector)!);
             return {

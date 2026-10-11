@@ -53,6 +53,7 @@ function hovercard() {
 }
 
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -69,14 +70,16 @@ describe("GitHub hovercards with authorized session details", () => {
     vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it.each(["hover", "focus"])("shows known details before enrichment for %s", async (trigger) => {
     const { pending, client, provider, anchor } = createSeededLink();
+    await provider.updateComplete;
     if (trigger === "hover") {
       await hover(anchor);
     } else {
@@ -224,6 +227,10 @@ describe("GitHub hovercards with authorized session details", () => {
       } else {
         client.recoveryScope = "principal-b";
       }
+      provider.remove();
+      await Promise.resolve();
+      document.body.append(provider);
+      await provider.updateComplete;
       const current = createDeferred<unknown>();
       client.request.mockReturnValue(current.promise);
       await hover(anchor);
