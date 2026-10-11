@@ -103,24 +103,30 @@ async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<
   throw new Error(`timed out waiting for parseable JSON in ${filePath}`, { cause: lastError });
 }
 
-async function waitForProcessExit(
+const closedLaunchers = new WeakSet<ReturnType<typeof spawn>>();
+
+function trackLauncherClose(child: ReturnType<typeof spawn>): void {
+  child.once("close", () => closedLaunchers.add(child));
+}
+
+async function waitForProcessClose(
   child: ReturnType<typeof spawn>,
   label: string,
   timeoutMs: number,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  if (child.exitCode !== null || child.signalCode !== null) {
+  if (closedLaunchers.has(child)) {
     return { code: child.exitCode, signal: child.signalCode };
   }
 
   const signal = AbortSignal.timeout(timeoutMs);
   try {
-    const [code, exitSignal] = (await once(child, "exit", { signal })) as [
+    const [code, exitSignal] = (await once(child, "close", { signal })) as [
       number | null,
       NodeJS.Signals | null,
     ];
     return { code, signal: exitSignal };
   } catch (error) {
-    throw new Error(`timed out waiting for ${label} to exit`, { cause: error });
+    throw new Error(`timed out waiting for ${label} stdio to close`, { cause: error });
   }
 }
 
@@ -133,7 +139,7 @@ async function settleLauncherFixture(
     if (inspectManagedProcessGroup(launcher, { errorPolicy: "alive-on-eperm" }) !== "dead") {
       terminateManagedChild(launcher, "SIGKILL", { processGroupFallback: "never" });
     }
-    await waitForProcessExit(launcher, "fixture launcher cleanup", 5000);
+    await waitForProcessClose(launcher, "fixture launcher cleanup", 5000);
     if (
       !(await waitForManagedProcessGroupExit(launcher, 5000, { errorPolicy: "alive-on-eperm" }))
     ) {
@@ -1193,10 +1199,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           env: launcherEnv({ NODE_COMPILE_CACHE: path.join(root, ".node-compile-cache") }),
           stdio: "ignore",
         });
+        trackLauncherClose(launcher);
         try {
           const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
           launcher.kill("SIGTERM");
-          await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+          await expect(waitForProcessClose(launcher, "launcher", 5000)).resolves.toEqual({
             code: mode === "cooperative" ? 0 : null,
             signal: mode === "cooperative" ? null : "SIGKILL",
           });
@@ -1248,11 +1255,12 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
             stdio: "ignore",
           },
         );
+        trackLauncherClose(launcher);
         let ownerPid: number | undefined;
         try {
           ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
           launcher.kill("SIGTERM");
-          await expect(waitForProcessExit(launcher, "foreground Gmail", 5000)).resolves.toEqual({
+          await expect(waitForProcessClose(launcher, "foreground Gmail", 5000)).resolves.toEqual({
             code: 0,
             signal: null,
           });
@@ -1268,52 +1276,62 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     { signal: "SIGINT" as const, target: "launcher" },
     { signal: "SIGTERM" as const, target: "launcher" },
     { signal: "SIGKILL" as const, target: "child" },
-  ])("preserves $signal when the respawn $target is signaled", async (testCase) =>
-    fixtures.run(async () => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
-      await addGitMarker(fixtureRoot);
-      const childInfoPath = path.join(fixtureRoot, "child-info.json");
-      await fs.writeFile(
-        path.join(fixtureRoot, "dist", "entry.js"),
-        [
-          'import { writeFileSync } from "node:fs";',
-          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
-          'process.title = "openclaw-launcher-default-signal-test-child";',
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+  ])(
+    "propagates $signal after output closes when the respawn $target is signaled",
+    async (testCase) =>
+      fixtures.run(async () => {
+        const fixtureRoot = await makeLauncherFixture(fixtures);
+        await addGitMarker(fixtureRoot);
+        const childInfoPath = path.join(fixtureRoot, "child-info.json");
+        const expectedOutput = "signal-output\n".repeat(32 * 1024);
+        await fs.writeFile(
+          path.join(fixtureRoot, "dist", "entry.js"),
+          [
+            'import { writeFileSync } from "node:fs";',
+            `process.stdout.write(${JSON.stringify(expectedOutput)}, () => writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid })));`,
+            'process.title = "openclaw-launcher-default-signal-test-child";',
+            "setInterval(() => {}, 1000);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
 
-      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
-        detached: true,
-        cwd: fixtureRoot,
-        env: launcherEnv({
-          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
-        }),
-        stdio: "ignore",
-      });
-      let respawnChildPid: number | undefined;
-
-      try {
-        const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
-        respawnChildPid = childInfo.pid;
-
-        if (testCase.target === "launcher") {
-          launcher.kill(testCase.signal);
-        } else {
-          process.kill(respawnChildPid, testCase.signal);
-        }
-
-        await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
-          code: null,
-          signal: testCase.signal,
+        const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+          detached: true,
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+          }),
+          stdio: ["ignore", "pipe", "pipe"],
         });
-        expect(isProcessAlive(respawnChildPid)).toBe(false);
-      } finally {
-        await settleLauncherFixture(fixtures, launcher);
-      }
-    }),
+        trackLauncherClose(launcher);
+        let output = "";
+        launcher.stdout.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        launcher.stderr.resume();
+        let respawnChildPid: number | undefined;
+
+        try {
+          const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
+          respawnChildPid = childInfo.pid;
+
+          if (testCase.target === "launcher") {
+            launcher.kill(testCase.signal);
+          } else {
+            process.kill(respawnChildPid, testCase.signal);
+          }
+
+          await expect(waitForProcessClose(launcher, "launcher", 5000)).resolves.toEqual({
+            code: null,
+            signal: testCase.signal,
+          });
+          expect(output).toBe(expectedOutput);
+          expect(isProcessAlive(respawnChildPid)).toBe(false);
+        } finally {
+          await settleLauncherFixture(fixtures, launcher);
+        }
+      }),
   );
 
   it("preserves an explicit exit 143 from a compile-cache respawn child", async () => {

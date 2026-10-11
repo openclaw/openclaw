@@ -47,6 +47,8 @@ let container: HTMLDivElement;
 let onPatch: ReturnType<typeof vi.fn<Parameters<typeof renderConfigFormBase>[0]["onPatch"]>>;
 beforeEach(() => {
   container = document.createElement("div");
+  document.body.append(container);
+  onTestFinished(() => container.remove());
   onPatch = vi.fn();
 });
 
@@ -59,12 +61,10 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 function selectSegmented(control: HTMLElement) {
-  const group = expectElement(
-    control.closest<HTMLElement & { value: string }>("wa-radio-group"),
-    "segmented radio group",
-  );
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  expectElement(
+    control.querySelector<HTMLInputElement>('.settings-segmented__input[type="radio"]'),
+    "segmented radio input",
+  ).click();
 }
 
 afterEach(async () => {
@@ -116,7 +116,7 @@ describe("config form renderer", () => {
       const props = { value: {}, onPatch, uiHints: { [key]: { label, help } } };
       const heading = () =>
         field
-          ? container.querySelector("input")?.getAttribute("aria-label")
+          ? container.querySelector("input.settings-input")?.getAttribute("aria-label")
           : container.querySelector("h2.settings-section__heading")?.textContent?.trim();
       const expectHelp = (text: string) => {
         if (field) {
@@ -224,8 +224,6 @@ describe("config form renderer", () => {
     ["string or SecretRef", { type: ["string", "object"] }],
   ])("keeps a masked sensitive %s field editable across keystrokes", async (_name, tokenSchema) => {
     const { userEvent } = await import("vitest/browser");
-    document.body.append(container);
-    onTestFinished(() => container.remove());
     const analysis = analyzeConfigSchema(object({ token: tokenSchema }));
     const revealed = new Set<string>();
     let value: Record<string, unknown> = {};
@@ -298,11 +296,10 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "enabled switch",
     );
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
 
     const addButton = expectElement(
@@ -347,8 +344,6 @@ describe("config form renderer", () => {
         },
       }),
     );
-    document.body.append(container);
-    onTestFinished(() => container.remove());
     const draw = (fromNumber: string) =>
       renderAnalyzedFormFixture(container, analysis, {
         uiHints: {
@@ -438,24 +433,25 @@ describe("config form renderer", () => {
       onPatch,
     });
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "named toggle",
     );
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
     const label = wildcard ? "Plugin Enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
-    expect(checkbox.textContent?.trim()).toBe(label);
+    expect(
+      container.querySelector(`#${checkbox.getAttribute("aria-labelledby")}`)?.textContent?.trim(),
+    ).toBe(label);
     if (!wildcard) {
       expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
         "Enable beta features",
       );
     }
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(
       wildcard ? ["plugins", "entries", "voice-call", "enabled"] : ["features", "beta"],
-      true,
+      !wildcard,
     );
   });
 
@@ -508,7 +504,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
     const select = expectElement(
       container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
       "automations enabled select",

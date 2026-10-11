@@ -344,8 +344,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = host.sidebarAgentsMode === "roster";
   const grouping = host.effectiveSessionsGrouping();
-  const owners = host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : [];
   const ownerFilterId = host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null;
+  const owners = host.sessionOwnerOptions.filter(
+    (owner) => host.sessionOwnershipVisibility.filters || owner.id === ownerFilterId,
+  );
   const involvingMe = host.sessionInvolvingMeFilterActive;
   const selfOwnerId = host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null;
   const peopleSortAvailable = host.sessionPeopleSortAvailable();
@@ -377,7 +379,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       value,
       options: options.map((option) => ({ ...option, title: option.label })),
       ariaLabel: label,
-      className: "sidebar-session-menu-segmented",
+      class: "sidebar-session-menu-segmented",
       onChange,
     })}
   </div>`;
@@ -423,7 +425,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
                       (event.currentTarget as HTMLElement)
                         .closest(".sidebar-session-filter-panel")
                         ?.querySelector<HTMLElement>(
-                          '#sidebar-sessions-status wa-radio[value="active"]',
+                          '#sidebar-sessions-status input[type="radio"][value="active"]',
                         )
                         ?.focus();
                       host.setSessionOwnerFilter(null);

@@ -35,7 +35,7 @@ export function createSessionRowProjectionCatalog(params: {
   onRefreshed: (changed: boolean) => void;
 }) {
   let modelCatalog = params.modelCatalog;
-  let catalogDirty = params.getModelCatalog ? Symbol("catalog") : undefined;
+  let catalogDirty = Boolean(params.getModelCatalog);
   let pending: Promise<void> | undefined;
   let replacement: Promise<void> | undefined;
   let disposed = false;
@@ -44,15 +44,15 @@ export function createSessionRowProjectionCatalog(params: {
       return;
     }
     if (event.phase === "invalidated" && event.replacement) {
-      const replacing = (replacement = event.replacement);
+      replacement = event.replacement;
       const settled = () => {
-        if (!disposed && replacement === replacing) {
+        if (!disposed) {
           replacement = undefined;
           params.onInvalidated();
         }
       };
       // Scoped auth invalidations need not publish globally; only the owner gate can pause reads.
-      void replacing.then(settled, settled).catch(() => {});
+      void replacement.then(settled, settled).catch(() => {});
     }
     // An incomplete catalog read still needs the next publication to recover its rows.
     if (
@@ -73,11 +73,11 @@ export function createSessionRowProjectionCatalog(params: {
       return !disposed && pending !== undefined;
     },
     get needsInitialRead() {
-      return Boolean(catalogDirty) && modelCatalog === undefined;
+      return catalogDirty && modelCatalog === undefined;
     },
     invalidate() {
       if (params.getModelCatalog) {
-        catalogDirty = Symbol("catalog");
+        catalogDirty = true;
       }
     },
     refresh() {
@@ -87,28 +87,19 @@ export function createSessionRowProjectionCatalog(params: {
       if (pending) {
         return pending;
       }
-      const revision = catalogDirty;
       const work = (async () => {
-        try {
-          const next = await params.getModelCatalog?.();
-          pending = undefined;
-          if (disposed || catalogDirty !== revision) {
-            if (!disposed) {
-              params.onRefreshed(false);
-            }
-            return;
-          }
-          // Catalog visibility and row invalidation share one synchronous publication.
-          const changed = !hasSameModelFacts(modelCatalog, next);
-          modelCatalog = next;
-          catalogDirty = undefined;
-          params.onRefreshed(changed);
-        } catch (error) {
-          pending = undefined;
-          // Keep the revision dirty so the next publication or read can retry.
-          throw error;
+        const next = await params.getModelCatalog?.();
+        if (disposed) {
+          return;
         }
-      })();
+        // A concurrent catalog change is adopted by the next publication.
+        const changed = !hasSameModelFacts(modelCatalog, next);
+        modelCatalog = next;
+        catalogDirty = false;
+        params.onRefreshed(changed);
+      })().finally(() => {
+        pending = undefined;
+      });
       pending = work;
       void work.catch(() => {});
       return work;

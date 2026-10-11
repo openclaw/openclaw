@@ -2,13 +2,14 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
-  replaceTranscriptEvents,
   type SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
   restoreSessionColdTranscript,
@@ -29,7 +30,10 @@ import {
   readSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import {
+  readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync,
+} from "./session-transcript-title-reader.js";
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -166,6 +170,41 @@ test.each([
 });
 
 describe("session transcript title hydration", () => {
+  test("reads fresh title fields in the worker after in-process appends and rewrites", async () => {
+    const scope = await writeSqliteMessages("reader-title-worker", [
+      { role: "user", content: "Original question" },
+      { role: "assistant", content: "Initial answer" },
+    ]);
+    await readSessionTitleFieldsFromTranscriptAsync(scope);
+    const read = async (firstUserMessage: string, lastMessagePreview: string) => {
+      const sql = observeHostDataSql();
+      try {
+        await expect(readSessionTitleFieldsFromTranscriptAsync(scope)).resolves.toEqual({
+          firstUserMessage,
+          lastMessagePreview,
+        });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "assistant", content: "Latest answer" } }],
+      touchSessionEntry: false,
+    });
+    await read("Original question", "Latest answer");
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "replacement",
+        parentId: null,
+        message: { role: "user", content: "Replacement question" },
+      },
+    ]);
+    await read("Replacement question", "Replacement question");
+  });
+
   test("keeps cold transcripts archived while reading mixed title rows and heals after restoration", async () => {
     const cold = await writeTranscript("reader-title-archived", [
       { type: "session", version: 3, id: "reader-title-archived" },

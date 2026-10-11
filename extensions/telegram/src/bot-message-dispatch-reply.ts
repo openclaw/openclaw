@@ -7,7 +7,6 @@ import type {
   LivePreviewDeliveryResult,
   OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -510,7 +509,7 @@ async function deliverReplyWithNormalization(
       info.kind !== "final" &&
       (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
     if (finalizedPreview) {
-      await handlePreviewFinalizedResult(turn, result);
+      await handlePreviewFinalizedResult(turn, result, lanePayload);
       if (isAskUserPayload && result.kind === "preview-finalized") {
         registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, {
           messageId: result.delivery.messageId,
@@ -605,9 +604,7 @@ export function handleReplyError(
   info: Parameters<ErrorCallback>[1],
 ): void {
   if (info.kind === "final") {
-    if (err instanceof PlatformMessageNotDispatchedError) {
-      turn.finalDeliveryNotDispatched = true;
-    }
+    turn.finalDeliveryError = err;
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );

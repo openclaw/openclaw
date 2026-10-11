@@ -11,6 +11,7 @@ export type SqliteSchemaFacts = {
   readonly userVersion: number;
   readonly schemaVersion: number;
   readonly tables: ReadonlySet<string>;
+  readonly views: ReadonlySet<string>;
   readonly tableSql: ReadonlyMap<string, string | null>;
   readonly indexes: ReadonlySet<string>;
   readonly indexDefinitions: ReadonlyMap<string, { table: string; sql: string | null }>;
@@ -34,6 +35,9 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
       typeof value.schemaVersion !== "number" ||
       !("tables" in value) ||
       !(value.tables instanceof Set) ||
+      !("views" in value) ||
+      !(value.views instanceof Set) ||
+      ![...value.views].every((view) => typeof view === "string") ||
       !("tableSql" in value) ||
       !(value.tableSql instanceof Map) ||
       !("indexes" in value) ||
@@ -58,6 +62,7 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
       userVersion: value.userVersion,
       schemaVersion: value.schemaVersion,
       tables: value.tables,
+      views: value.views,
       tableSql: value.tableSql,
       indexes: value.indexes,
       indexDefinitions: value.indexDefinitions,
@@ -79,7 +84,7 @@ function captureSqliteSchemaFacts(
     validateUserVersion?.(userVersion);
     const objects = executeWithCachedStatement(
       database,
-      "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'index', 'trigger')",
+      "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
       [],
       (s) => s.all(),
     );
@@ -90,6 +95,11 @@ function captureSqliteSchemaFacts(
       userVersion,
       schemaVersion,
       tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
+      views: new Set(
+        objects.flatMap((row) =>
+          row.type === "view" && typeof row.name === "string" ? [row.name] : [],
+        ),
+      ),
       tableSql: new Map(
         tables.flatMap((row) =>
           typeof row.name === "string"

@@ -284,10 +284,8 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
-  for (const key of ["temperature", "topP"] as const) {
-    if (typeof extraParams[key] === "number") {
-      streamParams[key] = extraParams[key];
-    }
+  if (typeof extraParams.temperature === "number") {
+    streamParams.temperature = extraParams.temperature;
   }
   if (typeof extraParams.streaming === "boolean") {
     streamParams.streaming = extraParams.streaming;
@@ -322,9 +320,10 @@ function createStreamFnWithExtraParams(
     streamParams.cachedContent = cachedContent;
   }
 
-  // Camel-case request overrides win over configured snake-case penalties.
+  // Camel-case request overrides win over configured snake-case sampling values.
   // Transports still decide which API accepts each sampling parameter.
   for (const keys of [
+    ["topP", "top_p"],
     ["frequencyPenalty", "frequency_penalty"],
     ["presencePenalty", "presence_penalty"],
   ] as const) {

@@ -128,7 +128,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
     }
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Repaired canonical workspace metadata for 2 of 2"),
+      expect.stringContaining("Repaired saved workspace metadata for 2 of 2"),
       "Session worktrees",
     );
   });

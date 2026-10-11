@@ -3,8 +3,10 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   captureControlUiE2eFailureDiagnostics,
+  createControlUiMockSameOriginGatewayScript,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -31,16 +33,15 @@ suite.define(() => {
         async ({ page }) => {
           const pinnedKey = "agent:main:release-plan";
           const groupedKey = "agent:main:review-notes";
-          await installMockGateway(page, {
+          const gateway = await installMockGateway(page, {
             sessionKey: groupedKey,
             sessionGroups: ["Research", "Operations"],
             sessions: [
               sessionRow(pinnedKey, "Release planning", 3, {
-                pinned: true,
                 icon: "📌",
                 color: "blue",
               }),
-              sessionRow(groupedKey, "Review notes", 2, {
+              sessionRow(groupedKey, "Review the mobile navigation changes", 2, {
                 category: "Research",
                 icon: "🔬",
                 color: "purple",
@@ -53,19 +54,26 @@ suite.define(() => {
               { id: "reports", pluginId: "reports", label: "Reports", icon: "chartBar" },
             ],
           });
+          // This suite serves Vite source; bind it to the same Gateway origin as the seed.
+          await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
           await page.addInitScript(
-            ({ key }) =>
+            ({ key, gatewayUrl }) => {
+              localStorage.setItem(`openclaw.control.currentGateway.v1:${gatewayUrl}`, gatewayUrl);
               localStorage.setItem(
                 key,
                 JSON.stringify({
                   sidebarEntries: [
+                    "route:cron",
                     "session:agent:main:release-plan",
                     "plugin:reports/reports",
-                    "route:cron",
                   ],
                 }),
-              ),
-            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+              );
+            },
+            {
+              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+            },
           );
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, groupedKey));
           await page
@@ -73,26 +81,45 @@ suite.define(() => {
             .first()
             .click();
           await waitForMobileSidebarDrawerOpen(page);
-          const pinned = page.locator('[data-sidebar-entry="session:agent:main:release-plan"]');
-          const plugin = page.locator('[data-sidebar-entry="plugin:reports/reports"]');
+          const rail = page.locator(".sidebar-rail");
+          const pinned = rail.locator('[data-sidebar-entry="session:agent:main:release-plan"]');
+          const plugin = rail.locator('[data-sidebar-entry="plugin:reports/reports"]');
+          const session = page.locator(
+            '.sidebar-session-content .sidebar-recent-session[data-session-key="agent:main:release-plan"]',
+          );
           const group = page.locator('[data-session-section="category:Research"]');
           await pinned.locator(".session-glyph").waitFor();
           await plugin.locator(".nav-item__icon").waitFor();
+          await group.locator(".sidebar-recent-session").waitFor();
+          await session.waitFor();
+          // Pins are flat navigation refs, while session actions stay in Sessions.
+          expect(await pinned.locator(".sidebar-recent-session").count()).toBe(0);
+          await rail.locator('[data-navigation-view="pages"]').click();
+          await page
+            .locator('.sidebar-pages [data-sidebar-entry="plugin:reports/reports"]')
+            .waitFor();
+          expect(await plugin.count()).toBe(1);
+          await rail.locator('[data-navigation-view="sessions"]').click();
           await group.locator(".sidebar-recent-session").waitFor();
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             const frame = await takeControlUiScreenshotFrame(
               page,
               page.locator(".shell-nav"),
               [pinned, plugin, group],
-              { animations: "disabled" },
+              { animations: "disabled", elements: [page.locator(".shell-nav")] },
             );
             await writeFile(
               path.join(suite.artifactDir, "sidebar-spacing-" + pointer + ".png"),
               frame.png,
             );
+            await writeFile(
+              path.join(suite.artifactDir, "sidebar-spacing-" + pointer + "-crop.png"),
+              frame.elements[0]!.png,
+            );
           }
           for (const width of [320, 390, 768]) {
             await page.setViewportSize({ width, height: 844 });
+            expect((await rail.boundingBox())?.width).toBe(52);
             for (const row of [pinned, plugin]) {
               const grip = row.locator(".sidebar-reorder-trigger");
               await row.hover();
@@ -105,13 +132,21 @@ suite.define(() => {
               expect(icon).not.toBeNull();
               expect(glyph).not.toBeNull();
               expect(button!.width).toBeGreaterThanOrEqual(24);
+              expect(button!.height).toBeGreaterThanOrEqual(24);
               expect(icon!.x).toBeGreaterThanOrEqual(button!.x);
               expect(icon!.x + icon!.width).toBeLessThanOrEqual(button!.x + button!.width);
-              expect(glyph!.x + glyph!.width).toBeLessThanOrEqual(button!.x);
+              // Rail controls may be stacked or adjacent, but must not cover the glyph.
+              expect(
+                glyph!.x + glyph!.width <= button!.x ||
+                  button!.x + button!.width <= glyph!.x ||
+                  glyph!.y + glyph!.height <= button!.y ||
+                  button!.y + button!.height <= glyph!.y,
+              ).toBe(true);
               if (width === 390) {
                 const previous = await row.evaluate((element) =>
                   element.previousElementSibling?.getAttribute("data-sidebar-entry"),
                 );
+                expect(previous).not.toBeNull();
                 if (pointer === "coarse") {
                   await grip.tap();
                 } else {
@@ -132,14 +167,16 @@ suite.define(() => {
                 ).toBe(previous);
               }
             }
-            const menuBox = await pinned.locator("[data-sidebar-session-menu]").boundingBox();
-            const reorderBox = await pinned.locator(".sidebar-reorder-trigger").boundingBox();
-            expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(reorderBox!.x);
+            const menuBox = await session.locator("[data-sidebar-session-menu]").boundingBox();
+            const sessionBox = await session.boundingBox();
+            expect(menuBox).not.toBeNull();
+            expect(sessionBox).not.toBeNull();
+            expect(menuBox!.x).toBeGreaterThanOrEqual(sessionBox!.x);
+            expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(
+              sessionBox!.x + sessionBox!.width,
+            );
             expect(menuBox!.width).toBe(44);
-            for (const colored of [
-              pinned.locator(".sidebar-recent-session"),
-              group.locator(".sidebar-recent-session"),
-            ]) {
+            for (const colored of [session, group.locator(".sidebar-recent-session")]) {
               const clearance = await colored.evaluate((row) => {
                 const stripe = getComputedStyle(row, "::before");
                 return (
@@ -149,7 +186,6 @@ suite.define(() => {
                   Number.parseFloat(stripe.width)
                 );
               });
-              // Pinned rows center the glyph in a narrower lead than grouped rows.
               expect(clearance).toBeGreaterThanOrEqual(2);
             }
             const header = group.locator(".sidebar-recent-sessions__head");
@@ -164,6 +200,8 @@ suite.define(() => {
           await group.locator(".sidebar-recent-session").waitFor({ state: "hidden" });
           await toggle.click();
           await group.locator(".sidebar-recent-session").waitFor();
+          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+          expect(await gateway.getRequests("config.patch")).toEqual([]);
         },
       );
     },
@@ -224,6 +262,22 @@ suite.define(() => {
         const title = row.locator(".sidebar-recent-session__name");
         const titleWidth = () => title.evaluate((element) => element.getBoundingClientRect().width);
         const restingWidth = await titleWidth();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".shell-nav"),
+            [title],
+            {
+              animations: "disabled",
+              elements: [page.locator(".shell-nav")],
+            },
+          );
+          await writeFile(path.join(suite.artifactDir, `mobile-title-${pointer}.png`), frame.png);
+          await writeFile(
+            path.join(suite.artifactDir, `mobile-title-${pointer}-crop.png`),
+            frame.elements[0]!.png,
+          );
+        }
         // Keep the drawer increase modest; reclaim reading space inside its rows.
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
@@ -252,12 +306,16 @@ suite.define(() => {
         const menuButton = row.locator("[data-sidebar-session-menu]");
         const buttonBox = await menuButton.boundingBox();
         const rowBox = await row.boundingBox();
-        if (!buttonBox || !rowBox) {
+        const titleBox = await title.boundingBox();
+        if (!buttonBox || !rowBox || !titleBox) {
           throw new Error("expected visible sidebar row and menu target");
         }
         // Allow only roundoff from the drawer's translated box coordinates.
         expect(buttonBox.width).toBeCloseTo(44, 4);
         expect(buttonBox.height).toBeCloseTo(44, 4);
+        expect(titleBox.x).toBeGreaterThanOrEqual(rowBox.x);
+        expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+        expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(buttonBox.y);
         expect(buttonBox.y).toBeGreaterThanOrEqual(rowBox.y);
         expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
         if (pointer === "coarse") {
@@ -312,6 +370,157 @@ suite.define(() => {
       } finally {
         await context.close();
       }
+    },
+  );
+
+  it.each([1280, 390])(
+    "shows everyday actions and the advanced page at width %i",
+    async (width) => {
+      await suite.withPage(
+        { colorScheme: "dark", hasTouch: width === 390, viewport: { width, height: 900 } },
+        async ({ page, context }) => {
+          const sessionKey = "agent:main:release-checklist";
+          await installMockGateway(page, {
+            sessionKey,
+            featureMethods: [
+              "chat.startup",
+              "sessions.assignOwner",
+              "sessions.setInvolvement",
+              "sessions.create",
+              "sessions.patch",
+              "users.list",
+            ],
+            sessionGroups: ["Product", "Research"],
+            hasMultipleSessionSharingIdentities: true,
+            operatorScopes: ["operator.read", "operator.write", "operator.admin"],
+            presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+            sessions: [
+              sessionRow(sessionKey, "Release checklist", Date.now() - 300_000, {
+                hiddenFromInvolvingMe: false,
+                owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+                effectiveCommunication: { send: "always", receive: "ask" },
+              }),
+              sessionRow("agent:main:design-review", "Design review", Date.now() - 600_000),
+              sessionRow("agent:main:customer-notes", "Customer notes", Date.now() - 900_000),
+            ],
+            historyMessages: [
+              { role: "user", content: "What is left before the release?" },
+              {
+                role: "assistant",
+                content:
+                  "The implementation is ready. Next: review the changes, verify the checklist, and publish the release notes.",
+              },
+            ],
+            methodResponses: {
+              "users.list": {
+                profiles: ["Ada", "Ben"].map((name) => ({
+                  id: "profile-" + name.toLowerCase(),
+                  displayName: name,
+                  emails: [],
+                  mergedInto: null,
+                  avatarMime: null,
+                  hasAvatar: false,
+                  githubIdentity: null,
+                  createdAt: 1,
+                  updatedAt: 1,
+                })),
+              },
+            },
+          });
+          await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          if (width === 390) {
+            await page
+              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+              .first()
+              .click();
+            await waitForMobileSidebarDrawerOpen(page);
+          }
+          const row = page.locator('[data-session-key="' + sessionKey + '"]');
+          await row.locator(".sidebar-recent-session__link").click({ button: "right" });
+          const menu = page.locator("openclaw-session-menu");
+          await menu.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
+          const phase = "after-" + width;
+          expect(
+            await menu
+              .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
+              .allTextContents(),
+          ).toEqual([
+            "Pin session",
+            "Rename…",
+            "Mark as unread",
+            "Copy link",
+            "Assign to…",
+            "Move to group",
+            "Snooze",
+            "Archive session",
+            "Advanced",
+          ]);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [menu.getByRole("menuitem", { name: "Pin session", exact: true })],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(suite.artifactDir, phase + "-root.png"), frame.png);
+          }
+          await menu.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+          await expect
+            .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+            .toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await row.locator(".sidebar-recent-session__link").click({ button: "right" });
+          await menu.getByRole("menuitem", { name: "Assign to…", exact: true }).click();
+          await menu.getByRole("menuitemradio", { name: "Ben", exact: true }).waitFor();
+          if (width === 390) {
+            expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+            await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+            await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
+          } else {
+            await page.keyboard.press("ArrowLeft");
+          }
+          const advanced = menu.getByRole("menuitem", {
+            name: "Advanced",
+            exact: true,
+          });
+          await advanced.click();
+          await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [
+                width === 390
+                  ? menu.getByRole("menuitem", { name: "Back", exact: true })
+                  : advanced,
+                menu.locator(".session-menu__communication"),
+              ],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(suite.artifactDir, phase + "-advanced.png"), frame.png);
+          }
+          if (width === 390) {
+            for (const label of ["Copy details", "Open in", "Icon & color"]) {
+              await menu.getByRole("menuitem", { name: label, exact: true }).click();
+              expect(await menu.locator("[slot='submenu']").count()).toBe(0);
+              await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+              await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
+            }
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [menu.getByRole("menuitem", { name: "Back", exact: true })],
+              { animations: "disabled" },
+            );
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              await writeFile(path.join(suite.artifactDir, "after-phone-back.png"), frame.png);
+            }
+            await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+            await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
+          }
+        },
+      );
     },
   );
 });

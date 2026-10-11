@@ -26,8 +26,6 @@ import { sqliteSnapshotSourceFileSize } from "./sqlite-snapshot-policy.js";
 import {
   acquireSqliteSnapshotToken as snapshotToken,
   beginSqliteSnapshotRetirement,
-  drainPendingSqliteSnapshotRootTokens,
-  drainPendingSqliteSnapshotTokens,
   isSqliteSnapshotStagingName as isStagingName,
   SQLITE_SNAPSHOT_LEGACY_AGE_MS as legacyAgeMs,
   SQLITE_SNAPSHOT_LEGACY_MARKER as legacyMarker,
@@ -62,7 +60,6 @@ export function acquireSqliteSnapshotReadToken(directory: string): () => void {
 
 /** Reconcile only after the token process closed; active readers still fence reclamation. */
 export function reconcileSqliteSnapshotRetirement(directory: string): void {
-  drainPendingSqliteSnapshotTokens(directory);
   if (!fs.lstatSync(directory, { throwIfNoEntry: false })) {
     return;
   }
@@ -80,9 +77,6 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
     return;
   }
   try {
-    drainPendingSqliteSnapshotRootTokens(root, (error) =>
-      report("SQLite snapshot token close failed; retaining native cleanup custody.", error),
-    );
     let admittedBytes = 0;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (admittedBytes >= reclamationByteBudget) {
@@ -303,16 +297,6 @@ export function createSqliteSnapshotStagingTokenSync(
   root = resolvePrivateSqliteSnapshotStagingRoot(),
   allowLegacyWorker = false,
 ): { directory: string; release: SnapshotToken } {
-  // A shared parent token fences admission until the child's own token is held.
-  // No mkdir of root: a late orphan must abort if reclamation already won.
-  const parentDirectory = stagingParent(root);
-  let parent: SnapshotToken | undefined;
-  try {
-    parent = parentDirectory ? snapshotToken(parentDirectory, "read") : undefined;
-  } catch (error) {
-    // Parent admission finishes before any new staging directory is attempted.
-    throw markPrivateDirectoryCreationRefused(error);
-  }
   let directory: string | undefined;
   try {
     // A selected installation may launch a worker without token admission.
@@ -332,7 +316,5 @@ export function createSqliteSnapshotStagingTokenSync(
       removeTempDirectory(directory);
     }
     throw error;
-  } finally {
-    parent?.();
   }
 }

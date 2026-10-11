@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { hasSessionTranscriptMessageInDatabase } from "../../../config/sessions/session-accessor.sqlite-transcript-metadata-read.js";
-import { replaceTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";

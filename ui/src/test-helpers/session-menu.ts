@@ -32,6 +32,7 @@ export async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
     compact?: boolean;
+    involvingMeContext?: boolean;
     navigationAllowed?: boolean;
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
@@ -76,6 +77,7 @@ export async function mountMenu(
     html`<openclaw-session-menu
       .session=${session}
       .compact=${options.compact ?? false}
+      .involvingMeContext=${options.involvingMeContext ?? false}
       .navigationAllowed=${options.navigationAllowed ?? true}
       .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
       .splitAllowed=${options.splitAllowed ?? false}
@@ -106,8 +108,20 @@ export async function mountMenu(
   if (!element) {
     throw new Error("Expected session menu");
   }
-  await element.updateComplete;
+  await settleSessionMenu(element);
   return element;
+}
+
+export async function settleSessionMenu(menu: SessionMenuElement): Promise<void> {
+  await menu.updateComplete;
+  // The Solid host commits before its retained Web Awesome children and their focus work.
+  await Promise.all(
+    Array.from(
+      menu.querySelectorAll<SessionMenuItem>("wa-dropdown, wa-dropdown-item"),
+      (item) => item.updateComplete,
+    ),
+  );
+  await Promise.resolve();
 }
 
 function itemLabel(item: HTMLElement): string {

@@ -172,18 +172,21 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not rotate harness-owned assistant timeouts", () => {
-    // Harness-owned transports already implement their own retry envelope;
-    // core failover should not double-rotate on those synthetic timeouts.
-    expect(
-      resolveAssistantDecision({
-        terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
-        harnessOwnsTransport: true,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
+  it.each(["runtime", "run_budget"] as const)(
+    "does not rotate harness-owned %s timeouts",
+    (source) => {
+      // Harness-owned transports already implement their own retry envelope;
+      // core failover should not double-rotate on those synthetic timeouts.
+      expect(
+        resolveAssistantDecision({
+          terminal: { kind: "timeout", phase: "prompt", source, aborted: true },
+          harnessOwnsTransport: true,
+        }),
+      ).toEqual({
+        action: "continue_normal",
+      });
+    },
+  );
 
   it("does not rotate harness-owned assistant errors classified as timeout", () => {
     expect(
@@ -289,13 +292,14 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not rotate or fallback assistant timeouts that exhausted the run budget (#60388)", () => {
+  it("moves an expired prompt attempt to its configured fallback without profile rotation", () => {
     expect(
       resolveAssistantDecision({
         terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
       }),
     ).toEqual({
-      action: "continue_normal",
+      action: "fallback_model",
+      reason: "timeout",
     });
   });
 });

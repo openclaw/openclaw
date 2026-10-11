@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -10,18 +9,20 @@ import "../../styles/components.css";
 import "../../styles/settings.css";
 import "../../styles/settings-controls.css";
 import "../../styles/activity.css";
-import { renderSessionActivityView } from "./session-activity-view.ts";
+import { mountSolid } from "./session-activity-view.test-harness.ts";
+import { renderSessionActivityView } from "./session-activity-view.tsx";
+
+const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
 
 let container: HTMLDivElement;
 
 beforeEach(() => {
-  // Own the Lit root: other browser suites may replace the shared body children.
+  // Own the root: other browser suites may replace the shared body children.
   container = document.createElement("div");
   document.body.append(container);
 });
 
 afterEach(() => {
-  render(null, container);
   container.remove();
 });
 
@@ -72,7 +73,7 @@ it.each([
       onAutomationDayToggle: vi.fn(),
       onFiltersChange: vi.fn(),
     };
-    render(renderSessionActivityView(props), container);
+    renderSessionActivityViewSolid(props, container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const content = main.querySelector<HTMLElement>(
       personId ? "[data-activity-identity]" : ".activity-pulse",
@@ -84,32 +85,28 @@ it.each([
     expect(content.getBoundingClientRect().height).toBeGreaterThan(0);
 
     for (const loading of [true, false, true, false]) {
-      render(renderSessionActivityView({ ...props, loading }), container);
+      renderSessionActivityViewSolid({ ...props, loading }, container);
       expect(Math.abs(content.getBoundingClientRect().top - top)).toBeLessThan(1);
       expect(main.textContent).not.toContain("Loading");
     }
 
     const request = vi.fn().mockResolvedValue(props.result);
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = new SessionActivityController({
-      addController() {},
-      removeController() {},
-      updateComplete: Promise.resolve(true),
-      requestUpdate: () =>
-        render(
-          renderSessionActivityView({
-            ...props,
-            result: controller.result,
-            error: controller.error,
-            loading: controller.loading,
-            retrying: controller.retrying,
-            onRetry: () => {
-              void controller.load(client, props.filters, "retry");
-            },
-          }),
-          container,
-        ),
-    });
+    const controller = new SessionActivityController(() =>
+      renderSessionActivityViewSolid(
+        {
+          ...props,
+          result: controller.result,
+          error: controller.error,
+          loading: controller.loading,
+          retrying: controller.retrying,
+          onRetry: () => {
+            void controller.load(client, props.filters, "retry");
+          },
+        },
+        container,
+      ),
+    );
     try {
       void controller.load(client, props.filters);
       await vi.waitFor(() => expect(controller.loading).toBe(false));
@@ -148,10 +145,10 @@ it.each([
       expect(container.querySelector('[role="alert"]')).toBeNull();
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
     } finally {
-      controller.hostDisconnected();
+      controller.dispose();
     }
 
-    render(renderSessionActivityView({ ...props, result: undefined, loading: true }), container);
+    renderSessionActivityViewSolid({ ...props, result: undefined, loading: true }, container);
     expect(
       container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
     ).toContain("Loading");

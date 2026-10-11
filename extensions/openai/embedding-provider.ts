@@ -41,12 +41,11 @@ export async function createOpenAiEmbeddingProvider(
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,
   });
+  const isNativeOpenAi =
+    URL.parse(resolvedClient.baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") ===
+    "api.openai.com";
   // Routers expect the provider-qualified model name; only native OpenAI strips it.
-  if (
-    URL.parse(resolvedClient.baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") !==
-      "api.openai.com" &&
-    originalModel.startsWith("openai/")
-  ) {
+  if (!isNativeOpenAi && originalModel.startsWith("openai/")) {
     resolvedClient.model = `openai/${normalizeOpenAiModel(originalModel)}`;
   }
   const client: OpenAiEmbeddingClient = {
@@ -62,6 +61,8 @@ export async function createOpenAiEmbeddingProvider(
       client,
       errorPrefix: "openai embeddings failed",
       maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
+      // https://developers.openai.com/api/reference/resources/embeddings/methods/create
+      maxInputsPerRequest: isNativeOpenAi ? 2048 : undefined,
       buildRequestFields: (kind) => {
         const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
         const value = explicit ?? client.inputType;

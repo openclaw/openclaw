@@ -114,7 +114,7 @@ curl http://127.0.0.1:18789/a2a/v1 \
 
 The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
 
-`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin-facing abort seam, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
+`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
 
 ## Configure outbound peers
 
@@ -161,7 +161,7 @@ Each authenticated peer and A2A `contextId` pair gets its own agent session. A2A
 isolated direct-message scope rather than inheriting `session.dmScope`, so remote peer content never
 joins the operator's main session and one peer cannot read another peer's conversation history.
 
-For agent bindings, use the configured peer name as the canonical direct-peer ID, such as
+For agent bindings, use the configured peer name as the direct-peer ID, such as
 `hermes`. A context-specific `hermes:<contextId>` binding takes precedence over that stable peer
 binding, and the stable peer binding takes precedence over broader A2A account or channel routes.
 

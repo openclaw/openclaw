@@ -35,8 +35,8 @@ import {
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
-import { controlUiSolidPlugin } from "./vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -202,8 +202,11 @@ export function createUiBrowserVitestConfig(
         "@awesome.me/webawesome/dist/components/switch/switch.js",
         "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
+        "@codemirror/language",
+        "@codemirror/language-data",
         "@codemirror/state",
         "@codemirror/view",
+        "@lezer/highlight",
         "@lit/context",
         "@lit/task",
         "@noble/ed25519",
@@ -213,6 +216,7 @@ export function createUiBrowserVitestConfig(
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
         "@panzoom/panzoom",
+        "@solidjs/testing-library",
         "@tanstack/lit-virtual",
         "@tanstack/virtual-core",
         "dompurify",

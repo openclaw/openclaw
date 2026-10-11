@@ -160,7 +160,7 @@ a canonical URL alone is not proof of anonymous access.
     accounts. Return `enabled`, `configured`, and applicable credential status
     fields without requiring secret resolution. Its result is not a resolved
     account: operational hooks such as checks and account status builders receive
-    `config.resolveAccount` results instead.
+    `config.resolveAccountAsync` or `config.resolveAccount` results instead.
     Diagnostics expose only status-safe fields from the inspection result.
     Include the same account enablement and configuration decisions used by the
     runtime, including duplicate-account suppression. If `configured` is omitted,
@@ -179,11 +179,15 @@ a canonical URL alone is not proof of anonymous access.
     Operational account reads can be asynchronous. Define
     `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
     durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for
-    the matching operational configured-state check. These optional callbacks
-    return a Promise of the same result as their synchronous counterparts.
-    Core awaits them when present; a rejection stays an error and never retries
-    the synchronous callback. Keep synchronous counterparts for older hosts and
-    external consumers of the existing contract.
+    the matching operational configured-state check. Use
+    `config.describeAccountAsync(account, cfg)` for state-backed account summaries,
+    `config.resolveAllowFromAsync({ cfg, accountId })` for stored allowlists, and
+    `security.resolveDmPolicyAsync({ cfg, accountId, account })` for stored DM policy.
+    These optional callbacks return a Promise of the same result as their
+    synchronous counterparts. Core awaits the async hook whenever it is present;
+    neither a rejection nor an empty result retries the synchronous hook. Keep
+    synchronous signatures for older hosts and external consumers, and forward
+    async hooks through any adapter that wraps the channel.
 
     Prepare current credentials for each operation, and revalidate live authority
     after awaited preparation before any side effect. Account objects and registry
@@ -382,6 +386,10 @@ a canonical URL alone is not proof of anonymous access.
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
+      `hasReplyPayloadFinalDeliveryCapture(payload)` from the same subpath identifies
+      replies whose confirmed delivery the shared dispatcher will record. Channel
+      adapters must skip their own transcript mirror for those replies, including
+      fallback sends, while still reporting the delivery outcome normally.
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
@@ -573,6 +581,28 @@ a canonical URL alone is not proof of anonymous access.
       its own inbound pipeline. Look at bundled channel plugins
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
+
+    Direct-message adapters can use `dispatchInboundDirectDm` from
+    `openclaw/plugin-sdk/channel-inbound`. Its optional synchronous
+    `assertAuthority: () => void` callback carries the channel owner's live
+    sender and lifecycle checks through asynchronous preparation. Capture the
+    selected account, peer identity, and policy before yielding; the callback
+    must check their current authority, not just compare a saved token. On
+    current hosts, it runs before session recording,
+    at metadata transaction and commit admission, and before agent dispatch.
+    Throw to refuse the pending effect. The callback is transient authority;
+    never serialize it or replace it with `inboundAccessAuthorized: true`.
+
+    The same callback is available on channel turn plans and prepared turns.
+    Direct session-recording callers can pass `assertAuthority`; the metadata
+    owner receives it as `assertCommitAllowed` and uses its existing writer
+    admission. Metadata failures keep their existing best-effort reporting,
+    while the subsequent dispatch check still refuses revoked authority.
+    Older hosts may ignore these additive fields: their presence is not
+    capability negotiation. The checks after host preparation and at metadata
+    commit require a host that implements this contract. Plugins must also
+    check live authority at effects they initiate directly, such as notices
+    and provider requests.
 
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,

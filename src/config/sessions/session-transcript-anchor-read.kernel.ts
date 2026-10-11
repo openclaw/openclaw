@@ -8,6 +8,7 @@ import {
   readExactSessionEntryRow,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionTranscriptMetadataInDatabase } from "./session-accessor.sqlite-metadata-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import {
   readCurrentProjectionSnapshot,
@@ -43,6 +44,7 @@ export type SessionTranscriptAnchorSelection = {
   includeHeader?: boolean;
   includeWatermark?: boolean;
   includeMessagePresence?: boolean;
+  includeMetadata?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
@@ -95,6 +97,10 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     throw new Error("Transcript anchor message selection requires prepared display policy");
   }
   const read = (): SessionTranscriptAnchorFacts => {
+    const readWatermark = () =>
+      projection
+        ? { generation: projection.version.generation, maxSeq: projection.version.rawSeq }
+        : readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId);
     const contextEntry = selection.contextAuthority
       ? readSessionEntryRow(database, resolved.sessionKey)?.entry
       : undefined;
@@ -107,7 +113,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
             cliHistoryBoundary: contextEntry.cliHistoryBoundary,
             permissionMode: contextEntry.permissionMode,
           },
-          watermark: readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
+          watermark: readWatermark(),
         }
       : undefined;
     // Session replacement and permission refusal precede transcript-anchor refusal.
@@ -159,14 +165,15 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       );
     }
     const validated = {
+      ...(selection.includeMetadata
+        ? { metadata: readSessionTranscriptMetadataInDatabase(database, resolved.sessionId) }
+        : {}),
       ...(selection.includeMessagePresence
         ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
         : {}),
       ...(selection.includeWatermark
         ? {
-            watermark:
-              contextAuthority?.watermark ??
-              readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
+            watermark: contextAuthority?.watermark ?? readWatermark(),
           }
         : {}),
       ...(contextAuthority ? { contextAuthority } : {}),

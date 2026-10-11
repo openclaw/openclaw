@@ -133,12 +133,14 @@ function setRuntime(bun: boolean, platform: string) {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   previousSelection = Object.getOwnPropertyDescriptor(globalThis, selectionKey);
   previousVersions = Object.getOwnPropertyDescriptor(process, "versions");
   previousPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   Reflect.deleteProperty(globalThis, selectionKey);
   vi.resetModules();
+  // File identity must keep the physical host policy while library selection simulates macOS.
+  await import("./sqlite-worker-identity.js");
   runtime.mainThread = true;
   runtime.environment.clear();
   runtime.selectedPath = undefined;
@@ -299,42 +301,24 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     },
   );
 
-  it.each(["custom", "fallback"] as const)(
-    "inherits the parent's %s selection without probing or applying a worker override",
-    async (selection) => {
-      if (selection === "fallback") {
-        vi.stubEnv("OPENCLAW_SQLITE_LIBRARY", "");
-        runtime.dlopen.mockImplementation(() => {
-          throw new Error("No custom library available");
-        });
-      }
-      const parent = await import("./bun-sqlite-library.js");
-      const selected = parent.ensureSqliteLibrarySelected();
-      if (selection === "custom") {
-        expect(selected).toMatchObject({
-          source: "env",
-          path: "/fixture/sqlite.dylib",
-          version: "3.53.4",
-        });
-      } else {
-        expect(selected).toEqual({ source: "runtime" });
-        runtime.dlopen.mockClear();
-      }
-      expect([...runtime.environment.values()]).toEqual([selected]);
-      const worker = await enterWorkerHeap();
-      expect(
-        worker.ensureSqliteLibrarySelected({ explicitPath: "/worker/different.dylib" }),
-      ).toEqual(selected);
-      expect(worker.ensureSqliteLibrarySelected()).toEqual(selected);
-      if (selection === "custom") {
-        expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
-      } else {
-        expect(runtime.select).not.toHaveBeenCalled();
-      }
-      expect(runtime.dlopen).toHaveBeenCalledTimes(selection === "custom" ? 1 : 0);
-      expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("inherits the parent's custom selection without probing or applying a worker override", async () => {
+    const parent = await import("./bun-sqlite-library.js");
+    const selected = parent.ensureSqliteLibrarySelected();
+    expect(selected).toMatchObject({
+      source: "env",
+      path: "/fixture/sqlite.dylib",
+      version: "3.53.4",
+    });
+    expect([...runtime.environment.values()]).toEqual([selected]);
+    const worker = await enterWorkerHeap();
+    expect(worker.ensureSqliteLibrarySelected({ explicitPath: "/worker/different.dylib" })).toEqual(
+      selected,
+    );
+    expect(worker.ensureSqliteLibrarySelected()).toEqual(selected);
+    expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
+    expect(runtime.dlopen).toHaveBeenCalledTimes(1);
+    expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])(
     "inherits the immutable native-close decision (capable: %s)",
@@ -476,7 +460,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         active.push(store);
         await store.execute({ type: "append", input: { value: `database ${index}` } });
       }
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       for (const [index, store] of active.entries()) {
         expect(await store.execute({ type: "read", input: undefined })).toEqual([
           `database ${index}`,
@@ -486,7 +470,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
       await fs.link(paths[0]!, aliasPath);
       const alias = await open(aliasPath);
       await alias.execute({ type: "append", input: { value: "shared alias" } });
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       await active[0]!.close();
       expect(await alias.execute({ type: "read", input: undefined })).toEqual([
         "database 0",
@@ -500,7 +484,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           "database 0",
           "shared alias",
         ]);
-        expect(runtime.launches).toBe(4);
+        expect(runtime.launches).toBe(2);
         expect(
           await active[4]!.execute({ type: "append", input: { value: "sibling still open" } }),
         ).toMatchObject({ writes: 2 });

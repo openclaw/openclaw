@@ -17,6 +17,10 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost) {
   }
 
   return {
+    async searchForCli(params) {
+      const { searchMemoryForCli } = await import("./memory-search-operation.js");
+      return searchMemoryForCli(params);
+    },
     prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
       return await getMemorySearchManager({

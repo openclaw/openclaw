@@ -88,11 +88,11 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
       this.error = null;
       this.host.requestUpdate();
       try {
-        while (current() && observation?.isCurrent()) {
+        if (observation?.isCurrent()) {
           const reconcile = observation.captureReconcile();
           const { session } = await scope.sessions.describe({ key, agentId });
-          if (!current() || reconcile(session ?? undefined).status !== "invalidated") {
-            break;
+          if (current()) {
+            reconcile(session ?? undefined);
           }
         }
       } catch (error) {
@@ -116,7 +116,7 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
       },
       { onInvalidate: () => void refresh() },
     );
-    if (row.rowMode === "compact") {
+    if (row.rowMode) {
       void refresh();
     }
   }

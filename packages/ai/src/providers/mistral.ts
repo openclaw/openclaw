@@ -329,7 +329,7 @@ async function consumeChatStream(
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlock = {
-    block: ToolCall & { partialArgs?: string };
+    block: ToolCall & { partialJson?: string };
     contentIndex: number;
     preview: ToolArgumentPreviewSchedule;
     explicitIds: Set<string>;
@@ -551,7 +551,7 @@ async function consumeChatStream(
           id: providedCallId ?? createMissingToolCallId(contentIndex),
           name: functionName ?? "",
           arguments: {},
-          partialArgs: "",
+          partialJson: "",
         };
         output.content.push(block);
         identity = {
@@ -588,11 +588,11 @@ async function consumeChatStream(
         typeof toolCall.function.arguments === "string"
           ? toolCall.function.arguments
           : JSON.stringify(toolCall.function.arguments || {});
-      block.partialArgs = (block.partialArgs || "") + argsDelta;
+      block.partialJson = (block.partialJson || "") + argsDelta;
       // Preview refresh is scheduled geometrically; the terminal strict parse
       // below re-reads the full buffer authoritatively either way.
-      if (identity.preview(block.partialArgs.length)) {
-        block.arguments = parseStreamingJson(block.partialArgs);
+      if (identity.preview(block.partialJson.length)) {
+        block.arguments = parseStreamingJson(block.partialJson);
       }
       stream.push({
         type: "toolcall_delta",
@@ -614,13 +614,13 @@ async function consumeChatStream(
   }
   finalizeTerminalToolCallArguments(
     toolBlocks.map(({ block }) => block),
-    (block) => block.partialArgs ?? "",
+    (block) => block.partialJson ?? "",
     "Mistral completed tool call has invalid JSON arguments",
   );
   for (const { block, contentIndex } of toolBlocks) {
     // Finalize in-place and strip the scratch buffer so replay only
     // carries parsed arguments.
-    delete block.partialArgs;
+    delete block.partialJson;
     stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
   }
 }

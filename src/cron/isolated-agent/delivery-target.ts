@@ -1,5 +1,6 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -62,12 +63,12 @@ async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
   try {
-    const loaded = tryResolveLoadedOutboundTarget(params);
+    const loaded = await tryResolveLoadedOutboundTarget(params);
     if (loaded) {
       return loaded;
     }
     const { resolveOutboundTarget } = await targetsRuntimeLoader.load();
-    return resolveOutboundTarget({ ...params, allowBootstrap: true });
+    return await resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
       ok: false as const,
@@ -294,10 +295,9 @@ export async function resolveDeliveryTarget(
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
-      cfg,
-      accountId: resolvedAccountId,
-    });
+    const configuredAllowFromRaw = channelPlugin
+      ? await resolveChannelAllowFrom({ plugin: channelPlugin, cfg, accountId: resolvedAccountId })
+      : undefined;
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];

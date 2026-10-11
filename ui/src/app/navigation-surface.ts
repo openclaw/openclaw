@@ -7,6 +7,8 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import type { ApplicationContext } from "./context.ts";
 
+export const NAVIGATION_RAIL_WIDTH = 52;
+
 const NAV_DRAWER_FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
@@ -115,9 +117,11 @@ export function navigationSurfaceIsHidden(params: {
   navCollapsed: boolean;
   navDrawerOpen: boolean;
   mobileNavLayout: boolean;
+  railAvailable?: boolean;
 }): boolean {
   return (
-    params.onboarding || (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed)
+    params.onboarding ||
+    (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed && !params.railAvailable)
   );
 }
 

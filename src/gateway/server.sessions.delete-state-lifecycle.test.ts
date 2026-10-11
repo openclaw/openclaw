@@ -19,7 +19,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as sessionArchiveStore from "../config/sessions/session-accessor.sqlite-archive-store.js";
 import * as sessionArchive from "../config/sessions/session-accessor.sqlite-archive.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";

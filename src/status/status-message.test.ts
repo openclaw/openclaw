@@ -138,38 +138,46 @@ describe("buildStatusMessageParts presentation", () => {
     expect(JSON.stringify(parts)).not.toContain("https://");
   });
 
-  it("shows a context meter and a pressure warning when the window runs hot", () => {
-    const parts = buildStatusMessageParts({
-      ...displayParams,
-      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
-      now: 1_751_529_600_000,
-      config: { agents: { defaults: { userTimezone: "UTC" } } },
-      agent: { model: "anthropic/claude-haiku-4-5" },
-      runtimeContextTokens: 100_000,
-      sessionEntry: {
-        sessionId: "status-meter-session",
-        totalTokens: 87_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        compactionCount: 2,
-        updatedAt: 1_751_529_500_000,
-      },
-      queue: { mode: "steer", depth: 3 },
-    });
+  it.each([undefined, true] as const)(
+    "shows context pressure and persisted compaction degradation (%s)",
+    (compactionQualityDegraded) => {
+      const parts = buildStatusMessageParts({
+        ...displayParams,
+        modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+        now: 1_751_529_600_000,
+        config: { agents: { defaults: { userTimezone: "UTC" } } },
+        agent: { model: "anthropic/claude-haiku-4-5" },
+        runtimeContextTokens: 100_000,
+        sessionEntry: {
+          sessionId: "status-meter-session",
+          totalTokens: 87_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          compactionCount: 2,
+          compactionQualityDegraded,
+          updatedAt: 1_751_529_500_000,
+        },
+        queue: { mode: "steer", depth: 3 },
+      });
 
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-    if (table?.type !== "table") {
-      throw new Error("expected table block");
-    }
-    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
-    expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
-    expect(rows.get("🧹 Compactions")).toBe("2");
-    expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
-    const warning = parts.presentation.blocks.find(
-      (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
-    );
-    expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
-  });
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      if (table?.type !== "table") {
+        throw new Error("expected table block");
+      }
+      const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+      expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
+      const compactions = compactionQualityDegraded
+        ? "2 · degraded history (details may be lost)"
+        : "2";
+      expect(rows.get("🧹 Compactions")).toBe(compactions);
+      expect(parts.text).toContain(`🧹 Compactions: ${compactions}`);
+      expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
+      const warning = parts.presentation.blocks.find(
+        (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
+      );
+      expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
+    },
+  );
 });
 
 describe("buildStatusMessage cost snapshot", () => {

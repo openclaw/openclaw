@@ -1,11 +1,7 @@
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
@@ -18,8 +14,13 @@ import {
   affectsPlacementObservation,
   applyPlacementReadPublication,
   hasPendingPublication,
+  prepareCachedPlacementPreservationRead,
+  preparePlacementRead,
+  readCachedPlacementProjection,
+  retainProjection,
   retainSessionPlacementRead,
 } from "./placement-read-authority.js";
+import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
 import {
   isCurrentPlacementTurnClaim,
   sameWorkerSessionTurnClaim,
@@ -29,7 +30,6 @@ import {
   type WorkerSessionTurnClaimFacts,
 } from "./placement-record.js";
 import {
-  capturePlacementAuthorityChange,
   captureWorkspaceResultChange,
   captureWorkspaceResultPostimage,
 } from "./placement-turn-authority.receipt.js";
@@ -61,8 +61,6 @@ function notifyRevoked(claim: RetainedClaim): void {
 function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
   owner.pending.clear();
-  owner.settlementListeners.forEach((listener) => listener());
-  owner.settlementListeners.clear();
   owner.published.clear();
   owner.tools.clear();
   owner.workspaceResults.clear();
@@ -76,6 +74,8 @@ function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.claims.clear();
   owner.observations.clear();
   owner.placementReaders.clear();
+  owner.projections.clear();
+  owner.preservation = undefined;
 }
 
 const owners = resolveGlobalSingleton(
@@ -96,17 +96,16 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
   }
   const owner: PlacementAuthorityOwner = {
     identity,
-    incarnation: randomUUID(),
     active: true,
     claims: new Map(),
     observations: new Map(),
     placementReaders: new Map(),
     pending: new Set(),
-    settlementListeners: new Set(),
     sequence: 0,
     published: new Map(),
     tools: new Map(),
     workspaceResults: new Map(),
+    projections: new Map(),
   };
   owners.set(identity.key, owner);
   return owner;
@@ -152,11 +151,19 @@ function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): vo
 
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
-  owner.settlementListeners.forEach((listener) => listener());
   if (!owner.active) {
     return;
   }
   applyPlacementReadPublication(owner, change, sequence);
+  if (affectsPlacementObservation(change)) {
+    owner.preservation = undefined;
+  }
+  if (change.kind !== "tools") {
+    owner.projections.delete(change.sessionId);
+    if (change.kind === "claim" && change.projection && !change.indeterminate) {
+      retainProjection(owner, change.sessionId, change.projection);
+    }
+  }
   const tools = owner.tools.get(change.sessionId);
   if (change.kind === "tools") {
     if (sequence > (tools?.sequence ?? -1)) {
@@ -298,55 +305,41 @@ function observePlacementAuthority(pathname: string, sessionId?: string) {
   return capturePlacementObservation(pathname, sessionId).authority;
 }
 
-/** Refresh only unconsumed reads; retained observations and uncertain writes stay fenced. */
+/** A concurrent placement mutation fails this read; the caller can retry it. */
 export async function preparePlacementAuthorityRead<T>(
   pathname: string,
   sessionId: string | undefined,
   read: () => Promise<T>,
 ) {
-  return await preparePlacementRead(pathname, sessionId, read, (value, { authority }) => ({
-    value,
-    ...authority,
-  }));
+  return await preparePlacementRead(
+    capturePlacementObservation(pathname, sessionId),
+    sessionId,
+    read,
+    (value, { authority }) => ({
+      value,
+      ...authority,
+    }),
+  );
 }
 
-async function preparePlacementRead<T, Result>(
+/** The authority owner retains exact reads until one of its writers publishes a change. */
+export async function readPlacementProjection(
   pathname: string,
-  sessionId: string | undefined,
-  read: () => Promise<T>,
-  consume: (value: T, captured: ReturnType<typeof capturePlacementObservation>) => Result,
-): Promise<Result> {
-  const captured = capturePlacementObservation(pathname, sessionId);
-  const { authority, observation, owner, assertUsable } = captured;
-  const signal = getAsyncWorkSignal();
-  const assertReading = () => {
-    signal?.throwIfAborted();
-    assertUsable();
-  };
-  try {
-    for (;;) {
-      assertReading();
-      while (hasPendingPublication(owner, sessionId)) {
-        const settled = createDeferredCore();
-        const unsubscribe = registerListener(owner.settlementListeners, settled.resolve);
-        try {
-          await racePromiseWithAbortSignal(settled.promise, signal);
-        } finally {
-          unsubscribe();
-        }
-        assertReading();
-      }
-      observation.revoked = false;
-      const value = await read();
-      assertReading();
-      if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
-        return consume(value, captured);
-      }
-    }
-  } catch (error) {
-    authority.release();
-    throw error;
-  }
+  sessionId: string,
+  read: () => Promise<WorkerSessionPlacementReadResult>,
+): Promise<WorkerSessionPlacementReadResult> {
+  return readCachedPlacementProjection(
+    capturePlacementObservation(pathname, sessionId),
+    sessionId,
+    read,
+  );
+}
+
+export async function preparePlacementPreservationRead(
+  pathname: string,
+  read: () => Promise<WorkerSessionPlacementRecord[]>,
+) {
+  return await prepareCachedPlacementPreservationRead(capturePlacementObservation(pathname), read);
 }
 
 /** Retain writer postimages, rather than invalidating a destination on ordinary turn claims. */
@@ -355,21 +348,25 @@ export async function prepareSessionPlacementRead(
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementRecord | undefined>,
 ) {
-  return await preparePlacementRead(pathname, sessionId, read, (placement, captured) => {
-    return retainSessionPlacementRead(sessionId, placement, captured);
-  });
+  return await preparePlacementRead(
+    capturePlacementObservation(pathname, sessionId),
+    sessionId,
+    read,
+    (placement, captured) => {
+      return retainSessionPlacementRead(sessionId, placement, captured);
+    },
+  );
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
   const owner = ownerFor(requireOpenClawStateDatabaseIdentity({ db }));
-  const committedChange = capturePlacementAuthorityChange(owner, change);
   if (
     !stageSqliteTransactionState(db, {
       stage() {
         owner.pending.add(change);
       },
       commit() {
-        commitChange(owner, committedChange(), ++owner.sequence);
+        commitChange(owner, change, ++owner.sequence);
       },
       invalidate: () => closeOwner(owner),
       prepareObservers() {
@@ -379,7 +376,6 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
       },
       rollback() {
         owner.pending.delete(change);
-        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
         try {
           assertTransactionUsable(db);
@@ -401,6 +397,7 @@ export function stagePlacementTurnClaimWorkerPublication(
   workspaceResult?: WorkspaceResultPostimage,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
   workspacePlacement?: WorkerSessionPlacementRecord,
+  projection?: WorkerSessionPlacementReadResult,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
@@ -408,6 +405,7 @@ export function stagePlacementTurnClaimWorkerPublication(
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),
+    projection,
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
   });
 }
@@ -570,7 +568,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     }
   };
   const publish = () => {
-    commitChange(owner, capturePlacementAuthorityChange(owner, change)(), sequence);
+    commitChange(owner, change, sequence);
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
       notifyRevoked(retained);
     }
@@ -580,7 +578,6 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     rollback: () =>
       settle(() => {
         owner.pending.delete(change);
-        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
       }),
     invalidate: () =>

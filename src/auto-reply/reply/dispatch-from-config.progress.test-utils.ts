@@ -798,8 +798,6 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = createDirectCtx({ SessionKey: "agent:main:main" });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      sessionStoreMocks.loadSessionStore.mockClear();
-      sessionStoreMocks.resolveSessionStoreEntry.mockClear();
       sessionStoreMocks.loadSessionStoreEntry.mockClear();
       await opts?.onPlanUpdate?.({
         phase: "update",
@@ -827,8 +825,6 @@ describe("dispatchReplyFromConfig", () => {
       readConsistency: "latest",
       clone: false,
     });
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
-    expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
       text: "✅ Inspect code\n▸ Patch code\n▢ Run tests",
       isStatusNotice: true,

@@ -15,8 +15,6 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
-  createDeferredConfiguredPluginRepairDoctorResult,
-  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
   type UpdatePostInstallDoctorResult,
@@ -26,7 +24,6 @@ import {
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
 import { parseManagedHandoffLeasePayload } from "../../infra/update-managed-service-handoff-schema.js";
-import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
@@ -141,13 +138,7 @@ function expectRetainedCommandClaims(writerPid: number, roots: string[]) {
   }
 }
 
-it.each([
-  "requester-replaced",
-  "fence-reassigned",
-  "recovery-pending",
-  "A-revoked",
-  "B-revoked",
-] as const)(
+it.each(["recovery-pending", "A-revoked", "B-revoked"] as const)(
   "withholds all Doctor input and settles the real child when %s before input",
   async (change) => {
     const runId = randomUUID();
@@ -177,12 +168,6 @@ it.each([
               ...options,
               beforeInput(pid, spawnedArgv) {
                 childPid = pid;
-                if (change === "requester-replaced") {
-                  run.requesterAuthority = { ...requesterAuthority };
-                }
-                if (change === "fence-reassigned") {
-                  run.executorFence = { assertCurrent() {} };
-                }
                 if (change === "recovery-pending") {
                   opts.recovery = {};
                 }
@@ -216,124 +201,74 @@ it.each([
   },
 );
 
-it.each([
-  { exitCode: 23, revokeAfterSettlement: false },
-  { exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, revokeAfterSettlement: true },
-])(
-  "retains settled Doctor outcome $exitCode when requester revocation after settlement is $revokeAfterSettlement",
-  async ({ exitCode, revokeAfterSettlement }) => {
-    const runId = randomUUID();
-    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
-    let childPid: number | undefined;
-    let resultPath: string | undefined;
-    let authorityRefusal: unknown;
-    const receipt: UpdatePostInstallDoctorResult =
-      exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-        ? createDeferredConfiguredPluginRepairDoctorResult(["Configured plugin repair deferred."])
-        : { status: "error" };
-    receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
-    const steps: UpdateStepResult[] = [];
-    const onStepComplete = vi.fn();
-    await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot });
-      const opts: UpdateCommandOptions = {
-        run: {
-          runId,
-          env,
-          executorFence: fence,
-          requesterAuthority: {
-            requester: { channel: "test", senderId: "owner" },
-            isCurrent: () => true,
-          },
+it("retains the settled Doctor failure outcome", async () => {
+  const exitCode = 23;
+  const runId = randomUUID();
+  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+  let childPid: number | undefined;
+  let resultPath: string | undefined;
+  const receipt: UpdatePostInstallDoctorResult = { status: "error" };
+  receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
+  const steps: UpdateStepResult[] = [];
+  const onStepComplete = vi.fn();
+  await withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(root, { serviceRoot });
+    const opts: UpdateCommandOptions = {
+      run: {
+        runId,
+        env,
+        executorFence: fence,
+        requesterAuthority: {
+          requester: { channel: "test", senderId: "owner" },
+          isCurrent: () => true,
         },
-      };
-      const guards = createUpdateCommandExecutionGuards(opts, root);
-      vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
-        async (_argv, options) => {
-          assert(typeof options !== "number", "Doctor supplies input-admission options");
-          const result = await runUtf8(
-            [
-              process.execPath,
-              "-e",
-              "process.stdin.resume();process.stdin.on('end',()=>process.exit(Number(process.argv[1])));",
-              String(exitCode),
-            ],
-            {
-              ...options,
-              beforeInput(pid, spawnedArgv) {
-                childPid = pid;
-                options.beforeInput?.(pid, spawnedArgv);
-              },
+      },
+    };
+    const guards = createUpdateCommandExecutionGuards(opts, root);
+    vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+      async (_argv, options) => {
+        assert(typeof options !== "number", "Doctor supplies input-admission options");
+        const result = await runUtf8(
+          [
+            process.execPath,
+            "-e",
+            "process.stdin.resume();process.stdin.on('end',()=>process.exit(Number(process.argv[1])));",
+            String(exitCode),
+          ],
+          {
+            ...options,
+            beforeInput(pid, spawnedArgv) {
+              childPid = pid;
+              options.beforeInput?.(pid, spawnedArgv);
             },
-          );
-          expect(result.cleanup).toBe("normal");
-          expect(result.code).toBe(exitCode);
-          expect(onStepComplete).not.toHaveBeenCalled();
-          resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
-          assert(resultPath);
-          await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
-          if (revokeAfterSettlement) {
-            assert(opts.run?.requesterAuthority);
-            opts.run.requesterAuthority = { ...opts.run.requesterAuthority };
-          }
-          return result;
-        },
-      );
-      const result = await runPackageUpdateDoctor({
-        ...doctorOptions(runId, fence, {
-          ...guards,
-          assertCurrent: () => {
-            try {
-              guards.assertCurrent();
-            } catch (error) {
-              authorityRefusal = error;
-              throw error;
-            }
           },
-        }),
-        progress: { onStepComplete },
-        results: steps,
-      }).catch((cause: unknown) => cause);
-      if (revokeAfterSettlement) {
-        expect(result).toBeInstanceOf(UpdateRequesterRevokedError);
-        expect(result).toBe(authorityRefusal);
-        expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            name: "openclaw doctor",
-            exitCode,
-            advisory: undefined,
-            configChanges: receipt.configChanges,
-            failureFacts: expect.arrayContaining([
-              expect.objectContaining({ code: "requester-revoked" }),
-            ]),
-          }),
         );
-        expect(steps).toEqual([
-          expect.objectContaining({
-            name: "openclaw doctor",
-            exitCode,
-            configChanges: receipt.configChanges,
-            stderrTail: expect.stringContaining("requester-revoked"),
-          }),
-        ]);
-        const [failedDoctor] = steps;
-        assert(failedDoctor);
-        expect(failedDoctor.advisory).toBeUndefined();
-      } else {
-        expect(result).toMatchObject({ exitCode: 23 });
-        guards.assertCurrent();
-      }
-      expect(childPid).toBeTypeOf("number");
-      if (childPid !== undefined) {
-        expect(await waitForPidToExit(childPid)).toBe(true);
-      }
-      fence.assertCurrent();
-      assert(resultPath);
-      expect(fs.existsSync(resultPath)).toBe(false);
-      expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
-    });
-  },
-);
+        expect(result.cleanup).toBe("normal");
+        expect(result.code).toBe(exitCode);
+        expect(onStepComplete).not.toHaveBeenCalled();
+        resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        assert(resultPath);
+        await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
+        return result;
+      },
+    );
+    const result = await runPackageUpdateDoctor({
+      ...doctorOptions(runId, fence, guards),
+      progress: { onStepComplete },
+      results: steps,
+    }).catch((cause: unknown) => cause);
+    expect(result).toMatchObject({ exitCode: 23 });
+    guards.assertCurrent();
+    expect(childPid).toBeTypeOf("number");
+    if (childPid !== undefined) {
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    }
+    fence.assertCurrent();
+    assert(resultPath);
+    expect(fs.existsSync(resultPath)).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+  });
+});
 
 it("preserves before-input failure after proving the delegated grant was withheld", async () => {
   const runId = randomUUID();

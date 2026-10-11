@@ -13,6 +13,7 @@ import {
 } from "../lib/config/config-test-harness.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createProfileAppearanceGateway } from "./app-shell-gateway.test-support.ts";
+import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
@@ -33,6 +34,92 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     resetServerUiPrefsSync();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["context", "client", "profile", "config", "source", "offline", "reset"])(
+    "discards lazy reconciliation after %s replacement",
+    async (replacement) => {
+      const { context, host, owner, snapshot, refreshTheme, request } =
+        createProfileAppearanceGateway(null);
+      patchSettings({ accent: "#112233" });
+      const pending = owner.reconcileServerUiPrefs(context.runtimeConfig);
+      if (replacement === "context") {
+        Object.assign(host, { context: { ...context } });
+      }
+      if (replacement === "client") {
+        snapshot.client = createProfileAppearanceGateway(null).snapshot.client;
+      }
+      if (replacement === "profile") {
+        snapshot.selfUser = { id: "replacement" };
+      }
+      if (replacement === "config") {
+        Object.assign(context.runtimeConfig.state, { configSnapshot: { config: {} } });
+      }
+      if (replacement === "source") {
+        Object.assign(context, { runtimeConfig: { ...context.runtimeConfig } });
+      }
+      if (replacement === "offline") {
+        snapshot.phase = "offline";
+      }
+      if (replacement === "reset") {
+        owner.reset();
+      }
+      await pending;
+      expect(loadSettings().accent).toBe("#112233");
+      expect(refreshTheme).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+      expect(host.lastLocalePrefSignature).toBeNull();
+    },
+  );
+
+  it("keeps bootstrap and deduplicated callers pending through actual profile hydration", async () => {
+    const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+    const readStarted = createDeferred();
+    const reply = createDeferred<{
+      status: string;
+      entries: { "ui.accent": string; "ui.sidebarEntries": string[] };
+    }>();
+    request.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return reply.promise;
+    });
+    const ready = owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(owner.ensureRuntimeConfig(snapshot, context.runtimeConfig)).toBe(ready);
+    let complete = false;
+    void ready.then(() => {
+      complete = true;
+    });
+    await readStarted.promise;
+    expect(complete).toBe(false);
+    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.sidebarEntries": [] } });
+    await ready;
+    expect(complete).toBe(true);
+    expect(loadSettings().accent).toBe("#336699");
+  });
+
+  it("refuses profile hydration from a superseded config snapshot", async () => {
+    const { context, owner, snapshot, request, refreshTheme, requestUpdate } =
+      createProfileAppearanceGateway("profile-owner");
+    const readStarted = createDeferred();
+    const reply = createDeferred<{
+      status: string;
+      entries: { "ui.accent": string; "ui.sidebarEntries": string[] };
+    }>();
+    request.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return reply.promise;
+    });
+    const ready = owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    await readStarted.promise;
+    // Initial identity adoption published its navigation reset before the held profile read.
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    refreshTheme.mockClear();
+    Object.assign(context.runtimeConfig.state, { configSnapshot: { config: {} } });
+    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.sidebarEntries": [] } });
+    await ready;
+    expect(loadSettings().accent).not.toBe("#336699");
+    expect(refreshTheme).not.toHaveBeenCalled();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("loads current agent discovery when hello lands", async () => {
@@ -80,28 +167,29 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         expect(request).not.toHaveBeenCalled();
         snapshot.selfUser = { id: "profile-owner" };
         owner.synchronizeGateway(snapshot);
-        owner.reconcileServerUiPrefs(context.runtimeConfig);
+        void owner.reconcileServerUiPrefs(context.runtimeConfig);
         expect(refreshTheme).not.toHaveBeenCalled();
         expect(loadSettings().accent).toBeUndefined();
       }
       await completeProfileAppearance();
-      // Completion republishes readiness even when values already match the boot mirror.
       await vi.dynamicImportSettled();
+      // Adoption publishes navigation, then hydration publishes profile/readiness.
+      expect(refreshTheme).toHaveBeenCalledTimes(2);
       expect(requestUpdate).toHaveBeenCalledOnce();
-      if (mirrored) {
-        expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
-      }
-      expect(refreshTheme).toHaveBeenCalledOnce();
+      expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
       expect(loadSettings().accent).toBe("#336699");
       expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-        keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
+        keys: [
+          ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
+          ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
+        ],
       });
       request.mockClear();
       const configState = context.runtimeConfig.state as { configSnapshot: { config: unknown } };
       configState.configSnapshot = {
         config: { ui: { prefs: { accent: "#884422" } }, agents: { defaults: {} } },
       };
-      owner.reconcileServerUiPrefs(context.runtimeConfig);
+      await owner.reconcileServerUiPrefs(context.runtimeConfig);
       expect(request).not.toHaveBeenCalled();
       expect(loadSettings().accent).toBe("#336699");
     },

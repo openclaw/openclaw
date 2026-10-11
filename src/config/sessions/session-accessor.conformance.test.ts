@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -22,7 +21,11 @@ import {
   readSessionArchiveContentSync,
 } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
-import { closeSessionAccessorConformanceFixture } from "./session-accessor.conformance.test-support.js";
+import {
+  closeSessionAccessorConformanceFixture,
+  createSessionAccessorConformanceFixture,
+  type SessionAccessorConformancePaths as TestPaths,
+} from "./session-accessor.conformance.test-support.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -59,7 +62,7 @@ import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-m
 import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
@@ -101,7 +104,10 @@ type AccessorAdapter = {
   ): Promise<SessionEntry | null>;
   cleanupSessionLifecycleArtifactsCore: typeof cleanupSessionLifecycleArtifactsCore;
   loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
-  appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
+  appendTranscriptEvent(
+    scope: SessionTranscriptAccessScope,
+    event: TranscriptEvent,
+  ): Promise<boolean>;
   appendTranscriptMessage<TMessage>(
     scope: SessionTranscriptWriteScope,
     options: TranscriptMessageAppendOptions<TMessage>,
@@ -110,13 +116,6 @@ type AccessorAdapter = {
     scope: SessionTranscriptWriteScope,
     update?: TranscriptUpdatePayload,
   ): Promise<void>;
-};
-
-type TestPaths = {
-  sqlitePath: string;
-  stateDir: string;
-  storePath: string;
-  tempDir: string;
 };
 
 const publicAccessorAdapter: AccessorAdapter = {
@@ -182,13 +181,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     };
 
     beforeEach(() => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-accessor-conf-"));
-      paths = {
-        sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
-        stateDir: path.join(tempDir, "state"),
-        storePath: path.join(tempDir, "sessions.json"),
-        tempDir,
-      };
+      paths = createSessionAccessorConformanceFixture("openclaw-session-accessor-conf-");
     });
 
     afterEach(async () => {
@@ -1165,13 +1158,7 @@ describe("sqlite session normalization", () => {
   let paths: TestPaths;
 
   beforeEach(() => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-sqlite-norm-"));
-    paths = {
-      sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
-      stateDir: path.join(tempDir, "state"),
-      storePath: path.join(tempDir, "sessions.json"),
-      tempDir,
-    };
+    paths = createSessionAccessorConformanceFixture("openclaw-session-sqlite-norm-");
   });
 
   afterEach(async () => {

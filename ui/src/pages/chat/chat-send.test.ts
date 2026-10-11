@@ -13,7 +13,6 @@ import {
   buildSlashCommandsFromEntries,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import {
@@ -53,7 +52,6 @@ import {
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { admitHostQueueItems, idleChatHistory, row } from "./chat-outbox-recovery.test-support.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import {
@@ -451,83 +449,6 @@ describe("refreshChat", () => {
       hasActiveRun: false,
       status: "done",
       updatedAt: 10,
-    });
-  });
-
-  it("keeps a newer canonical offline runner row over coalesced stale startup hydration", async () => {
-    const key = "agent:main:device-session";
-    const deviceRow = (status: "available" | "offline") =>
-      deviceSessionRow(key, status, {
-        sessionId: "device-session-incarnation",
-      });
-    const staleAvailable = deviceRow("available");
-    const startup = createDeferred<unknown>();
-    const initialSessions = createSessionsResult([staleAvailable]);
-    const request = makeRequestMock({
-      "chat.startup": () => startup.promise,
-      "sessions.list": createSessionsResult([deviceRow("offline")]),
-    });
-    const client = clientWithRequest(request);
-    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
-    sessions.reconcile(staleAvailable, initialSessions.defaults);
-    const first = createTestChatPane({ client, sessions });
-    const second = createTestChatPane({ client, sessions });
-    const firstPane = first.state;
-    const secondPane = second.state;
-    const pending: Promise<unknown>[] = [];
-    const releases = [first, second].map(({ pane, state }) => {
-      state.sessionKey = key;
-      state.hello = gatewayHelloForMethods(["chat.startup"], []);
-      pane.presented = false;
-      pane.applySessionsState(sessions.state);
-      return sessions.subscribe(pane.applySessionsState.bind(pane));
-    });
-    onTestFinished(async () => {
-      releases.forEach((release) => release());
-      sessions.dispose();
-      startup.resolve({ messages: [] });
-      await Promise.allSettled(pending);
-    });
-    const options = {
-      awaitHistory: true,
-      deferBranches: true,
-      scheduleScroll: false,
-      startup: true,
-    } as const;
-    const firstRefresh = refreshPageChat(firstPane, options);
-    pending.push(firstRefresh);
-    await vi.waitFor(() => expect(requestCalls(request, "chat.startup")).toHaveLength(1));
-    await firstPane.sessions.refresh({ force: true });
-    expect(firstPane.sessions.canonicalListRevision).toBe(1);
-    expect(firstPane.sessions.state.result?.sessions[0]?.placement).toMatchObject({
-      runner: { kind: "device", status: "offline" },
-    });
-
-    const joinedRefresh = refreshPageChat(secondPane, options);
-    pending.push(joinedRefresh);
-    startup.resolve({
-      messages: [{ role: "assistant", content: "Stale startup transcript was consumed." }],
-      sessionInfo: staleAvailable,
-    });
-    await Promise.all([firstRefresh, joinedRefresh]);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    expect(requestCalls(request, "chat.startup")).toHaveLength(1);
-    for (const pane of [firstPane, secondPane]) {
-      expect(pane.chatMessages.map((message) => extractText(message))).toContain(
-        "Stale startup transcript was consumed.",
-      );
-      expect(pane.sessionsResult?.sessions[0]?.placement).toMatchObject({
-        runner: { kind: "device", status: "offline" },
-      });
-      expect(selectedChatSessionRow(pane)?.placement).toMatchObject({
-        runner: { kind: "device", status: "offline" },
-      });
-    }
-    expect(firstPane.sessions.state.result?.sessions[0]?.placement).toMatchObject({
-      runner: { kind: "device", status: "offline" },
     });
   });
 

@@ -1,5 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -17,6 +17,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -260,7 +261,12 @@ describe("worker detached model-context branch parity", () => {
   });
   afterEach(async () => {
     if (!hasUnjoinedOwner) {
-      await cleanupWorkerTurnLauncherTest();
+      await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+    }
+  });
+  afterAll(async () => {
+    if (!hasUnjoinedOwner) {
+      await closeStateDatabaseForTest();
     }
   });
 

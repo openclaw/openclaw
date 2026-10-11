@@ -176,7 +176,7 @@ async function configureChannelAccount(
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
       await import("../channel-setup/plugin-install.js");
-    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+    const snapshot = await loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: nextConfig,
       runtime,
       channel: channelId,

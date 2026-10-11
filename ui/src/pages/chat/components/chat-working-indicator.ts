@@ -16,6 +16,28 @@ import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
+export function renderChatBubbleDots(working = false) {
+  return html`<span
+    class="chat-bubble-dots ${working ? "chat-bubble-dots--working" : ""}"
+    aria-hidden="true"
+    ><span></span><span></span><span></span
+  ></span>`;
+}
+
+/** Local disclosure state stays on the native element while status text streams. */
+export function renderChatBubbleActivity(content: unknown, label: string, working = false) {
+  return html`<details class="chat-bubble-activity">
+    <summary
+      class="chat-bubble-activity__summary"
+      aria-label=${label}
+      title=${t("chat.view.activityDetails")}
+    >
+      ${renderChatBubbleDots(working)}
+    </summary>
+    <div class="chat-bubble-activity__details">${content}</div>
+  </details>`;
+}
+
 // 0 is valid; only null/undefined means "unknown".
 function outputTokensLabel(outputTokens: number): string {
   return outputTokens === 1
@@ -26,6 +48,7 @@ function outputTokensLabel(outputTokens: number): string {
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
+    bubbleMode?: boolean;
     mascot?: ThemeMascot;
     workingIndicator?: ThemeWorkingIndicator;
     workingPhrases?: readonly string[];
@@ -199,8 +222,11 @@ export function renderChatWorkingIndicator(
     </div>
   `;
   // Keep the live activity slot stable when the parent yields or resumes.
-  return html`${waitingSubagents && options.subagentActivity ? nothing : status}
+  const content = html`${waitingSubagents && options.subagentActivity ? nothing : status}
   ${options.subagentActivity ?? nothing}`;
+  return options.bubbleMode
+    ? renderChatBubbleActivity(content, t("chat.view.workingDetails"), true)
+    : content;
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how

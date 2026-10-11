@@ -122,25 +122,21 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   }
   lookup.addDirectProviderOwners(scope, configuredProviderIds);
 
-  const decisionProviderIds = configs.flatMap(getConfiguredDecisionProviderIds);
-  if (!lookup.hasProviderContributionOwners(decisionProviderIds)) {
-    return undefined;
+  for (const resolveProviderIds of [
+    () => configs.flatMap(getConfiguredDecisionProviderIds),
+    () =>
+      normalizeWorkerProviderIds([
+        ...configs.flatMap(collectConfiguredWorkerProviderIds),
+        ...(params.workerProviderIds ?? []),
+      ]),
+    () => configs.flatMap(collectConfiguredStorageProviderIds),
+  ]) {
+    const contributionProviderIds = resolveProviderIds();
+    if (!lookup.hasProviderContributionOwners(contributionProviderIds)) {
+      return undefined;
+    }
+    lookup.addProviderContributionOwners(scope, contributionProviderIds);
   }
-  lookup.addProviderContributionOwners(scope, decisionProviderIds);
-
-  const workerProviderIds = normalizeWorkerProviderIds([
-    ...configs.flatMap(collectConfiguredWorkerProviderIds),
-    ...(params.workerProviderIds ?? []),
-  ]);
-  if (!lookup.hasProviderContributionOwners(workerProviderIds)) {
-    return undefined;
-  }
-  lookup.addProviderContributionOwners(scope, workerProviderIds);
-  const storageProviderIds = configs.flatMap(collectConfiguredStorageProviderIds);
-  if (!lookup.hasProviderContributionOwners(storageProviderIds)) {
-    return undefined;
-  }
-  lookup.addProviderContributionOwners(scope, storageProviderIds);
 
   const configuredShorthandModelIds = sortUniquePluginIds(
     validationRefs.flatMap((refs) =>

@@ -128,4 +128,29 @@ describe("subagent spawn envelope", () => {
       "completion event",
     );
   });
+
+  it("keeps per-spawn identity out of the system prompt so prompts stay cacheable", () => {
+    const stablePrompt = buildEnvelope().systemPrompt;
+    for (const id of ["first", "second"]) {
+      const envelope = buildEnvelope({
+        childSessionKey: `agent:main:subagent:${id}`,
+        requesterSessionKey: `agent:main:dashboard:${id}`,
+        requesterOrigin: { channel: "webchat" },
+        label: `worker-${id}`,
+      });
+      for (const fact of [
+        `- Your session: agent:main:subagent:${id}.`,
+        `- Requester session: agent:main:dashboard:${id}.`,
+        "- Requester channel: webchat.",
+        `- Label: worker-${id}`,
+      ]) {
+        expect(envelope.systemPrompt).not.toContain(fact);
+        expect(envelope.message).toContain(fact);
+      }
+      expect(stripInternalRuntimeContext(envelope.message)).toBe(
+        "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+      );
+      expect(envelope.systemPrompt).toBe(stablePrompt);
+    }
+  });
 });

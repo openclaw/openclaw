@@ -86,7 +86,6 @@ export function bindSqliteWorkerBackend(
         };
         assertSources();
         const { previous, ...result } = mutateSessionGoalInDatabase(current, request);
-        assertSources();
         const candidate: SessionGoalManagementCandidate = {
           kind: "session-goal-management",
           result,

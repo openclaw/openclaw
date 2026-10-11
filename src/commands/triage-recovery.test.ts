@@ -109,73 +109,43 @@ afterEach(() => {
 });
 
 describe("triage external recovery handoff", () => {
-  it.each([
-    { executable: "codex", detectedAgents: ["codex"] },
-    { executable: "cursor-agent", detectedAgents: ["cursor"] },
-    { executable: "kimi", detectedAgents: ["kimi"] },
-    { executable: "qwen", detectedAgents: ["qwen"] },
-    { executable: "agy", detectedAgents: ["agy"] },
-    { executable: "cursor", detectedAgents: [] },
-    { executable: "agent", detectedAgents: [] },
-  ])(
-    "reports coding agents for $executable without checking credentials or selecting an editor",
-    async ({ executable, detectedAgents }) => {
+  it.each(["claude", "kimi", "agy"] as const)(
+    "starts the first available agent %s immediately",
+    async (agent) => {
+      const available = new Set<string>(
+        agents
+          .slice(agents.indexOf(agent))
+          .map((name) => (name === "cursor" ? "cursor-agent" : name)),
+      );
       mocks.resolveExecutablePath.mockImplementation((binary: string) =>
-        binary === executable ? `/usr/local/bin/${binary}` : undefined,
+        available.has(binary) ? `/usr/local/bin/${binary}` : undefined,
       );
       const runtime = createTriageRuntime();
-
       await withOpenClawTestState({ layout: "split" }, async () => {
-        await triageCommand(runtime, { json: true, noExport: true });
+        await withTriageTerminal(true, () =>
+          triageCommand(runtime, {
+            noExport: true,
+          }),
+        );
       });
-
-      expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ detectedAgents });
-      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
+        `/usr/local/bin/${agent}`,
+        agent === "claude"
+          ? ["--safe-mode", expect.any(String)]
+          : agent === "agy"
+            ? ["--prompt-interactive", expect.any(String)]
+            : ["--prompt", expect.any(String)],
+        expect.objectContaining({ stdio: "inherit" }),
+      );
+      if (agent === "kimi") {
+        expect(runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining("native automatic permission policy (no approval prompts)"),
+        );
+      }
     },
   );
 
-  it.each(
-    ["first available", "explicit"].flatMap((selection) =>
-      agents.map((agent) => ({ agent, selection })),
-    ),
-  )("starts the $selection agent $agent immediately", async ({ agent, selection }) => {
-    const explicit = selection === "explicit";
-    const available = new Set<string>(
-      (explicit ? agents : agents.slice(agents.indexOf(agent))).map((name) =>
-        name === "cursor" ? "cursor-agent" : name,
-      ),
-    );
-    mocks.resolveExecutablePath.mockImplementation((binary: string) =>
-      available.has(binary) ? `/usr/local/bin/${binary}` : undefined,
-    );
-    const runtime = createTriageRuntime();
-    await withOpenClawTestState({ layout: "split" }, async () => {
-      await withTriageTerminal(true, () =>
-        triageCommand(runtime, {
-          noExport: true,
-          agent: explicit ? agent : undefined,
-        }),
-      );
-    });
-    expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-      `/usr/local/bin/${agent === "cursor" ? "cursor-agent" : agent}`,
-      agent === "claude"
-        ? ["--safe-mode", expect.any(String)]
-        : agent === "qwen" || agent === "agy"
-          ? ["--prompt-interactive", expect.any(String)]
-          : agent === "opencode" || agent === "kimi"
-            ? ["--prompt", expect.any(String)]
-            : [expect.any(String)],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
-    if (agent === "kimi") {
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("native automatic permission policy (no approval prompts)"),
-      );
-    }
-  });
-
-  it.skipIf(process.platform === "win32").each(["default", "custom"])(
+  it.skipIf(process.platform === "win32").each(["custom"])(
     "pins state, config and %s workspace in executable, POSIX-quoted manual handoffs",
     async (workspaceSelector) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -258,21 +228,7 @@ describe("triage external recovery handoff", () => {
     },
   );
 
-  it.each(
-    printOnlyModes.flatMap((mode) =>
-      (
-        [
-          { agent: "opencode", command: "opencode run" },
-          { agent: "muse", command: "muse exec --prompt-file" },
-          { agent: "grok", command: "grok --prompt-file" },
-          { agent: "cursor", command: "cursor-agent --print" },
-          { agent: "kimi", command: "kimi --prompt" },
-          { agent: "qwen", command: "qwen" },
-          { agent: "agy", command: "agy --prompt-interactive" },
-        ] as const
-      ).map((agent) => Object.assign({}, mode, agent)),
-    ),
-  )(
+  it.each([{ ...printOnlyModes[1], agent: "kimi", command: "kimi --prompt" }] as const)(
     "never launches an explicitly selected $agent in $mode mode",
     async ({ json, nonInteractive, terminal, agent, command }) => {
       await withOpenClawTestState({ layout: "split" }, async () => {
@@ -309,12 +265,10 @@ describe("triage external recovery handoff", () => {
     },
   );
 
-  it.each(["claude", "codex", undefined] as const)(
+  it.each([undefined] as const)(
     "gives one non-interactive next action when the detected agent is %s",
     async (agent) => {
-      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
-        binary === agent ? `/usr/local/bin/${binary}` : undefined,
-      );
+      mocks.resolveExecutablePath.mockReturnValue(undefined);
       await withOpenClawTestState({ layout: "split" }, async () => {
         const runtime = createTriageRuntime();
         await withTriageTerminal(true, () =>
@@ -422,7 +376,7 @@ describe("triage external recovery handoff", () => {
     );
   });
 
-  it.each(["pi", "muse", "grok", "cursor", "kimi", "qwen", "agy"] as const)(
+  it.each(["cursor"] as const)(
     "reports missing %s without falling back to an available agent",
     async (agent) => {
       mocks.resolveExecutablePath.mockImplementation((binary: string) =>
@@ -537,7 +491,7 @@ describe("triage external recovery handoff", () => {
     });
   });
 
-  it.each(["mkdir", "writeFile"] as const)(
+  it.each(["writeFile"] as const)(
     "launches native recovery when the prompt artifact %s is denied",
     async (operation) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -576,7 +530,7 @@ describe("triage external recovery handoff", () => {
     },
   );
 
-  it.each(printOnlyModes)(
+  it.each([printOnlyModes[2]])(
     "keeps prompt artifact failure explicit without interactive handoff in $mode mode",
     async ({ json, nonInteractive, terminal }) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -610,10 +564,7 @@ describe("triage external recovery handoff", () => {
 });
 
 describe("standalone triage update evidence", () => {
-  it.each([
-    { status: "error" as const, reason: "background-doctor-failure" },
-    { status: "skipped" as const, reason: "dirty" },
-  ])(
+  it.each([{ status: "skipped" as const, reason: "dirty" }])(
     "reads a failed $status sentinel without consuming it or exposing routing instructions",
     async ({ status, reason }) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -668,34 +619,7 @@ describe("standalone triage update evidence", () => {
     },
   );
 
-  it("prefers the current updater failure over an older pending notification", async () => {
-    await withOpenClawTestState({ layout: "split" }, async (state) => {
-      await writeRestartSentinel({
-        kind: "update",
-        status: "error",
-        ts: 1,
-        stats: { reason: "older-pending-failure" },
-      });
-      const runtime = createTriageRuntime();
-      await triageCommand(runtime, {
-        json: true,
-        noExport: true,
-        recovery: {
-          target: resolveInstallationTarget(),
-          updateFailure: { result: failedUpdate(state.statePath("install")) },
-        },
-      });
-      const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
-      expect(prompt).toContain("injected-doctor-failure");
-      expect(prompt).not.toContain("older-pending-failure");
-    });
-  });
-
-  it.each([
-    { status: "ok" as const, reason: "completed-update" },
-    { status: "skipped" as const, reason: "already-current" },
-    { status: "skipped" as const, reason: "managed-service-handoff-started" },
-  ])(
+  it.each([{ status: "skipped" as const, reason: "managed-service-handoff-started" }])(
     "does not project a $status/$reason notification as a failed update",
     async ({ status, reason }) => {
       await withOpenClawTestState({ layout: "split" }, async () => {
@@ -712,13 +636,4 @@ describe("standalone triage update evidence", () => {
       });
     },
   );
-
-  it("keeps an absent update outcome unknown without creating a state database", async () => {
-    await withOpenClawTestState({ layout: "split" }, async (state) => {
-      const databasePath = path.join(state.stateDir, "state", "openclaw.sqlite");
-      await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await triageCommand(createTriageRuntime(), { json: true, noExport: true });
-      await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
 });

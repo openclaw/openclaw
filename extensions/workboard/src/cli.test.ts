@@ -7,7 +7,7 @@ import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
-  getRuntimeConfig: vi.fn(() => ({})),
+  isImplicitLocalGatewayTargetFromCli: vi.fn(async () => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
@@ -17,11 +17,17 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
   return {
     ...actual,
     callGatewayFromCli: gatewayRuntime.callGatewayFromCli,
+    isImplicitLocalGatewayTargetFromCli: gatewayRuntime.isImplicitLocalGatewayTargetFromCli,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: gatewayRuntime.getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>()),
+  runWithLocalStateOwner: ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent(): void }) => unknown;
+  }) => runLocal({ assertCurrent() {} }),
 }));
 
 function createProgram(store: WorkboardStore): Command {
@@ -31,7 +37,7 @@ function createProgram(store: WorkboardStore): Command {
     writeErr: () => {},
     writeOut: () => {},
   });
-  registerWorkboardCli({ program, store });
+  registerWorkboardCli({ program, withStore: async (action) => action(store) });
   return program;
 }
 
@@ -65,8 +71,7 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
 describe("registerWorkboardCli", () => {
   beforeEach(() => {
     gatewayRuntime.callGatewayFromCli.mockReset();
-    gatewayRuntime.getRuntimeConfig.mockReset();
-    gatewayRuntime.getRuntimeConfig.mockReturnValue({});
+    gatewayRuntime.isImplicitLocalGatewayTargetFromCli.mockReset().mockResolvedValue(false);
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
@@ -195,9 +200,7 @@ describe("registerWorkboardCli", () => {
     const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Configured remote target", status: "ready" });
     const program = createProgram(store);
-    gatewayRuntime.getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
-    });
+
     gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
       new Error("connect ECONNREFUSED gateway.example:443"),
     );

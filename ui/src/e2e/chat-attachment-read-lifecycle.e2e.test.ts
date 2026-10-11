@@ -18,6 +18,7 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -145,7 +146,7 @@ suite.define(() => {
         }
         await proof.finish();
       });
-      await page.locator("a.nav-item--home").click();
+      await openHomeFullPage(page);
       await composer.waitFor({ state: "visible" });
       await expect.poll(() => dockComposer.isVisible()).toBe(false);
       const receipt = {

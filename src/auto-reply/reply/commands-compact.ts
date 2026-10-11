@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
@@ -26,6 +27,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
+import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
 function extractCompactInstructions(params: {
@@ -406,6 +408,7 @@ export async function handleCompactCommand(
       tokensAfter: result.result?.tokensAfter,
       compactionKind: result.compactionKind,
       expectedSession,
+      transcriptByteCompactionLatch: result.compactionKind === "native-harness" ? undefined : null,
     });
     if (compactionCount === undefined) {
       return (
@@ -426,6 +429,10 @@ export async function handleCompactCommand(
   );
   const reason = formatCompactionReason(result.reason);
   const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
+  const degradedNotice =
+    didCompact && parseCompactionDetails(result.result?.details)?.qualityDegraded
+      ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+      : "";
   runtime.enqueueSystemEvent(line, {
     sessionKey: resolveSystemEventQueueKey(params.sessionKey, sessionAgentId),
   });
@@ -438,7 +445,7 @@ export async function handleCompactCommand(
       tokensAfter: tokensAfterCompaction,
     },
     reply: {
-      text: `⚙️ ${line}${interruptionNotice}`,
+      text: `⚙️ ${line}${degradedNotice}${interruptionNotice}`,
       isStatusNotice: true,
     },
   };

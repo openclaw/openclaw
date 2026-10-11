@@ -15,7 +15,7 @@ import {
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CrabboxCheckpointCreateError } from "./crabbox-worker-warm-image-checkpoint.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
@@ -90,7 +90,7 @@ describe("Crabbox project snapshot provisioning", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("Crabbox warm image capture unsupported:"),
     );
-    await provider.destroy({ ...source, profile });
+    await destroyAndWait(provider, { ...source, profile });
     expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported?.atMs).toBe(now);
     await provider.dispose();
     const restarted = createWarmProvider(command, stateDir);
@@ -100,7 +100,7 @@ describe("Crabbox project snapshot provisioning", () => {
     expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
     expect(current.options.beginNodeEnrollment).toHaveBeenCalledOnce();
     expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
-    await restarted.provider.destroy({ ...next, profile });
+    await destroyAndWait(restarted.provider, { ...next, profile });
     expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
     clock.mockReturnValue(now + 86_400_000);
     unsupported = false;
@@ -367,7 +367,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         "replay-baseline",
         projectOptions([], new AbortController(), preparation).options,
       );
-      await initial.provider.destroy({ ...baseline, profile: PROFILE });
+      await destroyAndWait(initial.provider, { ...baseline, profile: PROFILE });
       await initial.provider.dispose();
       const operation = "prepared-capture-replay";
       const leaseId = operationLeaseId(operation);
@@ -899,7 +899,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       calls.length = 0;
       warn.mockClear();
 
-      const cleanup = provider.destroy({ leaseId, profile: PROFILE });
+      const cleanup = destroyAndWait(provider, { leaseId, profile: PROFILE });
       if (stopFails) {
         await expect(cleanup).rejects.toThrow("source cleanup still pending");
         expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId]).toBeDefined();

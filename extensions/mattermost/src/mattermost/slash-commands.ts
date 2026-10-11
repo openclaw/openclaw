@@ -50,15 +50,6 @@ export type MattermostSlashCommandPayload = {
   response_url?: string;
 };
 
-export type MattermostSlashCommandResponse = {
-  response_type?: "ephemeral" | "in_channel";
-  text: string;
-  username?: string;
-  icon_url?: string;
-  goto_location?: string;
-  attachments?: unknown[];
-};
-
 type MattermostCommandCreate = {
   team_id: string;
   trigger: string;

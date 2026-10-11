@@ -6,9 +6,11 @@ import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 export const page = definePage({
   ...routePageSpec("logs"),
   component: () =>
-    import("./logs-page.ts").then(() => ({
+    import("./logs-page.tsx").then(() => ({
       header: true,
       render: () =>
-        html`<openclaw-logs-page ${shellLayoutTraits({ logsPage: true })}></openclaw-logs-page>`,
+        html`<openclaw-logs-page
+          ${shellLayoutTraits({ logsPage: true, toolbarHeader: true, settingsWorkspace: true })}
+        ></openclaw-logs-page>`,
     })),
 });

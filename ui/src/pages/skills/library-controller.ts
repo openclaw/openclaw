@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type {
   SkillLibraryEntry,
   SkillLibraryFile,
@@ -10,12 +9,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
@@ -65,11 +64,14 @@ export class SkillLibraryController {
   importSelection: File[] = [];
   newFilePath = "";
   query = "";
-  private readSequence = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly gateway: GatewayPageController,
+    private readonly host: { requestUpdate(): void },
+    private readonly gateway: {
+      readonly snapshot: ApplicationGatewaySnapshot | null;
+      capture(): GatewayConnectionScope | null;
+      isCurrent(scope: GatewayConnectionScope): boolean;
+    },
     private readonly config: () => ApplicationConfigCapability | undefined = () => undefined,
   ) {}
 
@@ -93,7 +95,6 @@ export class SkillLibraryController {
     }
   }
   reset() {
-    this.readSequence++;
     this.list = null;
     this.view = null;
     this.loading = false;
@@ -145,14 +146,10 @@ export class SkillLibraryController {
       this.list = result;
       this.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
-      if (this.gateway.isCurrent(connection)) {
-        this.error = formatUiError(error);
-      }
+      this.error = formatUiError(error);
     } finally {
-      if (this.gateway.isCurrent(connection)) {
-        this.loading = false;
-        this.changed();
-      }
+      this.loading = false;
+      this.changed();
     }
   }
 
@@ -171,7 +168,6 @@ export class SkillLibraryController {
     if (this.busy || (this.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
       return;
     }
-    this.readSequence++;
     this.draft = null;
     this.importOpen = false;
     this.newFilePath = "";
@@ -186,12 +182,11 @@ export class SkillLibraryController {
     if (!connection || this.busy) {
       return;
     }
-    const sequence = ++this.readSequence;
     await this.perform(async () => {
       const read = await connection.client.request<SkillsLibraryReadResult>("skills.library.read", {
         skillId,
       });
-      if (!this.gateway.isCurrent(connection) || sequence !== this.readSequence) {
+      if (!this.gateway.isCurrent(connection)) {
         return;
       }
       this.draft = libraryDraft(connection, read);
@@ -332,7 +327,7 @@ export class SkillLibraryController {
       }
       // Record the committed mutation even if the follow-up list or revision read fails.
       await this.receipt(receipt);
-      if (!this.gateway.isCurrent(draft.connection) || action === "remove") {
+      if (action === "remove") {
         return;
       }
       if (action === "rollback") {
@@ -340,9 +335,6 @@ export class SkillLibraryController {
           "skills.library.read",
           { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
         );
-        if (!this.gateway.isCurrent(draft.connection)) {
-          return;
-        }
         draft.content = read.content;
         draft.files = read.files;
         draft.baseFiles = read.files.map((file) => ({ ...file }));

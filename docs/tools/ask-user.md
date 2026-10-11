@@ -54,6 +54,10 @@ does not expose their questions or make them answerable. Secret, administrative,
 and sessionless questions keep their existing privileged access requirements.
 Answering a question does not grant the agent additional permissions.
 
+If a standalone question link cannot refresh after reconnecting, use **Retry**
+to load it again without losing the answer you typed in that page. A question
+that is no longer available remains unavailable.
+
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
@@ -115,8 +119,8 @@ answers ambiguous, the summary shows the saved reply text without splitting it.
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
-run cancellation or the overall run timeout. A pending question does not extend
-an explicit run budget.
+run cancellation or the current model attempt's timeout. A pending question
+does not pause or extend that attempt's execution budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.

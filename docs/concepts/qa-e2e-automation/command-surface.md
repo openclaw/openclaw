@@ -12,6 +12,9 @@ title: "Command surface"
 Every QA flow runs under `pnpm openclaw qa <subcommand>`. Many have `pnpm qa:*`
 script aliases; both forms work.
 
+QA command failures print their diagnostic message to stderr and exit with code 1.
+Invalid option values are reported by the argument parser before a run starts.
+
 | Command                                             | Purpose                                                                                                                                                                                                                                                             |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci`, `--qa-profile release`, or `--qa-profile all`.                                                                                                  |
