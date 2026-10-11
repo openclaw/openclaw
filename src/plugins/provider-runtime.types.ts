@@ -15,6 +15,7 @@ type ProviderRuntimeProviderConfig = Partial<
   Pick<ModelProviderConfig, "baseUrl" | "api" | "auth" | "models">
 > & {
   headers?: unknown;
+  request?: ModelProviderConfig["request"];
 };
 
 /**

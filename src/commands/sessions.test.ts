@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   assignSessionOwner,
@@ -32,6 +34,31 @@ import {
 } from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
+
+const catalogState = vi.hoisted(() => ({
+  catalog: { entries: [], routeVariants: [] } as ModelCatalogSnapshot,
+  callGateway: vi.fn<typeof import("../gateway/call.js").callGateway>(),
+  readActiveGatewayLockIdentity:
+    vi.fn<typeof import("../infra/gateway-lock.js").readActiveGatewayLockIdentity>(),
+}));
+// mock-isolation: Supply catalog I/O without provider discovery or prepared-runtime startup.
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => catalogState.catalog),
+}));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: catalogState.callGateway,
+  isImplicitLocalGatewayTarget: vi.fn(async () => true),
+}));
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockIdentity: catalogState.readActiveGatewayLockIdentity,
+}));
+beforeEach(() => {
+  catalogState.catalog = { entries: [], routeVariants: [] };
+  catalogState.callGateway.mockReset();
+  catalogState.readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);
+});
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 import { sessionsCommand } from "./sessions.js";
@@ -181,12 +208,12 @@ describe("sessionsCommand", () => {
       "1m ago",
       "claude-opus-4-7",
       "Claude CLI",
-      "unknown/200k (?%)",
+      "unknown/1.0m (?%)",
       "visibility:shared id:main-session",
     ]);
   });
 
-  it("renders recorded runtime with current context after a same-model runtime change", async () => {
+  it("renders current runtime and context after a same-model runtime change", async () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
@@ -227,9 +254,167 @@ describe("sessionsCommand", () => {
     cleanupStore(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("OpenClaw Default");
+    expect(row).toContain("OpenAI Codex");
     expect(row).toContain("11/1.0m (0%)");
   });
+
+  it.each([
+    { capacity: 32_768, runtimeId: "openclaw" },
+    { capacity: undefined, runtimeId: "openclaw" },
+    { capacity: 96_000, runtimeId: "native-fixture" },
+  ])(
+    "reports admitted Gateway capacity $capacity for $runtimeId without a default denominator",
+    async ({ capacity, runtimeId }) => {
+      catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
+        pid: 123,
+        port: 19461,
+        createdAt: "fixture",
+      });
+      catalogState.callGateway.mockResolvedValue({
+        models:
+          capacity === undefined
+            ? []
+            : [
+                {
+                  provider: "ollama",
+                  id: "qwen3:4b",
+                  name: "qwen3:4b",
+                  contextWindow: 262_144,
+                  contextTokens: runtimeId === "openclaw" ? capacity : 32_768,
+                  agentRuntime: { id: "openclaw", source: "model" },
+                  ...(runtimeId !== "openclaw"
+                    ? {
+                        runtimeChoices: [
+                          {
+                            agentRuntime: { id: runtimeId, source: "model" },
+                            contextWindow: 128_000,
+                            contextTokens: capacity,
+                          },
+                        ],
+                      }
+                    : {}),
+                },
+              ],
+      });
+      const store = await writeStore({
+        "agent:main:main": {
+          sessionId: "local-model-switch",
+          updatedAt: Date.now(),
+          modelProvider: "ollama",
+          model: runtimeId === "openclaw" ? "qwen3:8b" : "qwen3:4b",
+          providerOverride: "ollama",
+          modelOverride: "qwen3:4b",
+          agentHarnessId: runtimeId,
+          contextTokens: 128_000,
+          contextTokensSource: "resolved-v1",
+        },
+      });
+      setMockSessionsConfig(() => ({
+        session: { store },
+        agents: {
+          defaults: {
+            model: { primary: "ollama/qwen3:8b" },
+            models: { "ollama/qwen3:4b": { agentRuntime: { id: runtimeId } } },
+          },
+        },
+        models: {
+          providers: {
+            ollama: { models: [{ id: "qwen3:8b", contextTokens: 128_000 }] },
+          },
+        },
+      }));
+      const payload = await runSessionsJson<SessionsJsonPayload>(
+        (options, runtime) => sessionsCommand({ ...options, store: undefined }, runtime),
+        store,
+      );
+
+      expect(payload.sessions?.[0]).toMatchObject({
+        modelProvider: "ollama",
+        model: "qwen3:4b",
+        contextTokens: capacity ?? null,
+        agentRuntime: { id: runtimeId },
+      });
+      expect(catalogState.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "models.list",
+          localPortOverride: 19461,
+          params: expect.objectContaining({
+            preparedOnly: true,
+            agentId: "main",
+            provider: "ollama",
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each(["absent", "unreachable", "uninspectable", "other-workspace"])(
+    "preserves verified capacity for auto runtime when the Gateway is %s",
+    async (gatewayState) => {
+      const spawnedWorkspaceDir =
+        gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
+      if (gatewayState === "uninspectable") {
+        catalogState.readActiveGatewayLockIdentity.mockRejectedValue(
+          new Error("Gateway lock payload could not be verified"),
+        );
+      } else if (gatewayState !== "absent") {
+        catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
+          pid: 123,
+          port: 19461,
+          createdAt: "fixture",
+        });
+        if (gatewayState === "unreachable") {
+          catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+        } else {
+          catalogState.callGateway.mockResolvedValue({
+            models: [
+              { provider: "llama-cpp", id: "local-llama", name: "Local", contextTokens: 131_072 },
+            ],
+          });
+        }
+      }
+      const store = await writeStore({
+        "agent:main:main": {
+          sessionId: "saved-local-capacity",
+          updatedAt: Date.now(),
+          modelProvider: "llama-cpp",
+          model: "local-llama",
+          agentHarnessId: "openclaw",
+          contextTokens: 16_384,
+          contextTokensSource: "resolved-v1",
+          spawnedWorkspaceDir,
+        },
+      });
+      setMockSessionsConfig(() => ({
+        session: { store },
+        agents: { defaults: { model: { primary: "llama-cpp/local-llama" } } },
+      }));
+      const { runtime, logs, errors } = makeRuntime();
+      try {
+        await sessionsCommand({ json: true }, runtime);
+        const payload = JSON.parse(logs[0] ?? "{}") as SessionsJsonPayload;
+        expect(payload.sessions?.[0]).toMatchObject({
+          contextTokens: 16_384,
+          agentRuntime: { id: "openclaw" },
+        });
+        const gatewayUnavailable = ["unreachable", "uninspectable"].includes(gatewayState);
+        expect(errors).toHaveLength(gatewayUnavailable ? 1 : 0);
+        if (gatewayState === "uninspectable") {
+          expect(catalogState.callGateway).not.toHaveBeenCalled();
+        }
+        if (spawnedWorkspaceDir) {
+          expect(loadPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
+            expect.objectContaining({ workspaceDir: spawnedWorkspaceDir, readOnly: true }),
+          );
+        }
+        if (gatewayUnavailable) {
+          expect(errors[0]).toContain("showing configured or last verified capacity");
+        }
+      } finally {
+        cleanupStore(store);
+      }
+    },
+  );
 
   it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeStore({
@@ -247,7 +432,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
-    expect(row).toContain("unknown/200k (?%)");
+    expect(row).toContain("unknown/? (?%)");
     expect(row).toContain("think:high");
   });
 
@@ -742,7 +927,7 @@ describe("sessionsCommand model resolution", () => {
         expect(session).toMatchObject({
           modelProvider: "clawrouter",
           model: "openai/gpt-5.6",
-          agentRuntime: { id: "openclaw", source: "session" },
+          agentRuntime: { id: "openclaw", source: "model" },
           contextTokens: 272_000,
         });
       },
