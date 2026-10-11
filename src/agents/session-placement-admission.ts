@@ -59,7 +59,7 @@ export type PreparedSessionPlacementSandbox = Disposable & {
 
 export type SessionPlacementAdmissionProvider = {
   withRequiredSession?: RequiredSessionPlacementAdmission;
-  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => boolean;
+  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => Promise<boolean>;
   resolveRuntimeOverride?: (
     identity: Omit<LocalTurnPlacementClaim, "runId">,
   ) => Promise<string | undefined>;
@@ -194,10 +194,10 @@ export async function withRequiredSessionPlacement<T>(
   );
 }
 
-export function sessionPlacementUsesWorkerInference(
+export async function sessionPlacementUsesWorkerInference(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
-): boolean {
-  return state.provider?.usesWorkerInference?.(identity) === true;
+): Promise<boolean> {
+  return (await state.provider?.usesWorkerInference?.(identity)) === true;
 }
 
 /** Captures the exact placement owner, including standalone absence, before awaited work. */

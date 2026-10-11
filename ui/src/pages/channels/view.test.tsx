@@ -1,15 +1,19 @@
 // Channels page view tests.
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
-import { renderChannelDetail } from "./view.detail.ts";
-import { resolveChannelDisplayState } from "./view.shared.ts";
-import { createChannelsViewProps } from "./view.test-support.ts";
-import { renderChannels } from "./view.ts";
+import { renderChannelDetail } from "./view.detail.tsx";
+import { createNostrProfileFormState } from "./view.nostr-profile-form.tsx";
+import { resolveChannelDisplayState } from "./view.shared.tsx";
+import {
+  renderChannelView,
+  disposeChannelViews,
+  createChannelsViewProps,
+} from "./view.test-support.ts";
+import { ChannelsView } from "./view.tsx";
 import type { ChannelsProps } from "./view.types.ts";
-import { renderWhatsAppCard } from "./view.whatsapp.ts";
+import { WhatsAppCard } from "./view.whatsapp.tsx";
 
 function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
   return createChannelsViewProps(snapshot, {
@@ -38,7 +42,7 @@ describe("channel hub refresh actions", () => {
     props.onPairingRefresh = onPairingRefresh;
     const container = document.createElement("div");
 
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     const refreshButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>('button[aria-label="Refresh"]'),
@@ -100,7 +104,7 @@ describe("channels plugin presentation metadata", () => {
     });
     const container = document.createElement("div");
 
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     const row = container.querySelector(".channels-item");
     expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Slack");
@@ -134,7 +138,7 @@ describe("channels plugin presentation metadata", () => {
         plugins: [createChannelPlugin({ hasIcon: false })],
       },
     });
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
     expect(container.querySelector(".channels-item img")).toBeNull();
   });
 });
@@ -152,7 +156,7 @@ describe("channels setup access", () => {
     });
     const container = document.createElement("div");
 
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     const availableLabels = Array.from(
       container.querySelectorAll(".channels-item__detail .settings-row__title"),
@@ -182,7 +186,7 @@ describe("channels setup access", () => {
     props.canAdmin = false;
     props.onStartSetup = onStartSetup;
     const container = document.createElement("div");
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     expect(container.textContent).toContain(
       "Browsing only. Channel setup requires operator.admin access.",
@@ -206,7 +210,7 @@ describe("channels section order", () => {
       channelDefaultAccountId: {},
     });
     const container = document.createElement("div");
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
       node.textContent?.trim(),
@@ -242,7 +246,7 @@ describe("channel row actions", () => {
         props.onShowDetail = onAction;
       }
       const container = document.createElement("div");
-      render(renderChannels(props), container);
+      renderChannelView(ChannelsView, props, container);
       const row = Array.from(container.querySelectorAll<HTMLElement>(".channels-item")).find(
         (element) => element.querySelector(".settings-row__title")?.textContent === "Telegram",
       )!;
@@ -259,7 +263,7 @@ describe("channel row actions", () => {
           ? { channels: { ...snapshot.channels, whatsapp: { configured: true } } }
           : { channelOrder: ["telegram", "whatsapp"] }),
       };
-      render(renderChannels(props), container);
+      renderChannelView(ChannelsView, props, container);
       expect(container.contains(button)).toBe(true);
       button.click();
 
@@ -316,10 +320,10 @@ describe("channel status issues", () => {
     const container = document.createElement("div");
     props.onShowDetail = (channel) => {
       props.selectedChannel = channel;
-      render(renderChannels(props), container);
+      renderChannelView(ChannelsView, props, container);
     };
 
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     const discord = findChannelRow(container, "Discord");
     expect(discord.querySelector(".settings-status")?.textContent?.trim()).toBe("Needs attention");
@@ -347,7 +351,7 @@ describe("channel status issues", () => {
     expect(running?.nextElementSibling?.textContent?.trim()).toBe("Yes");
 
     props.channels.channelsSnapshot = { ...snapshot, ts: 2, statusIssues: [] };
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     expect(
       findChannelRow(container, "Discord").querySelector(".settings-status")?.textContent?.trim(),
@@ -371,7 +375,7 @@ describe("channel status issues", () => {
     props.selectedChannel = "discord";
     const container = document.createElement("div");
 
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     const row = findChannelRow(container, "Discord");
     const notice = container.querySelector('.channels-detail [role="note"]')!;
@@ -393,7 +397,7 @@ describe("channel status issues", () => {
     props.selectedChannel = "discord";
     const container = document.createElement("div");
 
-    render(renderChannels(props), container);
+    renderChannelView(ChannelsView, props, container);
 
     expect(
       findChannelRow(container, "Discord").querySelector(".settings-status")?.textContent?.trim(),
@@ -438,7 +442,7 @@ function renderWhatsAppButtons(params: {
   }
 
   const container = document.createElement("div");
-  render(renderWhatsAppCard({ props, whatsapp }), container);
+  renderChannelView(WhatsAppCard, props, container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
     container,
@@ -471,14 +475,15 @@ function renderChannelDetailFixture(
     props.onRefresh = options.onRefresh;
   }
   const container = document.createElement("div");
-  render(
-    renderChannelDetail({
+  renderChannelView(
+    renderChannelDetail,
+    {
       channelId,
       label: options.label ?? channelId,
       props,
       onClose: () => {},
       onSetup: () => {},
-    }),
+    },
     container,
   );
   return container;
@@ -535,7 +540,7 @@ function renderWhatsAppConfigForm(
   props.onShowAdvancedSettings = onShowAdvancedSettings;
 
   const container = document.createElement("div");
-  render(renderWhatsAppCard({ props, whatsapp }), container);
+  renderChannelView(WhatsAppCard, props, container);
   return { container, onShowAdvancedSettings };
 }
 
@@ -627,14 +632,15 @@ describe("channel detail", () => {
     });
 
     const container = document.createElement("div");
-    render(
-      renderChannelDetail({
+    renderChannelView(
+      renderChannelDetail,
+      {
         channelId: "telegram",
         label: "Telegram",
         props,
         onClose: () => {},
         onSetup: () => {},
-      }),
+      },
       container,
     );
 
@@ -733,9 +739,9 @@ describe("channel detail", () => {
         const container = document.createElement("div");
         props.onShowDetail = (selected) => {
           props.selectedChannel = selected;
-          render(renderChannels(props), container);
+          renderChannelView(ChannelsView, props, container);
         };
-        render(renderChannels(props), container);
+        renderChannelView(ChannelsView, props, container);
         const trigger = container.querySelector<HTMLButtonElement>(
           configured ? "button.channels-item" : ".channels-item__detail",
         );
@@ -844,7 +850,7 @@ describe("WhatsApp status", () => {
       channelDefaultAccountId: {},
     });
     const container = document.createElement("div");
-    render(renderWhatsAppCard({ props, whatsapp }), container);
+    renderChannelView(WhatsAppCard, props, container);
     const label = Array.from(container.querySelectorAll("dt")).find(
       (node) => node.textContent?.trim() === "Phone number",
     );
@@ -913,3 +919,45 @@ describe("WhatsApp card actions", () => {
     expect(qrRow?.nextElementSibling?.classList.contains("settings-row--actions")).toBe(true);
   });
 });
+
+describe("channel draft editing", () => {
+  it("keeps the Nostr editor mounted while the owner replaces its draft", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["nostr"],
+      channelLabels: { nostr: "Nostr" },
+      channels: { nostr: { configured: true, running: true } },
+      channelAccounts: { nostr: [{ accountId: "default", configured: true }] },
+      channelDefaultAccountId: { nostr: "default" },
+    });
+    props.selectedChannel = "nostr";
+    props.nostrProfileAccountId = "default";
+    props.nostrProfileFormState = createNostrProfileFormState({ name: "before" });
+    const container = document.createElement("div");
+    props.onNostrProfileFieldChange = (field, value) => {
+      const draft = props.nostrProfileFormState!;
+      props.nostrProfileFormState = { ...draft, values: { ...draft.values, [field]: value } };
+      renderChannelView(ChannelsView, props, container);
+    };
+    renderChannelView(ChannelsView, props, container);
+    const input = container.querySelector<HTMLInputElement>("#nostr-profile-name");
+    expect(input?.value).toBe("before");
+    input!.value = "after";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(props.nostrProfileFormState.values.name).toBe("after");
+    expect(container.querySelector("#nostr-profile-name")).toBe(input);
+    expect(input?.value).toBe("after");
+    expect(container.textContent).toContain("You have unsaved changes");
+
+    const save = vi.fn();
+    props.onNostrProfileSave = save;
+    renderChannelView(ChannelsView, props, container);
+    const publish = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save & Publish",
+    );
+    publish?.click();
+    expect(save).toHaveBeenCalledOnce();
+  });
+});
+
+afterEach(disposeChannelViews);
