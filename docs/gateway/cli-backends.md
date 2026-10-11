@@ -356,8 +356,10 @@ When prompt content changes, a compatible CLI session can resume with an OpenCla
 context note before the current user prompt. Chat history first matches imported
 Claude user turns against the full local text, including any literal quote of the
 note. If that does not match, it ignores one exact context note for comparison, so
-the same turn appears once. Stored OpenClaw and native transcript text remains
-unchanged. For unmatched imported user turns, chat history removes generated
+the same turn appears once. Queued system events, including model-switch notices,
+are ignored for matching even after generated conversation metadata and recent
+chat history. Stored OpenClaw and native transcript text remains unchanged.
+For unmatched imported user turns, chat history removes generated
 resume notes, historical requester guidance, and queued system-event prefixes
 from the display copy only. Historical requester guidance is recognized by its
 complete generated prefix; matching canonical user text and later quoted

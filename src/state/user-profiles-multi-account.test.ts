@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { prepareUserProfileRolePolicyAuthority } from "./user-channel-identity-operations.js";
 import { setCanonicalUserPreferences } from "./user-preferences.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
@@ -400,6 +401,11 @@ describe("multi-account people", () => {
       id: target.id,
       githubIdentity: { login: "primary-person" },
     });
+    expect(await prepareUserProfileRolePolicyAuthority(older.id, options)).toMatchObject({
+      profileId: target.id,
+      role: null,
+      githubLogin: "primary-person",
+    });
     expect(getProfileAvatar(older.id, options)?.bytes).toEqual(new Uint8Array([4, 5]));
     expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: target.id, logins: ["older-work", "primary-person"] }],
@@ -434,6 +440,10 @@ describe("multi-account people", () => {
       expect(
         (await resolveUserProfileGitHubAttribution([person.id], options)).get(person.id),
       ).toBeNull();
+      expect(await prepareUserProfileRolePolicyAuthority(person.id, options)).toMatchObject({
+        profileId: person.id,
+        githubLogin: null,
+      });
     }
   });
 });

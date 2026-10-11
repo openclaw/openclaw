@@ -40,54 +40,61 @@ test.each([999.9, 1_000])(
   },
 );
 
-test("acknowledgement splits overlapping phases into request and startup observations", async () => {
-  setDiagnosticsEnabledForProcess(true);
-  const events: DiagnosticEventPayload[] = [];
-  const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
-    include: ["diagnostic.phase.completed"],
-  });
-  const log = { info: vi.fn() };
-  try {
-    const diagnostics = startChatSendDiagnostics(log);
-    const request = diagnostics.scope("persist")!;
-    clock = 10;
-    request.mark("response");
-    const snapshot = diagnostics.scope("snapshot")!;
-    clock = 15;
-    request.finish();
-    diagnostics.acknowledge();
-    diagnostics[Symbol.dispose]();
-    const parallel = diagnostics.scope("snapshot")!;
-    clock = 815;
-    parallel.finish();
-    clock = 1_215;
-    snapshot.mark("dispatch");
-    clock = 1_415;
-    diagnostics.finish();
-    expect(events).toEqual([]);
-    expect(log.info).toHaveBeenCalledExactlyOnceWith(
-      "slow chat send 1400ms stage=startup ack=15ms snapshot=2000ms dispatch=200ms",
-    );
+test.each(["startup", "steer", "queued"] as const)(
+  "acknowledgement splits overlapping phases into request and %s observations",
+  async (stage) => {
+    setDiagnosticsEnabledForProcess(true);
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["diagnostic.phase.completed"],
+    });
+    const log = { info: vi.fn() };
+    try {
+      const diagnostics = startChatSendDiagnostics(log);
+      const request = diagnostics.scope("persist")!;
+      clock = 10;
+      request.mark("response");
+      const snapshot = diagnostics.scope("snapshot")!;
+      clock = 15;
+      request.finish();
+      diagnostics.acknowledge(stage === "queued" ? "startup" : stage);
+      diagnostics[Symbol.dispose]();
+      const parallel = diagnostics.scope("snapshot")!;
+      clock = 815;
+      parallel.finish();
+      clock = 1_215;
+      snapshot.mark("dispatch");
+      clock = 1_415;
+      diagnostics.finish({
+        isSteered: () => false,
+        isEnqueued: () => stage === "queued",
+        isTerminal: () => false,
+      });
+      expect(events).toEqual([]);
+      expect(log.info).toHaveBeenCalledExactlyOnceWith(
+        `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`,
+      );
 
-    clock = 4_000;
-    snapshot.mark("effects");
-    snapshot.finish();
-    diagnostics.acknowledge();
-    diagnostics.finish();
-    expect(diagnostics.scope("worktree")).toBeUndefined();
-    await waitForDiagnosticEventsDrained();
-    expect(events).toMatchObject([
-      { name: "chat.send.persist", durationMs: 10, details: { stage: "request" } },
-      { name: "chat.send.snapshot", durationMs: 5, details: { stage: "request" } },
-      { name: "chat.send.response", durationMs: 5, details: { stage: "request" } },
-      { name: "chat.send.snapshot", durationMs: 2_000, details: { stage: "startup" } },
-      { name: "chat.send.dispatch", durationMs: 200, details: { stage: "startup" } },
-    ]);
-    expect(log.info).toHaveBeenCalledOnce();
-  } finally {
-    stop();
-  }
-});
+      clock = 4_000;
+      snapshot.mark("effects");
+      snapshot.finish();
+      diagnostics.acknowledge();
+      diagnostics.finish();
+      expect(diagnostics.scope("worktree")).toBeUndefined();
+      await waitForDiagnosticEventsDrained();
+      expect(events).toMatchObject([
+        { name: "chat.send.persist", durationMs: 10, details: { stage: "request" } },
+        { name: "chat.send.snapshot", durationMs: 5, details: { stage: "request" } },
+        { name: "chat.send.response", durationMs: 5, details: { stage: "request" } },
+        { name: "chat.send.snapshot", durationMs: 2_000, details: { stage } },
+        { name: "chat.send.dispatch", durationMs: 200, details: { stage } },
+      ]);
+      expect(log.info).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+    }
+  },
+);
 
 test("logging failures preserve the send error and retire unfinished scopes", () => {
   const log = {

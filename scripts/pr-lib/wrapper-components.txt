@@ -762,6 +762,7 @@ src/gateway/worker-environments/placement-workspace-result.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
+src/gateway/worker-environments/store-errors.ts
 src/gateway/worker-environments/store-native-publication.ts
 src/gateway/worker-environments/store-projection.ts
 src/gateway/worker-environments/store-validation.ts

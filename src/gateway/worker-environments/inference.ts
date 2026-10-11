@@ -628,8 +628,9 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     request: WorkerInferenceCancelParams;
     revalidate?: RevalidateInference;
   }): Promise<WorkerInferenceCancelApplicationResult> => {
-    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
-      await joinInferenceOperations([], unknownSettlements.get(inferenceTurnKey(params.request)));
+    const unknownFailures = unknownSettlements.get(inferenceTurnKey(params.request));
+    if (unknownFailures) {
+      await joinInferenceOperations([], unknownFailures);
     }
     const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
     const failed = active.get(claimKey);
