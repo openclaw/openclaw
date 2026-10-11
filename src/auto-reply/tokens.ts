@@ -119,12 +119,23 @@ function stripLeadingReasoningBlocks(text: string): string {
 
 function stripFinalSilentToken(text: string, token: string): string | null {
   const escaped = escapeRegExp(token);
-  const stripped = text.replace(new RegExp(`(?:^|[\\s*.])${escaped}\\s*$`, "i"), "").trim();
+  // Tolerate punctuation-only tails ("NO_REPLY.", "NO_REPLY!") the same way
+  // token-only matching accepts punctuation-wrapped tokens (#165025).
+  const stripped = text
+    .replace(new RegExp(`(?:^|[\\s*.])${escaped}[\\p{P}\\s]*$`, "iu"), "")
+    .trim();
   return stripped === text.trim() ? null : stripped;
 }
 
 const silentIntentTextRe =
   /^\s*(?:i|i'll|i\s+will|i'm|i\s+am|we|we'll|we\s+will|the\s+assistant|assistant|the\s+bot|bot|openclaw)\s+(?:(?:will\s+)?(?:stay|remain|keep|be)\s+(?:quiet|silent)(?:\s+(?:here|for\s+now|on\s+this|in\s+this\s+(?:chat|thread|channel|conversation)))?|(?:do\s+not|don't|dont|will\s+not|won't|would\s+not|should\s+not)\s+(?:reply|respond)(?:\s+(?:here|for\s+now|on\s+this|in\s+this\s+(?:chat|thread|channel|conversation)))?|(?:have|has)\s+nothing\s+(?:to|for)\s+(?:say|add|reply|respond))(?:[.!?]+)?\s*$/i;
+
+// Unanchored companion: the closing line may wrap the silent intent in extra
+// deliberation, so the clause may be preceded or followed by reasoning prose
+// (#165025). Subject-bearing predicates keep the original whitelist shape;
+// the subject-less clauses are inherently first-person silence intents.
+const silentIntentClauseRe =
+  /(?:(?:i|i'll|i\s+will|i'm|i\s+am|we|we'll|we\s+will|the\s+assistant|assistant|the\s+bot|bot|openclaw)\s+(?:(?:will\s+)?(?:stay|remain|keep|be)\s+(?:quiet|silent)|(?:do\s+not|don't|dont|will\s+not|won't|would\s+not|should\s+not)\s+(?:reply|respond|answer|send|say|add)|(?:have|has)\s+nothing\s+(?:to|for)\s+(?:say|add|reply|respond|send))|no\s+need\s+to\s+(?:reply|respond|answer|send|say|add)(?:\s+(?:here|further|again|more|on\s+this))?|nothing\s+(?:more|further|else)\s+to\s+(?:say|add|reply|respond|send)|adding\s+more(?:\s+\w+){0,3}\s+(?:would|will|is)\s+(?:just\s+)?(?:be\s+)?(?:noise|redundant|pointless|unnecessary))/i;
 
 const substantiveAnswerCueRe =
   /\b(?:answer|here(?:'s|\s+is)|tell\s+them|you\s+(?:should|can|could|need|must)|please|try|use|send|service\s+is|resolved|retry|yes|no,|sure)\b/i;
@@ -146,20 +157,21 @@ function hasReasoningFinalSilentToken(
   if (!allowPlainReasoning) {
     return false;
   }
+  if (bareReasoningPlaceholderRe.test(withoutToken)) {
+    return true;
+  }
+  // A substantive-answer cue anywhere in the remaining payload still forces
+  // delivery (#19537), including inside the closing line that carries the
+  // silent-intent clause.
+  if (substantiveAnswerCueRe.test(withoutToken)) {
+    return false;
+  }
   const lines = withoutToken
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
   const finalLine = lines.at(-1);
-  const previousLines = lines.slice(0, -1).join("\n");
-  return (
-    Boolean(
-      finalLine &&
-      silentIntentTextRe.test(finalLine) &&
-      previousLines &&
-      !substantiveAnswerCueRe.test(previousLines),
-    ) || bareReasoningPlaceholderRe.test(withoutToken)
-  );
+  return Boolean(finalLine && silentIntentClauseRe.test(finalLine));
 }
 
 function isReasoningPrefixedSilentReplyText(text: string | undefined, token: string): boolean {
