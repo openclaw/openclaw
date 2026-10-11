@@ -1067,7 +1067,7 @@ describe("gateway server cron", () => {
       name: "unreached failure alert",
       sessionTarget: "isolated",
       delivery: { mode: "none" },
-      failureAlert: { after: 1, mode: "announce", channel: "last" },
+      failureAlert: { after: 1, mode: "announce", channel: "telegram", to: "123" },
     });
     await runCronJobAndWaitForFinished(ws, unreachedJobId);
     await expectOutcome(unreachedJobId, {
