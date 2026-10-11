@@ -767,7 +767,7 @@ describe("mcp-app-view localization", () => {
       }
       return originalRequest(method, params, options);
     });
-    client.request = createTestGatewayClient(request).request;
+    client.request = createTestGatewayClient(request).request.bind(client);
     // SAFETY: the registered Apps page exposes these properties to its rendering callers.
     const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
       readonly updateComplete: Promise<boolean>;
