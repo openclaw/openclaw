@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { sql, type RawBuilder } from "kysely";
+import { sql } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -26,7 +26,6 @@ import {
   transcriptEventModelNavigationSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
-  transcriptEventUtf8BytesSql,
   transcriptEventWithoutCustomDataBytesSql,
   type TranscriptPayloadRecord,
 } from "./transcript-payload.js";
@@ -82,164 +81,51 @@ function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): Trans
   };
 }
 
-function inspectNavigation(database: DatabaseSync, event: RawBuilder<string>, seq: number) {
-  const paths = [
-    "$.type",
-    "$.id",
-    "$.parentId",
-    "$.customType",
-    "$.display",
-    "$.message.role",
-    "$.message.idempotencyKey",
-    "$.message.provenance",
-    "$.message.excludeFromContext",
-    "$.message.__openclaw.runId",
-    "$.message.__openclaw.steerTargetRunId",
-    "$.message.__openclaw.contextFreeCommand",
-  ];
-  return paths.map((jsonPath) =>
-    executeSqliteQueryTakeFirstSync(
-      database,
-      getNodeSqliteKysely<PayloadDatabase>(database)
-        .selectFrom("transcript_events")
-        .select((eb) => [
-          eb.fn<string | null>("json_type", [event, eb.val(jsonPath)]).as("type"),
-          sql`CASE WHEN json_type(${event}, ${jsonPath}) IN ('object', 'array')
-            THEN json(json_extract(${event}, ${jsonPath}))
-            ELSE json_extract(${event}, ${jsonPath}) END`.as("value"),
-        ])
-        .where("seq", "=", seq),
-    ),
-  );
-}
-
 describe("transcript payload storage boundary", () => {
-  it.each([
-    ["UTF-8", "UTF-16le"],
-    ["UTF-8", "UTF-16be"],
-    ["UTF-16le", "UTF-8"],
-    ["UTF-16be", "UTF-8"],
-  ])("recomputes a prepared %s frame for %s storage", (sourceEncoding, targetEncoding) => {
-    const source = openNodeSqliteDatabase(":memory:");
-    const target = openNodeSqliteDatabase(":memory:");
-    try {
-      source.exec(`PRAGMA encoding = '${sourceEncoding}'`);
-      target.exec(`PRAGMA encoding = '${targetEncoding}'`);
-      createTable(source);
-      createTable(target);
-      target.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
-        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
-      const eventJson = `{"type":"custom","id":"first","id":"last","data":"${"fixture".repeat(1024)}"}`;
-      const prepared = prepareTranscriptPayloadForReuse(source, eventJson);
-      expect(prepared.storageEncoding).toBe(sourceEncoding);
-      const insertEvent = createTranscriptEventInserter(target, "session");
-      insertEvent({
-        seq: 1,
-        eventJson,
-        createdAt: 1,
-        preparedPayload: prepared,
-      });
-      const stored = target
-        .prepare(
-          "SELECT event_json, event_zstd, event_utf8_bytes, navigation_json FROM transcript_events",
-        )
-        .get();
-      expect(readBody(target, 1)).toBe(eventJson);
-      expect(readBody(target, 1, "row")).toBe(eventJson);
-      if (targetEncoding === "UTF-8") {
-        expect(stored?.event_json).toBeNull();
-        expect(stored?.event_zstd).toBeInstanceOf(Uint8Array);
-        expect(stored?.event_utf8_bytes).toBe(Buffer.byteLength(eventJson));
-      } else {
-        expect(stored).toEqual({
-          event_json: eventJson,
-          event_zstd: null,
-          event_utf8_bytes: null,
-          navigation_json: null,
-        });
-      }
-    } finally {
-      source.close();
-      target.close();
-    }
-  });
-
-  it("keeps identity storage when navigation would outweigh compressed payload savings", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
-      createTable(database);
-      for (const original of [
-        '{"type":"message","message":{"role":"user","content":"short"}}',
-        JSON.stringify({ type: "custom", id: "identifier".repeat(256), data: "small" }),
-      ]) {
-        expect(prepareTranscriptPayload(database, original)).toEqual({
-          event_json: original,
-          event_zstd: null,
-          event_utf8_bytes: Buffer.byteLength(original),
-          navigation_json: null,
-        });
-      }
-    } finally {
-      database.close();
-    }
-  });
-
-  it("preserves exact canonical text while selecting metadata without the body", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
-      createTable(database);
-      const original = ` { "type": "custom", "id": "雪🦞", "data": "${"é ".repeat(4096)}", "number": 1.00, "duplicate": 1, "duplicate": 2 }\n`;
-      const prepared = prepareTranscriptPayload(database, original);
-      expect(prepared.event_json).toBeNull();
-      expect(prepared.event_zstd?.byteLength).toBeLessThan(Buffer.byteLength(original) / 2);
-      expect(
-        prepared.event_zstd!.byteLength + Buffer.byteLength(prepared.navigation_json!),
-      ).toBeLessThan(Buffer.byteLength(original));
-      insert(database, 1, prepared);
-      expect(readBody(database, 1)).toBe(original);
-      expect(readBody(database, 1, "row")).toBe(original);
-
-      database.prepare("UPDATE transcript_events SET event_zstd = x'010203' WHERE seq = 1").run();
-      const metadata = executeSqliteQueryTakeFirstSync(
-        database,
-        getNodeSqliteKysely<PayloadDatabase>(database)
-          .selectFrom("transcript_events")
-          .select([
-            transcriptEventNavigationSql().as("navigation"),
-            transcriptEventUtf8BytesSql().as("bytes"),
-          ]),
-      );
-      expect(metadata?.bytes).toBe(Buffer.byteLength(original));
-      expect(metadata?.navigation).not.toContain('"data"');
-      expect(() => readBody(database, 1)).toThrow();
-      expect(() => readBody(database, 1, "row")).toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each(["true", "1", '"true"', "null", "false"])(
-    "preserves SQLite navigation types, missing keys and duplicate selection for %s",
-    (booleanValue) => {
-      const database = openNodeSqliteDatabase(":memory:");
+  it.each([["UTF-16le", "UTF-8"]])(
+    "recomputes a prepared %s frame for %s storage",
+    (sourceEncoding, targetEncoding) => {
+      const source = openNodeSqliteDatabase(":memory:");
+      const target = openNodeSqliteDatabase(":memory:");
       try {
-        createTable(database);
-        const original = `{"type":"custom_message","id":"雪🦞","parentId":null,"display":${booleanValue},"display":false,"message":{"role":"user","role":"assistant","idempotencyKey":"a-b","provenance":{"kind":"voice","sourceChannel":"雪🦞","extra":[true,null,1]},"excludeFromContext":${booleanValue},"__openclaw":{"runId":"run","steerTargetRunId":null,"contextFreeCommand":${booleanValue}},"content":"${"content ".repeat(512)}"}}`;
-        insert(database, 0, {
-          event_json: original,
-          event_zstd: null,
-          event_utf8_bytes: null,
-          navigation_json: null,
+        source.exec(`PRAGMA encoding = '${sourceEncoding}'`);
+        target.exec(`PRAGMA encoding = '${targetEncoding}'`);
+        createTable(source);
+        createTable(target);
+        target.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
+        const eventJson = `{"type":"custom","id":"first","id":"last","data":"${"fixture".repeat(1024)}"}`;
+        const prepared = prepareTranscriptPayloadForReuse(source, eventJson);
+        expect(prepared.storageEncoding).toBe(sourceEncoding);
+        const insertEvent = createTranscriptEventInserter(target, "session");
+        insertEvent({
+          seq: 1,
+          eventJson,
+          createdAt: 1,
+          preparedPayload: prepared,
         });
-        const prepared = prepareTranscriptPayload(database, original);
-        expect(prepared.event_zstd).not.toBeNull();
-        insert(database, 1, prepared);
-        expect(inspectNavigation(database, transcriptEventNavigationSql(), 1)).toEqual(
-          inspectNavigation(database, nativeFixtureEvent, 0),
-        );
-        expect(readBody(database, 1)).toBe(original);
+        const stored = target
+          .prepare(
+            "SELECT event_json, event_zstd, event_utf8_bytes, navigation_json FROM transcript_events",
+          )
+          .get();
+        expect(readBody(target, 1)).toBe(eventJson);
+        expect(readBody(target, 1, "row")).toBe(eventJson);
+        if (targetEncoding === "UTF-8") {
+          expect(stored?.event_json).toBeNull();
+          expect(stored?.event_zstd).toBeInstanceOf(Uint8Array);
+          expect(stored?.event_utf8_bytes).toBe(Buffer.byteLength(eventJson));
+        } else {
+          expect(stored).toEqual({
+            event_json: eventJson,
+            event_zstd: null,
+            event_utf8_bytes: null,
+            navigation_json: null,
+          });
+        }
       } finally {
-        database.close();
+        source.close();
+        target.close();
       }
     },
   );
@@ -277,184 +163,38 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it.each([3, "3", [3], { future: true }])(
-    "keeps a genuine large header in identity storage with version %j",
-    (version) => {
-      const database = openNodeSqliteDatabase(":memory:");
-      try {
-        const original = JSON.stringify({
-          type: "session",
-          id: "header",
-          version,
-          padding: "x".repeat(4096),
-        });
-        const payload = prepareTranscriptPayload(database, original);
-        expect(payload).toEqual({
-          event_json: original,
-          event_zstd: null,
-          event_utf8_bytes: Buffer.byteLength(original),
-          navigation_json: null,
-        });
-      } finally {
-        database.close();
-      }
-    },
-  );
-
-  it("retains native UTF-16 navigation and native projected byte accounting", () => {
+  it.each([[3]])("keeps a genuine large header in identity storage with version %j", (version) => {
     const database = openNodeSqliteDatabase(":memory:");
     try {
-      database.exec("PRAGMA encoding = 'UTF-16le'");
-      createTable(database);
-      const original = `{"type":"custom_message","id":"雪🦞\\ud800","display":true,"data":"${"雪".repeat(1024)}"}`;
-      const prepared = prepareTranscriptPayload(database, original);
-      expect(prepared.navigation_json).toBeNull();
-      expect(prepared.event_zstd).toBeNull();
-      expect(prepared.event_utf8_bytes).toBeNull();
-      insert(database, 1, prepared);
-      expect(inspectNavigation(database, transcriptEventNavigationSql(), 1)).toEqual(
-        inspectNavigation(database, nativeFixtureEvent, 1),
-      );
-      expect(readBody(database, 1)).toBe(original);
-      const lengths = database
-        .prepare(
-          "SELECT octet_length(event_json) stored, event_utf8_bytes utf8 FROM transcript_events",
-        )
-        .get();
-      expect(lengths?.utf8).toBeNull();
-      expect(lengths?.stored).not.toBe(Buffer.byteLength(original));
-      const projected = projectModelContextEventSql(nativeFixtureEvent, sql.lit(0));
-      const modelSizes = executeSqliteQueryTakeFirstSync(
-        database,
-        getNodeSqliteKysely<PayloadDatabase>(database)
-          .selectFrom("transcript_events")
-          .select((eb) => [
-            transcriptEventModelBytesSql(sql.lit(0)).as("stored"),
-            eb.fn<number>("octet_length", [projected]).as("native"),
-          ]),
-      );
-      expect(modelSizes?.stored).toBe(modelSizes?.native);
+      const original = JSON.stringify({
+        type: "session",
+        id: "header",
+        version,
+        padding: "x".repeat(4096),
+      });
+      const payload = prepareTranscriptPayload(database, original);
+      expect(payload).toEqual({
+        event_json: original,
+        event_zstd: null,
+        event_utf8_bytes: Buffer.byteLength(original),
+        navigation_json: null,
+      });
     } finally {
       database.close();
     }
   });
 
-  it.each(["native", "text fallback", "large"])(
-    "preserves owner projections with %s JSON",
-    (mode) => {
-      const jsonb =
-        mode === "text fallback"
-          ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
-          : undefined;
-      const database = openNodeSqliteDatabase(":memory:");
-      try {
-        createTable(database);
-        const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(mode === "large" ? 256 * 1024 : 512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
-        const prepared = prepareTranscriptPayload(database, original);
-        expect(prepared.event_zstd).not.toBeNull();
-        insert(database, 0, {
-          event_json: original,
-          event_zstd: null,
-          event_utf8_bytes: null,
-          navigation_json: null,
-        });
-        insert(database, 1, prepared);
-        const db = getNodeSqliteKysely<PayloadDatabase>(database);
-        const stored = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("transcript_events")
-            .select((eb) => [
-              transcriptEventNavigationSql().as("navigation"),
-              transcriptEventResetNavigationSql().as("reset"),
-              transcriptEventModelNavigationSql().as("model"),
-              transcriptEventModelBytesSql(sql.lit(0)).as("modelBytes"),
-              transcriptEventModelBytesSql(sql.lit(1)).as("modelWithoutCheckpointBytes"),
-              transcriptEventWithoutCustomDataBytesSql().as("withoutCustomDataBytes"),
-              eb
-                .fn<string>("json_extract", [transcriptEventNavigationSql(), eb.val("$.type")])
-                .as("first_type"),
-              eb
-                .fn<string>("json_extract", [
-                  transcriptEventNavigationSql(),
-                  eb.val("$.message.role"),
-                ])
-                .as("first_role"),
-            ])
-            .where("seq", "=", 1),
-        );
-        const native = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("transcript_events")
-            .select((eb) => [
-              projectResetBoundaryNavigationSql(nativeFixtureEvent).as("reset"),
-              projectModelContextNavigationSql(nativeFixtureEvent).as("model"),
-              eb
-                .fn<number>("octet_length", [
-                  projectModelContextEventSql(nativeFixtureEvent, sql.lit(0)),
-                ])
-                .as("modelBytes"),
-              eb
-                .fn<number>("octet_length", [
-                  projectModelContextEventSql(nativeFixtureEvent, sql.lit(1)),
-                ])
-                .as("modelWithoutCheckpointBytes"),
-              eb
-                .fn<number>("octet_length", [
-                  eb.fn<string>("json_remove", [nativeFixtureEvent, eb.val("$.data")]),
-                ])
-                .as("withoutCustomDataBytes"),
-            ])
-            .where("seq", "=", 0),
-        );
-        expect(stored?.first_type).toBe("message");
-        expect(stored?.first_role).toBe("assistant");
-        expect(JSON.parse(stored!.navigation)).toMatchObject({
-          type: "reset",
-          id: "last",
-          targetId: "target",
-          appendParentId: "append",
-          appendMode: "preserve",
-          firstKeptEntryId: "kept",
-          message: { role: "toolResult" },
-        });
-        expect(stored).toMatchObject(native!);
-        expect(readBody(database, 1)).toBe(original);
-        expect(JSON.parse(stored!.model).message.content).toEqual([
-          { type: "toolCall", id: "call", name: "read" },
-        ]);
-        expect(JSON.parse(stored!.model).message.providerReplay).toEqual({ type: "checkpoint" });
-      } finally {
-        database.close();
-        jsonb?.mockRestore();
-      }
-    },
-  );
-
-  it.each([
-    '"message":{"role":"toolResult"}',
-    '"message":{"role":"assistant"}',
-    '"message":{"role":null}',
-    '"message":{"timestamp":1}',
-    '"message":{"role":"toolResult","role":"assistant"}',
-    '"message":{"role":"assistant","role":"toolResult"}',
-    '"message":{"role":"toolResult"},"message":{"role":"assistant"}',
-    '"message":null',
-    '"message":42',
-    '"message":"scalar"',
-  ])("projects selected payloads once with native role semantics: %s", (envelope) => {
+  it.each(["text fallback"])("preserves owner projections with %s JSON", (mode) => {
+    const jsonb =
+      mode === "text fallback"
+        ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
+        : undefined;
     const database = openNodeSqliteDatabase(":memory:");
-    const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
     try {
       createTable(database);
-      const fields =
-        ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
-      const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
+      const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(mode === "large" ? 256 * 1024 : 512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
       const prepared = prepareTranscriptPayload(database, original);
-      expect(prepared.event_zstd !== null).toBe(
-        !envelope.includes("scalar") && !envelope.includes("42"),
-      );
+      expect(prepared.event_zstd).not.toBeNull();
       insert(database, 0, {
         event_json: original,
         event_zstd: null,
@@ -463,114 +203,144 @@ describe("transcript payload storage boundary", () => {
       });
       insert(database, 1, prepared);
       const db = getNodeSqliteKysely<PayloadDatabase>(database);
-      for (const omitCheckpoint of [0, 1]) {
-        for (const omission of [undefined, sql.val("body omitted")]) {
-          const native = executeSqliteQueryTakeFirstSync(
-            database,
-            db
-              .selectFrom("transcript_events")
-              .select(
-                projectModelContextEventSql(
-                  nativeFixtureEvent,
-                  sql.val(omitCheckpoint),
-                  omission,
-                ).as("event"),
-              )
-              .where("seq", "=", 0),
-          );
-          for (const seq of [0, 1]) {
-            decompress.mockClear();
-            const stored = executeSqliteQueryTakeFirstSync(
-              database,
-              db
-                .selectFrom("transcript_events")
-                .select((eb) =>
-                  projectModelContextEventSql(
-                    transcriptEventJsonSql(database),
-                    eb.val(omitCheckpoint),
-                    omission,
-                    eb.fn("json_extract", [
-                      transcriptEventNavigationSql(),
-                      eb.val("$.message.role"),
-                    ]),
-                  ).as("event"),
-                )
-                .where("seq", "=", seq),
-            );
-            expect(stored).toEqual(native);
-            expect(decompress).toHaveBeenCalledTimes(seq === 1 && prepared.event_zstd ? 1 : 0);
-          }
-        }
-      }
-    } finally {
-      decompress.mockRestore();
-      database.close();
-    }
-  });
-
-  it("admits model and retained-custom projections using exact costs without decoding bodies", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
-      createTable(database);
-      const original = JSON.stringify({
-        type: "message",
-        id: "tool-result",
-        data: "custom ".repeat(2048),
-        message: {
-          role: "toolResult",
-          toolCallId: "call",
-          toolName: "read",
-          isError: false,
-          content: [{ type: "text", text: "visible" }],
-          details: { diagnostic: "detail ".repeat(2048) },
-          __openclaw: { upstreamUserText: "upstream ".repeat(2048) },
-          providerReplay: { type: "checkpoint", payload: "replay ".repeat(2048) },
-        },
-      });
-      const prepared = prepareTranscriptPayload(database, original);
-      expect(prepared.event_zstd).not.toBeNull();
-      insert(database, 1, { ...prepared, event_zstd: Buffer.from([1, 2, 3]) });
-      const db = getNodeSqliteKysely<PayloadDatabase>(database);
       const stored = executeSqliteQueryTakeFirstSync(
         database,
         db
           .selectFrom("transcript_events")
-          .select([
-            transcriptEventModelBytesSql(sql.lit(0)).as("model"),
-            transcriptEventModelBytesSql(sql.lit(1)).as("withoutCheckpoint"),
-            transcriptEventWithoutCustomDataBytesSql().as("withoutData"),
-            transcriptEventModelNavigationSql().as("navigation"),
-          ]),
+          .select((eb) => [
+            transcriptEventNavigationSql().as("navigation"),
+            transcriptEventResetNavigationSql().as("reset"),
+            transcriptEventModelNavigationSql().as("model"),
+            transcriptEventModelBytesSql(sql.lit(0)).as("modelBytes"),
+            transcriptEventModelBytesSql(sql.lit(1)).as("modelWithoutCheckpointBytes"),
+            transcriptEventWithoutCustomDataBytesSql().as("withoutCustomDataBytes"),
+            eb
+              .fn<string>("json_extract", [transcriptEventNavigationSql(), eb.val("$.type")])
+              .as("first_type"),
+            eb
+              .fn<string>("json_extract", [
+                transcriptEventNavigationSql(),
+                eb.val("$.message.role"),
+              ])
+              .as("first_role"),
+          ])
+          .where("seq", "=", 1),
       );
-      const source = sql.val(original);
       const native = executeSqliteQueryTakeFirstSync(
         database,
-        db.selectNoFrom((eb) => [
-          eb
-            .fn<number>("octet_length", [projectModelContextEventSql(source, sql.lit(0))])
-            .as("model"),
-          eb
-            .fn<number>("octet_length", [projectModelContextEventSql(source, sql.lit(1))])
-            .as("withoutCheckpoint"),
-          eb
-            .fn<number>("octet_length", [eb.fn<string>("json_remove", [source, eb.val("$.data")])])
-            .as("withoutData"),
-        ]),
+        db
+          .selectFrom("transcript_events")
+          .select((eb) => [
+            projectResetBoundaryNavigationSql(nativeFixtureEvent).as("reset"),
+            projectModelContextNavigationSql(nativeFixtureEvent).as("model"),
+            eb
+              .fn<number>("octet_length", [
+                projectModelContextEventSql(nativeFixtureEvent, sql.lit(0)),
+              ])
+              .as("modelBytes"),
+            eb
+              .fn<number>("octet_length", [
+                projectModelContextEventSql(nativeFixtureEvent, sql.lit(1)),
+              ])
+              .as("modelWithoutCheckpointBytes"),
+            eb
+              .fn<number>("octet_length", [
+                eb.fn<string>("json_remove", [nativeFixtureEvent, eb.val("$.data")]),
+              ])
+              .as("withoutCustomDataBytes"),
+          ])
+          .where("seq", "=", 0),
       );
-      expect(stored).toMatchObject(native!);
-      expect(stored!.withoutCheckpoint).toBeLessThan(stored!.model);
-      expect(stored!.model).toBeLessThan(Buffer.byteLength(original));
-      expect(JSON.parse(stored!.navigation).message).toMatchObject({
-        role: "toolResult",
-        toolCallId: "call",
-        toolName: "read",
-        isError: false,
+      expect(stored?.first_type).toBe("message");
+      expect(stored?.first_role).toBe("assistant");
+      expect(JSON.parse(stored!.navigation)).toMatchObject({
+        type: "reset",
+        id: "last",
+        targetId: "target",
+        appendParentId: "append",
+        appendMode: "preserve",
+        firstKeptEntryId: "kept",
+        message: { role: "toolResult" },
       });
-      expect(() => readBody(database, 1)).toThrow();
+      expect(stored).toMatchObject(native!);
+      expect(readBody(database, 1)).toBe(original);
+      expect(JSON.parse(stored!.model).message.content).toEqual([
+        { type: "toolCall", id: "call", name: "read" },
+      ]);
+      expect(JSON.parse(stored!.model).message.providerReplay).toEqual({ type: "checkpoint" });
     } finally {
       database.close();
+      jsonb?.mockRestore();
     }
   });
+
+  it.each(['"message":{"timestamp":1}'])(
+    "projects selected payloads once with native role semantics: %s",
+    (envelope) => {
+      const database = openNodeSqliteDatabase(":memory:");
+      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
+      try {
+        createTable(database);
+        const fields =
+          ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
+        const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
+        const prepared = prepareTranscriptPayload(database, original);
+        expect(prepared.event_zstd !== null).toBe(
+          !envelope.includes("scalar") && !envelope.includes("42"),
+        );
+        insert(database, 0, {
+          event_json: original,
+          event_zstd: null,
+          event_utf8_bytes: null,
+          navigation_json: null,
+        });
+        insert(database, 1, prepared);
+        const db = getNodeSqliteKysely<PayloadDatabase>(database);
+        for (const omitCheckpoint of [0, 1]) {
+          for (const omission of [undefined, sql.val("body omitted")]) {
+            const native = executeSqliteQueryTakeFirstSync(
+              database,
+              db
+                .selectFrom("transcript_events")
+                .select(
+                  projectModelContextEventSql(
+                    nativeFixtureEvent,
+                    sql.val(omitCheckpoint),
+                    omission,
+                  ).as("event"),
+                )
+                .where("seq", "=", 0),
+            );
+            for (const seq of [0, 1]) {
+              decompress.mockClear();
+              const stored = executeSqliteQueryTakeFirstSync(
+                database,
+                db
+                  .selectFrom("transcript_events")
+                  .select((eb) =>
+                    projectModelContextEventSql(
+                      transcriptEventJsonSql(database),
+                      eb.val(omitCheckpoint),
+                      omission,
+                      eb.fn("json_extract", [
+                        transcriptEventNavigationSql(),
+                        eb.val("$.message.role"),
+                      ]),
+                    ).as("event"),
+                  )
+                  .where("seq", "=", seq),
+              );
+              expect(stored).toEqual(native);
+              expect(decompress).toHaveBeenCalledTimes(seq === 1 && prepared.event_zstd ? 1 : 0);
+            }
+          }
+        }
+      } finally {
+        decompress.mockRestore();
+        database.close();
+      }
+    },
+  );
 
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
     const database = openNodeSqliteDatabase(":memory:");

@@ -261,10 +261,7 @@ export function finalizeOpenAICompletionsToolCalls(
     return;
   }
 
-  type FinalToolCall = ToolCall & {
-    partialJson?: unknown;
-  };
-  const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
+  const toolCalls = output.content.filter(isToolCall);
   const rejectToolCalls = () => {
     output.stopReason = "error";
     output.errorMessage = "Provider returned an incomplete or malformed tool call";
@@ -294,7 +291,7 @@ export function finalizeOpenAICompletionsToolCalls(
     if (!block || !isToolCall(block)) {
       continue;
     }
-    delete (block as { partialJson?: string }).partialJson;
+    delete block.partialJson;
     delete (block as { streamIndex?: number }).streamIndex;
     options.onConfirmedToolCall?.(block, contentIndex);
   }

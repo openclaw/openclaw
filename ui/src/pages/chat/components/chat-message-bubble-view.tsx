@@ -401,12 +401,7 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
   );
   return (
     <Show when={props.options.bubbleMode} fallback={content}>
-      <ChatBubbleActivity
-        label={t("chat.view.activityDetails")}
-        working={props.options.isStreaming}
-      >
-        {content}
-      </ChatBubbleActivity>
+      <ChatBubbleActivity label={t("chat.view.reasoning")}>{content}</ChatBubbleActivity>
     </Show>
   );
 }
