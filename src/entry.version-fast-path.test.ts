@@ -16,6 +16,7 @@ vi.mock("./infra/git-commit.js", async (importOriginal) => ({
 
 describe("entry root version fast path", () => {
   const exit = vi.fn<typeof process.exit>();
+  let previousExitCode: typeof process.exitCode;
   let logging: typeof import("./logging.js");
 
   beforeAll(async () => {
@@ -28,11 +29,14 @@ describe("entry root version fast path", () => {
   });
 
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
     vi.stubEnv("OPENCLAW_CONTAINER", undefined);
     vi.spyOn(process, "exit").mockImplementation(exit);
   });
 
   afterEach(() => {
+    process.exitCode = previousExitCode;
     vi.restoreAllMocks();
     vi.clearAllMocks();
     vi.unstubAllEnvs();
@@ -51,7 +55,8 @@ describe("entry root version fast path", () => {
     await printed.promise;
 
     expect(output).toHaveBeenCalledWith(expected);
-    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(process.exitCode).toBe(0);
+    expect(exit).not.toHaveBeenCalled();
   });
 
   it("skips host handling when container-targeted", () => {
@@ -84,7 +89,8 @@ describe("entry root version fast path", () => {
       expect(tryHandleRootVersionFastPath(["node", "openclaw", "--version"])).toBe(true);
       await printed.promise;
 
-      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(process.exitCode).toBe(1);
+      expect(exit).not.toHaveBeenCalled();
       expect(output).not.toHaveBeenCalled();
       const line = stderr.mock.calls.map(([value]) => String(value)).join("");
       if (consoleStyle === "json") {

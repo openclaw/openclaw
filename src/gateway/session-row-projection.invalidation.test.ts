@@ -1,6 +1,7 @@
 import { renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionCommunicationMode } from "../../packages/gateway-protocol/src/session-communication.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -210,7 +211,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           });
         }
         expect(sequence(siblingKey)).toBe(siblingSequence);
-        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([parentKey]);
+        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([]);
       }
       parent.modelOverrideSource = "user";
       replaceSessionEntrySync(scope, { ...parent });
@@ -251,7 +252,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
         children[0],
       ]);
       expect(moved.sessions.find((row) => row.key === children[0])?.model).toBe("default");
-      expect.soft(reads, "Unchanged parents after a child moves").toEqual([childScope.sessionKey]);
+      expect.soft(reads, "Unchanged parents after a child moves").toEqual([]);
       reads.length = 0;
       await deleteSessionEntryLifecycle({
         ...scope,
@@ -495,11 +496,13 @@ it("reuses row identities across lists until their entry, profile, or config cha
       agents: {
         entries: { main: { identity: { name: "Original agent" } } },
       },
+      session: { communication: { receive: "ask" as SessionCommunicationMode } },
     };
     const scope = { agentId: "main", sessionKey: "agent:main:identity-cache" };
     const entry = {
       sessionId: "identity-cache",
       updatedAt: 1,
+      communication: { send: "never" as const },
       createdActor: { type: "agent" as const, id: "main" },
     };
     replaceSessionEntrySync(scope, entry);
@@ -508,7 +511,10 @@ it("reuses row identities across lists until their entry, profile, or config cha
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const list = () => listProjectedSessions({ projection, opts: {} });
     try {
-      await list();
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
+        send: "never",
+        receive: "ask",
+      });
       const identities = vi.spyOn(agentIdentity, "resolveAgentIdentity");
       for (let index = 0; index < 3; index++) {
         expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
@@ -523,8 +529,14 @@ it("reuses row identities across lists until their entry, profile, or config cha
       expect(identities).not.toHaveBeenCalled();
 
       cfg.agents.entries.main.identity.name = "Renamed agent";
+      cfg.session.communication.receive = "always";
       sessionChanges.emit({ all: true, scope: "config" });
       expect((await list()).owners?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
+        send: "never",
+        receive: "always",
+      });
+      expect((await list()).sessions[0]?.communication).toEqual({ send: "never" });
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "missing" },
         assignedBy: { type: "system", id: "test" },

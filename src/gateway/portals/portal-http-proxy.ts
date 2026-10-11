@@ -449,12 +449,11 @@ function rejectPortalUpgrade(socket: Duplex): void {
 }
 
 function respondUpgradeWaiting(socket: Duplex, targetPort: number): void {
-  const html = portalWaitingHtml(targetPort);
-  socket.end(
-    "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html; charset=utf-8\r\n" +
-      `Cache-Control: no-store\r\nReferrer-Policy: ${PORTAL_REFERRER_POLICY}\r\n` +
-      `Content-Length: ${Buffer.byteLength(html)}\r\nConnection: close\r\n\r\n${html}`,
-  );
+  rejectWebSocketUpgrade(socket, {
+    status: 502,
+    body: { contentType: "text/html; charset=utf-8", text: portalWaitingHtml(targetPort) },
+    headers: { "Cache-Control": "no-store", "Referrer-Policy": PORTAL_REFERRER_POLICY },
+  });
 }
 
 function forwardWebSocketResponse(

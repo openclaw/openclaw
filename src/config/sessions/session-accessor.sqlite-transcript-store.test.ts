@@ -136,9 +136,9 @@ describe("SQLite transcript append", () => {
       { seq: 1, event_json: nextJson },
     ]);
     expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
-    expect(policy.counts).toEqual({ policy: 1 });
-    expect(policy.rowCounts).toEqual({ policy: 1 });
-    expect(policy.textBytes).toEqual({ policy: 4 });
+    expect(policy.counts).toEqual({ policy: 0 });
+    expect(policy.rowCounts).toEqual({ policy: 0 });
+    expect(policy.textBytes).toEqual({ policy: 0 });
   });
 });
 
@@ -225,6 +225,34 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
+  it.each([
+    { name: "content", message: { content: "changed" } },
+    { name: "provenance", message: { provenance: { kind: "internal_system" } } },
+    { name: "sender authority", metadata: { senderIsOwner: true } },
+    {
+      name: "model projection",
+      metadata: { modelPromptProjection: { version: 1, text: "changed" } },
+    },
+    { name: "branch parent", envelope: { parentId: null } },
+  ])(
+    "invalidates admissions when steering metadata accompanies $name changes",
+    async ({ message, metadata, envelope }) => {
+      await withRewriteFixture(({ snapshot, rewrite }) => {
+        const before = snapshot();
+        rewrite({
+          ...rewriteEvents[1],
+          ...envelope,
+          message: {
+            ...rewriteEvents[1].message,
+            ...message,
+            __openclaw: { steerTargetRunId: "running-turn", ...metadata },
+          },
+        });
+        expect(snapshot().generation).not.toBe(before.generation);
+      });
+    },
+  );
+
   it("applies exact bindings across both storage arms", async () => {
     const details = { opaque: "preserved metadata ".repeat(2048) };
     const events = [

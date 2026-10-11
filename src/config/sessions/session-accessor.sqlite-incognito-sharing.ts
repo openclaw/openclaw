@@ -95,7 +95,7 @@ export function commitIncognitoSessionSharingFacts(
 export function commitIncognitoSessionSharingField(
   database: DatabaseSync,
   sessionKey: string,
-  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
 ): void {
   const entries = incognitoSharingEntries.get(database)?.entries;
   const current = entries?.get(sessionKey);
@@ -184,5 +184,6 @@ export function publishIncognitoSessionEntryChange(
     database,
     () => commitIncognitoSessionSharingFacts(database.db, update.sessionKey, current),
     () => stageIncognitoSharingPublication(database.db, update.sessionKey, { facts: current }),
+    () => commitIncognitoSessionSharingFacts(database.db, update.sessionKey, null),
   );
 }

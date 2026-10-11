@@ -132,13 +132,7 @@ beforeEach(() => {
     ({ channel }: { channel: string }) =>
       getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
   );
-  setActivePluginRegistry(
-    createTargetsTestRegistry([
-      createGenericTargetTestPlugin("alpha", "Alpha"),
-      createGenericTargetTestPlugin("beta", "Beta"),
-      createForumTargetTestPlugin(),
-    ]),
-  );
+  setActivePluginRegistry(createTargetsTestRegistry());
 });
 
 function session(fields: Partial<LegacyDeliveryFixture> = {}): LegacyDeliveryFixture {
@@ -154,12 +148,12 @@ type SessionTargetCase = {
 describe("resolveOutboundTarget defaultTo config fallback", () => {
   installResolveOutboundTargetPluginRegistryHooks();
 
-  it("passes bootstrap opt-in and overrides the plugin default with an explicit target", () => {
+  it("passes bootstrap opt-in and overrides the plugin default with an explicit target", async () => {
     const cfg: OpenClawConfig = {
       channels: { alpha: { defaultTo: "Alpha:Room One", allowFrom: ["*"] } },
     };
     expect(
-      resolveOutboundTarget({
+      await resolveOutboundTarget({
         channel: "alpha",
         to: "Alpha:Override Room",
         cfg,
@@ -174,18 +168,20 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     });
   });
 
-  it("falls back to the active registry when the cached channel map is stale", () => {
+  it("falls back to the active registry when the cached channel map is stale", async () => {
     const registry = createTargetsTestRegistry([]);
     setActivePluginRegistry(registry, "stale-registry-test");
-    expect(resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" }).ok).toBe(
-      false,
-    );
+    expect(
+      (await resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" })).ok,
+    ).toBe(false);
     registry.channels.push({
       pluginId: "alpha",
       plugin: createGenericTargetTestPlugin("alpha", "Alpha"),
       source: "test",
     });
-    expect(resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" })).toEqual({
+    expect(
+      await resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" }),
+    ).toEqual({
       ok: true,
       to: "room-one",
     });

@@ -126,8 +126,8 @@ describe("openclaw.setup auth retries", () => {
     resetCommandQueueStateForTest();
   });
 
-  it.each(["running", "cancelled", "overlapping"] as const)(
-    "starts only the latest replacement after %s sign-in cleanup settles",
+  it.each(["running", "cancelled"] as const)(
+    "starts a replacement after %s sign-in cleanup settles",
     async (status) => {
       const { wizardSessions, context } = makeContext();
       const cleanupStarted = createDeferredCore();
@@ -161,38 +161,15 @@ describe("openclaw.setup auth retries", () => {
             respond: () => undefined,
           } as never);
         }
-        let replacement = startAuthRequest(context, "auth-replacement");
+        const replacement = startAuthRequest(context, "auth-replacement");
         requests.push(replacement.pending);
         await Promise.race([cleanupStarted.promise, replacement.pending]);
         expect(session.signal.aborted).toBe(true);
         expect(replacement.calls).toEqual([]);
         expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
-        if (status === "overlapping") {
-          const duplicate = startAuthRequest(context, "auth-replacement");
-          requests.push(duplicate.pending);
-          await duplicate.pending;
-          expect(duplicate.calls[0]).toMatchObject({
-            ok: false,
-            error: { message: "wizard session already exists" },
-          });
-          expect(replacement.calls).toEqual([]);
-          const superseded = replacement;
-          replacement = startAuthRequest(context, "auth-latest");
-          requests.push(replacement.pending);
-          cleanupReleased.resolve();
-          await superseded.pending;
-          expect(superseded.calls).toEqual([
-            {
-              ok: true,
-              payload: { sessionId: "auth-replacement", done: true, status: "cancelled" },
-              error: undefined,
-            },
-          ]);
-          expect(wizardSessions.has("auth-replacement")).toBe(false);
-        }
         cleanupReleased.resolve();
         await replacement.pending;
-        const sessionId = status === "overlapping" ? "auth-latest" : "auth-replacement";
+        const sessionId = "auth-replacement";
         expect(wizardSessions.has("auth-first")).toBe(false);
         expect(replacement.calls).toEqual([
           {

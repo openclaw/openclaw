@@ -82,15 +82,10 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-type RootMemoryStatResult = Awaited<ReturnType<typeof statIfExists>>;
-
 async function statIfExists(filePath: string) {
   try {
     const stat = await fs.promises.stat(filePath);
-    if (!stat.isFile()) {
-      return { exists: false };
-    }
-    return { exists: true, bytes: stat.size };
+    return stat.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
   } catch (err) {
     if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
       return { exists: false };
@@ -115,14 +110,11 @@ async function detectRootMemoryFiles(workspaceDir: string) {
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
   const entries = await listWorkspaceEntries(resolvedWorkspace);
-  const [canonical, legacy] = await Promise.all([
-    entries.has(CANONICAL_ROOT_MEMORY_FILENAME)
-      ? statIfExists(canonicalPath)
-      : Promise.resolve<RootMemoryStatResult>({ exists: false }),
-    entries.has(LEGACY_ROOT_MEMORY_FILENAME)
-      ? statIfExists(legacyPath)
-      : Promise.resolve<RootMemoryStatResult>({ exists: false }),
-  ]);
+  const inspect = (filePath: string): ReturnType<typeof statIfExists> =>
+    entries.has(path.basename(filePath))
+      ? statIfExists(filePath)
+      : Promise.resolve({ exists: false });
+  const [canonical, legacy] = await Promise.all([inspect(canonicalPath), inspect(legacyPath)]);
   return {
     workspaceDir: resolvedWorkspace,
     canonicalPath,
@@ -261,9 +253,8 @@ async function migrateLegacyRootMemoryFile(
     await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
   }
   return {
+    ...unchanged,
     changed: true,
-    canonicalPath: detection.canonicalPath,
-    legacyPath: detection.legacyPath,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
   };
@@ -281,9 +272,9 @@ export async function noteWorkspaceMemoryHealth(scope: WorkspaceMemoryDoctorScop
     if (detection.canonicalExists && detection.legacyExists) {
       const rootMemoryWarning = [
         "Split root durable memory files detected:",
-        `- canonical: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
+        `- current: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
         `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
-        `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
+        `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the current durable memory file.`,
         `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
         `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
       ].join("\n");
@@ -313,7 +304,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const approvedLegacyMigration = await params.prompter.confirmRuntimeRepair({
-      message: `${prefix}Merge legacy root ${LEGACY_ROOT_MEMORY_FILENAME} into canonical ${CANONICAL_ROOT_MEMORY_FILENAME} and remove the shadowed file?`,
+      message: `${prefix}Merge legacy root ${LEGACY_ROOT_MEMORY_FILENAME} into the current ${CANONICAL_ROOT_MEMORY_FILENAME} and remove the shadowed file?`,
       initialValue: true,
     });
     if (!approvedLegacyMigration) {
@@ -331,7 +322,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       note(
         [
           `${prefix}Workspace memory root repair skipped (${reason}):`,
-          `- canonical: ${migration.canonicalPath}`,
+          `- current: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
           migration.archivedLegacyPath
             ? `- preserved archive: ${migration.archivedLegacyPath}`
@@ -348,7 +339,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     }
     const lines = [
       `${prefix}Workspace memory root merged:`,
-      `- canonical: ${migration.canonicalPath}`,
+      `- current: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
       `- removed legacy file: ${migration.legacyPath}`,

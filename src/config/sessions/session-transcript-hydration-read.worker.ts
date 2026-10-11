@@ -26,14 +26,6 @@ export async function readSessionTranscriptHydrationRequest(
     }
     return result.value;
   }
-  const { readOpenClawDatabaseQuarantineFailure } =
-    await import("../../state/openclaw-quarantine-store.js");
-  const quarantine = readOpenClawDatabaseQuarantineFailure("agent", request.database.path, {
-    env: request.target.env,
-  });
-  if (quarantine) {
-    throw quarantine;
-  }
   if (request.kind === "latest-active-message") {
     const { readLatestSessionTranscriptMessageEvent } =
       await import("./session-accessor.sqlite-active-events.js");
@@ -92,7 +84,8 @@ export async function readSessionTranscriptHydrationRequest(
       ...request.limits,
       readOnly: true,
       resolvedScope: request.resolvedScope,
-      onRead: ({ database, resolved }) => {
+      onRead: (projection) => {
+        const { database, resolved } = projection;
         if (request.expectedIdentity) {
           assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
         }
@@ -101,6 +94,8 @@ export async function readSessionTranscriptHydrationRequest(
             database,
             { ...resolved, sessionKey: selection.sessionKey },
             selection,
+            undefined,
+            projection,
           );
         }
       },

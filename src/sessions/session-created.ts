@@ -12,7 +12,7 @@ import {
   prepareSystemEventStorePath,
   withSystemEventOwner,
 } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -22,6 +22,9 @@ import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "./session-state-event-kin
 import { recordSessionStateEventAsync } from "./session-state-events.js";
 
 const log = createSubsystemLogger("sessions/state-events");
+const CREATION_SUMMARY_MAX_CHARS = 8192;
+const CREATION_SUMMARY_HEADER =
+  "Recent session creations (bounded summary; older entries may be omitted):";
 
 function reportCreationSignalFailure(error: unknown): void {
   try {
@@ -114,21 +117,40 @@ async function enqueueSessionCreatedNotice(params: {
         }
       : undefined,
   };
-  const contextKey = `${SESSION_CREATED_NOTICE_CONTEXT_PREFIX}${sessionKey}:${entry.sessionId}`;
   const isStoreCurrent = captureSystemEventStoreCurrentCheck(mainSessionKey, agentId);
   const sessionStorePath = await prepareSystemEventStorePath(mainSessionKey, agentId);
   if (!isStoreCurrent(sessionStorePath)) {
     return;
   }
-  enqueueSystemEvent(
-    wrapUntrustedPromptDataBlock({ label: "New session created", text: JSON.stringify(details) }),
-    withSystemEventOwner(
-      {
-        sessionKey: mainSessionKey,
-        sessionStorePath,
-        contextKey,
-      },
-      agentId,
-    ),
+  const options = withSystemEventOwner(
+    {
+      sessionKey: mainSessionKey,
+      sessionStorePath,
+      contextKey: SESSION_CREATED_NOTICE_CONTEXT_PREFIX,
+      replace: true,
+    },
+    agentId,
   );
+  const pending = peekSystemEventEntries(options.sessionKey).find(
+    (event) => event.contextKey === options.contextKey,
+  );
+  // JSON metadata has no literal blank lines, so each wrapped record stays intact.
+  // The queue owns the batch lifetime; read it after store preparation, without another await.
+  const notices = pending?.text.split("\n\n").slice(1) ?? [];
+  const notice = wrapUntrustedPromptDataBlock({
+    label: "New session created",
+    text: JSON.stringify(details),
+    maxEscapedChars: 2048,
+    truncationMarker: "…",
+  });
+  if (notices.includes(notice)) {
+    return;
+  }
+  notices.push(notice);
+  let text = [CREATION_SUMMARY_HEADER, ...notices].join("\n\n");
+  while (text.length > CREATION_SUMMARY_MAX_CHARS) {
+    notices.shift();
+    text = [CREATION_SUMMARY_HEADER, ...notices].join("\n\n");
+  }
+  enqueueSystemEvent(text, options);
 }

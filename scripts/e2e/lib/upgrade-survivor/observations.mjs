@@ -26,3 +26,31 @@ export function inspectCronBackups(databasePath) {
         .digest("hex"),
     }));
 }
+
+export function findInstalledPackageRoot(startDirectory, maxDepth) {
+  let directory = startDirectory;
+  for (let depth = 0; depth < maxDepth; depth++, directory = path.dirname(directory)) {
+    const manifest = path.join(directory, "package.json");
+    if (
+      fs.existsSync(manifest) &&
+      JSON.parse(fs.readFileSync(manifest, "utf8")).name === "openclaw"
+    ) {
+      return directory;
+    }
+  }
+  return undefined;
+}
+
+export function recordProcessExitSnapshot(file, receipt, after) {
+  const write = (value) =>
+    fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  write(receipt);
+  process.once("exit", (exitCode) => {
+    try {
+      receipt.after = after();
+    } catch (error) {
+      receipt.observationError = String(error);
+    }
+    write({ ...receipt, exitCode });
+  });
+}

@@ -1,13 +1,25 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import { setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
 
 afterEach(async () => {
   await i18n.setLocale("en");
+  setCurrentThemeBranding(resolveThemeBranding(undefined));
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("does not advertise hidden Lobsterdex choices while retaining the rest of tab icon settings", () => {
+    const search = (query: string) =>
+      findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });
+    setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: false }));
+    expect(search("Lobsterdex")).toEqual([]);
+    expect(search("favicon")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
+    setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
+    expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
+  });
   it("finds the meeting library separately from its Communications capture settings", () => {
     const search = (query: string) =>
       findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });

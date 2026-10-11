@@ -8,7 +8,6 @@ import {
 } from "./thread-bindings.persistence.js";
 import {
   BINDINGS_BY_THREAD_ID,
-  ensureBindingsLoaded,
   ensureBindingsLoadedAsync,
   resolveBindingIdsForSession,
   MANAGERS_BY_ACCOUNT_ID,
@@ -24,7 +23,6 @@ export function resolveBindingIdsForTargetSession(params: {
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }) {
-  ensureBindingsLoaded();
   return resolveBindingIdsForSession({
     ...params,
     accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,
@@ -37,14 +35,14 @@ export function mutateBindingsForTargetSession(
   onRemoved?: (record: ThreadBindingRecord, manager: ThreadBindingManager | undefined) => void,
 ): Promise<ThreadBindingRecord[]> {
   const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  const admittedOwners = new Map(
-    [...MANAGERS_BY_ACCOUNT_ID]
-      .filter(([ownerAccountId]) => accountId === undefined || ownerAccountId === accountId)
-      .map(
-        ([ownerAccountId, manager]) =>
-          [ownerAccountId, { manager, stopping: manager.isStopping() }] as const,
-      ),
-  );
+  const admittedOwners = new Map<string, { manager: ThreadBindingManager; stopping: boolean }>();
+  // Snapshot registry membership before invoking manager callbacks.
+  const ownerSnapshot = [...MANAGERS_BY_ACCOUNT_ID];
+  for (const [ownerAccountId, manager] of ownerSnapshot) {
+    if (accountId === undefined || ownerAccountId === accountId) {
+      admittedOwners.set(ownerAccountId, { manager, stopping: manager.isStopping() });
+    }
+  }
   // Include pending binds whose target rows do not exist until their account work settles.
   return runThreadBindingAccountOperation(
     [...admittedOwners.values()].map(({ manager }) => manager),

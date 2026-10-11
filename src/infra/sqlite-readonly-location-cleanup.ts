@@ -8,6 +8,7 @@ import {
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
@@ -98,6 +99,14 @@ function releaseSnapshotDirectoryCustody(directory: string, owner: SnapshotDirec
   if (snapshotDirectories.get(directory) === owner) {
     snapshotDirectories.delete(directory);
   }
+}
+
+function completeSnapshotDirectoryRemoval(directory: string, owner: SnapshotDirectory | undefined) {
+  if (owner) {
+    owner.removed = true;
+  }
+  releaseSnapshotDirectoryCustody(directory, owner);
+  return true;
 }
 
 export function cleanupSnapshotOperations(): Promise<void> {
@@ -298,6 +307,7 @@ export function retireSqliteSnapshotPayload(
   retirement: ReturnType<typeof beginSqliteSnapshotRetirement>,
 ): void {
   for (const file of retirement.payload) {
+    retireSqliteDatabaseAdmissionForPath(file);
     fs.rmSync(file, tempDirectoryRemovalOptions);
   }
   // Free copied bytes before SQLite allocates its retirement page/journal.
@@ -328,11 +338,7 @@ export function removeTempDirectory(
     } finally {
       retirement?.release();
     }
-    if (owner) {
-      owner.removed = true;
-    }
-    releaseSnapshotDirectoryCustody(tempDir, owner);
-    return true;
+    return completeSnapshotDirectoryRemoval(tempDir, owner);
   } catch (error) {
     onFailure?.(error);
     registerSnapshotTempDirectory(tempDir);
@@ -374,11 +380,7 @@ export async function removeTempDirectoryAsync(
     } finally {
       retirement?.release();
     }
-    if (owner) {
-      owner.removed = true;
-    }
-    releaseSnapshotDirectoryCustody(tempDir, owner);
-    return true;
+    return completeSnapshotDirectoryRemoval(tempDir, owner);
   } catch (error) {
     onFailure?.(error);
     registerSnapshotTempDirectory(tempDir);
@@ -411,11 +413,7 @@ export function startRemoveTempDirectory(
       onFailure?.(outcome.error);
       retained.resolve(false);
     } else {
-      if (owner) {
-        owner.removed = true;
-      }
-      releaseSnapshotDirectoryCustody(directory, owner);
-      retained.resolve(true);
+      retained.resolve(completeSnapshotDirectoryRemoval(directory, owner));
     }
   });
   if (owner?.removed) {

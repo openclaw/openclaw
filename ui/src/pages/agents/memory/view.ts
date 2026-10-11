@@ -600,6 +600,14 @@ function describeWaitingEntryOrigin(entry: DreamingEntry): string {
   );
 }
 
+function renderDreamingAction(label: string, disabled: boolean, onClick: (event: Event) => void) {
+  return html`
+    <button class="btn btn--subtle btn--sm" ?disabled=${disabled} @click=${onClick}>
+      ${label}
+    </button>
+  `;
+}
+
 function renderAdvancedEntryList(params: {
   titleKey: string;
   descriptionKey: string;
@@ -708,16 +716,12 @@ function renderAdvancedSection(props: DreamingProps) {
               onClick: props.onResetGroundedShortTerm,
               allowed: props.access.canResetGroundedShortTerm,
             },
-          ].map(
-            ({ label, onClick, allowed }) => html`
-              <button
-                class="btn btn--subtle btn--sm"
-                ?disabled=${!allowed || props.modeSaving || props.dreamDiaryActionLoading}
-                @click=${() => onClick()}
-              >
-                ${label}
-              </button>
-            `,
+          ].map(({ label, onClick, allowed }) =>
+            renderDreamingAction(
+              label,
+              !allowed || props.modeSaving || props.dreamDiaryActionLoading,
+              () => onClick(),
+            ),
           )}
         </div>
       </div>
@@ -734,15 +738,11 @@ function renderAdvancedSection(props: DreamingProps) {
                   <span>${props.dreamDiaryActionMessage.text}</span>
                   ${
                     props.dreamDiaryActionArchivePath
-                      ? html`
-                          <button
-                            class="btn btn--subtle btn--sm"
-                            ?disabled=${props.dreamDiaryActionLoading}
-                            @click=${() => props.onCopyDreamingArchivePath()}
-                          >
-                            ${t("dreaming.wiki.copyArchivePath")}
-                          </button>
-                        `
+                      ? renderDreamingAction(
+                          t("dreaming.wiki.copyArchivePath"),
+                          props.dreamDiaryActionLoading,
+                          () => props.onCopyDreamingArchivePath(),
+                        )
                       : nothing
                   }
                 </div>
@@ -757,19 +757,13 @@ function renderAdvancedSection(props: DreamingProps) {
           descriptionKey: "dreaming.advanced.stagedDescription",
           emptyKey: "dreaming.advanced.emptyGrounded",
           entries: groundedEntries,
-          controls: html`
-            <button
-              class="btn btn--subtle btn--sm"
-              ?disabled=${
-                !props.access.canResetGroundedShortTerm ||
-                props.modeSaving ||
-                props.dreamDiaryActionLoading
-              }
-              @click=${() => props.onResetGroundedShortTerm()}
-            >
-              ${t("dreaming.scene.clearGrounded")}
-            </button>
-          `,
+          controls: renderDreamingAction(
+            t("dreaming.scene.clearGrounded"),
+            !props.access.canResetGroundedShortTerm ||
+              props.modeSaving ||
+              props.dreamDiaryActionLoading,
+            () => props.onResetGroundedShortTerm(),
+          ),
           badge: () => t("dreaming.advanced.originDailyLog"),
           meta: (entry) => [
             entry.groundedCount > 0
@@ -991,26 +985,22 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
       </div>
       ${renderWikiInsightBody(card, expanded)}
       <div class="dreams-diary__insight-actions">
-        <button
-          class="btn btn--subtle btn--sm"
-          @click=${(event: Event) => {
+        ${renderDreamingAction(
+          t(expanded ? "dreaming.wiki.hideDetails" : "dreaming.wiki.details"),
+          false,
+          (event) => {
             event.stopPropagation();
             toggleExpandedCard(expandedCards, item.pagePath, props.onViewStateChange);
-          }}
-        >
-          ${expanded ? t("dreaming.wiki.hideDetails") : t("dreaming.wiki.details")}
-        </button>
-        <button
-          class="btn btn--subtle btn--sm"
-          @click=${(event: Event) => {
+          },
+        )}
+        ${renderDreamingAction(
+          t(card.kind === "import" ? "dreaming.wiki.openSourcePage" : "dreaming.wiki.openWikiPage"),
+          false,
+          (event) => {
             event.stopPropagation();
             void openWikiPreview(item.pagePath, props);
-          }}
-        >
-          ${t(
-            card.kind === "import" ? "dreaming.wiki.openSourcePage" : "dreaming.wiki.openWikiPage",
-          )}
-        </button>
+          },
+        )}
       </div>
     </article>
   `;
@@ -1320,34 +1310,24 @@ function renderDiarySection(props: DreamingProps) {
               props.onViewStateChange();
             },
           })}
-          <button
-            class="btn btn--subtle btn--sm"
-            ?disabled=${
-              memoryWikiUnavailable
-                ? !props.access.canOpenConfig
-                : props.modeSaving || diary.loading
-            }
-            @click=${() => {
+          ${renderDreamingAction(
+            memoryWikiUnavailable
+              ? t("dreaming.wiki.howToEnable")
+              : activeDiarySubTab === "dreams"
+                ? t(diary.loading ? "dreaming.diary.reloading" : "dreaming.diary.reload")
+                : diary.loading
+                  ? "Reloading…"
+                  : "Reload",
+            memoryWikiUnavailable ? !props.access.canOpenConfig : props.modeSaving || diary.loading,
+            () => {
               state.diaryPage = 0;
               if (memoryWikiUnavailable) {
                 props.onOpenConfig();
               } else {
                 diary.refresh();
               }
-            }}
-          >
-            ${
-              memoryWikiUnavailable
-                ? t("dreaming.wiki.howToEnable")
-                : activeDiarySubTab === "dreams"
-                  ? diary.loading
-                    ? t("dreaming.diary.reloading")
-                    : t("dreaming.diary.reload")
-                  : diary.loading
-                    ? "Reloading…"
-                    : "Reload"
-            }
-          </button>
+            },
+          )}
         </div>
         <p class="dreams-diary__explainer">${t(diary.explainer)}</p>
         ${memoryWikiUnavailable ? nothing : diaryNavigation}
@@ -1374,13 +1354,11 @@ function renderDiarySection(props: DreamingProps) {
                     )}
                   </div>
                   <div class="dreams-diary__empty-actions">
-                    <button
-                      class="btn btn--subtle btn--sm"
-                      ?disabled=${!props.access.canOpenConfig}
-                      @click=${() => props.onOpenConfig()}
-                    >
-                      ${t("dreaming.wiki.openConfig")}
-                    </button>
+                    ${renderDreamingAction(
+                      t("dreaming.wiki.openConfig"),
+                      !props.access.canOpenConfig,
+                      () => props.onOpenConfig(),
+                    )}
                   </div>
                 </div>
               `

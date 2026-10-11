@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -50,3 +51,11 @@ export function createPluginCliConfigIO(params: {
     },
   };
 }
+
+// mock-isolation: These command fixtures own synthetic storage; ownership has a separate boundary suite.
+vi.mock("./plugins-local-state.js", () => ({
+  runWithLocalPluginState: async (
+    _command: string,
+    run: (assertCurrent: () => void) => Promise<unknown>,
+  ) => run(() => {}),
+}));

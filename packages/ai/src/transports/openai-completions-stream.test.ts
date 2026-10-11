@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type CapturedStreamEvent,
@@ -18,6 +17,138 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each([false, true])(
+    "publishes cumulative tool input before execution (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const snapshots: unknown[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "write-progress",
+                type: "function",
+                function: { name: "write", arguments: '{"content":"first' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 1,
+                id: "edit-progress",
+                type: "function",
+                function: { name: "edit", arguments: '{"newText":"second' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({ tool_calls: [{ index: 0, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({ tool_calls: [{ index: 1, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        model,
+        {
+          push: (event) => {
+            if (event.type === "toolcall_delta") {
+              snapshots.push(structuredClone(event.partial.content[event.contentIndex]));
+            }
+          },
+        },
+        direct
+          ? { mode: "direct", beforeContentBlock() {}, provisionalCommentaryTags: new Map() }
+          : undefined,
+      );
+      expect(snapshots).toEqual([
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second' }),
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first line"}' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second line"}' }),
+      ]);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "write-progress",
+          name: "write",
+          arguments: { content: "first line" },
+        },
+        {
+          type: "toolCall",
+          id: "edit-progress",
+          name: "edit",
+          arguments: { newText: "second line" },
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    ["length", ["<thi", "nk>unfinished reasoning"], ""],
+    ["length", ["Answer. ", "<reasoning>unfinished\n\nreasoning"], "Answer. "],
+    ["content_filter", ["<thinking>unfinished reasoning"], ""],
+    ["stop", ["<thi", "nk>Recovered answer."], "Recovered answer."],
+    ["stop", ["Use <think> in prose"], "Use <think> in prose"],
+    ["length", ["<think>hidden</think>", "Answer."], "Answer."],
+    ["length", ["Use `<think>` in code. <thi"], "Use `<think>` in code. <thi"],
+    ["length", ["Answer </think> remains visible."], "Answer </think> remains visible."],
+  ] as const)("finalizes content-only tags on %s: %j", async (finishReason, content, expected) => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await processCompletionsStream(
+      streamChunks([
+        ...content.map((text) => makeCompletionsChunk({ content: text })),
+        makeCompletionsChunk({}, finishReason),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event) },
+      { emitReasoning: false },
+    );
+
+    expect(collectVisibleText(output)).toBe(expected);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe(expected);
+    expect(output.stopReason).toBe(finishReason === "content_filter" ? "error" : finishReason);
+  });
+
+  it.each(["abort", "error"] as const)("does not recover unfinished tags after %s", async (end) => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const events: CapturedStreamEvent[] = [];
+    async function* interruptedStream() {
+      yield makeCompletionsChunk({ content: "Answer. <think>unfinished reasoning" });
+      if (end === "abort") {
+        abort.abort();
+      } else {
+        throw new Error("Provider disconnected");
+      }
+    }
+
+    await expect(
+      processCompletionsStream(
+        interruptedStream(),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+        { signal: abort.signal, emitReasoning: false },
+      ),
+    ).rejects.toThrow(end === "abort" ? "Request was aborted" : "Provider disconnected");
+    expect(collectVisibleText(output)).toBe("Answer. ");
+    expect(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+    ).toEqual(["Answer. "]);
+  });
+
   it("partitions inline reasoning tags out of OpenAI-compatible visible text", async () => {
     const model = makeCompletionsModel({
       id: "MiniMax-M2.7",
@@ -498,31 +629,6 @@ async function runChunks(chunks: readonly unknown[], model = makeCompletionsMode
   return { output, events };
 }
 
-async function captureModelProgress(
-  chunks: readonly unknown[],
-  model = makeCompletionsModel(),
-  options: { emitReasoning?: boolean } = {},
-) {
-  const output = createAssistantOutput(model);
-  const controller = new AbortController();
-  const progress: boolean[] = [];
-  const unsubscribe = onLlmRequestActivity(controller.signal, (modelProgress) => {
-    progress.push(modelProgress);
-  });
-  try {
-    await processCompletionsStream(
-      streamChunks(chunks),
-      output,
-      model,
-      { push() {} },
-      { ...options, signal: controller.signal },
-    );
-  } finally {
-    unsubscribe();
-  }
-  return { output, progress };
-}
-
 describe("openai completions stream", () => {
   it("clamps uncached prompt usage at zero", () => {
     const usage = parseOpenAICompletionsUsage(
@@ -578,132 +684,6 @@ describe("openai completions stream", () => {
       }
     },
   );
-
-  it("counts only advancing usage-only reasoning as progress when reasoning is hidden", async () => {
-    const model = makeCompletionsModel({
-      id: "google/gemini-2.5-flash",
-      name: "Gemini 2.5 Flash",
-      provider: "vertex-ai",
-      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
-      contextWindow: 1_000_000,
-    });
-    const output = createAssistantOutput(model);
-    const controller = new AbortController();
-    const progress: boolean[] = [];
-    const unsubscribe = onLlmRequestActivity(controller.signal, (modelProgress) => {
-      progress.push(modelProgress);
-    });
-
-    try {
-      await processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk({}, null, {
-            choices: [],
-            usage: {
-              prompt_tokens: 8,
-              completion_tokens: 7,
-              total_tokens: 15,
-              completion_tokens_details: { reasoning_tokens: 7 },
-            },
-          }),
-          makeCompletionsChunk({}, null, {
-            choices: [],
-            usage: {
-              prompt_tokens: 8,
-              completion_tokens: 7,
-              total_tokens: 15,
-              completion_tokens_details: { reasoning_tokens: 7 },
-            },
-          }),
-          makeCompletionsChunk({}, null, {
-            choices: [],
-            usage: {
-              prompt_tokens: 8,
-              completion_tokens: 9,
-              total_tokens: 17,
-              completion_tokens_details: { reasoning_tokens: 9 },
-            },
-          }),
-          makeCompletionsChunk({}, null, { choices: [] }),
-        ]),
-        output,
-        model,
-        { push() {} },
-        { emitReasoning: false, signal: controller.signal },
-      );
-    } finally {
-      unsubscribe();
-    }
-
-    expect(progress).toEqual([true, false, true, false]);
-    expect(output.content).toEqual([]);
-  });
-
-  it("counts only advancing non-reasoning usage counters as model progress", async () => {
-    const usage = {
-      prompt_tokens: 8,
-      completion_tokens: 7,
-      total_tokens: 15,
-    };
-    const { progress } = await captureModelProgress([
-      makeCompletionsChunk({}, null, { choices: [], usage }),
-      makeCompletionsChunk({}, null, { choices: [], usage }),
-      makeCompletionsChunk({}, null, {
-        choices: [],
-        usage: { ...usage, completion_tokens: 9, total_tokens: 17 },
-      }),
-      makeCompletionsChunk({}, null, {
-        choices: [],
-        usage: { ...usage, completion_tokens: 9, total_tokens: 17 },
-      }),
-    ]);
-
-    expect(progress).toEqual([true, false, true, false]);
-  });
-
-  it("counts finish-only choices as model progress and preserves their stop reason", async () => {
-    const { output, progress } = await captureModelProgress([makeCompletionsChunk({}, "stop")]);
-
-    expect(progress).toEqual([true]);
-    expect(output.stopReason).toBe("stop");
-  });
-
-  it.each([
-    {
-      name: "nested empty text",
-      delta: { content: [{ type: "text", text: "" }] },
-    },
-    {
-      name: "empty legacy function call",
-      delta: { function_call: {} },
-    },
-  ])("does not count $name as model progress", async ({ delta }) => {
-    const { output, progress } = await captureModelProgress([
-      makeCompletionsChunk(delta),
-      makeCompletionsChunk({ role: "assistant" }),
-    ]);
-
-    expect(progress).toEqual([false, false]);
-    expect(output.content).toEqual([]);
-  });
-
-  it("counts valid tool-call fragments as model progress", async () => {
-    const { progress } = await captureModelProgress([
-      makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "call-progress",
-            type: "function",
-            function: { name: "lookup", arguments: "{}" },
-          },
-        ],
-      }),
-      makeCompletionsChunk({}, null, { choices: [] }),
-    ]);
-
-    expect(progress).toEqual([true, false]);
-  });
 
   it("yields to aborts during bursty OpenAI-compatible streams", async () => {
     const model = makeCompletionsModel({

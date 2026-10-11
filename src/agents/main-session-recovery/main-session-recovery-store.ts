@@ -64,7 +64,6 @@ export async function commitMainSessionRecovery(params: {
   command: MainSessionRecoveryCommand;
   expectedSessionId?: string;
   requireWriteSuccess?: boolean;
-  scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryStoreResult> {
@@ -82,10 +81,17 @@ export async function commitMainSessionRecovery(params: {
       ? params.command.claim
       : undefined;
   let yieldedContinuation: (() => boolean) | undefined;
-  const result = await applySessionEntryReplacements<MainSessionRecoveryStoreResult | undefined>({
+  return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
     agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
-    ...(params.scanAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
+    sessionKeys: [params.target.sessionKey],
+    // Retained windows follow key moves and session rotation; the claim still authorizes cleanup.
+    includeSessionWindowOwner:
+      reservationCleanup?.sessionId ??
+      recoveryAdmission?.sessionId ??
+      exactOwnerClaim?.sessionId ??
+      ownerClaim?.sessionId ??
+      params.expectedSessionId,
     storePath: params.target.storePath,
     assertCommitAllowed: () => {
       if (
@@ -98,8 +104,7 @@ export async function commitMainSessionRecovery(params: {
       }
     },
     update: (entries) => {
-      // Recheck after entering write admission: shutdown can begin while this
-      // recovery owner is waiting, including between exact and moved-key lookups.
+      // Shutdown can begin while recovery waits for writer admission.
       const expectedGeneration = currentGenerationRequiredBy(params.command);
       if (
         params.shouldContinue?.() === false ||
@@ -141,20 +146,8 @@ export async function commitMainSessionRecovery(params: {
         });
       } else if (ownerClaim && (!selected || selected.entry.sessionId !== ownerClaim.sessionId)) {
         candidate = entries.find(({ entry }) => entry.sessionId === ownerClaim.sessionId);
-      } else if (params.scanAliases && params.expectedSessionId) {
+      } else if (params.expectedSessionId) {
         candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
-      }
-      if (
-        !candidate &&
-        !params.scanAliases &&
-        (reservationCleanup ||
-          recoveryAdmission ||
-          exactOwnerClaim ||
-          ownerClaim ||
-          params.command.kind === "inspect")
-      ) {
-        // Discover moved identities only after the exact key misses.
-        return { result: undefined };
       }
       if (reservationCleanup || recoveryAdmission || exactOwnerClaim) {
         candidate ??= selected;
@@ -219,7 +212,6 @@ export async function commitMainSessionRecovery(params: {
       };
     },
   });
-  return result ?? commitMainSessionRecovery({ ...params, scanAliases: true });
 }
 
 export async function refreshMainSessionRecoveryOwner(

@@ -210,9 +210,9 @@ function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): Ab
   const composedSignal = AbortSignal.any([callerSignal, runSignal]);
   // The activity registry owns this bridge weakly; an abort listener on either
   // reusable source would retain its composite after a successful request.
-  onLlmRequestActivity(composedSignal, (modelProgress) => {
+  onLlmRequestActivity(composedSignal, (progress) => {
     if (!composedSignal.aborted) {
-      notifyLlmRequestActivity(callerSignal, modelProgress);
+      notifyLlmRequestActivity(callerSignal, progress);
     }
   });
   return composedSignal;

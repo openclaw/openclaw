@@ -4,7 +4,8 @@ import { html, svg, nothing } from "lit";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
-import { formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { formatIsoDate } from "./helpers.ts";
+import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.ts";
 import type { UsageProps } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
@@ -265,7 +266,7 @@ export function renderTimeSeriesCompact(
           ${renderSettingsSegmented({
             mode: "buttons",
             variant: "accent",
-            className: "small",
+            class: "small",
             value: mode,
             onChange: callbacks.onTimeSeriesModeChange,
             onReselect: callbacks.onTimeSeriesModeChange,
@@ -279,7 +280,7 @@ export function renderTimeSeriesCompact(
               ? renderSettingsSegmented({
                   mode: "buttons",
                   variant: "accent",
-                  className: "small",
+                  class: "small",
                   value: breakdownMode,
                   onChange: callbacks.onTimeSeriesBreakdownChange,
                   onReselect: callbacks.onTimeSeriesBreakdownChange,

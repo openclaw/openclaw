@@ -1,3 +1,4 @@
+import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
@@ -245,6 +246,52 @@ describe("launchd process membership when launchctl denies PID domains", () => {
     observe(caller, gateway);
     expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
   });
+
+  it.each(["missing-record", "empty-coalition", "available"] as const)(
+    "renders a naturally completing native probe for %s",
+    (mode) => {
+      observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"));
+      inspectServiceProcessMembershipSync(gatewayPid, "darwin");
+      const invocation = native.spawn.mock.calls.find(([command]) => command === process.execPath);
+      const script = invocation?.[1]?.[2];
+      expect(typeof script).toBe("string");
+      if (typeof script !== "string") {
+        throw new Error("Native coalition probe was not invoked");
+      }
+      const write = vi.fn();
+      const childProcess = {
+        argv: ["node", "koffi-fixture", "42"],
+        exitCode: undefined as number | undefined,
+        stdout: { write },
+        exit: () => {
+          throw new Error("Forced exit bypassed native probe completion");
+        },
+      };
+      vm.runInNewContext(script, {
+        Buffer,
+        process: childProcess,
+        require: () => ({
+          load: (name: string) => {
+            if (name !== "/usr/lib/libproc.dylib") {
+              throw new Error("Optional coalition name unavailable");
+            }
+            return {
+              func: () => (_pid: number, _kind: number, _arg: number, info: Buffer) => {
+                info.writeBigUInt64LE(mode === "empty-coalition" ? 0n : 42n);
+                return mode === "missing-record" ? 0 : info.length;
+              },
+            };
+          },
+        }),
+      });
+      expect(childProcess.exitCode).toBe(mode === "available" ? undefined : 1);
+      if (mode === "available") {
+        expect(write).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ id: "42" }));
+      } else {
+        expect(write).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("does not query natively when launchctl itself fails to run", () => {
     observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"), {

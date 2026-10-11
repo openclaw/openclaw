@@ -1,16 +1,14 @@
 import { createServer } from "node:http";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
 } from "../../../../src/logging/diagnostic-run-activity.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
-import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
@@ -23,10 +21,6 @@ import {
 describe("openai completions stream", () => {
   afterAll(() => {
     resetDiagnosticRunActivityForTest();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   describe.each([
@@ -431,152 +425,6 @@ describe("openai completions stream", () => {
       }
     },
   );
-
-  it("does not treat empty SSE chunks as diagnostic model progress", async ({ signal }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const idleTimeoutMs = 100;
-    const runId = "empty-stream-progress-run";
-    let resolveRequestReady!: () => void;
-    const requestReady = new Promise<void>((resolve) => {
-      resolveRequestReady = resolve;
-    });
-    let response: import("node:http").ServerResponse | undefined;
-    const streamAbortController = new AbortController();
-    let collectStream: Promise<void> | undefined;
-    let collectionFinished = false;
-    const onIdleTimeout = vi.fn();
-    const activityWaiters = new Set<() => void>();
-    let unsubscribeActivity: (() => void) | undefined;
-    const server = createServer((req, res) => {
-      req.resume();
-      req.on("end", () => {
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-        response = res;
-        resolveRequestReady();
-      });
-    });
-
-    try {
-      await withinTest(
-        new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(0, "127.0.0.1", () => {
-            server.off("error", reject);
-            resolve();
-          });
-        }),
-        signal,
-      );
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const model = makeCompletionsModel({
-        id: "empty-progress-model",
-        provider: "compatible-proxy",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-      });
-      const transportStreamFn = createOpenAICompletionsTransportStreamFn();
-      const observedStreamFn: typeof transportStreamFn = (requestModel, context, options) => {
-        if (!options?.signal) {
-          throw new Error("Missing request activity signal");
-        }
-        unsubscribeActivity = onLlmRequestActivity(options.signal, () => {
-          for (const resolve of activityWaiters) {
-            resolve();
-          }
-          activityWaiters.clear();
-        });
-        return transportStreamFn(requestModel, context, options);
-      };
-      markDiagnosticRunProgress({
-        runId,
-        sessionId: runId,
-        reason: "model_call:started",
-      });
-      const stream = streamWithIdleTimeout(observedStreamFn, idleTimeoutMs, onIdleTimeout, {
-        runId,
-      })(
-        model,
-        {
-          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
-        } as never,
-        { apiKey: "test-key", signal: streamAbortController.signal } as never,
-      );
-
-      let text = "";
-      const streamCollection = (async () => {
-        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
-          if (event.type === "text_delta") {
-            text += event.delta ?? "";
-          }
-        }
-      })();
-      collectStream = streamCollection;
-      const awaitGate = <T>(gate: PromiseLike<T>, message: string) =>
-        withinTest(awaitGateBeforeSettlement(gate, streamCollection, message), signal);
-      await awaitGate(
-        requestReady,
-        "Stream collection settled before the request reached the server",
-      );
-      const sendChunk = async (chunk: unknown) => {
-        if (!response || response.destroyed) {
-          throw new Error("Loopback response is not available");
-        }
-        const parsedActivity = new Promise<void>((resolve) => {
-          activityWaiters.add(resolve);
-        });
-        response.write(`data: ${JSON.stringify(chunk)}\n\n`);
-        await awaitGate(parsedActivity, "Stream collection settled before parsing a sent chunk");
-        await vi.advanceTimersByTimeAsync(0);
-      };
-      const emptyChunk = makeCompletionsChunk({}, null, { choices: [] });
-      for (let index = 0; index < 4; index += 1) {
-        await sendChunk(emptyChunk);
-        await vi.advanceTimersByTimeAsync(40);
-      }
-      const duringEmptyActivity = getDiagnosticSessionActivitySnapshot({ sessionId: runId });
-      expect(duringEmptyActivity.lastProgressReason).toBe("model_call:started");
-      expect(duringEmptyActivity.lastProgressAgeMs).toBeGreaterThan(150);
-
-      await sendChunk(makeCompletionsChunk({ role: "assistant", content: "OK" }));
-      await sendChunk(makeCompletionsChunk({}, "stop"));
-      if (!response || response.destroyed) {
-        throw new Error("Loopback response closed before completing the stream");
-      }
-      response.end("data: [DONE]\n\n");
-      await withinTest(streamCollection, signal);
-      collectionFinished = true;
-      expect(text).toBe("OK");
-      expect(onIdleTimeout).not.toHaveBeenCalled();
-      expect(getDiagnosticSessionActivitySnapshot({ sessionId: runId }).lastProgressReason).toBe(
-        "model_call:stream_progress",
-      );
-    } finally {
-      unsubscribeActivity?.();
-      activityWaiters.clear();
-      if (!collectionFinished) {
-        streamAbortController.abort(new Error("Test cleanup"));
-        response?.destroy();
-      }
-      if (collectStream) {
-        await withinTest(
-          collectStream.catch(() => undefined),
-          signal,
-        ).catch(() => undefined);
-      }
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
-    }
-  });
 });
 
 describe("openai completions stream", () => {

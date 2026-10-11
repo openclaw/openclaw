@@ -6,13 +6,13 @@ import {
   collectActiveSessionWorkAdmissions,
   collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
   resolveSessionMaintenancePreserveKeys,
-  type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
 type PreparedSessionMaintenancePreserveKeys = {
@@ -86,9 +86,7 @@ export async function prepareSessionMaintenancePreservation(
       preserveKeysProviders.size !== registrations.length ||
       registrations.some((registration) => !preserveKeysProviders.has(registration))
     ) {
-      throw new SessionMaintenancePreservationConflictError(
-        "Session maintenance providers changed during preparation",
-      );
+      throw new SqliteSessionMutationConflictError("session maintenance");
     }
   };
   try {

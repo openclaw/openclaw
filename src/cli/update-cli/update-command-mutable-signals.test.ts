@@ -117,6 +117,8 @@ it.skipIf(process.platform === "win32").for([
     const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.candidateStepWriter).href)});
     const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executionGuards).href)});
     const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)});
+    const { withCliProcessScope, withCliCommandCleanup } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.cliCleanupScope).href)});
+    const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.oneShotExit).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
     const run = await admitUpdateCommandRun({opts, root:installRoot});
@@ -224,7 +226,9 @@ it.skipIf(process.platform === "win32").for([
           return;
         }
         process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
-        await new Promise(() => {});
+        await new Promise(resolve => {
+          if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
+        });
       };
       if (mode === 'lost') {
         await withUpdateCommandExecutor(run.runId, async (executor) => {await enter(executor);});
@@ -243,7 +247,28 @@ it.skipIf(process.platform === "win32").for([
         } else {await execute();}
       }
     };
-    await operate();
+    try {
+      if (mode === "inherited") await operate();
+      else {
+        let resources;
+        await withCliProcessScope(() => runCliWithExitFinalization({
+          run: () => withCliCommandCleanup(false, async cleanup => {
+            resources = cleanup.pluginResources;
+            await operate();
+            process.exitCode = 19;
+          }),
+          onError: error => {
+            if (!run.interrupted) throw error;
+            process.exitCode = 19;
+          },
+          finalize: async () => { await resources?.release(); },
+        }));
+      }
+    } finally {
+      fs.writeFileSync(root + "/signal-owner-unwound", "settled");
+      closeOpenClawStateDatabaseForTest();
+      if (process.connected) process.disconnect();
+    }
   `,
         );
         const child = spawn(
@@ -415,6 +440,12 @@ it.skipIf(process.platform === "win32").for([
             expect(fs.existsSync(path.join(root, "unexpected-canary-child"))).toBe(false);
           }
           const [code, exitSignal] = await closed;
+          if (mode !== "inherited") {
+            expect(exitSignal).toBeNull();
+            expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe(
+              "settled",
+            );
+          }
           const expectedCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
           expect(code ?? (exitSignal === signal ? expectedCode : null)).toBe(expectedCode);
           if (publicationMode) {

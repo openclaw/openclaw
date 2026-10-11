@@ -20,7 +20,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
@@ -39,6 +38,7 @@ import {
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import * as transcriptWatermark from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -782,7 +782,9 @@ describe("SQLite session branches", () => {
     const sessionId = "large-branches-source";
     const scope = { agentId, env, sessionId, sessionKey };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    // Keep reader startup outside the graph-work budget; replacement below forces a fresh scan.
+    // Match replacement's resident writer so warmup and measurement use the maintenance reader.
+    // Replacement below still forces a fresh graph scan.
+    openOpenClawAgentDatabase({ agentId, env });
     await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches: [] });
     const events: Parameters<typeof replaceTranscriptEvents>[1] = [
       {

@@ -8,16 +8,15 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMoveAuthorityInDatabase } from "./placement-read-projection.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { readPublishedPlacementProjection } from "./placement-read-publication.js";
 import { createPlacementReadStore } from "./placement-read-store.js";
 import {
   normalizeEpoch,
   required,
-  type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
@@ -30,13 +29,16 @@ import {
   fromRow,
   query,
   readWorkerPlacementsForReconcileInDatabase,
+  readWorkerPlacementsInDatabase,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
   preparePlacementAuthorityRead,
+  preparePlacementPreservationRead,
   preparePlacementTurnClaimAuthority,
   prepareSessionPlacementRead,
+  readPlacementProjection,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
 import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
@@ -138,6 +140,14 @@ export function createWorkerSessionPlacementStore(
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
     },
 
+    readCurrentMoveAuthority(sessionId: string) {
+      const authority = readWorkerPlacementMoveAuthorityInDatabase(
+        read(),
+        required(sessionId, "session id"),
+      );
+      return { ...authority, placement: withWorkspaceResultConflict(authority.placement) };
+    },
+
     prepareTurnClaimAuthority(claim: WorkerSessionTurnClaim): Promise<PlacementTurnClaimAuthority> {
       return preparePlacementTurnClaimAuthority(path, claim, (sessionIds) =>
         store.readProjection(sessionIds, { current: true }),
@@ -165,22 +175,17 @@ export function createWorkerSessionPlacementStore(
     },
 
     async prepareMaintenancePlacements() {
-      const { value: placements, ...observation } = await preparePlacementAuthorityRead(
-        path,
-        undefined,
-        async () => {
-          const result = await executeExistingOpenClawStateRead(
-            { path },
-            { type: "workers.placementPreservation" },
-            { current: true },
-          );
-          if (!result || !result.ok || result.type !== "workers.placementPreservation") {
-            throw new Error("Worker placement preservation source is unavailable");
-          }
-          return result.placements;
-        },
-      );
-      return { placements, ...observation };
+      return await preparePlacementPreservationRead(path, async () => {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          { type: "workers.placementPreservation" },
+          { current: true },
+        );
+        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+          throw new Error("Worker placement preservation source is unavailable");
+        }
+        return result.placements;
+      });
     },
 
     async readProjection(
@@ -195,27 +200,34 @@ export function createWorkerSessionPlacementStore(
           return conflict ? [[id, conflict] as const] : [];
         }),
       );
-      const result = await executeExistingOpenClawStateRead(
-        { path },
-        {
-          type: "workers.placementProjection",
-          sessionIds: ids,
-          conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
-            placement: {
-              sessionId: placement.sessionId,
-              generation: placement.generation,
-              environmentId: placement.environmentId,
-              activeOwnerEpoch: placement.activeOwnerEpoch,
-            },
-            claim: { ...claim },
-          })),
-        },
-        readOptions,
-      );
-      if (!result || !result.ok || result.type !== "workers.placementProjection") {
-        throw new Error("Worker placement projection source is unavailable");
-      }
-      const { projection, conflictSessionIds } = result.result;
+      const loadProjection = async () => {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          {
+            type: "workers.placementProjection",
+            sessionIds: ids,
+            conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
+              placement: {
+                sessionId: placement.sessionId,
+                generation: placement.generation,
+                environmentId: placement.environmentId,
+                activeOwnerEpoch: placement.activeOwnerEpoch,
+              },
+              claim: { ...claim },
+            })),
+          },
+          readOptions,
+        );
+        if (!result || !result.ok || result.type !== "workers.placementProjection") {
+          throw new Error("Worker placement projection source is unavailable");
+        }
+        return result.result;
+      };
+      const singleSessionId = ids.length === 1 ? ids[0] : undefined;
+      const { projection, conflictSessionIds } =
+        singleSessionId !== undefined && conflicts.size === 0
+          ? await readPlacementProjection(path, singleSessionId, loadProjection)
+          : await loadProjection();
       const placements = new Map(projection.placements);
       for (const [id, captured] of conflicts) {
         const record = placements.get(id);
@@ -353,13 +365,6 @@ export function createWorkerSessionPlacementStore(
       sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey });
     },
 
-    startDispatch(
-      input: WorkerSessionPlacementDispatchIdentity,
-      dispatchOptions: { assertCurrent?: () => void } = {},
-    ): Promise<WorkerSessionPlacementRecord> {
-      return startWorkerPlacementDispatch(path, input, now(), dispatchOptions.assertCurrent);
-    },
-
     async adoptActive(input: {
       sessionId: string;
       environmentId: string;
@@ -388,11 +393,9 @@ export function createWorkerSessionPlacementStore(
     },
 
     list(): WorkerSessionPlacementRecord[] {
-      const db = read();
-      return executeSqliteQuerySync(
-        db,
-        query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
-      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+      return readWorkerPlacementsInDatabase(read()).map((record) =>
+        withWorkspaceResultConflict(record)!,
+      );
     },
 
     async readChangeSnapshot(profileIds?: readonly string[]) {

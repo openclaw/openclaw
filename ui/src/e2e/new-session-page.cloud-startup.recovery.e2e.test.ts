@@ -112,7 +112,8 @@ suite.define(() => {
       const alert = page.getByRole("alert").filter({ hasText: diagnostic });
       await alert.waitFor({ state: "visible" });
       await pollLocatorText(alert).toContain("startup needs attention");
-      expect(await composer.isDisabled()).toBe(true);
+      expect(await composer.isDisabled()).toBe(false);
+      await composer.fill("Follow-up waiting for startup recovery");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       if (captureUiProof) {
         await alert.locator("summary").click();
@@ -132,6 +133,7 @@ suite.define(() => {
       await expect.poll(() => alert.count()).toBe(0);
       await expect.poll(() => retry.count()).toBe(0);
       await expect.poll(() => composer.isDisabled()).toBe(false);
+      expect(await composer.inputValue()).toBe("Follow-up waiting for startup recovery");
       await composer.fill("Follow-up after recovery");
       expect(await composer.inputValue()).toBe("Follow-up after recovery");
       expect(await initialTurn.count()).toBe(1);
@@ -752,6 +754,7 @@ suite.define(() => {
           expect.objectContaining({
             params: {
               sessionKey,
+              toolResultMaxChars: 2_000,
               limit: 1000,
               inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
             },
@@ -759,9 +762,10 @@ suite.define(() => {
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
-      await expect
-        .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-        .toBe(true);
+      const followUp = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => followUp.isDisabled()).toBe(false);
+      await followUp.fill("Unsent follow-up while checking delivery");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       const recovery = await page.evaluate(() => {
         const key = Object.keys(sessionStorage).find((candidate) =>
           candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),

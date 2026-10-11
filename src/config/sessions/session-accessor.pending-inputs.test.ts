@@ -1,9 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -17,12 +18,10 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -41,6 +40,10 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -348,6 +351,12 @@ describe("accepted input custody", () => {
     const receipt = await stage("relocation-observer");
     await promote(receipt);
     const appendCopy = createRelocation(receipt);
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => {
+      errorLog.mockRestore();
+      resetLogger();
+    });
 
     expect(() =>
       runOpenClawAgentWriteTransaction(
@@ -359,7 +368,10 @@ describe("accepted input custody", () => {
         },
         toDatabaseOptions(resolveSqliteScope(scope())),
       ),
-    ).toThrow("injected observer failure");
+    ).not.toThrow();
+    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("SQLite post-commit notification failed"),
+    );
 
     expect(() =>
       receipt.run(() => appendCopy(receipt.inputId, "stale-source-after-observer")),

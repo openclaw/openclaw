@@ -47,8 +47,7 @@ export type TestChatPane = HTMLElement & {
   syncHistoryObserver: () => void;
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
-  stagedOlderPage: unknown;
-  stagedOlderLoad: Promise<void> | null;
+  stagedOlder: { page: unknown; load: Promise<void> | null };
   readReplyMessage: (messageId: string) => unknown;
   replyMessageStatus: (messageId: string) => string | undefined;
   openReplyMessage: (messageId: string) => void;

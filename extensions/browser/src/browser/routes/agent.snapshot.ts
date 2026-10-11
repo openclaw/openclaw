@@ -29,7 +29,6 @@ import {
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
-import type { BrowserObservedState } from "../pw-session-contracts.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -430,6 +429,11 @@ export function registerBrowserAgentSnapshotRoutes(
               url: tab.url,
               ...snapshot,
             });
+          const snapshotOptions = {
+            interactive: plan.interactive ?? undefined,
+            compact: plan.compact ?? undefined,
+            maxDepth: plan.depth ?? undefined,
+          };
           const deltaFamily: SnapshotDeltaFamily | undefined =
             plan.format === "ai"
               ? {
@@ -465,11 +469,7 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             const built = buildChromeMcpRouteSnapshot({
               root: snapshot,
-              options: {
-                interactive: plan.interactive ?? undefined,
-                compact: plan.compact ?? undefined,
-                maxDepth: plan.depth ?? undefined,
-              },
+              options: snapshotOptions,
             });
             const builtWithUrls = plan.urls
               ? {
@@ -500,17 +500,19 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             return jsonSnapshot(finalized);
           }
+          const playwrightTarget = {
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+          };
           const readPlaywrightDocumentIdentities = pwModule?.getDocumentIdentitiesViaPlaywright;
-          let observedBrowserState: BrowserObservedState | undefined;
-          if (pwModule) {
-            observedBrowserState = await pwModule
-              .getObservedBrowserStateViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              })
-              .catch(() => undefined);
-          }
+          const observedBrowserState = pwModule
+            ? await pwModule
+                .getObservedBrowserStateViaPlaywright({
+                  ...playwrightTarget,
+                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                })
+                .catch(() => undefined)
+            : undefined;
           const browserStateFields =
             observedBrowserState &&
             (observedBrowserState.dialogs.pending.length ||
@@ -527,8 +529,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const readDocumentIdentities = async (): Promise<CdpDocumentIdentities> => {
             const playwrightIdentities = readPlaywrightDocumentIdentities
               ? await readPlaywrightDocumentIdentities({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
+                  ...playwrightTarget,
                   timeoutMs: plan.timeoutMs,
                 }).catch(() => undefined)
               : undefined;
@@ -581,24 +582,32 @@ export function registerBrowserAgentSnapshotRoutes(
               );
             }
           };
+          const publishSnapshot = async (snapshot: () => Record<string, unknown>) => {
+            await assertDocumentIdentityUnchanged();
+            return jsonSnapshot({ ...browserStateFields, ...snapshot() });
+          };
           if (plan.format === "ai") {
             const roleSnapshotArgs = {
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
-              selector: plan.selectorValue,
-              frameSelector: plan.frameSelectorValue,
-              refsMode: plan.refsMode,
+              ...playwrightTarget,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
-              maxChars: plan.resolvedMaxChars,
               signal,
-              options: {
-                interactive: plan.interactive ?? undefined,
-                compact: plan.compact ?? undefined,
-                maxDepth: plan.depth ?? undefined,
-              },
               delta,
+              ...(plan.wantsRoleSnapshot
+                ? {
+                    selector: plan.selectorValue,
+                    frameSelector: plan.frameSelectorValue,
+                    refsMode: plan.refsMode,
+                    maxChars: plan.resolvedMaxChars,
+                    options: snapshotOptions,
+                  }
+                : {
+                    refsMode: "aria" as const,
+                    ...(typeof plan.resolvedMaxChars === "number"
+                      ? { maxChars: plan.resolvedMaxChars }
+                      : {}),
+                  }),
             };
 
             const cdpRoleWsUrl =
@@ -619,11 +628,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 recurseIframes,
                 timeoutMs: plan.timeoutMs,
                 maxChars: plan.resolvedMaxChars,
-                options: {
-                  interactive: plan.interactive ?? undefined,
-                  compact: plan.compact ?? undefined,
-                  maxDepth: plan.depth ?? undefined,
-                },
+                options: snapshotOptions,
                 delta,
               });
               usedCdpRoleSnapshot = true;
@@ -632,29 +637,13 @@ export function registerBrowserAgentSnapshotRoutes(
 
             const pw = pwModule;
             const cdpFirstPw = pw && plan.wantsRoleSnapshot && cdpRoleWsUrl ? pw : null;
-            const snap = plan.wantsRoleSnapshot
-              ? cdpFirstPw
-                ? await cdpRoleSnapshot(false).catch(async () => {
-                    signal.throwIfAborted();
-                    return await cdpFirstPw.snapshotRoleViaPlaywright(roleSnapshotArgs);
-                  })
-                : pw
-                  ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
-                  : await cdpRoleSnapshot()
+            const snap = cdpFirstPw
+              ? await cdpRoleSnapshot(false).catch(async () => {
+                  signal.throwIfAborted();
+                  return await cdpFirstPw.snapshotRoleViaPlaywright(roleSnapshotArgs);
+                })
               : pw
-                ? await pw.snapshotRoleViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    refsMode: "aria",
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                    urls: plan.urls,
-                    timeoutMs: plan.timeoutMs,
-                    signal,
-                    ...(typeof plan.resolvedMaxChars === "number"
-                      ? { maxChars: plan.resolvedMaxChars }
-                      : {}),
-                    delta,
-                  })
+                ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
                 : await cdpRoleSnapshot();
             if (!snap) {
               await requirePwAi(res, "ai snapshot");
@@ -663,8 +652,7 @@ export function registerBrowserAgentSnapshotRoutes(
             if (usedCdpRoleSnapshot && pw && "refs" in snap) {
               await assertDocumentIdentityUnchanged();
               await pw.storeSnapshotRefsViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
+                ...playwrightTarget,
                 refs: snap.refs,
                 signal,
                 deadlineMs: cdpCaptureDeadlineMs,
@@ -679,8 +667,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 return jsonError(res, 501, "Snapshot labels require Playwright.");
               }
               const labeled = await pw.screenshotWithLabelsViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
+                ...playwrightTarget,
                 refs: "refs" in snap ? snap.refs : {},
                 type: "png",
                 timeoutMs: plan.timeoutMs,
@@ -689,14 +676,11 @@ export function registerBrowserAgentSnapshotRoutes(
               image = await saveBrowserScreenshot(labeled, "png");
             }
 
-            await assertDocumentIdentityUnchanged();
-            if (deltaKey) {
-              recordSnapshotKeys(ctx, { ...deltaKey, refs: snap.refs ?? {} });
-            }
-            return jsonSnapshot({
-              ...browserStateFields,
-              ...image,
-              ...snap,
+            return await publishSnapshot(() => {
+              if (deltaKey) {
+                recordSnapshotKeys(ctx, { ...deltaKey, refs: snap.refs ?? {} });
+              }
+              return { ...image, ...snap };
             });
           }
 
@@ -707,8 +691,7 @@ export function registerBrowserAgentSnapshotRoutes(
               return;
             }
             resolved = await pw.snapshotAriaViaPlaywright({
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
+              ...playwrightTarget,
               limit: plan.limit,
               timeoutMs: plan.timeoutMs,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
@@ -724,8 +707,7 @@ export function registerBrowserAgentSnapshotRoutes(
             });
             await assertDocumentIdentityUnchanged();
             await pwModule?.storeSnapshotRefsViaPlaywright?.({
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
+              ...playwrightTarget,
               nodes: resolved.nodes,
               signal,
               deadlineMs: captureDeadlineMs,
@@ -734,11 +716,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 : {}),
             });
           }
-          await assertDocumentIdentityUnchanged();
-          return jsonSnapshot({
-            ...browserStateFields,
-            ...resolved,
-          });
+          return await publishSnapshot(() => resolved);
         },
       });
     } catch (err) {

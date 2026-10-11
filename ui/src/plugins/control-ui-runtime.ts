@@ -4,7 +4,6 @@ import type {
   PluginControlUiModule,
   PluginsControlUiCatalog,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
-import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
   ControlUiDisposer,
@@ -18,6 +17,10 @@ import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import {
+  controlUiPluginAssetGrantError,
+  ControlUiPluginAssetPreloads,
+} from "./control-ui-assets.ts";
 import type {
   ControlUiContributions,
   ControlUiPluginCapability,
@@ -57,15 +60,18 @@ const ACTIVATION_TIMEOUT_MS = 15_000;
 
 export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly owners = new Map<string, ControlUiPluginOwner>();
+  private readonly preloads = new ControlUiPluginAssetPreloads();
   private readonly selected = new Map<ControlUiSurface, { key: string; signal: AbortSignal }>();
   private readonly listeners = new Set<() => void>();
   private readonly loadingOwners = new Set<Omit<ControlUiPluginOwner, "host">>();
   private loadingCatalog: "pending" | Set<string> | null = null;
+  private catalogStatus: "pending" | "complete" | "failed" = "pending";
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
   private connectionId: string | null = null;
   private refreshGeneration = 0;
   private disposed = false;
+  private firstConnection = true;
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -93,6 +99,17 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   get hasPlugins(): boolean {
     return this.owners.size > 0 || this.loadingOwners.size > 0;
+  }
+
+  get registryStatus(): "pending" | "complete" | "failed" {
+    if (this.catalogStatus === "failed") {
+      return "failed";
+    }
+    return this.catalogStatus === "complete" &&
+      this.loadingCatalog === null &&
+      this.loadingOwners.size === 0
+      ? "complete"
+      : "pending";
   }
 
   isLoading(pluginId: string): boolean {
@@ -140,7 +157,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   start(): void {
     const context = this.getContext();
+    const preload = () =>
+      this.preloads.sync(context.config.current, context.resourceBasePath, (id, error) =>
+        this.reportError(id, error),
+      );
     this.stops.push(
+      context.config.subscribe(preload),
       context.gateway.subscribe(() => this.syncConnection()),
       context.gateway.subscribeEvents((event) => {
         if (event.event === "plugins.controlUi.changed" || event.event === "plugins.changed") {
@@ -148,6 +170,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         }
       }),
     );
+    preload();
     this.syncConnection();
   }
 
@@ -163,13 +186,19 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.client = client;
     this.connectionId = connectionId;
     this.diagnostics = [];
+    this.catalogStatus =
+      client && !isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")
+        ? "complete"
+        : "pending";
     this.publish();
     if (client && isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")) {
-      void this.refresh();
+      const reuseBootstrap = this.firstConnection;
+      this.firstConnection = false;
+      void this.refresh(reuseBootstrap);
     }
   }
 
-  async refresh(): Promise<void> {
+  async refresh(reuseBootstrap = false): Promise<void> {
     const client = this.client;
     if (!client || this.disposed) {
       return;
@@ -181,16 +210,22 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.disposeOwner(owner);
     }
     this.loadingOwners.clear();
+    this.catalogStatus = "pending";
     this.loadingCatalog = "pending";
     this.publish();
     const current = () =>
       !this.disposed && this.client === client && this.refreshGeneration === generation;
     try {
-      const catalog = await client.request<PluginsControlUiCatalog>("plugins.controlUi.list", {});
+      const sameOrigin = hasSameOriginGatewayTransport(client.gatewayUrl);
+      const [catalog, bootstrap] = await Promise.all([
+        client.request<PluginsControlUiCatalog>("plugins.controlUi.list", {}),
+        sameOrigin ? this.getContext().config.refresh({ ifNeeded: reuseBootstrap }) : null,
+      ]);
       if (!current()) {
         return;
       }
       this.diagnostics = catalog.diagnostics;
+      this.catalogStatus = "complete";
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;
       for (const [id, owner] of this.owners) {
@@ -203,7 +238,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       if (catalog.plugins.length) {
         const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
         gatewayUrl.protocol = gatewayUrl.protocol.replace(/^ws/u, "http");
-        if (!hasSameOriginGatewayTransport(client.gatewayUrl)) {
+        if (!sameOrigin) {
           this.loadingCatalog = null;
           const error = new Error(
             `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,
@@ -216,35 +251,18 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           );
           return;
         }
-        const bootstrap = await this.getContext().config.refresh();
-        if (!current()) {
-          return;
-        }
         if (!bootstrap) {
           throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
         }
         for (const descriptor of catalog.plugins) {
-          const prefix = controlUiPluginAssetPrefix(
-            descriptor.pluginId,
+          const grantError = controlUiPluginAssetGrantError(
+            descriptor,
+            bootstrap,
             this.getContext().resourceBasePath,
           );
-          // Secure asset cookies cannot authenticate requests from non-local HTTP.
-          if (
-            bootstrap.pluginAssetsRequireAuth &&
-            (!window.isSecureContext ||
-              !bootstrap.pluginFrameGrants.some(
-                (grant) =>
-                  grant.pluginId === descriptor.pluginId &&
-                  grant.match === "prefix" &&
-                  grant.path === prefix,
-              ))
-          ) {
+          if (grantError) {
             installed.delete(descriptor.pluginId);
-            const error = new Error(
-              window.isSecureContext
-                ? `Native plugin asset grant unavailable: ${descriptor.pluginId}`
-                : "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard.",
-            );
+            const error = new Error(grantError);
             this.reportError(descriptor.pluginId, error);
             await this.reportActivation(descriptor, client, current, "failed", error);
             if (!current()) {
@@ -273,6 +291,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.publish();
     } catch (error) {
       if (current()) {
+        if (this.loadingCatalog === "pending") {
+          this.catalogStatus = "failed";
+        }
         this.loadingCatalog = null;
         this.reportError("host", error);
         this.publish();
@@ -572,6 +593,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   private retireOwners(): void {
     this.refreshGeneration += 1;
+    this.catalogStatus = "pending";
     this.loadingCatalog = null;
     if (this.grantTimer !== null) {
       clearInterval(this.grantTimer);
@@ -587,6 +609,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   dispose(): void {
     this.disposed = true;
+    this.preloads.dispose();
     this.retireOwners();
     for (const stop of this.stops) {
       stop();

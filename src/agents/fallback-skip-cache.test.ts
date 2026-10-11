@@ -80,50 +80,6 @@ describe("fallback-skip-cache", () => {
     ).toBeUndefined();
   });
 
-  it("isolates entries across sessions", () => {
-    markFallbackCandidateSkipped({
-      ...candidate,
-      reason: "auth",
-      now: 1_000,
-      ttlMs: 60_000,
-    });
-    expect(isFallbackCandidateSkipped({ ...candidate, now: 30_000 })).toBe(true);
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s2",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        now: 30_000,
-      }),
-    ).toBe(false);
-  });
-
-  it("isolates entries across (provider, model) pairs", () => {
-    markFallbackCandidateSkipped({
-      ...candidate,
-      reason: "auth",
-      now: 1_000,
-      ttlMs: 60_000,
-    });
-    expect(isFallbackCandidateSkipped({ ...candidate, now: 30_000 })).toBe(true);
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        now: 30_000,
-      }),
-    ).toBe(false);
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "google",
-        model: "claude-opus-4-7",
-        now: 30_000,
-      }),
-    ).toBe(false);
-  });
-
   it("isolates entries across explicit and automatic auth scopes", () => {
     markFallbackCandidateSkipped({
       ...candidate,

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
 import {
@@ -10,6 +9,7 @@ import {
 } from "./whatsapp-live.gateway.js";
 import {
   sendWhatsAppQaMediaAndObserve,
+  runWhatsAppOutboundMediaChecks,
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
   WHATSAPP_QA_ONE_PIXEL_PNG,
@@ -127,32 +127,8 @@ export const whatsappCapabilityScenarios = {
     requiresGroupJid: true,
     marker: "WHATSAPP_QA_GROUP_OUTBOUND_MEDIA",
     buildRun: (token) => ({
-      afterReply: async (_reply, context) => {
-        const mediaRootToken = randomUUID().slice(0, 8);
-        const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: WHATSAPP_QA_ONE_PIXEL_PNG,
-          fileName: `whatsapp-qa-group-${mediaRootToken}.png`,
-        });
-        const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: createWhatsAppQaPdfBuffer(),
-          fileName: `whatsapp-qa-group-${mediaRootToken}.pdf`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "image",
-          label: "group-image",
-          mediaUrl: imagePath,
-          message: `${token}_IMAGE`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "document",
-          label: "group-document",
-          mediaUrl: documentPath,
-          message: `${token}_DOCUMENT`,
-        });
-        return "gateway send delivered image and document media to the group";
-      },
+      afterReply: async (_reply, context) =>
+        await runWhatsAppOutboundMediaChecks(context, token, "group"),
       input: `openclawqa reply with only this exact marker before group outbound media checks: ${token}`,
       target: "group",
     }),

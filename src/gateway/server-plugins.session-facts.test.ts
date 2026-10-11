@@ -580,6 +580,10 @@ describe("trusted plugin selected session facts", () => {
         await fixture.subscriptions.pollNow();
         expect(fixture.load).toHaveBeenCalledTimes(attempts + 1);
         expect(retried.retryAt).toBe(now + 120_000);
+        await fixture.seed(sessionKey, fixture.profile.id, { label: "Changed stored metadata" });
+        await selected();
+        await fixture.subscriptions.pollNow();
+        expect(fixture.load).toHaveBeenCalledTimes(attempts + 2);
         await fixture.seed(sessionKey, fixture.profile.id, {
           lifecycleRevision: "replacement-generation",
           worktree: {

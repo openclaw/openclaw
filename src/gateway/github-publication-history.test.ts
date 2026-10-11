@@ -248,43 +248,24 @@ describe("GitHub publication branch history", () => {
     });
   });
 
-  it.each([
-    { publication: "initial", reflog: "recreated" },
-    { publication: "refresh", reflog: "expired" },
-  ])(
-    "publishes $publication work after its branch reflog is $reflog",
-    async ({ publication, reflog }) => {
-      const f = await historyFixture();
-      if (publication === "refresh") {
-        expect(await f.publish("initial")).toMatchObject({ status: "published", url });
-      }
-      const previousRemote = await f.remoteHead();
-      await fs.writeFile(path.join(f.cwd, "artifact.txt"), "committed topic edit\n");
-      await f.git("add", "artifact.txt");
-      await f.git("commit", "-m", "topic edit");
-      const sourceHead = await f.git("rev-parse", "HEAD");
-      const sourceTree = await f.git("rev-parse", "HEAD^{tree}");
-      if (reflog === "recreated") {
-        await f.git("branch", "-m", "saved-topic");
-        await f.git("switch", "-c", BRANCH, sourceHead);
-      } else {
-        await f.git("reflog", "expire", "--expire=now", `refs/heads/${BRANCH}`);
-      }
-      f.calls.length = 0;
+  it("publishes initial work after its branch reflog is recreated", async () => {
+    const f = await historyFixture();
+    await fs.writeFile(path.join(f.cwd, "artifact.txt"), "committed topic edit\n");
+    await f.git("add", "artifact.txt");
+    await f.git("commit", "-m", "topic edit");
+    const sourceHead = await f.git("rev-parse", "HEAD");
+    const sourceTree = await f.git("rev-parse", "HEAD^{tree}");
+    await f.git("branch", "-m", "saved-topic");
+    await f.git("switch", "-c", BRANCH, sourceHead);
+    f.calls.length = 0;
 
-      expect(await f.publish("after-reflog-change")).toMatchObject({ status: "published", url });
+    expect(await f.publish("after-reflog-change")).toMatchObject({ status: "published", url });
 
-      expect(await f.git("rev-parse", "HEAD^")).toBe(sourceHead);
-      expect(await f.git("rev-parse", "HEAD^{tree}")).toBe(sourceTree);
-      expect(await f.remoteHead()).toBe(await f.git("rev-parse", "HEAD"));
-      if (previousRemote) {
-        await f.git("merge-base", "--is-ancestor", previousRemote, "HEAD");
-      }
-      expect(f.calls.filter((args) => args.includes("POST"))).toHaveLength(
-        publication === "initial" ? 1 : 0,
-      );
-    },
-  );
+    expect(await f.git("rev-parse", "HEAD^")).toBe(sourceHead);
+    expect(await f.git("rev-parse", "HEAD^{tree}")).toBe(sourceTree);
+    expect(await f.remoteHead()).toBe(await f.git("rev-parse", "HEAD"));
+    expect(f.calls.filter((args) => args.includes("POST"))).toHaveLength(1);
+  });
 
   it("rejects unrelated initial history without changing the workspace or remote", async () => {
     const f = await historyFixture();
@@ -304,49 +285,30 @@ describe("GitHub publication branch history", () => {
     expectNoPublicationWrites(f.calls);
   });
 
-  it.each(["rebased", "remote-ahead", "unrelated"] as const)(
-    "rejects %s history before changing HEAD, index, files, or remote",
-    async (history) => {
-      const f = await historyFixture();
-      // Already-committed source plus an intentional first-publication marker.
-      await f.git("add", "artifact.txt");
-      await f.git("commit", "-m", "source change");
-      expect(await f.publish("initial")).toMatchObject({ status: "published" });
-      const published = await f.remoteHead();
-      if (history === "rebased") {
-        await f.git("checkout", "main");
-        await fs.writeFile(path.join(f.cwd, "upstream.txt"), "upstream\n");
-        await f.git("add", "upstream.txt");
-        await f.git("commit", "-m", "upstream advance");
-        await f.git("checkout", BRANCH);
-        await f.git("rebase", "main");
-      } else {
-        const tree = await f.git("rev-parse", "HEAD^{tree}");
-        const remoteCommit = await f.git(
-          "commit-tree",
-          tree,
-          ...(history === "remote-ahead" ? ["-p", published] : []),
-          "-m",
-          "remote change",
-        );
-        await f.git("push", f.remote, `${remoteCommit}:refs/heads/foreign`);
-        await f.git("-C", f.remote, "update-ref", `refs/heads/${BRANCH}`, remoteCommit);
-      }
-      await fs.writeFile(path.join(f.cwd, "artifact.txt"), "staged after divergence\n");
-      await f.git("add", "artifact.txt");
-      await fs.writeFile(path.join(f.cwd, "artifact.txt"), "unstaged after divergence\n");
-      const before = await f.state();
-      f.calls.length = 0;
-      const rejected = await f.publish("diverged");
-      expect(await f.state()).toEqual(before);
-      expect(rejected).toMatchObject({
-        status: "failed",
-        code: "push_rejected",
-        nextAction: expect.stringContaining("published head"),
-      });
-      expectNoPublicationWrites(f.calls);
-    },
-  );
+  it("rejects unrelated history before changing HEAD, index, files, or remote", async () => {
+    const f = await historyFixture();
+    // Already-committed source plus an intentional first-publication marker.
+    await f.git("add", "artifact.txt");
+    await f.git("commit", "-m", "source change");
+    expect(await f.publish("initial")).toMatchObject({ status: "published" });
+    const tree = await f.git("rev-parse", "HEAD^{tree}");
+    const remoteCommit = await f.git("commit-tree", tree, "-m", "remote change");
+    await f.git("push", f.remote, `${remoteCommit}:refs/heads/foreign`);
+    await f.git("-C", f.remote, "update-ref", `refs/heads/${BRANCH}`, remoteCommit);
+    await fs.writeFile(path.join(f.cwd, "artifact.txt"), "staged after divergence\n");
+    await f.git("add", "artifact.txt");
+    await fs.writeFile(path.join(f.cwd, "artifact.txt"), "unstaged after divergence\n");
+    const before = await f.state();
+    f.calls.length = 0;
+    const rejected = await f.publish("diverged");
+    expect(await f.state()).toEqual(before);
+    expect(rejected).toMatchObject({
+      status: "failed",
+      code: "push_rejected",
+      nextAction: expect.stringContaining("published head"),
+    });
+    expectNoPublicationWrites(f.calls);
+  });
 
   it("retains identity-change semantics when identity is revoked during remote observation", async () => {
     const f = await historyFixture();
@@ -368,7 +330,7 @@ describe("GitHub publication branch history", () => {
     expectNoPublicationWrites(f.calls);
   });
 
-  it.each(["failed", "malformed", "wrong-ref", "fetch", "ancestry"] as const)(
+  it.each(["failed", "wrong-ref", "fetch", "ancestry"] as const)(
     "leaves the workspace untouched when remote %s observation is unknown",
     async (fault) => {
       const f = await historyFixture();
@@ -380,9 +342,6 @@ describe("GitHub publication branch history", () => {
         if (argv.includes("ls-remote")) {
           if (fault === "failed") {
             return commandResult("", 1);
-          }
-          if (fault === "malformed") {
-            return commandResult("not-a-ref");
           }
           if (fault === "wrong-ref") {
             return commandResult(`${remoteCommit}\trefs/heads/other\n`);

@@ -84,7 +84,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
     phaseSignalError = formatErrorMessage(err);
     phaseStore = emptyPhaseSignalStore(nowIso);
   }
-  let shortTermCount = 0;
   let recallSignalCount = 0;
   let dailySignalCount = 0;
   let groundedSignalCount = 0;
@@ -92,7 +91,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
   let phaseSignalCount = 0;
   let lightPhaseHitCount = 0;
   let remPhaseHitCount = 0;
-  let promotedTotal = 0;
   let promotedToday = 0;
   let currentDay: string | undefined;
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
@@ -127,7 +125,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
       ...(entry.lastRecalledAt ? { lastRecalledAt: entry.lastRecalledAt } : {}),
     };
     if (!entry.promotedAt) {
-      shortTermCount += 1;
       recallSignalCount += recallCount;
       dailySignalCount += dailyCount;
       groundedSignalCount += groundedCount;
@@ -136,7 +133,6 @@ export async function loadShortTermPromotionDreamingStats(params: {
       activeEntries.set(entryKey, detail);
       continue;
     }
-    promotedTotal += 1;
     promotedEntries.push({ ...detail, promotedAt: entry.promotedAt });
     const promotedAtMs = Date.parse(entry.promotedAt);
     if (Number.isFinite(promotedAtMs)) {
@@ -167,7 +163,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
   }
 
   return {
-    shortTermCount,
+    shortTermCount: shortTermEntries.length,
     recallSignalCount,
     dailySignalCount,
     groundedSignalCount,
@@ -175,7 +171,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
     phaseSignalCount,
     lightPhaseHitCount,
     remPhaseHitCount,
-    promotedTotal,
+    promotedTotal: promotedEntries.length,
     promotedToday,
     storePath: resolveStorePath(workspaceDir),
     phaseSignalPath: resolvePhaseSignalPath(workspaceDir),

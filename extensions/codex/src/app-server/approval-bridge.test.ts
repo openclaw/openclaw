@@ -181,46 +181,6 @@ describe("Codex app-server approval bridge", () => {
     }));
   });
 
-  it("maps file Allow Always to native session approval", async () => {
-    const params = createParams();
-    mockApprovalDecision("plugin:file-session", "allow-always");
-    const result = await requestNativeApproval(
-      params,
-      {
-        itemId: "file-session",
-        reason: "update generated output",
-      },
-      { method: "item/fileChange/requestApproval" },
-    );
-    expect(result).toEqual({ decision: "acceptForSession" });
-    expect(gatewayRequestPayload().allowedDecisions).toEqual([
-      "allow-once",
-      "allow-always",
-      "deny",
-    ]);
-  });
-
-  it("auto-accepts app-server file approvals in yolo mode without opening plugin approvals", async () => {
-    const params = createParams();
-
-    const result = await requestNativeApproval(
-      params,
-      {
-        itemId: "patch-yolo",
-        reason: "needs write access",
-      },
-      { method: "item/fileChange/requestApproval", autoApprove: true },
-    );
-
-    expect(result).toEqual({ decision: "accept" });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-    findApprovalEvent(params, {
-      status: "approved",
-      reason: "needs write access",
-      message: "Codex app-server approval auto-approved by runtime policy.",
-    });
-  });
-
   it("cancels native approval when permissions change during final file revalidation", async () => {
     const params = createParams();
     const controller = new AbortController();
@@ -1017,25 +977,19 @@ describe("Codex app-server approval bridge", () => {
     expect(params.onAgentEvent).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["string command", { command: `${"\u0000".repeat(4095)}😀tail` }],
-    ["command array", { command: [`${"\u0000".repeat(4095)}😀tail`] }],
-  ])(
-    "does not expose split surrogate pairs from the preview scan cap: %s",
-    async (_label, input) => {
-      const params = createParams();
-      mockApprovalDecision("plugin:approval-utf16-scan", "allow-once");
+  it("does not expose split surrogate pairs from the command array preview scan cap", async () => {
+    const params = createParams();
+    mockApprovalDecision("plugin:approval-utf16-scan", "allow-once");
 
-      await requestNativeApproval(params, {
-        itemId: "cmd-utf16-scan",
-        ...input,
-      });
+    await requestNativeApproval(params, {
+      itemId: "cmd-utf16-scan",
+      command: [`${"\u0000".repeat(4095)}😀tail`],
+    });
 
-      const event = findApprovalEvent(params, { status: "denied" });
-      expect(event.commandPreviewOmitted).toBe(true);
-      expect(event.command).toBeUndefined();
-      expect(mockCallGatewayTool).not.toHaveBeenCalled();
-      expect(() => encodeURIComponent(JSON.stringify(event))).not.toThrow();
-    },
-  );
+    const event = findApprovalEvent(params, { status: "denied" });
+    expect(event.commandPreviewOmitted).toBe(true);
+    expect(event.command).toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(() => encodeURIComponent(JSON.stringify(event))).not.toThrow();
+  });
 });

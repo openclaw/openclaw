@@ -19,7 +19,6 @@ import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js"
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
-import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import {
   resolveSqliteScope,
@@ -35,6 +34,7 @@ import {
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 function captureListingSource(

@@ -2,19 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
   withUpdateCandidatePluginFileHashing,
   type UpdateCandidatePluginFileHasher,
 } from "./update-candidate-plugin-hash.js";
+import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   ignoreUnresolvedPluginLink,
@@ -73,12 +74,7 @@ async function dependencyOwner(
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
+        (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
       )
     ) {
       return directory;
@@ -105,6 +101,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   candidateRoot: string;
   /** Retain selected host entries and the dependency owners reached from them. */
   retainedHostRoot?: string;
+  /** Installed runtime lookups stop at the package manager's owning project. */
+  retainedDependencyRoot?: string;
   onProgress?: () => void | Promise<void>;
 }): Promise<UpdateCandidatePluginTreePlan> {
   return await withUpdateCandidatePluginFileHashing((hashFile) =>
@@ -231,6 +229,10 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     if (!isRecord(manifest)) {
       return;
     }
+    const boundary =
+      params.retainedDependencyRoot && isPathInside(params.retainedDependencyRoot, directory)
+        ? params.retainedDependencyRoot
+        : undefined;
     const names = new Set<string>();
     for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
       const dependencies = manifest[field];
@@ -272,7 +274,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
             break;
           }
         }
-        if (path.dirname(ancestor) === ancestor) {
+        if (ancestor === boundary || path.dirname(ancestor) === ancestor) {
           // Missing optional dependencies remain absent; validation owns required ones.
           break;
         }
@@ -339,10 +341,8 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
         }
       }
     }
-    const leaves = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: entries
+    const leaves = await runUpdateCandidatePluginTasks(
+      entries
         .filter((entry) => {
           const file = path.join(directory, entry.name);
           return !entry.isDirectory() && !isRecoveryArtifact(file) && !isOwnedHostEdge(file);
@@ -359,11 +359,8 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
             .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
           return { measured, edge: { target, real } };
         }),
-    });
-    if (leaves.hasError) {
-      throw leaves.firstError;
-    }
-    const observations = new Map(leaves.results.map((leaf) => [leaf.measured.path, leaf]));
+    );
+    const observations = new Map(leaves.map((leaf) => [leaf.measured.path, leaf]));
     // Reads can overlap; graph discovery and progress callbacks retain listing order.
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
@@ -406,12 +403,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
       if (!exists) {
         continue;
       }
-      const real = await fs.realpath(source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const real = await fs.realpath(source).catch(ignoreMissingUpdateCandidateFile);
       discovered.push({ source, real });
     }
     hosts.clear();
@@ -622,14 +614,7 @@ export async function copyUpdateCandidatePluginTrees(
     params.onProgress?.();
   };
   const assertEntries = async () => {
-    const checked = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: plan.entries.map((entry) => () => assertEntry(entry)),
-    });
-    if (checked.hasError) {
-      throw checked.firstError;
-    }
+    await runUpdateCandidatePluginTasks(plan.entries.map((entry) => () => assertEntry(entry)));
   };
   await targets.assertBindings();
   await assertEntries();

@@ -3,6 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import { icons } from "../../../components/icons.ts";
 import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
@@ -26,7 +27,7 @@ import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
-import { hasForwardedSource, isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -60,16 +61,26 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
-import { renderInterSessionActivity } from "./chat-session-activity.ts";
+import { renderSessionActivity } from "./chat-session-activity.ts";
 import {
   renderBrowserTabPreviews,
   renderToolCard,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary, renderToolReviewOutcome } from "./chat-tool-outcome-summary.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderChatBubbleDots, renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
+
+function renderMessageActionsRow(
+  messageKey: string | undefined,
+  content: ReturnType<typeof html> | typeof nothing,
+  className = "chat-group-footer-actions",
+) {
+  return html`<div class=${className} data-message-actions-for=${messageKey ?? nothing}>
+    ${content}
+  </div>`;
+}
 
 function prepareGroupMessage(
   group: MessageGroup,
@@ -270,7 +281,7 @@ export function renderActivityGroup(
             <div class="chat-group-messages">${content}</div>
           </div>
         `;
-  if (soleStep) {
+  if (soleStep && !opts.bubbleMode) {
     // The step is the disclosure: keep the body's bounded scroll and file owner.
     return frame(html`
       <div
@@ -282,9 +293,10 @@ export function renderActivityGroup(
       </div>
     `);
   }
+  const compact = opts.bubbleMode && !activityExpanded;
   const content = html`
     <div
-      class="chat-activity-group ${activityExpanded ? "is-open" : ""}"
+      class="chat-activity-group ${activityExpanded ? "is-open" : ""} ${compact ? "chat-activity-group--bubble" : ""}"
       data-file-session-key=${firstGroup.senderSession?.sessionKey ?? nothing}
     >
       <button
@@ -292,47 +304,55 @@ export function renderActivityGroup(
         type="button"
         aria-expanded=${String(activityExpanded)}
         aria-controls=${activityBodyId}
+        aria-label=${compact ? t("chat.view.activityDetails") : nothing}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${() => opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
       >
-        ${activityHeadline(
-          JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
-          headline,
-          groupSummaryLabel,
-          currentActivity,
-          opts.pluginToolIcons,
-          describeToolGroup(visibleActivity)
-            .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-            .map(({ label }) => label),
-        )}
-        ${renderToolReviewOutcome(reviewOutcome, approvalReviews[0]?.label)}
         ${
-          activityExpanded
-            ? nothing
-            : renderToolOutcomeSummary(
-                cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
-                true,
-                visibleActivity,
-              )
+          compact
+            ? renderChatBubbleDots(currentActivity.length > 0)
+            : html`${activityHeadline(
+                  JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
+                  headline,
+                  groupSummaryLabel,
+                  currentActivity,
+                  opts.pluginToolIcons,
+                  describeToolGroup(visibleActivity)
+                    .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+                    .map(({ label }) => label),
+                )}
+                ${renderToolReviewOutcome(reviewOutcome, approvalReviews[0]?.label)}
+                ${
+                  activityExpanded
+                    ? nothing
+                    : renderToolOutcomeSummary(
+                        cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
+                        true,
+                        visibleActivity,
+                      )
+                }
+                <span class="chat-tool-row__chevron" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >`
         }
-        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
         ${activityExpanded ? renderMessages() : nothing}
       </div>
-      ${renderBrowserTabPreviews(groups, opts)}
+      ${opts.bubbleMode && !activityExpanded ? nothing : renderBrowserTabPreviews(groups, opts)}
     </div>
   `;
   return frame(content);
 }
 
-function isActivityMessageGroup(group: MessageGroup): boolean {
+function isActivityMessageGroup(group: MessageGroup, bubbleMode = false): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
+    bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
@@ -366,7 +386,7 @@ function resolveFileLinkOwnerOptions(group: MessageGroup, options: RenderMessage
 
 export function renderMessageGroupContent(group: MessageGroup, options: RenderMessageGroupOptions) {
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isActivityMessageGroup(group)) {
+  if (isActivityMessageGroup(group, opts.bubbleMode)) {
     return renderActivityGroup([group], opts, "continuation");
   }
   const messageOptions = { ...opts, isForwarded: hasForwardedSource(group) };
@@ -389,8 +409,8 @@ export function renderMessageGroupContent(group: MessageGroup, options: RenderMe
 export function renderMessageGroup(group: MessageGroup, options: RenderMessageGroupOptions) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isInterSessionGroup(group)) {
-    return renderInterSessionActivity(group, opts, (item, index) => {
+  if (isSessionActivityGroup(group)) {
+    return renderSessionActivity(group, opts, (item, index) => {
       const prepared = prepareGroupMessage(group, item, opts);
       return {
         content: renderPreparedGroupMessage(
@@ -480,7 +500,7 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
     return nothing;
   }
 
-  if (isActivityMessageGroup(group)) {
+  if (isActivityMessageGroup(group, opts.bubbleMode)) {
     return renderActivityGroup([group], opts);
   }
 
@@ -507,11 +527,9 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   const userFooterActions = hasUserFooterActions
-    ? html`
-        <div
-          class="chat-group-footer-actions"
-          data-message-actions-for=${footerActionMessageKey ?? nothing}
-        >
+    ? renderMessageActionsRow(
+        footerActionMessageKey,
+        html`
           ${
             footerActionDetails?.replyTarget && opts.onReply
               ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
@@ -519,8 +537,8 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
           }
           ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
           ${renderMessageActionButtons(footerActionDetails, messageReactionOptions(group, opts))}
-        </div>
-      `
+        `,
+      )
     : nothing;
 
   // Source sessions share the stable sender hue machinery; CSS owns contrast
@@ -597,19 +615,13 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
                             ${renderSenderIdentity()}
                             ${renderMessageMeta(prepared.source.normalizedMessage.timestamp, null)}
                           </div>
-                          <div
-                            class="chat-group-footer-actions"
-                            data-message-actions-for=${item.key}
-                          >
-                            ${renderMessageActionButtons(actionDetails, opts)}
-                          </div>
+                          ${renderMessageActionsRow(item.key, renderMessageActionButtons(actionDetails, opts))}
                         </div>`
-                      : html`<div
-                          class="chat-message-actions-row"
-                          data-message-actions-for=${item.key}
-                        >
-                          ${renderMessageActionButtons(actionDetails, opts)}
-                        </div>`
+                      : renderMessageActionsRow(
+                          item.key,
+                          renderMessageActionButtons(actionDetails, opts),
+                          "chat-message-actions-row",
+                        )
                     : nothing;
                 // Assistant groups carry one line; your own replies keep theirs in the
                 // bubble, and a participant's sits above the message beside its avatar.
@@ -700,14 +712,10 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
                   isPeerGroup
                     ? userFooterActions
                     : normalizedRole !== "user" && footerActionDetails
-                      ? html`
-                          <div
-                            class="chat-group-footer-actions"
-                            data-message-actions-for=${footerActionMessageKey ?? nothing}
-                          >
-                            ${renderMessageActionButtons(footerActionDetails, opts)}
-                          </div>
-                        `
+                      ? renderMessageActionsRow(
+                          footerActionMessageKey,
+                          renderMessageActionButtons(footerActionDetails, opts),
+                        )
                       : nothing
                 }
               </div>`

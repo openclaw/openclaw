@@ -66,13 +66,15 @@ function createActivityChecker(params: {
     runtime: {
       agent: {
         session: {
-          getSessionEntry: () => (params.sessionId ? { sessionId: params.sessionId } : undefined),
+          resolveStorePath: () => "/activity-store",
+          getSessionEntryAsync: async () =>
+            params.sessionId ? { sessionId: params.sessionId } : undefined,
         },
       },
     },
   } as unknown as OpenClawPluginApi;
   const bindingStore = {
-    read: vi.fn(() => params.binding),
+    readAsync: vi.fn(async () => params.binding),
   } as unknown as CodexAppServerBindingStore;
   return createChecker({
     api,

@@ -76,6 +76,7 @@ export type PluginNativeRecovery = {
   references: Map<string, PluginNativeArtifactFact>;
   namespaces: Map<string, PluginNativeNamespaceFact>;
   directories: Map<string, string>;
+  fork(relocate?: (source: string) => string): PluginNativeRecovery;
   retain(cache: PluginCache): void;
   dispose(): void;
   disposeAsync(): Promise<void>;
@@ -115,6 +116,18 @@ function createNativeRecovery(
     references,
     namespaces,
     directories,
+    fork(relocate = (source) => source) {
+      if (disposed) {
+        throw new Error("Plugin native recovery has been disposed");
+      }
+      return createNativeRecovery(
+        receipt,
+        new Map([...references].map(([source, fact]) => [relocate(source), { ...fact }])),
+        structuredClone(namespaces),
+        new Map([...directories].map(([source, namespace]) => [relocate(source), namespace])),
+        roots,
+      );
+    },
     retain(cache) {
       if (disposed) {
         throw new Error("Plugin native recovery has been disposed");
@@ -161,13 +174,17 @@ function isNativeArtifact(
 export function createPluginNativeAdmission(
   rootDir: string,
   directory: string,
-  entryFile?: string,
+  entryFiles?: readonly string[],
   recovery?: PluginNativeRecovery,
   outputRoot?: string,
 ) {
   recovery?.retain(getPluginCache());
   const state = nativeAdmissionStateFor();
-  const key = `${path.resolve(rootDir)}\0${entryFile ? path.resolve(entryFile) : ""}`;
+  const entryKey =
+    entryFiles?.length === 1
+      ? path.resolve(entryFiles[0]!)
+      : entryFiles && JSON.stringify(entryFiles.map((file) => path.resolve(file)));
+  const key = `${path.resolve(rootDir)}\0${entryKey ?? ""}`;
   const owner = state.owners.get(path.resolve(rootDir));
   const publishAdmission =
     owner && !state.artifactPreservingReadOnly
@@ -258,7 +275,7 @@ export function createPluginNativeAdmission(
       capturedRoot: root.directory,
       outputRoot,
       inspectionRoots: [...new Set([boundary, ...(owner ? [owner.rootDir] : [])])],
-      inspectedFiles: [owner?.source, owner?.setupSource, entryFile].filter(
+      inspectedFiles: [owner?.source, owner?.setupSource, ...(entryFiles ?? [])].filter(
         (file): file is string => Boolean(file),
       ),
     });
@@ -542,7 +559,7 @@ export function createPluginNativeAdmission(
       if (
         owner?.source === logicalSource ||
         owner?.setupSource === logicalSource ||
-        entryFile === logicalSource
+        entryFiles?.includes(logicalSource)
       ) {
         return undefined;
       }

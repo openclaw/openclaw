@@ -335,6 +335,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get revision() {
       return revision;
     },
+    captureBootRoster: () => null,
     get state() {
       return state;
     },
@@ -610,7 +611,8 @@ export async function mountSidebarContext(
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
-  sidebar.variant = variant;
+  // General behavioral fixtures model the original all-session query contract.
+  Object.assign(sidebar, { variant, navigationScope: "all" });
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;
   }

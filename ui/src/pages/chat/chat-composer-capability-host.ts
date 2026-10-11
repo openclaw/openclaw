@@ -48,11 +48,10 @@ type ComposerMcpServerScope = "session" | "everywhere";
 function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   const revision =
     snapshot?.appliedConfigHash ?? snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
-  if (revision) {
-    return revision;
-  }
   // Without a revision hash, connector edits still invalidate the effective tools.
-  return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
+  return (
+    revision || JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null)
+  );
 }
 
 export class ChatComposerCapabilityHost {
@@ -72,21 +71,6 @@ export class ChatComposerCapabilityHost {
   constructor(private readonly notify: () => void) {
     this.skillCatalog = new ComposerSkillCatalog(notify);
     this.library = new ComposerLibrarySession(notify);
-  }
-
-  private loadSkills(context: ApplicationContext, state: ChatPageHost, agentId: string): void {
-    const config = context.runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
-      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-    }
-    const client = state.client;
-    const connectionEpoch = state.connectionEpoch;
-    this.skillCatalog.load(
-      client,
-      connectionEpoch,
-      agentId,
-      () => state.connected && state.client === client && state.connectionEpoch === connectionEpoch,
-    );
   }
 
   private effectiveToolsKeys(
@@ -152,7 +136,7 @@ export class ChatComposerCapabilityHost {
       this.effectiveToolsKeys(context, state, agentId).cacheKey === cacheKey;
     this.effectiveToolsErrorKey = null;
     this.notify();
-    void loadToolsEffective(loader, { agentId, sessionKey }, { isCurrent })
+    void loadToolsEffective(loader, { agentId, sessionKey })
       .then(() => {
         if (!isCurrent()) {
           return;
@@ -602,7 +586,19 @@ export class ChatComposerCapabilityHost {
         if (!current()) {
           return;
         }
-        this.loadSkills(context, state, agentId);
+        const config = context.runtimeConfig.state;
+        if (!config.configSnapshot && !config.configLoading) {
+          void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+        }
+        const skillClient = state.client;
+        const skillEpoch = state.connectionEpoch;
+        this.skillCatalog.load(
+          skillClient,
+          skillEpoch,
+          agentId,
+          () =>
+            state.connected && state.client === skillClient && state.connectionEpoch === skillEpoch,
+        );
         void this.library.load(true);
       },
       onPatchToolOverrides: (next) => void this.patch(context, state, next),

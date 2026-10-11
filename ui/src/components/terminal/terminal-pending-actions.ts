@@ -54,7 +54,7 @@ export type TerminalIntentHost = {
  * Hosts bind while connected; the most recent binding executes.
  */
 export class TerminalIntentQueue {
-  private actions: QueuedTerminalAction[];
+  private actions: QueuedTerminalAction[] = [];
   private refreshPending = false;
   private refreshTimedOut = false;
   private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -65,7 +65,6 @@ export class TerminalIntentQueue {
   private timeoutHost: TerminalIntentHost | null = null;
 
   constructor(private readonly persistent = true) {
-    this.actions = [];
     this.rehydrate();
   }
 
