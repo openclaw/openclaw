@@ -84,7 +84,8 @@ export const CloudWorkerSnapshots = defineSolidBridge(
 
     let activeConfirmation: AbortController | null = null;
 
-    const gateway = useGatewayPage(context, {
+    const gateway = useGatewayPage({
+      getGateway: () => context.gateway,
       invalidateRequests: () => {
         refreshAgain = false;
         stopPolling();

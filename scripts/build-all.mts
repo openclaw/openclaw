@@ -68,8 +68,6 @@ const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
 const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
   (root) => root !== TSDOWN_AI_OUTPUT_ROOT,
 );
-const declarationCacheOutputs = (roots: string[]) =>
-  roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS }));
 const tsxScript = (script: string, ...args: string[]) => ["--import", "tsx", script, ...args];
 const nodeStep = (label: string, args: string[]): BuildAllStep => ({
   label,
@@ -77,6 +75,20 @@ const nodeStep = (label: string, args: string[]): BuildAllStep => ({
 });
 const tsxStep = (label: string, script: string, ...args: string[]) =>
   nodeStep(label, tsxScript(script, ...args));
+const declarationStep = (
+  label: string,
+  config: string,
+  roots: string[],
+  ...args: string[]
+): BuildAllStep => ({
+  ...tsxStep(label, "scripts/tsdown-build.mts", "--config", config, ...args),
+  cache: {
+    inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, config, TSDOWN_PACKAGES_CACHE_INPUT],
+    outputs: roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS })),
+    restore: "always",
+    runOnHit: { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } },
+  },
+});
 const pluginAssetStep = (phase: "build" | "copy") =>
   nodeStep(`plugins:assets:${phase}`, [
     "--import",
@@ -93,39 +105,14 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   ]),
   pluginAssetStep("build"),
   tsxStep("tsdown", "scripts/tsdown-build.mts"),
-  {
-    ...tsxStep("tsdown-ai", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"),
-    cache: {
-      inputs: [
-        ...TSDOWN_DECLARATION_TOOL_INPUTS,
-        "tsdown.ai.config.ts",
-        TSDOWN_PACKAGES_CACHE_INPUT,
-      ],
-      outputs: declarationCacheOutputs([TSDOWN_AI_OUTPUT_ROOT]),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
-  },
-  {
-    ...tsxStep(
-      "tsdown-packages",
-      "scripts/tsdown-build.mts",
-      "--config",
-      "tsdown.config.ts",
-      "--filter",
-      TSDOWN_PACKAGE_CONFIG_GROUP,
-    ),
-    cache: {
-      inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, "tsdown.config.ts", TSDOWN_PACKAGES_CACHE_INPUT],
-      outputs: declarationCacheOutputs(TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
-  },
+  declarationStep("tsdown-ai", "tsdown.ai.config.ts", [TSDOWN_AI_OUTPUT_ROOT]),
+  declarationStep(
+    "tsdown-packages",
+    "tsdown.config.ts",
+    TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS,
+    "--filter",
+    TSDOWN_PACKAGE_CONFIG_GROUP,
+  ),
   {
     ...tsxStep(
       "tsdown-unified",

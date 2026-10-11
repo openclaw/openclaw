@@ -148,9 +148,8 @@ function anotherRecorder() {
   git("commit", "-m", "base");
   const rows = inventory(root);
   expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
-    ["T1", 2],
+    ["T1", 3],
     ["T1", 1],
-    ["T2", 1],
     ["W", 1],
     ["W", 4],
   ]);

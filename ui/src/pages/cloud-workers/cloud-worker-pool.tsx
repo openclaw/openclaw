@@ -79,7 +79,8 @@ export const CloudWorkerPool = defineSolidBridge(
     }
     onCleanup(stopPolling);
 
-    const gateway = useGatewayPage(context, {
+    const gateway = useGatewayPage({
+      getGateway: () => context.gateway,
       invalidateRequests: () => {
         request?.abort();
         request = undefined;

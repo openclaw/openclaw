@@ -38,16 +38,18 @@ type LogsPayload = {
 
 function LogsPageContent(props: { host: HTMLElement }) {
   const context = useApplication();
-  const [status, setStatus] = createSignal(createPanelRefreshStatus());
-  const [file, setFile] = createSignal<string | null>(null);
-  const [entries, setEntries] = createSignal<LogEntry[]>([]);
+  const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
+  const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
+  const [entries, setEntries] = createSignal<LogEntry[]>([], { ownedWrite: true });
   const [filterText, setFilterText] = createSignal("");
   const [levelFilters, setLevelFilters] = createSignal<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
   });
   const [autoFollow, setAutoFollow] = createSignal(true);
-  const [truncated, setTruncated] = createSignal(false);
-  const [requestState, setRequestState] = createSignal<"idle" | "quiet" | "visible">("idle");
+  const [truncated, setTruncated] = createSignal(false, { ownedWrite: true });
+  const [requestState, setRequestState] = createSignal<"idle" | "quiet" | "visible">("idle", {
+    ownedWrite: true,
+  });
   const [forceFollow, setForceFollow] = createSignal(0);
   let cursor: number | null = null;
   let request: AbortController | null = null;
@@ -74,7 +76,8 @@ function LogsPageContent(props: { host: HTMLElement }) {
     }
     return false;
   };
-  const gateway = useGatewayPage(context, {
+  const gateway = useGatewayPage({
+    getGateway: () => context.gateway,
     onIdentityChange: () => {
       cursor = null;
       setStatus(createPanelRefreshStatus());

@@ -41,11 +41,12 @@ export const CloudWorkerRepositories = defineSolidBridge(
       poolDraft: string | null;
     }>({ editor: null, poolDraft: null });
 
-    const [saveRevision, setSaveRevision] = createSignal(0);
+    const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
     const configSave = new CloudWorkerConfigSave(() => setSaveRevision((revision) => revision + 1));
     const configProjection = projectRuntimeConfig(context.runtimeConfig);
 
-    const gateway = useGatewayPage(context, {
+    const gateway = useGatewayPage({
+      getGateway: () => context.gateway,
       invalidateRequests: () => {
         setView((draft) => {
           draft.editor = null;

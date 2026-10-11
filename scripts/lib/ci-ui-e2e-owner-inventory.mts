@@ -1490,7 +1490,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/new-session-page.provisional-navigation.e2e.test.ts",
     ["about", "chat", "new-session"],
     [
-      "ui/src/pages/about/about-page.ts",
+      "ui/src/pages/about/about-page.tsx",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
     ],

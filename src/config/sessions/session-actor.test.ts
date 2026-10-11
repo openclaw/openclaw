@@ -127,6 +127,7 @@ async function withActor(
       afterCommitted?: () => Promise<void>;
       drain?: Promise<void>;
       onExecuted?: () => void;
+      admissionCancelled?: boolean;
     };
     retireGeneration(this: void): void;
     nativePatch(this: void, updatedAt: number): void;
@@ -152,7 +153,15 @@ async function withActor(
     const commands: string[] = [];
     const fault: Parameters<typeof run>[0]["fault"] = { reply: "normal" };
     let epoch = 0;
-    const lifetime = { assertCurrent() {}, assertReadable() {} };
+    const lifetime = {
+      assertAdmission() {
+        if (fault.admissionCancelled) {
+          throw new Error("Admission cancelled");
+        }
+      },
+      assertCurrent() {},
+      assertReadable() {},
+    };
     const replica = createSessionActorReplica({
       target,
       lifetime,
@@ -571,5 +580,45 @@ it("release waits actual native settlement and flushes accepted phase work after
     await release;
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
     expect(released).toHaveBeenCalledOnce();
+  });
+});
+
+it("refuses cancelled admission while an accepted phase settles its committed reducers", async () => {
+  await withActor(async ({ actor, fault, commands }) => {
+    const initial = await actor.read(authority);
+    const continuePhase = Promise.withResolvers<void>();
+    const operation = actor.withPhase("accepted-turn", authority, async (phase) => {
+      phase.patch([{ kind: "activity", updatedAt: 790 }]);
+      await continuePhase.promise;
+      return phase.actor.patch(
+        {
+          commandId: "accepted",
+          phaseId: "accepted-turn",
+          expected: initial.version,
+          reducers: [],
+        },
+        authority,
+      );
+    });
+    fault.admissionCancelled = true;
+    expect(() => actor.snapshot(authority)).toThrow("Admission cancelled");
+    expect(() => actor.read(authority)).toThrow("Admission cancelled");
+    expect(() => actor.withPhase("new-turn", authority, async () => {})).toThrow(
+      "Admission cancelled",
+    );
+    expect(() =>
+      actor.patch(
+        { commandId: "new", phaseId: "new-turn", expected: initial.version, reducers: [] },
+        authority,
+      ),
+    ).toThrow("Admission cancelled");
+    continuePhase.resolve();
+    const result = await operation;
+    expect(result.kind).toBe("committed");
+    if (result.kind !== "committed") {
+      throw new Error("Expected accepted commit");
+    }
+    expect(result.receipt.postimage.entry?.updatedAt).toBe(790);
+    expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
   });
 });

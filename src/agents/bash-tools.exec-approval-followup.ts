@@ -3,6 +3,7 @@
  * Resumes the originating agent session when possible and falls back to safe
  * direct delivery only when session resume is unavailable.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -218,16 +219,8 @@ function formatDirectExecApprovalFollowupText(
   return body || (parsed.kind === "completed" ? "Background command finished." : null);
 }
 
-function readGatewayStatus(value: unknown): string | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? normalizeOptionalString((value as { status?: unknown }).status)
-    : undefined;
-}
-
-function readGatewayRunId(value: unknown): string | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? normalizeOptionalString((value as { runId?: unknown }).runId)
-    : undefined;
+function readGatewayString(value: unknown, key: "status" | "runId"): string | undefined {
+  return isRecord(value) ? normalizeOptionalString(value[key]) : undefined;
 }
 
 function buildFollowupWaitError(params: { status?: string; error?: unknown }): Error {
@@ -241,15 +234,14 @@ function buildFollowupWaitError(params: { status?: string; error?: unknown }): E
 }
 
 function hasTerminalFollowupEvidence(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const record = value as Record<string, unknown>;
   return (
-    typeof record.endedAt === "number" ||
-    typeof record.error === "string" ||
-    typeof record.stopReason === "string" ||
-    record.livenessState === "terminal"
+    typeof value.endedAt === "number" ||
+    typeof value.error === "string" ||
+    typeof value.stopReason === "string" ||
+    value.livenessState === "terminal"
   );
 }
 
@@ -293,7 +285,7 @@ async function waitForAgentFollowupRun(params: {
       continue;
     }
     consecutiveTransportErrors = 0;
-    const status = readGatewayStatus(wait);
+    const status = readGatewayString(wait, "status");
     if (status === "ok") {
       return { status: "completed" };
     }
@@ -414,13 +406,10 @@ async function sendDirectFollowupFallback(params: {
     completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
   });
   if (sendResult.deliveryStatus === "suppressed") {
-    if (sendResult.suppressionReason === "adapter_returned_no_identity") {
-      throw new Error(
-        "exec approval followup delivery could not be confirmed: adapter returned no identity",
-      );
-    }
     throw new Error(
-      `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+      sendResult.suppressionReason === "adapter_returned_no_identity"
+        ? "exec approval followup delivery could not be confirmed: adapter returned no identity"
+        : `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
     );
   }
   return true;
@@ -494,13 +483,13 @@ export async function sendExecApprovalFollowup(
         idempotencyKey,
       });
       const accepted = await callExecApprovalFollowupGateway("agent", 60_000, agentArgs);
-      const status = readGatewayStatus(accepted);
+      const status = readGatewayString(accepted, "status");
       if (status === "ok") {
         return true;
       }
       if (status === "accepted" || status === "in_flight" || status === "pending") {
         const runId =
-          readGatewayRunId(accepted) ?? normalizeOptionalString(agentArgs.idempotencyKey);
+          readGatewayString(accepted, "runId") ?? normalizeOptionalString(agentArgs.idempotencyKey);
         if (!runId) {
           throw buildFollowupWaitError({ status: "missing-run-id" });
         }

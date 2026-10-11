@@ -377,7 +377,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       value,
       options: options.map((option) => ({ ...option, title: option.label })),
       ariaLabel: label,
-      className: "sidebar-session-menu-segmented",
+      class: "sidebar-session-menu-segmented",
       onChange,
     })}
   </div>`;

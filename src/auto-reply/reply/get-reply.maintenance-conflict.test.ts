@@ -112,7 +112,7 @@ it.each([2, Infinity])(
           );
           if (conflicts === Infinity) {
             await expect(dispatch).rejects.toThrow(/retry your message/i);
-            expect(preparations).toBe(10);
+            expect(preparations).toBe(5);
             expect(sleep).toHaveBeenCalledTimes(4);
             expect(runEmbeddedAgent).not.toHaveBeenCalled();
             expect(loadSessionEntry({ sessionKey, storePath })?.displayName).toBeUndefined();
@@ -126,7 +126,7 @@ it.each([2, Infinity])(
               prompt: expect.stringContaining(body),
             });
             expect(preparations).toBe(3);
-            expect(sleep).toHaveBeenCalledOnce();
+            expect(sleep).toHaveBeenCalledTimes(2);
             expect(loadSessionEntry({ sessionKey, storePath })?.displayName).toBe(
               "accepted instruction",
             );

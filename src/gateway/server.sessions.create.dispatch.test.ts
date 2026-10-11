@@ -812,9 +812,9 @@ test("sessions.create sends selected global initial tasks to the requested agent
     task: "hello selected global",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created)).toBe(true);
   expect(created.payload?.key).toBe("global");
-  expect(created.payload?.runStarted).toBe(true);
+  expect(created.payload?.runStarted, JSON.stringify(created)).toBe(true);
   const runId = requireNonEmptyString(created.payload?.runId, "selected global run id");
   const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
   expect(wait.ok).toBe(true);

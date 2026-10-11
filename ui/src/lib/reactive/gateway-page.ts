@@ -1,141 +1,161 @@
-import { createEffect, onCleanup, untrack } from "solid-js";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
+import type { GatewayPageChange } from "../../lit/gateway-page-controller.ts";
 import { isGatewayAvailable } from "../gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
-import { projectGateway } from "./application.ts";
 
-export type GatewayPageChange = {
-  readonly snapshot: ApplicationGatewaySnapshot;
-  readonly initial: boolean;
-  readonly sourceChanged: boolean;
-  readonly clientChanged: boolean;
-  readonly connectionChanged: boolean;
-  readonly identityChanged: boolean;
-  readonly becameConnected: boolean;
-  readonly becameAvailable: boolean;
-};
+export type { GatewayPageChange } from "../../lit/gateway-page-controller.ts";
 
-type GatewayPageOptions = {
+/** Solid lifetime for the existing Gateway connection/request owner. */
+export function useGatewayPage(options: {
+  getGateway: () => ApplicationGateway;
   onIdentityChange?: (change: GatewayPageChange) => void;
   invalidateRequests?: (change: GatewayPageChange) => void;
   ensureInitialData?: (change: GatewayPageChange) => void;
   onSnapshot?: (change: GatewayPageChange) => void;
   onPageActivation?: () => void;
-};
-
-/** The projection renders owner facts; its synchronous subscriber fences pending requests. */
-export function useGatewayPage(
-  context: ApplicationContext | (() => ApplicationContext),
-  options: GatewayPageOptions = {},
-) {
-  const getContext = typeof context === "function" ? context : () => context;
-  let currentGateway = untrack(() => getContext().gateway);
-  const projection = projectGateway(currentGateway);
-  const lifecycle = createGatewayConnectionLifecycle(currentGateway.snapshot);
-  let disposed = false;
-  let sourceChanged = false;
-  let currentSnapshot: ApplicationGatewaySnapshot | null = null;
-  let currentClient: ApplicationGatewaySnapshot["client"] = null;
+}) {
+  const lifecycle = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  let source: ApplicationGateway | null = null;
+  let snapshot: ApplicationGatewaySnapshot | null = null;
+  let client: ApplicationGatewaySnapshot["client"] = null;
   let connected = false;
-  let initial = true;
-  const applySnapshot = () => {
-    const next = projection.read().snapshot;
-    const previousConnected = connected;
-    const previousAvailable = currentSnapshot !== null && isGatewayAvailable(currentSnapshot);
+  let bound = false;
+  let disposed = false;
+  let unsubscribe: (() => void) | undefined;
+
+  function apply(next: ApplicationGatewaySnapshot, initial: boolean, sourceChanged: boolean) {
+    const wasAvailable = snapshot !== null && isGatewayAvailable(snapshot);
+    const clientChanged = client !== next.client;
     const nextConnected = next.phase === "connected";
-    const clientChanged = currentClient !== next.client;
-    const changed = lifecycle.transition(next);
-    if (sourceChanged && !changed) {
+    const connectionChanged = connected !== nextConnected;
+    const lifecycleChanged = lifecycle.transition(next);
+    if (sourceChanged && !lifecycleChanged) {
       lifecycle.invalidate();
     }
-    currentSnapshot = next;
-    currentClient = next.client;
+    snapshot = next;
+    client = next.client;
     connected = nextConnected;
     const change: GatewayPageChange = {
       snapshot: next,
       initial,
       sourceChanged,
       clientChanged,
-      connectionChanged: previousConnected !== nextConnected,
+      connectionChanged,
       identityChanged: !initial && (sourceChanged || clientChanged),
-      becameConnected: nextConnected && !previousConnected,
-      becameAvailable: isGatewayAvailable(next) && !previousAvailable,
+      becameConnected: nextConnected && connectionChanged,
+      becameAvailable: isGatewayAvailable(next) && !wasAvailable,
     };
     if (change.identityChanged) {
       options.onIdentityChange?.(change);
     }
-    if (!initial && (changed || sourceChanged)) {
+    if (!initial && (lifecycleChanged || sourceChanged)) {
       options.invalidateRequests?.(change);
     }
     options.onSnapshot?.(change);
-    if (nextConnected && (initial || change.identityChanged || change.connectionChanged)) {
+    if (nextConnected && (initial || change.identityChanged || connectionChanged)) {
       options.ensureInitialData?.(change);
     }
-    initial = false;
-  };
-  const stop = projection.subscribe(applySnapshot);
-  createEffect(
-    () => getContext().gateway,
-    (nextGateway) => {
-      if (nextGateway !== currentGateway) {
-        currentGateway = nextGateway;
-        sourceChanged = true;
-        untrack(() => projection.replaceSource(nextGateway));
-        sourceChanged = false;
+    setRevision((value) => value + 1);
+  }
+
+  createEffect(options.getGateway, (gateway) => {
+    const initial = !bound;
+    const sourceChanged = bound && source !== gateway;
+    source = gateway;
+    bound = true;
+    untrack(() => apply(gateway.snapshot, initial, sourceChanged));
+    unsubscribe = gateway.subscribe((next) => {
+      if (!disposed && source === gateway && options.getGateway() === gateway) {
+        untrack(() => apply(next, false, false));
       }
-    },
-  );
-  // Defer the first callback until callers have assigned the returned page handle.
-  queueMicrotask(() => {
-    if (!disposed && currentSnapshot === null) {
-      applySnapshot();
-    }
+    });
+    return () => {
+      unsubscribe?.();
+      unsubscribe = undefined;
+    };
   });
   const activate = () => options.onPageActivation?.();
   if (options.onPageActivation) {
     document.addEventListener("visibilitychange", activate);
     globalThis.addEventListener("focus", activate);
+    onCleanup(() => {
+      document.removeEventListener("visibilitychange", activate);
+      globalThis.removeEventListener("focus", activate);
+    });
   }
   onCleanup(() => {
     disposed = true;
-    stop();
-    lifecycle.dispose();
-    document.removeEventListener("visibilitychange", activate);
-    globalThis.removeEventListener("focus", activate);
-    if (currentSnapshot) {
-      options.invalidateRequests?.({
-        snapshot: { ...currentSnapshot, client: null, phase: "stopped" },
-        initial: false,
-        sourceChanged: false,
-        clientChanged: currentClient !== null,
-        connectionChanged: connected,
-        identityChanged: false,
-        becameConnected: false,
-        becameAvailable: false,
-      });
+    unsubscribe?.();
+    unsubscribe = undefined;
+    const previous = snapshot;
+    source = null;
+    snapshot = null;
+    const clientChanged = client !== null;
+    const connectionChanged = connected;
+    client = null;
+    connected = false;
+    if (previous) {
+      const stopped = { ...previous, client: null, phase: "stopped" } as const;
+      if (lifecycle.transition(stopped)) {
+        untrack(() =>
+          options.invalidateRequests?.({
+            snapshot: stopped,
+            initial: false,
+            sourceChanged: false,
+            clientChanged,
+            connectionChanged,
+            identityChanged: false,
+            becameConnected: false,
+            becameAvailable: false,
+          }),
+        );
+      }
     }
-    currentSnapshot = null;
+    lifecycle.dispose();
   });
   return {
     get gateway() {
-      return currentGateway;
+      revision();
+      return source;
     },
     get snapshot() {
-      return projection.read().snapshot;
+      revision();
+      return snapshot;
     },
     get client() {
-      return projection.read().snapshot.client;
+      revision();
+      return client;
     },
     get connected() {
-      return projection.read().snapshot.phase === "connected";
+      revision();
+      return connected;
     },
     get epoch() {
+      revision();
       return lifecycle.epoch;
     },
-    capture: () =>
-      untrack(() => getContext().gateway === currentGateway) ? lifecycle.capture() : null,
-    isCurrent: (scope: Parameters<typeof lifecycle.isCurrent>[0]) =>
-      untrack(() => getContext().gateway === currentGateway) && lifecycle.isCurrent(scope),
+    capture: lifecycle.capture,
+    isCurrent: lifecycle.isCurrent,
     invalidate: lifecycle.invalidate,
+    isRouteDataCurrent(data: {
+      gateway: ApplicationGateway;
+      gatewaySnapshot: ApplicationGatewaySnapshot;
+    }) {
+      const gateway = options.getGateway();
+      if (data.gateway !== gateway) {
+        return false;
+      }
+      const current = gateway.snapshot;
+      return (
+        data.gatewaySnapshot === current ||
+        (data.gatewaySnapshot.phase === "connected" &&
+          current.phase === "connected" &&
+          data.gatewaySnapshot.client === current.client &&
+          data.gatewaySnapshot.hello !== null &&
+          data.gatewaySnapshot.hello === current.hello)
+      );
+    },
   };
 }

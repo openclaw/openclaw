@@ -55,7 +55,8 @@ function WorktreesContent() {
 
 export function WorktreesView(props: { model: WorktreesModel }) {
   const model = untrack(() => props.model);
-  model.gateway = useGatewayPage(() => model.context, {
+  model.gateway = useGatewayPage({
+    getGateway: () => model.context.gateway,
     onIdentityChange: () => model.update({ records: [], error: null }),
     invalidateRequests: () => model.invalidateRequests(),
     ensureInitialData: () => void model.load(),

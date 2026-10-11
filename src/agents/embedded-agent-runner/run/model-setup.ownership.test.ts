@@ -4,10 +4,11 @@ import {
 } from "@openclaw/ai/transports";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { bindReplyOperationDatabaseAdmission } from "../../../auto-reply/reply/reply-turn-database-admission.js";
-import { persistSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
+import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -301,62 +302,38 @@ describe("model chat and native model ownership", () => {
     expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
   });
 
-  it("rejects store topology changes during native ownership resolution", async () => {
-    const fixture = await createFixture({}, ({ assertCurrent }) => {
-      sessionChanges.emit({ all: true, scope: "stores" });
-      assertCurrent();
-      return { model: "native", auth: "native" };
-    });
-    await expect(fixture.resolve()).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
-    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
-  it.each(["row-publication", "caller-revoked"] as const)(
-    "rechecks native ownership after a worker read with %s",
-    async (race) => {
-      const nativeOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
-      const fixture = await createFixture({}, nativeOwner);
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      const revoked = new Error("Native model setup authority revoked");
-      let changed = false;
-      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (
-          !changed &&
-          reply.ok &&
-          typeof reply.value === "object" &&
-          !Array.isArray(reply.value) &&
-          reply.value.kind === "session-exact-entries"
-        ) {
-          changed = true;
-          if (race === "row-publication") {
-            sessionChanges.emit({
-              sessionKey: fixture.target.sessionKey,
-              storePath: fixture.target.storePath,
-            });
-          }
-        }
-        return reply;
-      });
-      try {
-        const setup = fixture.resolve(() => {
-          if (changed && race === "caller-revoked") {
-            throw revoked;
-          }
-        });
-        if (race === "caller-revoked") {
-          await expect(setup).rejects.toBe(revoked);
-          expect(nativeOwner).not.toHaveBeenCalled();
-        } else {
-          expect((await setup).nativeModelOwned).toBe(true);
-          expect(nativeOwner).toHaveBeenCalledOnce();
-        }
-        expect(changed).toBe(true);
-      } finally {
-        spy.mockRestore();
+  it("rechecks caller authority after a native ownership worker read", async () => {
+    const nativeOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
+    const fixture = await createFixture({}, nativeOwner);
+    const run = projectionLane.pool.run.bind(projectionLane.pool);
+    const revoked = new Error("Native model setup authority revoked");
+    let changed = false;
+    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (
+        !changed &&
+        reply.ok &&
+        typeof reply.value === "object" &&
+        !Array.isArray(reply.value) &&
+        reply.value.kind === "session-exact-entries"
+      ) {
+        changed = true;
       }
-    },
-  );
+      return reply;
+    });
+    try {
+      const setup = fixture.resolve(() => {
+        if (changed) {
+          throw revoked;
+        }
+      });
+      await expect(setup).rejects.toBe(revoked);
+      expect(nativeOwner).not.toHaveBeenCalled();
+      expect(changed).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it.each(["current", "changed-again", "revoked"] as const)(
     "reacquires initial model preparation after a shared OAuth refresh while authority is %s",
@@ -502,17 +479,42 @@ describe("model chat and native model ownership", () => {
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();
-    const sessionStore = { [fixture.target.sessionKey]: fixture.entry };
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
-        await persistSessionUsageUpdate({
-          ...fixture.target,
-          sessionStore,
+        const prepared = prepareSessionUsageUpdate({
           cfg: fixture.runParams.config,
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,
         });
+        const operation = createReplyOperation({
+          sessionId: fixture.entry.sessionId,
+          sessionKey: fixture.target.sessionKey,
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        try {
+          await withAgentTurnCompletion(
+            {
+              ...fixture.target,
+              entry: loadSessionEntryReadOnly(fixture.target),
+              operation,
+              publish() {},
+            },
+            async (completion) => {
+              if (!completion || !prepared) {
+                throw new Error("Missing usage completion owner");
+              }
+              completion.patch((entry) => ({
+                kind: "usage",
+                update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+                updatedAt: Date.now(),
+              }));
+            },
+          );
+        } finally {
+          operation.complete();
+        }
       }
       const entry = loadSessionEntryReadOnly(fixture.target);
       expect(entry).toMatchObject({
@@ -523,9 +525,6 @@ describe("model chat and native model ownership", () => {
         modelSelectionLocked: true,
       });
       expect(entry?.agentHarnessId).toBe(observation);
-      const committedEntry = sessionStore[fixture.target.sessionKey];
-      expect(committedEntry).toBeDefined();
-      expect(committedEntry?.agentHarnessId).toBe(observation);
       fixture.runParams.agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: "openai",
         entry,

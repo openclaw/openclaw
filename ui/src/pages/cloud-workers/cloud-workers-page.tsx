@@ -59,7 +59,7 @@ function CloudWorkersContent() {
     editor: null,
     draft: createCloudWorkerDraft(),
   });
-  const [saveRevision, setSaveRevision] = createSignal(0);
+  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
   const configSave = new CloudWorkerConfigSave(() => setSaveRevision((value) => value + 1));
   const saveState = () => {
     saveRevision();
@@ -71,15 +71,16 @@ function CloudWorkersContent() {
     value?: Map<string, ProfileSummary>;
     error?: string;
   }>({ pending: false });
-  const gateway = useGatewayPage(context, {
+  const gateway = useGatewayPage({
+    getGateway: () => context.gateway,
     invalidateRequests: () => configSave.update({ busy: false }),
   });
   void context.runtimeConfig.ensureLoaded();
   const catalogKey = createMemo(
     () => {
       return [
-        gateway.snapshot.client,
-        gateway.snapshot.phase,
+        gateway.snapshot?.client,
+        gateway.snapshot?.phase,
         gateway.epoch,
         configProjection.read().state.configSnapshot?.appliedConfigHash,
       ] as const;

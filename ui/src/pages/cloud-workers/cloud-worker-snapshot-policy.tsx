@@ -21,11 +21,12 @@ export const CloudWorkerSnapshotPolicy = defineSolidBridge(
   (_props, host) => {
     host.style.display = "contents";
     const context = useApplication();
-    const [draft, setDraft] = createSignal<PolicyDraft | null>(null);
-    const [saveRevision, setSaveRevision] = createSignal(0);
+    const [draft, setDraft] = createSignal<PolicyDraft | null>(null, { ownedWrite: true });
+    const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
     const configSave = new CloudWorkerConfigSave(() => setSaveRevision((revision) => revision + 1));
     const runtime = projectRuntimeConfig(context.runtimeConfig);
-    const gateway = useGatewayPage(context, {
+    const gateway = useGatewayPage({
+      getGateway: () => context.gateway,
       invalidateRequests: () => {
         setDraft(null);
         configSave.update({ busy: false, error: null, notice: null });

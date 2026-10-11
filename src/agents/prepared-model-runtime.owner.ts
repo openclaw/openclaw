@@ -501,6 +501,8 @@ export async function publishPreparedModelRuntimeOwnerBatch(
   });
   const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
+  const needsBuild = (candidate: (typeof candidates)[number]) =>
+    candidate.isEligible() && !results.has(candidate.owner);
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {
       return;
@@ -540,9 +542,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
   };
   try {
     while (true) {
-      const attempt = candidates.filter(
-        (candidate) => candidate.isEligible() && !results.has(candidate.owner),
-      );
+      const attempt = candidates.filter(needsBuild);
       if (attempt.length === 0) {
         break;
       }
@@ -550,9 +550,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
         // Auth events can touch live and static owners together. Build mode groups in sequence
         // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
         for (const [catalogMode, group] of groups) {
-          const currentGroup = group.filter(
-            (candidate) => candidate.isEligible() && !results.has(candidate.owner),
-          );
+          const currentGroup = group.filter(needsBuild);
           if (currentGroup.length === 0) {
             continue;
           }
