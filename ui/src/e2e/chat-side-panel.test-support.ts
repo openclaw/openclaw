@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 import {
   closeChatLayoutMenu,
   openChatLayoutMenu,
@@ -42,10 +43,24 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
   if (await content?.isVisible()) {
     return;
   }
-  if (panel?.slot === "subagents") {
-    const menu = await openChatLayoutMenu(page);
-    await menu.getByRole("menuitemcheckbox", { name: panel.action, exact: true }).setChecked(true);
-    await closeChatLayoutMenu(page);
+  if (panel?.slot === "subagents" && content) {
+    await expect
+      .poll(
+        async () => {
+          if (await content.isVisible()) {
+            await closeChatLayoutMenu(page);
+            return true;
+          }
+          const menu = await openChatLayoutMenu(page);
+          await menu
+            .getByRole("menuitemcheckbox", { name: panel.action, exact: true })
+            .setChecked(true);
+          await closeChatLayoutMenu(page);
+          return content.isVisible();
+        },
+        { timeout: 10_000, message: "Subagents panel did not open" },
+      )
+      .toBe(true);
     return;
   }
   await selectChatLayoutAction(page, panel?.action ?? label);
