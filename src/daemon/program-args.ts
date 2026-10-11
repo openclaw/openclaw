@@ -36,7 +36,8 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
   const resolvedPath = await fs.realpath(normalized).catch(() => normalized);
   if (resolvedPath.includes(`${path.sep}.pnpm${path.sep}`)) {
     const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-    const { resolvePnpmGlobalInstallOwner } = await import("../infra/update-global.js");
+    const { resolvePnpmGlobalInstallOwner, resolvePnpmIsolatedDurablePackageRoot } =
+      await import("../infra/update-global.js");
     const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
     const owner = packageRoot ? await resolvePnpmGlobalInstallOwner(packageRoot) : null;
     if (
@@ -46,8 +47,13 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
         (await fs.realpath(packageRoot).catch(() => undefined))
     ) {
       // Persist the verified package link, never the replaceable store generation.
+      // For pnpm 11+ isolated global installs, prefer the durable hash-link
+      // package root: the hash symlink is retargeted to each replacement project
+      // on update, while the generation directory and versioned store path are
+      // deleted. Fall back to the verified package link for legacy layouts.
+      const durablePackageRoot = await resolvePnpmIsolatedDurablePackageRoot(packageRoot);
       const stableEntrypoint = await findFirstAccessibleGatewayEntrypoint(
-        buildGatewayInstallEntrypointCandidates(owner.packageRoot),
+        buildGatewayInstallEntrypointCandidates(durablePackageRoot ?? owner.packageRoot),
         canAccessEntrypoint,
       );
       if (stableEntrypoint) {

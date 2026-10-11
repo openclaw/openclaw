@@ -709,13 +709,45 @@ function resolvePnpmIsolatedLayoutVersion(globalRoot?: string | null): number | 
   return match ? Number.parseInt(match[1] ?? "", 10) : null;
 }
 
-function inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
-  const nodeModulesRoot = inferGlobalRootFromPackageRoot(pkgRoot);
-  if (!nodeModulesRoot) {
+/**
+ * For a package root reached through a versioned pnpm store path
+ * (…/node_modules/.pnpm/openclaw@<version>/node_modules/openclaw), derive the
+ * isolated v-prefixed global root. The .pnpm store sits directly under the
+ * generation project's node_modules, so walking up from it lands on the
+ * generation project and then the global/v<N> root that the hash symlink lives in.
+ */
+function inferPnpmIsolatedGlobalRootFromNestedStorePath(pkgRoot?: string | null): string | null {
+  const trimmed = pkgRoot?.trim();
+  if (!trimmed) {
     return null;
   }
-  const globalRoot = path.dirname(path.dirname(nodeModulesRoot));
+  const parts = path.resolve(trimmed).split(path.sep);
+  const pnpmIndex = parts.lastIndexOf(".pnpm");
+  if (pnpmIndex <= 0) {
+    return null;
+  }
+  const generationNodeModules = parts.slice(0, pnpmIndex).join(path.sep) || path.sep;
+  if (path.basename(generationNodeModules) !== "node_modules") {
+    return null;
+  }
+  const globalRoot = path.dirname(path.dirname(generationNodeModules));
   return resolvePnpmIsolatedLayoutVersion(globalRoot) === null ? null : globalRoot;
+}
+
+/**
+ * Resolves the isolated v-prefixed global root for a package root, whether it is
+ * reached through the direct package link (…/v<N>/<project>/node_modules/openclaw)
+ * or through the versioned pnpm store path (…/v<N>/<project>/node_modules/.pnpm/…).
+ */
+function inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const nodeModulesRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (nodeModulesRoot) {
+    const globalRoot = path.dirname(path.dirname(nodeModulesRoot));
+    if (resolvePnpmIsolatedLayoutVersion(globalRoot) !== null) {
+      return globalRoot;
+    }
+  }
+  return inferPnpmIsolatedGlobalRootFromNestedStorePath(pkgRoot);
 }
 
 async function hasPnpmIsolatedProjectMetadata(
@@ -741,7 +773,13 @@ async function hasPnpmIsolatedProjectMetadata(
   );
 }
 
-/** Resolves the pnpm project owner without following its shared-store package symlink. */
+/**
+ * Resolves the pnpm project owner without following its shared-store package
+ * symlink. Accepts both the direct package link (…/v<N>/<project>/node_modules/
+ * openclaw) and the versioned store path (…/v<N>/<project>/node_modules/.pnpm/
+ * openclaw@<version>/node_modules/openclaw), so owners discovered from a nested
+ * generation still match the durable hash-link package roots.
+ */
 export async function resolvePnpmIsolatedInstallOwner(
   pkgRoot?: string | null,
 ): Promise<string | null> {
@@ -749,7 +787,22 @@ export async function resolvePnpmIsolatedInstallOwner(
   if (!nodeModulesRoot) {
     return null;
   }
-  return path.resolve(await tryRealpath(path.dirname(nodeModulesRoot)));
+  const trimmed = pkgRoot?.trim();
+  const pnpmIndex = trimmed ? path.resolve(trimmed).split(path.sep).lastIndexOf(".pnpm") : -1;
+  if (pnpmIndex <= 0) {
+    // Direct package link (…/v<N>/<project>/node_modules/openclaw): the owner is
+    // the isolated project root above its node_modules.
+    return path.resolve(await tryRealpath(path.dirname(nodeModulesRoot)));
+  }
+  // Versioned store path (…/v<N>/<project>/node_modules/.pnpm/openclaw@<v>/…):
+  // the .pnpm store is a sibling of the generation project's node_modules, so
+  // walk up to the isolated project root (the hash-link target) for comparison.
+  const generationNodeModules = path
+    .resolve(trimmed!)
+    .split(path.sep)
+    .slice(0, pnpmIndex)
+    .join(path.sep);
+  return path.resolve(await tryRealpath(path.dirname(generationNodeModules)));
 }
 
 async function listPnpmIsolatedGlobalPackages(params: {
@@ -894,6 +947,39 @@ export async function resolvePnpmGlobalInstallOwner(
     return null;
   }
   return { ownerRoot, packageRoot };
+}
+
+/**
+ * Resolves the durable, replacement-surviving package root for a pnpm isolated
+ * global install (global/v<N>/<hash>/node_modules/openclaw) given any package
+ * root inside that install (the direct link or the versioned store path). pnpm
+ * marks active isolated projects with hash symlinks that it retargets to each
+ * replacement generation project, so an entrypoint planned from the returned
+ * path keeps working across updates, whereas the generation directory and the
+ * versioned store path are deleted on replacement.
+ */
+export async function resolvePnpmIsolatedDurablePackageRoot(
+  pkgRoot: string,
+): Promise<string | null> {
+  const globalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
+  if (!globalRoot) {
+    return null;
+  }
+  const requestedOwner = await resolvePnpmIsolatedInstallOwner(pkgRoot);
+  if (!requestedOwner) {
+    return null;
+  }
+  const entries = await fs.readdir(globalRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isSymbolicLink()) {
+      continue;
+    }
+    const candidate = path.join(globalRoot, entry.name, "node_modules", PRIMARY_PACKAGE_NAME);
+    if ((await resolvePnpmIsolatedInstallOwner(candidate)) === requestedOwner) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function normalizeGlobalInstallCommand(
