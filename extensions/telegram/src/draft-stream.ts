@@ -764,4 +764,3 @@ export function createTelegramDraftStream(params: {
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

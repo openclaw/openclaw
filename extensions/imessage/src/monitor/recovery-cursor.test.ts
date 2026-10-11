@@ -26,9 +26,10 @@ function interceptCursorStore(options: { writeError?: Error } = {}) {
   vi.spyOn(state, "openKeyedStoreV2").mockImplementation(
     <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
       const store = openKeyedStore<T>(storeOptions);
-      if (options.writeError) {
+      const writeError = options.writeError;
+      if (writeError) {
         store.register = async () => {
-          throw options.writeError;
+          throw writeError;
         };
       }
       return store;

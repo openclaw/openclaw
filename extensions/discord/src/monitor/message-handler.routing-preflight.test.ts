@@ -179,11 +179,14 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
         : null;
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
+    let holdRead = false;
     const lookup = (ref: Conversation) =>
       ref.conversationId === conversation.conversationId ? current : null;
     const read = vi.fn(async (ref: Conversation) => {
-      entered.resolve();
-      await release.promise;
+      if (holdRead) {
+        entered.resolve();
+        await release.promise;
+      }
       return lookup(ref);
     });
     const { effectiveRoute: route } = await prepare(
@@ -198,6 +201,7 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
       },
       direct,
     );
+    holdRead = true;
     expect(route.agentId).toBe(configured || stale ? "work" : "main");
     if (configured) {
       expect(route.sessionKey).toContain("agent:work:acp:");

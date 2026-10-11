@@ -806,7 +806,6 @@ describe("draft stream initial message debounce", () => {
     expect(api.deleteMessage).toHaveBeenCalledOnce();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("Telegram draft link previews", () => {
   it.each([false, true])(
