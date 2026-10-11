@@ -708,6 +708,68 @@ describe("installPluginFromGitSpec", () => {
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      failure: "silent clone timeout",
+      spec: "git:https://github.com/acme/demo.git",
+      results: [{ code: 124, stdout: "", stderr: "", signal: "SIGKILL", termination: "timeout" }],
+      error: "failed to clone github.com/acme/demo: termination timeout (no output from git)",
+    },
+    {
+      failure: "clone killed after its banner",
+      spec: "git:https://github.com/acme/demo.git",
+      results: [
+        {
+          code: null,
+          stdout: "",
+          stderr: "Cloning into 'repo'...\n",
+          signal: "SIGTERM",
+          termination: "signal",
+        },
+      ],
+      error: "failed to clone github.com/acme/demo: signal SIGTERM: Cloning into 'repo'...",
+    },
+    {
+      failure: "silent checkout timeout",
+      spec: "git:https://github.com/acme/demo.git@v1",
+      results: [
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" },
+        { code: 124, stdout: "", stderr: "", signal: "SIGKILL", termination: "no-output-timeout" },
+      ],
+      error:
+        "failed to checkout v1 github.com/acme/demo: termination no-output-timeout (no output from git)",
+    },
+    {
+      failure: "silent ref lookup timeout",
+      spec: "git:https://github.com/acme/demo.git@v1",
+      results: [
+        { code: 0, stdout: "", stderr: "" },
+        { code: 124, stdout: "", stderr: "", signal: "SIGKILL", termination: "timeout" },
+        { code: 1, stdout: "", stderr: "" },
+      ],
+      error:
+        "failed to resolve ref v1 in github.com/acme/demo: termination timeout (no output from git)",
+    },
+    {
+      failure: "silent commit lookup exit",
+      spec: "git:https://github.com/acme/demo.git",
+      results: [
+        { code: 0, stdout: "", stderr: "" },
+        { code: 128, stdout: "", stderr: "", signal: null, termination: "exit" },
+      ],
+      error:
+        "failed to resolve commit for github.com/acme/demo: exit code 128 (no output from git)",
+    },
+  ])("names why Git stopped on a $failure", async ({ spec, results, error }) => {
+    for (const commandResult of results) {
+      runCommandWithTimeoutMock.mockResolvedValueOnce(commandResult);
+    }
+
+    await expect(installPluginFromGitSpec({ spec })).resolves.toMatchObject({ ok: false, error });
+    expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
+  });
+
   it("separates requested refs from git options", async () => {
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -736,7 +798,18 @@ describe("installPluginFromGitSpec", () => {
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the existing managed repo when replacement install fails", async () => {
+  it.each([
+    {
+      failure: "reported error",
+      npmResult: { code: 1, stdout: "", stderr: "npm failed" },
+      error: "npm install failed: npm failed",
+    },
+    {
+      failure: "silent timeout",
+      npmResult: { code: 124, stdout: "", stderr: "", signal: "SIGKILL", termination: "timeout" },
+      error: "npm install failed: termination timeout (no output from npm)",
+    },
+  ])("preserves the managed repo after a $failure from npm", async ({ npmResult, error }) => {
     const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-preserve-"));
     const normalizedSpec = "git:https://github.com/acme/demo.git";
     const existingRepoDir = expectedGitRepoDir({ gitDir, normalizedSpec });
@@ -747,7 +820,7 @@ describe("installPluginFromGitSpec", () => {
       runCommandWithTimeoutMock
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
-        .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "npm failed" });
+        .mockResolvedValueOnce(npmResult);
 
       const result = await installPluginFromGitSpec({
         spec: "git:https://github.com/acme/demo.git",
@@ -757,7 +830,7 @@ describe("installPluginFromGitSpec", () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toContain("npm install failed");
+        expect(result.error).toBe(error);
       }
       await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("keep");
       expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
