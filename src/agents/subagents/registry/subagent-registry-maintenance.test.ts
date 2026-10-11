@@ -9,7 +9,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -199,6 +202,8 @@ describe("subagent maintenance protection", () => {
       cleanupCompletedAt: 3,
     });
     saveSubagentRegistryToSqlite(new Map([first, second].map((entry) => [entry.runId, entry])));
+    const runs = new Map<string, SubagentRunRecord>();
+    await restoreSubagentRunsFromDisk({ runs });
     const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
     try {
       expect(prepared.capture().providerKeys).toEqual([]);
@@ -213,7 +218,7 @@ describe("subagent maintenance protection", () => {
             ]),
           ),
         }),
-        { runs: new Map() },
+        { runs },
       );
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -228,7 +233,7 @@ describe("subagent maintenance protection", () => {
       await mutateSubagentRuns(
         [first.runId],
         () => ({ value: undefined, postimages: new Map([[first.runId, null]]) }),
-        { runs: new Map() },
+        { runs },
       );
       expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
     } finally {
