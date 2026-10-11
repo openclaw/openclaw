@@ -12,6 +12,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  isReplyPayloadTerminalContent,
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -441,6 +442,7 @@ async function deliverReplyWithNormalization(
     const skipTextOnlyBlock =
       turn.streamMode === "partial" &&
       info.kind === "block" &&
+      payload.textMode !== "delta" &&
       segment.lane === "answer" &&
       !hasMediaOrControls &&
       turn.answerLane.hasStreamedMessage &&
@@ -456,7 +458,10 @@ async function deliverReplyWithNormalization(
     if (skipTextOnlyBlock || suppressProgressAnswerBlock) {
       turn.activeAnswerBlockDelivery = {
         payload: effectivePayload,
-        text: segment.text,
+        text:
+          payload.textMode === "delta"
+            ? (turn.activeAnswerBlockDelivery?.text ?? "") + segment.text
+            : segment.text,
         buttons: telegramButtons,
       };
       turn.activeAnswerDraftIsToolProgressOnly = false;
@@ -481,6 +486,25 @@ async function deliverReplyWithNormalization(
       turn.progressCompositor.resetActivity();
     }
     const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
+    // Only declared chunks extend a preview. Finals, media and replacement snapshots
+    // keep their own text even when they do not share the previous answer prefix.
+    const canStreamBlock =
+      info.kind === "block" &&
+      segment.lane === "answer" &&
+      Boolean(turn.answerLane.stream) &&
+      !hasMediaOrControls &&
+      !effectivePayload.isError &&
+      !effectivePayload.presentation &&
+      !effectivePayload.interactive &&
+      !isAskUserPayload &&
+      isReplyPayloadTerminalContent(effectivePayload);
+    const segmentText =
+      canStreamBlock && effectivePayload.textMode === "delta"
+        ? turn.lastAnswerPartialText + segment.text
+        : segment.text;
+    if (canStreamBlock) {
+      turn.lastAnswerPartialText = segmentText;
+    }
     const result =
       segment.lane === "answer" && info.kind === "final"
         ? await deliverFinalAnswerText(
@@ -494,7 +518,7 @@ async function deliverReplyWithNormalization(
           )
         : await turn.deliverLaneText({
             laneName: segment.lane,
-            text: segment.text,
+            text: segmentText,
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
@@ -520,7 +544,7 @@ async function deliverReplyWithNormalization(
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
         payload: lanePayload,
-        text: segment.text,
+        text: segmentText,
         buttons: telegramButtons,
       };
     }

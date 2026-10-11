@@ -45,6 +45,7 @@ import type {
   InboundMessageAuditTerminalRecorder,
 } from "./dispatch-from-config.audit.js";
 import {
+  resolveBoundAcpDispatchRuntimeOwner,
   resolveBoundAcpDispatchSessionKey,
   resolveSessionStoreLookup,
 } from "./dispatch-from-config.context.js";
@@ -433,7 +434,7 @@ export async function gatherDispatchRequest(
   // A bound ACP key names an external harness, not a configured model-runtime owner.
   // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
   const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
-    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    ? resolveBoundAcpDispatchRuntimeOwner({ sessionKey, cfg, ctx })
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   let preparedTtsPreferences: PreparedTtsPreferences;

@@ -23,6 +23,32 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     waitForBotApiCall,
   } = http;
 
+  it.each(["partial", "block"] as const)(
+    "appends explicit chunks and replaces each final in %s mode",
+    async (mode) => {
+      const first = "This answer starts here and has enough text to preview. ";
+      const chunk = "The next sentence belongs to the same answer. ";
+      const finalText = "The authoritative final replaces the streamed draft.";
+      await dispatchProgressTurn(async () => undefined, {
+        mode,
+        toolProgress: false,
+        producer: async ({ dispatcher }) => {
+          dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+          await dispatcher.waitForIdle();
+          dispatcher.sendBlockReply({ text: chunk, textMode: "delta" });
+          await dispatcher.waitForIdle();
+          dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+          await dispatcher.waitForIdle();
+          expect([...visibleMessages.values()]).toEqual([(first + chunk + first).trimEnd()]);
+          dispatcher.sendFinalReply({ text: finalText });
+          dispatcher.sendFinalReply({ text: "Separate status." });
+          return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+        },
+      });
+      expect([...visibleMessages.values()]).toEqual([finalText, "Separate status."]);
+    },
+  );
+
   it("keeps the same preview after one HTTP 502 edit failure", async () => {
     const initial = "The initial answer is visible while the remaining work completes.";
     const updated = `${initial} More details are ready.`;
