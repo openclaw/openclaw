@@ -44,11 +44,6 @@ function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
 }
 
-function reportMissingPlugin(id: string) {
-  defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
-  return defaultRuntime.exit(1);
-}
-
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
   return (
     (entry.level === "info" || entry.level === "warn") &&
@@ -154,51 +149,45 @@ async function runPluginPolicyCommand(
   if (await applyPluginEnabledThroughGateway(id, enabled, { acceptCapabilities })) {
     return;
   }
-  return await runWithLocalPluginState(enabled ? "enable" : "disable", (assertCurrent) =>
-    runPluginPolicyLocal(id, enabled, acceptCapabilities, assertCurrent),
-  );
-}
-
-async function runPluginPolicyLocal(
-  id: string,
-  enabled: boolean,
-  acceptCapabilities: boolean | undefined,
-  assertCurrent: () => void,
-): Promise<void> {
-  const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
-  const { ManagedPluginLifecycleError } = await import("../plugins/management-lifecycle-error.js");
-  await withPluginLifecycleLease({}, async () => {
-    try {
-      const result = await mutateManagedPluginEnabled({
-        pluginId: id,
-        enabled,
-        caller: "cli",
-        beforePersistentApply: assertCurrent,
-        requestCapabilityConsent: acceptCapabilities,
-        ...resolvePluginCapabilityConsentCliOptions({ acceptCapabilities, action: "enable" }),
-      });
-      if (result.status === "missing") {
-        return reportMissingPlugin(result.pluginId);
-      }
-      if (result.status === "blocked") {
-        defaultRuntime.error(
-          `Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
+  return await runWithLocalPluginState(enabled ? "enable" : "disable", async (assertCurrent) => {
+    const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
+    const { ManagedPluginLifecycleError } =
+      await import("../plugins/management-lifecycle-error.js");
+    await withPluginLifecycleLease({}, async () => {
+      try {
+        const result = await mutateManagedPluginEnabled({
+          pluginId: id,
+          enabled,
+          caller: "cli",
+          beforePersistentApply: assertCurrent,
+          requestCapabilityConsent: acceptCapabilities,
+          ...resolvePluginCapabilityConsentCliOptions({ acceptCapabilities, action: "enable" }),
+        });
+        if (result.status === "missing") {
+          const message = formatMissingPluginMessage({ id: result.pluginId, includeSearch: true });
+          defaultRuntime.error(message);
+          return defaultRuntime.exit(1);
+        }
+        if (result.status === "blocked") {
+          defaultRuntime.error(
+            `Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
+          );
+          return defaultRuntime.exit(1);
+        }
+        for (const warning of result.warnings) {
+          defaultRuntime.log(theme.warn(warning));
+        }
+        defaultRuntime.log(
+          `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Saved for the next Gateway start.`,
         );
+      } catch (error) {
+        if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+          throw error;
+        }
+        defaultRuntime.error(error.message);
         return defaultRuntime.exit(1);
       }
-      for (const warning of result.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
-      defaultRuntime.log(
-        `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Saved for the next Gateway start.`,
-      );
-    } catch (error) {
-      if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
-        throw error;
-      }
-      defaultRuntime.error(error.message);
-      return defaultRuntime.exit(1);
-    }
+    });
   });
 }
 
