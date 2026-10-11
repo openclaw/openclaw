@@ -234,9 +234,9 @@ export async function settlePreparedCliRun(params: {
   } catch (error) {
     outcome = { error };
   }
-  // Release the per-turn send slot at the logical-run terminal so a reused runId
-  // (isolated cron reuses its durable session id) starts the next turn with a fresh
-  // budget. Only the final candidate of a directly-driven chain is terminal here; every
+  // Release the per-turn send slot at the logical-run terminal so a reused runId starts
+  // the next turn with a fresh budget and a finished run leaves no slot behind. Only the
+  // final candidate of a directly-driven chain is terminal here; every
   // other candidate hands its prepared canonical scope to the outer logical-run owner
   // (cron's isolated-agent/run.ts finally, or the embedded run-entry.ts finally) so that
   // owner deletes the exact loopback-written slot at the true terminal — never mid-chain,

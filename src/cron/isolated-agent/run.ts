@@ -125,8 +125,8 @@ async function runCronIsolatedAgentTurnInTrace(
     },
   };
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
-  // Capture the stable run id before execution can rotate its persisted session.
-  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
+  // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.
+  const runId = randomUUID();
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
   // the lease open until cleanup finishes, then fence detached borrowed work.
@@ -135,8 +135,7 @@ async function runCronIsolatedAgentTurnInTrace(
       preparedRuntimeLease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
-          // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.
-          const runId = randomUUID();
+          const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
           const ownsSessionRuntime = params.job.sessionTarget === "isolated";
           let runContextOwnerToken: string | undefined;
           let runLifecycleGeneration = admittedLifecycleGeneration;
@@ -462,9 +461,8 @@ async function runCronIsolatedAgentTurnInTrace(
     leaseActive = false;
     // Release the per-turn send budget at the cron logical-run terminal. The CLI loopback
     // message tool commits under the canonical grant slot, which a non-final candidate's own
-    // settlement defers to an outer owner; reconstruct that exact canonical key here. Cron
-    // reuses its durable session id as runId, so leaked counts would suppress the next
-    // scheduled turn.
+    // settlement defers to an outer owner; reconstruct that exact canonical key for this
+    // invocation's runId so a deferred slot cannot outlive the run.
     try {
       clearTurnSendLedgerForRun({
         agentId: prepared.context.agentId,
@@ -473,7 +471,7 @@ async function runCronIsolatedAgentTurnInTrace(
           agentId: prepared.context.agentId,
           sessionKey: prepared.context.runSessionKey?.trim() || "main",
         }),
-        runId: initialSessionId,
+        runId,
       });
     } catch (ledgerError) {
       logWarn(

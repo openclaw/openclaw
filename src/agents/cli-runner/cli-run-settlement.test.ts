@@ -655,8 +655,8 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
   });
 
   it("repeated runs reusing one runId each start with an empty budget", async () => {
-    // Isolated cron reuses its durable session id as the runId (run-executor.ts), so
-    // turn 2 must not inherit turn 1's committed counts once turn 1's terminal clears.
+    // A caller that reuses a runId across turns must not let turn 2 inherit turn 1's
+    // committed counts once turn 1's terminal clears.
     const runId = "cron-durable-session";
     const budgetAtStartOfTurn: number[] = [];
 
