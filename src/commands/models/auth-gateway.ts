@@ -34,7 +34,9 @@ export async function readGatewayApiKeyParams(
   signal.throwIfAborted();
   const apiKey = normalizeSecretInput(input);
   if (!apiKey) {
-    throw new Error("Required");
+    throw new Error(
+      "No API key was supplied. Rerun this command and paste a non-empty API key, or pipe one to stdin.",
+    );
   }
   registerSecretValueForRedaction(apiKey);
   if (!opts.provider) {
