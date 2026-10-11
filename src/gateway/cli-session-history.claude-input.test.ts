@@ -220,16 +220,22 @@ describe("Claude imported internal inputs", () => {
       "unknown-time",
     ]) {
       const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-      const text = `${context}${events}real question`;
-      expect(importUnmatched(text)?.content).toBe(`${context}real question`);
-      // The canonical row holds the turn without the queued events; the pair is one turn.
-      const canonical = { role: "user", content: `${context}real question`, timestamp: 1 };
-      expect(
-        mergeImportedChatHistoryMessages({
-          localMessages: [canonical],
-          importedMessages: [{ ...parseImportedUser(text), timestamp: 2 }],
-        }),
-      ).toMatchObject([canonical]);
+      for (const question of [
+        "real question",
+        "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
+        "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
+      ]) {
+        const text = `${context}${events}${question}`;
+        expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
+        // The canonical row holds the turn without the queued events; the pair is one turn.
+        const canonical = { role: "user", content: `${context}${question}`, timestamp: 1 };
+        expect(
+          mergeImportedChatHistoryMessages({
+            localMessages: [canonical],
+            importedMessages: [{ ...parseImportedUser(text), timestamp: 2 }],
+          }),
+        ).toMatchObject([canonical]);
+      }
     }
     const untouched = "real question\n\nSystem: quoted log line\n\nmore";
     expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
