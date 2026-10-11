@@ -22,6 +22,7 @@ import {
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
 import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import type { McpAppContextStripElement as ContextStrip } from "./solid/mcp-app-context-strip.tsx";
 import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -766,8 +767,7 @@ describe("mcp-app-view localization", () => {
       }
       return originalRequest(method, params, options);
     });
-    const appClient = createTestGatewayClient(request);
-    client.request = appClient.request.bind(appClient);
+    client.request = createTestGatewayClient(request).request;
     // SAFETY: the registered Apps page exposes these properties to its rendering callers.
     const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
       readonly updateComplete: Promise<boolean>;
@@ -793,7 +793,7 @@ describe("mcp-app-view localization", () => {
       await pane.updateComplete;
       expect(pane.querySelector('[role="alert"]')?.textContent).toBeUndefined();
       await initialized.promise;
-      const strip = pane.querySelector("openclaw-mcp-app-context-strip")!;
+      const strip = pane.querySelector<ContextStrip>("openclaw-mcp-app-context-strip")!;
       expect(pane.classList.contains("mcp-app-conversation")).toBe(true);
       expect(strip).not.toBeNull();
       const bridge = bridgeMocks.instances[0] as Awaited<ReturnType<typeof mountBridge>>["bridge"];
