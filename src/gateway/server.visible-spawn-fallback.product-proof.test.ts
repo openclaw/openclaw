@@ -30,6 +30,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
+import * as modelFallback from "../agents/model-fallback-runner.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -37,7 +38,6 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onAgentEvent } from "../infra/agent-events.js";
 import * as backoff from "../infra/backoff.js";
 import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -311,12 +311,22 @@ describe("sessions_spawn model fallback through the Gateway", () => {
       const home = await setupGatewayTempHome({ prefix: "openclaw-spawn-fallback-" });
       let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      const lifecycleErrors: unknown[] = [];
-      const unsubscribe = onAgentEvent((event) => {
-        if (event.stream === "lifecycle" && event.data.phase === "error") {
-          lifecycleErrors.push({ runId: event.runId, ...event.data });
-        }
-      });
+      const fallbackErrors: string[] = [];
+      const runWithModelFallback = modelFallback.runWithModelFallback;
+      using fallbackRun = vi
+        .spyOn(modelFallback, "runWithModelFallback")
+        .mockImplementation(async function <T>(
+          params: Parameters<typeof runWithModelFallback<T>>[0],
+        ) {
+          try {
+            return await runWithModelFallback(params);
+          } catch (error) {
+            fallbackErrors.push(
+              error instanceof Error ? (error.stack ?? error.message) : String(error),
+            );
+            throw error;
+          }
+        });
       await runQaGatewayFixture(
         async () => {
           provider = await startProvider(scenario);
@@ -530,7 +540,12 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             .filter((request) => request.child);
           expect(
             terminal.status,
-            JSON.stringify({ terminal, requests: provider.requests, lifecycleErrors }),
+            JSON.stringify({
+              terminal,
+              requests: provider.requests,
+              fallbackErrors,
+              fallbackRuns: fallbackRun.mock.calls.length,
+            }),
           ).toBe(scenario.backup ? "ok" : "error");
           expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
           if (!scenario.model && !scenario.inherited) {
@@ -579,7 +594,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         () => provider?.stop(),
         () => removeGatewayTempHome(home.tempHome),
         () => home.envSnapshot.restore(),
-        unsubscribe,
         resetGatewayTestState,
       );
     },
