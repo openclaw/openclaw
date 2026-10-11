@@ -6,16 +6,17 @@ import type {
 } from "../config/sessions/activity-summary-source.types.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
-  readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptBoundedMessageTailPage,
-  readSessionTranscriptWatermark,
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
+import { readActivePathEntryRelationFromProjection } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { readSessionTranscriptWatermarkInDatabase } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -30,65 +31,63 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 export function readActivitySummaryBatch(
   params: SessionActivitySummaryBatchInput,
 ): SessionActivitySummaryBatchResult {
-  const snapshot = readSessionTranscriptBoundedMessageTailPage(params.scope, {
-    maxBytes: 0,
-    maxMessages: 0,
-    offset: 0,
-    readOnly: true,
-  });
-  let previous = params.previous;
-  if (
-    previous &&
-    (previous.generation !== (snapshot.snapshot.generation ?? null) ||
-      previous.coveredMessages > snapshot.totalMessages ||
-      (previous.leafEntryId &&
-        !["exact", "ancestor"].includes(
-          readSessionTranscriptActivePathEntryRelation(params.scope, previous.leafEntryId, {
-            readOnly: true,
-          }),
-        )))
-  ) {
-    previous = undefined;
-  }
-  const watermark = readSessionTranscriptWatermark(params.scope);
-  const covered = previous?.coveredMessages ?? 0;
-  let batchSize = Math.min(64, snapshot.totalMessages - covered);
-  const readPage = (maxMessages: number, includeEarlier = false) =>
-    readSessionTranscriptBoundedMessageTailPage(params.scope, {
-      maxBytes: 128 * 1024,
-      maxMessages,
-      offset: snapshot.totalMessages - covered - maxMessages,
-      readOnly: true,
-      oversizedMessageCheck: {
-        roles: ["user", "assistant"],
-        includeEarlier,
-      },
-    });
-  const earlierOmission =
-    previous?.omittedContent &&
-    (previous.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION ||
-      readPage(0, true).hasOversizedMessages);
-  let page = readPage(batchSize);
-  while (batchSize > 1 && page.events.length < page.scannedMessages) {
-    batchSize = Math.max(1, Math.floor(batchSize / 2));
-    page = readPage(batchSize);
-  }
-  if (
-    page.totalMessages !== snapshot.totalMessages ||
-    page.snapshot.generation !== snapshot.snapshot.generation ||
-    page.snapshot.indexedSeq !== snapshot.snapshot.indexedSeq
-  ) {
-    return undefined;
-  }
-  // Shrinking leaves only individually oversized omissions; recheck legacy flags by role.
-  return {
-    previous,
-    snapshot,
-    watermark,
-    covered,
-    page,
-    omitted: earlierOmission === true || page.hasOversizedMessages === true,
-  };
+  return withCurrentProjectionSnapshot(
+    params.scope,
+    (projection) => {
+      const snapshot = readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
+        maxBytes: 0,
+        maxMessages: 0,
+        offset: 0,
+      });
+      let previous = params.previous;
+      if (
+        previous &&
+        (previous.generation !== (snapshot.snapshot.generation ?? null) ||
+          previous.coveredMessages > snapshot.totalMessages ||
+          (previous.leafEntryId &&
+            !["exact", "ancestor"].includes(
+              readActivePathEntryRelationFromProjection(projection, previous.leafEntryId),
+            )))
+      ) {
+        previous = undefined;
+      }
+      const watermark = readSessionTranscriptWatermarkInDatabase(
+        projection.database,
+        projection.resolved.sessionId,
+      );
+      const covered = previous?.coveredMessages ?? 0;
+      let batchSize = Math.min(64, snapshot.totalMessages - covered);
+      const readPage = (maxMessages: number, includeEarlier = false) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
+          maxBytes: 128 * 1024,
+          maxMessages,
+          offset: snapshot.totalMessages - covered - maxMessages,
+          oversizedMessageCheck: {
+            roles: ["user", "assistant"],
+            includeEarlier,
+          },
+        });
+      const earlierOmission =
+        previous?.omittedContent &&
+        (previous.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION ||
+          readPage(0, true).hasOversizedMessages);
+      let page = readPage(batchSize);
+      while (batchSize > 1 && page.events.length < page.scannedMessages) {
+        batchSize = Math.max(1, Math.floor(batchSize / 2));
+        page = readPage(batchSize);
+      }
+      // Shrinking leaves only individually oversized omissions; recheck legacy flags by role.
+      return {
+        previous,
+        snapshot,
+        watermark,
+        covered,
+        page,
+        omitted: earlierOmission === true || page.hasOversizedMessages === true,
+      };
+    },
+    { readOnly: true },
+  );
 }
 
 export async function readActivitySummarySource(

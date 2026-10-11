@@ -112,6 +112,14 @@ timeout once, immediately after acquiring the write transaction, and carries an
 inherited lock deadline without rereading the connection's timeout. FIFO,
 lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
+Activity-summary batches read metadata, ancestry, and bounded messages in one
+native snapshot. Transcript appends fold an existing window's recency into their
+final mutation-watermark write; rejected duplicates still record attempt recency.
+Connections retain their owner-set busy timeout and skip unchanged assignments.
+The audit writer retains the earliest expiry and skips empty pruning until it is
+due, invalidating that fact on rollback or maintenance. Audit retention, transcript
+timestamp semantics, schemas, and update behavior are unchanged.
+
 The admitted catalog includes index names and trigger definitions alongside tables.
 Canonical session validation consumes these definitions without another catalog scan.
 First canonical index admission shares the schema contract reader's batched metadata snapshot
