@@ -32,27 +32,27 @@ it.each([
         }),
         container,
       );
-      const group = container.querySelector("wa-radio-group")!;
-      const radios = [...container.querySelectorAll("wa-radio")];
-      await group.updateComplete;
-      await Promise.all(radios.map((radio) => radio.updateComplete));
+      const radios = [
+        ...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input"),
+      ];
       expect(radios).toHaveLength(4);
       expect(radios.filter((radio) => radio.checked)).toHaveLength(profile ? 1 : 0);
       expect(onToolProfileChange).not.toHaveBeenCalled();
       if (input === "mouse") {
-        await page.elementLocator(container.querySelector('wa-radio[value="full"]')!).click();
+        await page
+          .elementLocator(container.querySelector('.settings-segmented__input[value="full"]')!)
+          .click();
       } else {
-        group.focus();
+        (radios.find((radio) => radio.checked) ?? radios[0])!.focus();
         if (!profile) {
           await userEvent.keyboard("{ArrowLeft}");
         }
         await userEvent.keyboard(" ");
       }
-      await group.updateComplete;
       expect(onToolProfileChange).toHaveBeenCalledTimes(writes);
       if (writes) {
         expect(onToolProfileChange).toHaveBeenCalledWith("full");
-        expect(group.value).toBe("full");
+        expect(radios.find((radio) => radio.checked)?.value).toBe("full");
       }
     } finally {
       render(null, container);
