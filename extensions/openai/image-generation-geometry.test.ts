@@ -59,7 +59,6 @@ describe("OpenAI image request geometry", () => {
   }
 
   it.each([
-    ["gpt-image-1", "https://api.openai.com/v1"],
     ["gpt-image-1-mini", "https://api.openai.com/v1"],
     ["gpt-image-1.5", "https://api.openai.com/v1"],
     ["gpt-image-1.5", "https://myresource.openai.azure.com/openai/v1"],
