@@ -39,6 +39,7 @@ import {
   invalidateSessionEntryMaintenanceAgeFact,
   applySessionEntryMaintenanceAgeChange,
   readSessionEntryMaintenanceNextAgeAt,
+  readSessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
@@ -170,6 +171,7 @@ export function readSessionMaintenanceInWorker(
         return {
           kind: "maintenance-age",
           nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.maintenance),
         };
       }
       prepareWorkerAgeFact(database, plan);
@@ -183,6 +185,7 @@ export function readSessionMaintenanceInWorker(
           value: emptySessionEntryMaintenancePlan(),
           readOnlyInput: input,
           nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, input.maintenance),
         };
       }
       return withSqlitePostCommitPublications(database.db, () =>
@@ -200,6 +203,7 @@ export function readSessionMaintenanceInWorker(
               value: prepared.value,
               readOnlyInput: input,
               nextAt: readSessionEntryMaintenanceNextAgeAt(database, input.maintenance),
+              ageFact: readSessionEntryMaintenanceAgeFact(database.db, input.maintenance),
             };
           },
           { databaseLabel: database.path, operationLabel: "session.maintenance.read" },
@@ -314,6 +318,7 @@ export function runSessionMaintenanceMetadataInTransaction(
           return {
             kind: "maintenance-age",
             nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.maintenance),
+            ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.maintenance),
           };
         }
         if (!prepared) {
@@ -335,6 +340,7 @@ export function runSessionMaintenanceMetadataInTransaction(
           kind: plan.kind,
           value: maintenance,
           nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.input.maintenance),
+          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
         };
       },
       plan.databaseOptions,
