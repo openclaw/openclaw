@@ -201,19 +201,16 @@ export async function loadAgentTranscriptReadOperations() {
 }
 
 export async function loadAgentReplacementOperations() {
-  const [kernel, { assertSessionSubagentRunsCurrent }, { sealSessionEntryPublicationSource }] =
-    await Promise.all([
-      import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-      import("../config/sessions/session-accessor.sqlite-descendant-basis.js"),
-      import("../config/sessions/session-entry-publication-source.js"),
-    ]);
+  const [kernel, { sealSessionEntryPublicationSource }] = await Promise.all([
+    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+    import("../config/sessions/session-entry-publication-source.js"),
+  ]);
   return {
     "session.entries.replace": (
       input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
       context,
     ) =>
       context.writeTransaction("session.entry-replacements", "Session replacement", (current) => {
-        assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
         const postimages: SessionEntryWritePostimages = new Map();
         const result = kernel.commitSessionEntryReplacementsInDatabase(
           current,
@@ -235,7 +232,6 @@ export async function loadAgentReplacementOperations() {
         kernel.boundSessionEntryReplacementPublication(publication, candidate);
         deferSqliteWorkerCommitReceipt(current.db, publication);
         context.admit("commit", publication);
-        assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
         return candidate;
       }),
   } satisfies Handlers;

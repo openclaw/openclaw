@@ -588,7 +588,6 @@ const captures = [
             sourceAdmitted: true,
             projection: "maintenance",
             runs: new Map(),
-            maintenanceDigest: "fixture",
           }
         : { ok: true, type: "subagents.runs", sourceAdmitted: true, runs: new Map() },
       kind === "descendants"
