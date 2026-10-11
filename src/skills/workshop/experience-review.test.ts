@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
@@ -7,7 +8,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   onTrustedInternalDiagnosticEvent,
-  type DiagnosticModelUsageEvent,
+  type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -66,7 +67,11 @@ describe("runSkillExperienceReview", () => {
         { workspaceDir: state.workspaceDir, modelId: "usage-fixture" },
       );
       candidate.config.diagnostics = { enabled };
-      candidate.config.models!.providers!.openai.models = unpriced
+      const provider = expectDefined(
+        candidate.config.models?.providers?.openai,
+        "fixture provider",
+      );
+      provider.models = unpriced
         ? []
         : [
             {
@@ -79,7 +84,7 @@ describe("runSkillExperienceReview", () => {
               cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
             },
           ];
-      const events: DiagnosticModelUsageEvent[] = [];
+      const events: Extract<DiagnosticEventPayload, { type: "model.usage" }>[] = [];
       const stop = onTrustedInternalDiagnosticEvent((event) => {
         if (event.type === "model.usage") {
           events.push(event);
@@ -116,7 +121,8 @@ describe("runSkillExperienceReview", () => {
         }
         expect(events).toHaveLength(enabled && hasUsage ? 1 : 0);
         if (enabled && hasUsage) {
-          expect(events[0]).toMatchObject({
+          const event = expectDefined(events[0], "Workshop review usage diagnostic");
+          expect(event).toMatchObject({
             agentId: "main",
             sessionKey: expect.stringMatching(
               /^agent:main:internal-session-effects:skill-workshop-review/,
@@ -137,11 +143,11 @@ describe("runSkillExperienceReview", () => {
             durationMs: 123,
           });
           if (unpriced) {
-            expect(events[0].costUsd).toBeUndefined();
+            expect(event.costUsd).toBeUndefined();
           } else {
-            expect(events[0].costUsd).toBeCloseTo(0.0002);
+            expect(event.costUsd).toBeCloseTo(0.0002);
           }
-          expect(events[0].channel).toBeUndefined();
+          expect(event.channel).toBeUndefined();
         }
       } finally {
         stop();

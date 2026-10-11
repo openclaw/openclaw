@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   afterAll,
   afterEach,
@@ -11,10 +12,11 @@ import {
   vi,
 } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   onTrustedInternalDiagnosticEvent,
-  type DiagnosticModelUsageEvent,
+  type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
   clearMemoryPluginState,
@@ -34,14 +36,12 @@ import {
 } from "./agent-runner.test-fixtures.js";
 
 const { runEntry, runAgent } = vi.hoisted(() => ({ runEntry: vi.fn(), runAgent: vi.fn() }));
-vi.mock("../../agents/embedded-agent-runner/run-entry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/embedded-agent-runner/run-entry.js")>()),
+// mock-isolation: Keep provider entry and its process-global runtime state out of settlement proof.
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
   runEmbeddedAgentEntry: runEntry,
 }));
-vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
-  runEmbeddedAgent: runAgent,
-}));
+// mock-isolation: Inference supplies completed usage; unrelated embedded operations must stay isolated.
+vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: runAgent }));
 
 describe("private memory usage diagnostics", () => {
   const tempDirs = createTempDirTracker();
@@ -81,7 +81,7 @@ describe("private memory usage diagnostics", () => {
   });
 
   it.each([false, true])("settles usage independently of a returned error: %s", async (isError) => {
-    const events: DiagnosticModelUsageEvent[] = [];
+    const events: Extract<DiagnosticEventPayload, { type: "model.usage" }>[] = [];
     onTestFinished(
       onTrustedInternalDiagnosticEvent((event) => {
         if (event.type === "model.usage") {
@@ -89,7 +89,7 @@ describe("private memory usage diagnostics", () => {
         }
       }),
     );
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 10,
       totalTokens: 80_000,
@@ -144,7 +144,8 @@ describe("private memory usage diagnostics", () => {
     });
     expect(result.outcome).toBe(isError ? "failed" : "completed");
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    const event = expectDefined(events[0], "memory flush usage diagnostic");
+    expect(event).toMatchObject({
       agentId: "main",
       sessionKey: expect.stringMatching(/^agent:main:internal-session-effects:/),
       sessionId: expect.stringMatching(/^internal-session-effects-/),
@@ -163,7 +164,7 @@ describe("private memory usage diagnostics", () => {
       costUsd: 0.125,
       durationMs: 123,
     });
-    expect(events[0].channel).toBeUndefined();
+    expect(event.channel).toBeUndefined();
     expect(followupRun.run.sessionId).toBe("session");
     expect(loadSessionEntry({ storePath, sessionKey: "main" })).not.toHaveProperty("inputTokens");
   });
