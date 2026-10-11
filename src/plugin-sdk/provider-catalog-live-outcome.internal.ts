@@ -1,3 +1,4 @@
+import { warnProviderCatalogFailure } from "../plugins/provider-catalog-diagnostics.js";
 import type { ProviderCatalogOutcome, ProviderCatalogResult } from "../plugins/types.js";
 
 export class LiveModelCatalogHttpError extends Error {
@@ -15,6 +16,7 @@ export async function runLiveProviderCatalog(params: {
   profileId?: string;
   run: () => Promise<ProviderCatalogResult>;
 }): Promise<ProviderCatalogResult> {
+  const startedAt = performance.now();
   const identity = {
     provider: params.providerId,
     ...(params.profileId ? { profileId: params.profileId } : {}),
@@ -25,6 +27,13 @@ export async function runLiveProviderCatalog(params: {
       ? { ...result, outcomes: [...(result.outcomes ?? []), { ...identity, status: "ready" }] }
       : result;
   } catch (error) {
+    warnProviderCatalogFailure({
+      provider: params.providerId,
+      phase: "live-catalog",
+      startedAt,
+      error,
+      ...(error instanceof LiveModelCatalogHttpError ? { httpStatus: error.status } : {}),
+    });
     const rejected =
       error instanceof LiveModelCatalogHttpError && (error.status === 401 || error.status === 403);
     const outcome: ProviderCatalogOutcome = rejected

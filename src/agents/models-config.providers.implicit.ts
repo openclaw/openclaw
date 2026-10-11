@@ -10,9 +10,8 @@ import {
 import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { warnProviderCatalogFailure } from "../plugins/provider-catalog-diagnostics.js";
 import {
   recordProviderCatalogModels,
   withProviderCatalogExpiry,
@@ -58,8 +57,6 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-
-const log = createSubsystemLogger("agents/model-providers");
 
 type ImplicitProviderParams = {
   agentDir: string;
@@ -333,6 +330,8 @@ export async function runProviderCatalogWithTimeout(
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs ?? undefined;
+  const startedAt = performance.now();
+  let deadlineExceeded = false;
   let active = true;
   const catalogParams = {
     ...params,
@@ -366,6 +365,7 @@ export async function runProviderCatalogWithTimeout(
       timeoutMs,
       () => {
         active = false;
+        deadlineExceeded = true;
         throw new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`);
       },
       { ref: false },
@@ -381,7 +381,13 @@ export async function runProviderCatalogWithTimeout(
     for (const provider of params.providerIds ?? [params.provider.id]) {
       params.reportCatalogOutcome?.({ provider, status: "unavailable" });
     }
-    log.warn(`${formatErrorMessage(error)}; skipping provider discovery`);
+    warnProviderCatalogFailure({
+      provider: params.provider.id,
+      phase: "provider-discovery",
+      startedAt,
+      error,
+      deadlineExceeded,
+    });
     return undefined;
   } finally {
     // A timed-out hook can still finish; its late reports no longer own this publication.
