@@ -5,22 +5,23 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionConfig } from "./agent-session-types.js";
+import type { AgentSessionConfig, AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ToolDefinition } from "./extensions/types.js";
-import { ModelRegistry } from "./model-registry.js";
+import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
+type TestStreamSimple = NonNullable<ProviderConfigInput["streamSimple"]>;
 const hoistedStreamMocks = vi.hoisted(() => ({
-  streamSimple: vi.fn(),
+  streamSimple: vi.fn<TestStreamSimple>(),
 }));
 
-export const streamMocks: { streamSimple: Mock } = hoistedStreamMocks;
+export const streamMocks: { streamSimple: Mock<TestStreamSimple> } = hoistedStreamMocks;
 
 export const testModel: Model = {
   id: "test-model",
@@ -82,6 +83,27 @@ export function createAssistantResultStream(message: AssistantMessage) {
     stream.end();
   });
   return stream;
+}
+
+export function holdAssistantResponse(text: string) {
+  const response = createAssistantMessageEventStream();
+  let released = false;
+  return {
+    response,
+    isReleased: () => released,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      response.push({
+        type: "done",
+        reason: "stop",
+        message: createAssistant(testModel, [{ type: "text", text }]),
+      });
+      response.end();
+    },
+  };
 }
 
 export function createOverflowAssistant(activeModel: Model) {
@@ -184,6 +206,19 @@ export async function appendHistory(
     timestamp: Date.now() - 2,
   });
   await sessionManager.appendMessageAsync({ ...assistant, timestamp: Date.now() - 1 });
+}
+
+/** Collect compaction_end events in order; both compaction suites assert on them. */
+export function collectCompactionEnds(session: {
+  subscribe: (listener: (event: AgentSessionEvent) => void) => unknown;
+}) {
+  const events: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+  session.subscribe((event) => {
+    if (event.type === "compaction_end") {
+      events.push(event);
+    }
+  });
+  return events;
 }
 
 export function registerAgentSessionLoopTestLifecycle(): void {

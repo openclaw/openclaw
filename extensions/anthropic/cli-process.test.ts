@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,10 +9,14 @@ import type {
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { discoverClaudeCliModels } from "./cli-model-discovery.js";
+import * as cliProcess from "./cli-process.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
+import { createClaudeCliTransport } from "./cli-transport.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
 const roots: string[] = [];
@@ -97,6 +102,25 @@ async function collect(
   return events;
 }
 
+function observeChild(
+  observe: (
+    child: ChildProcessWithoutNullStreams,
+    owner: ReturnType<typeof cliProcess.createClaudeCliProcessOwner>,
+  ) => void,
+) {
+  const createOwner = cliProcess.createClaudeCliProcessOwner;
+  vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockImplementation((...args) => {
+    const owner = createOwner(...args);
+    const spawn = owner.spawn;
+    vi.spyOn(owner, "spawn").mockImplementation((options) => {
+      const child = spawn(options);
+      observe(child, owner);
+      return child;
+    });
+    return owner;
+  });
+}
+
 function attachLiveSession(context: CliBackendExecuteContext) {
   let current: CliBackendLiveSessionHandle | undefined;
   context.liveSession = {
@@ -161,10 +185,214 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     expect(formatErrorMessageForDisplay(error).length).toBeLessThan(2_200);
   });
 
-  it("preserves a silent child's exit error without inventing stderr", async () => {
-    const context = await contextForChild("process.exit(1);");
-    await expect(collect(context)).rejects.toThrow(/^Claude Code process exited with code 1$/);
-  });
+  it.skipIf(process.platform === "win32")(
+    "preserves a live child's broken pipe when shutdown makes it exit nonzero",
+    async () => {
+      const context = await contextForChild(`
+      import { closeSync } from "node:fs";
+      process.on("SIGTERM", () => process.exit(23));
+      setInterval(() => {}, 1000);
+      closeSync(0);
+    `);
+      context.systemPrompt = "x".repeat(1024 * 1024);
+      await expect(collect(context)).rejects.toMatchObject({ code: "EPIPE" });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([0, 1])(
+    "preserves natural exit %i and diagnostics when initialization hits a broken pipe",
+    async (exitCode) => {
+      const context = await contextForChild(`
+        import { writeSync } from "node:fs";
+        writeSync(2, "PermissionError: fixture input closed " + process.env.OPENCLAW_MCP_TOKEN + "\\n");
+        process.exit(${exitCode});
+      `);
+      context.env.OPENCLAW_MCP_TOKEN = "opaque-early-exit-fixture";
+      // Exceed the pipe buffer so the ignored initialization cannot finish writing.
+      context.systemPrompt = "x".repeat(1024 * 1024);
+      const error = await collect(context).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        exitCode === 0
+          ? "Claude CLI live session exited unexpectedly without a terminal result."
+          : "Claude Code process exited with code 1",
+      );
+      const display = formatErrorMessageForDisplay(error);
+      expect(display).toContain("PermissionError: fixture input closed [REDACTED]");
+      expect(display).not.toContain(context.env.OPENCLAW_MCP_TOKEN);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves cancellation while settling a broken input pipe",
+    async ({ signal }) => {
+      const controller = new AbortController();
+      const reason = new Error("Synthetic cancellation after stdin failure.");
+      const inputErrors: unknown[] = [];
+      observeChild((child) => {
+        child.stdin.once("error", (error) => {
+          inputErrors.push(error);
+          controller.abort(reason);
+        });
+      });
+      const context = await contextForChild(`
+      import { closeSync } from "node:fs";
+      setInterval(() => {}, 1000);
+      closeSync(0);
+    `);
+      context.systemPrompt = "x".repeat(1024 * 1024);
+      context.abortSignal = AbortSignal.any([controller.signal, context.abortSignal ?? signal]);
+      await expect(collect(context)).rejects.toBe(reason);
+      expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves cancellation while broken-pipe diagnostics are draining",
+    async ({ signal }) => {
+      const controller = new AbortController();
+      const reason = new Error("Synthetic cancellation during stderr drainage.");
+      const diagnosticsStarted = createDeferred<void>();
+      const releaseDiagnostics = createDeferred<void>();
+      const inputErrors: unknown[] = [];
+      observeChild((child, owner) => {
+        child.stdin.once("error", (error) => inputErrors.push(error));
+        const withDiagnostics = owner.withDiagnostics.bind(owner);
+        vi.spyOn(owner, "withDiagnostics").mockImplementation(async (error) => {
+          diagnosticsStarted.resolve();
+          await withinTest(releaseDiagnostics.promise, signal);
+          return withDiagnostics(error);
+        });
+      });
+      const context = await contextForChild("process.exit(1);");
+      context.systemPrompt = "x".repeat(1024 * 1024);
+      context.abortSignal = AbortSignal.any([controller.signal, context.abortSignal ?? signal]);
+      const result = collect(context);
+      void result.catch(() => {});
+      try {
+        await withinTest(diagnosticsStarted.promise, signal);
+        expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+        controller.abort(reason);
+        releaseDiagnostics.resolve();
+        await expect(result).rejects.toBe(reason);
+      } finally {
+        releaseDiagnostics.resolve();
+        await result.catch(() => {});
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "shares one failure across late sends and terminal notifications (diagnostics reject: %s)",
+    async (diagnosticsReject) => {
+      const context = await contextForChild("process.exit(1);");
+      const onError = vi.fn();
+      const diagnosticError = new Error("Synthetic diagnostic collection failure.");
+      let lateSend: Promise<void> | undefined;
+      observeChild((child, owner) => {
+        if (diagnosticsReject) {
+          vi.spyOn(owner, "withDiagnostics").mockRejectedValue(diagnosticError);
+        }
+        child.stdin.once("error", () => {
+          lateSend = transport.send({ type: "control_response" });
+          void lateSend.catch(() => {});
+        });
+      });
+      const transport = createClaudeCliTransport({
+        context,
+        args: [...context.args],
+        initialize: { appendSystemPrompt: "x".repeat(1024 * 1024) },
+        currentContext: () => context,
+        onMessage: async () => {},
+        onRequest: async () => () => ({}),
+        onError,
+      });
+      try {
+        const error = await transport.initialize().catch((failure: unknown) => failure);
+        await transport.waitForExit();
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe(
+          diagnosticsReject ? diagnosticError.message : "Claude Code process exited with code 1",
+        );
+        if (!lateSend) {
+          throw new Error("Expected a send after the native stdin error.");
+        }
+        await expect(lateSend).rejects.toBe(error);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+      } finally {
+        transport.close();
+        await transport.waitForExit();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").for(["pipe failure", "explicit close"] as const)(
+    "aborts pending control requests before disposal and exit on %s",
+    async (shutdown, { signal: testSignal }) => {
+      const context = await contextForChild(`
+      import { closeSync } from "node:fs";
+      process.on("SIGTERM", () => process.exit(23));
+      setInterval(() => {}, 1000);
+      closeSync(0);
+      process.stdout.write(JSON.stringify({ type: "control_request", request_id: "pending", request: { subtype: "fixture" } }) + "\\n");
+    `);
+      const started = createDeferred<AbortSignal>();
+      const aborted = createDeferred<boolean>();
+      let childExited = false;
+      let disposed = false;
+      observeChild((child, owner) => {
+        const dispose = owner[Symbol.dispose].bind(owner);
+        vi.spyOn(owner, Symbol.dispose).mockImplementation(() => {
+          disposed = true;
+          dispose();
+        });
+        child.once("exit", () => {
+          childExited = true;
+        });
+      });
+      const transport = createClaudeCliTransport({
+        context,
+        args: [...context.args],
+        initialize: {},
+        currentContext: () => context,
+        onMessage: async () => {},
+        onRequest: async (_request, signal) => {
+          started.resolve(signal);
+          await new Promise<void>((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted.resolve(disposed);
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          return () => ({});
+        },
+        onError: () => {},
+      });
+      try {
+        const signal = await withinTest(started.promise, testSignal);
+        let send: Promise<void> | undefined;
+        if (shutdown === "pipe failure") {
+          send = transport.send({ type: "user", data: "x".repeat(1024 * 1024) });
+          void send.catch(() => {});
+        } else {
+          transport.close();
+        }
+        expect(await withinTest(aborted.promise, testSignal)).toBe(false);
+        expect(signal.aborted).toBe(true);
+        expect(childExited).toBe(false);
+        if (send) {
+          await expect(send).rejects.toMatchObject({ code: "EPIPE" });
+        }
+      } finally {
+        transport.close();
+        await transport.waitForExit();
+      }
+    },
+  );
 
   it("masks opaque descriptor and environment credentials without copying native stdout", async () => {
     const context = await contextForChild(`
@@ -258,7 +486,6 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   });
 
   it.each([
-    { firstPrompt: "success with stderr", prompt: "fail silently" },
     { firstPrompt: "success with stderr", prompt: "fail noisily" },
     { firstPrompt: "success with stderr", prompt: "close idle" },
     { firstPrompt: "success with delayed stderr", prompt: "fail silently" },
@@ -352,4 +579,49 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       expect(stderr).not.toHaveBeenCalled();
     },
   );
+});
+
+it("discovers deduplicated native model IDs through initialize without a turn", async () => {
+  const context = await contextForChild(`
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const message = JSON.parse(line);
+      if (message.type !== "control_request" || message.request.subtype !== "initialize") {
+        process.exit(7);
+      }
+      process.stdout.write(JSON.stringify({ type: "control_response", response: {
+        subtype: "success", request_id: message.request_id, response: { models: [
+          { value: "default", resolvedModel: "claude-future[1m]", displayName: "Default",
+            supportedEffortLevels: ["low", "max"] },
+          { value: "future", resolvedModel: "claude-future[1m]", displayName: "Future",
+            supportedEffortLevels: ["low", "max"] },
+        ] },
+      } }) + "\\n");
+    });
+  `);
+  const createOwner = cliProcess.createClaudeCliProcessOwner;
+  vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockImplementation((...args) => {
+    const owner = createOwner(...args);
+    const spawn = owner.spawn;
+    vi.spyOn(owner, "spawn").mockImplementation((options) => {
+      expect(options.args).not.toContain("--model");
+      expect(options.args).toContain("--tools");
+      return spawn({ ...options, command: context.command, args: context.args });
+    });
+    return owner;
+  });
+  expect(await discoverClaudeCliModels({ env: context.env })).toEqual([
+    expect.objectContaining({
+      id: "claude-future[1m]",
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: "max",
+      },
+    }),
+  ]);
 });

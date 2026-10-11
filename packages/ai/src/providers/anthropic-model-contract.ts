@@ -1,11 +1,13 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_HAIKU_55_THINKING_PROFILE,
   CLAUDE_OPUS_55_THINKING_PROFILE,
   CLAUDE_SONNET_55_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeOpus55ModelIdentity,
@@ -32,6 +34,7 @@ export {
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
@@ -134,6 +137,7 @@ export function usesClaudeStreamingRefusalContract(model: {
     return false;
   }
   return (
+    resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
     resolveClaudeOpus5ModelIdentity(model) !== undefined ||
@@ -162,6 +166,7 @@ export function defaultsClaudeAdaptiveThinking(model: {
     requiresClaudeAdaptiveThinking(model) ||
     (normalizeApi(model.api) === "anthropic-messages" &&
       (resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+        resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
         resolveClaudeSonnet5ModelIdentity(model) !== undefined))
   );
 }
@@ -173,13 +178,15 @@ export function resolveAnthropicThinkingEffort(
 ): AnthropicEffort {
   const requestedLevel: ModelThinkingLevel | undefined =
     level ??
-    (resolveClaudeOpus55ModelIdentity(model)
-      ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
-      : resolveClaudeSonnet55ModelIdentity(model)
-        ? CLAUDE_SONNET_55_THINKING_PROFILE.defaultLevel
-        : resolveClaudeFable5ModelIdentity(model)
-          ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
-          : undefined);
+    (resolveClaudeHaiku55ModelIdentity(model)
+      ? CLAUDE_HAIKU_55_THINKING_PROFILE.defaultLevel
+      : resolveClaudeOpus55ModelIdentity(model)
+        ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
+        : resolveClaudeSonnet55ModelIdentity(model)
+          ? CLAUDE_SONNET_55_THINKING_PROFILE.defaultLevel
+          : resolveClaudeFable5ModelIdentity(model)
+            ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+            : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,
@@ -230,7 +237,11 @@ export function mapAnthropicStopReason(reason: string | undefined): StopReason {
 
 /** Remove unsupported assistant prefills while preserving completed tool-use turns. */
 export function prepareClaudeNoPrefillRequestContext(model: Model, context: Context): Context {
-  if (!resolveClaudeOpus5ModelIdentity(model) && !resolveClaudeSonnet5ModelIdentity(model)) {
+  if (
+    !resolveClaudeOpus5ModelIdentity(model) &&
+    !resolveClaudeSonnet5ModelIdentity(model) &&
+    !resolveClaudeHaiku55ModelIdentity(model)
+  ) {
     return context;
   }
 
@@ -270,13 +281,14 @@ export function applyClaudeRequestContract(
   }
   const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
+  const haiku55 = resolveClaudeHaiku55ModelIdentity(model) !== undefined;
   if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
     return;
   }
   delete params.temperature;
   delete params.top_p;
   delete params.top_k;
-  if (opus5 || sonnet5) {
+  if (opus5 || sonnet5 || haiku55) {
     delete params.service_tier;
   }
 }
@@ -289,6 +301,10 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
     ? { id: ref.responseModelId }
     : { id: ref.modelId, params: ref.modelParams };
   const fableIdentity = resolveClaudeFable5ModelIdentity(modelRef);
+  const haikuIdentity = resolveClaudeHaiku55ModelIdentity(modelRef);
+  if (haikuIdentity) {
+    return `haiku:${haikuIdentity}`;
+  }
   if (fableIdentity) {
     return `fable:${fableIdentity}`;
   }
@@ -322,7 +338,10 @@ function readsPriorClaudeThinking(
     return false;
   }
   if (FABLE_51_REPLAY_IDENTITY.test(targetIdentity)) {
-    return sourceIdentity === undefined || !SONNET_55_REPLAY_IDENTITY.test(sourceIdentity);
+    return (
+      sourceIdentity === undefined ||
+      (!SONNET_55_REPLAY_IDENTITY.test(sourceIdentity) && !sourceIdentity.startsWith("haiku:"))
+    );
   }
   if (SONNET_55_REPLAY_IDENTITY.test(targetIdentity)) {
     return sourceIdentity === undefined || sourceIdentity.startsWith("sonnet:");

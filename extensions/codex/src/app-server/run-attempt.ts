@@ -28,13 +28,18 @@ export async function runCodexAppServerAttempt(
   if (
     params.requireWorkspaceOnly === true &&
     (params.disableTools === true ||
-      typeof params.hostCapabilities?.createToolSurface !== "function")
+      typeof params.hostCapabilities?.createToolSurfaceAsync !== "function")
   ) {
     throw new Error("Codex required-root execution requires an enabled host-mediated tool surface");
   }
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
-    prepareCodexAttemptConnection({ params, options }),
+    prepareCodexAttemptConnection({
+      params: params.continuation
+        ? { ...params, prompt: `${params.continuation.prompt}\n\n${params.prompt}` }
+        : params,
+      options,
+    }),
   );
   try {
     const runtime = await preparation.measure("runtime", () =>

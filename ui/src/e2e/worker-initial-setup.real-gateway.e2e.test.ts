@@ -287,21 +287,6 @@ suite.define(() => {
             const tool = createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
-              callGateway: async (request) =>
-                await page.evaluate(
-                  async ({ method, params }) => {
-                    const app = document.querySelector("openclaw-app") as HTMLElement & {
-                      runtime: {
-                        context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
-                      };
-                    };
-                    return await app.runtime.context.gateway.snapshot.client.request(
-                      method,
-                      params,
-                    );
-                  },
-                  { method: request.method, params: request.params },
-                ),
             });
             const sent = await tool.execute("setup-send", {
               sessionKey,
@@ -313,15 +298,35 @@ suite.define(() => {
               .poll(async () => (await listSessionPendingInputs(scope)).items.length)
               .toBe(2);
             expect(launched).toEqual([]);
-            expect(
-              (await listSessionPendingInputs(scope)).items.every(
-                (input) => input.state === "queued",
-              ),
-            ).toBe(true);
+            const heldInputs = (await listSessionPendingInputs(scope)).items;
+            expect(heldInputs.every((input) => input.state === "queued")).toBe(true);
             release.resolve();
             await dispatchOperation;
-            await expect.poll(() => launched.length, { timeout: 30_000 }).toBe(2);
+            const outcomes = await page.evaluate(
+              async (runIds) => {
+                const app = document.querySelector("openclaw-app") as HTMLElement & {
+                  runtime: {
+                    context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
+                  };
+                };
+                return await Promise.all(
+                  runIds.map((runId) =>
+                    app.runtime.context.gateway.snapshot.client.request(
+                      "agent.wait",
+                      { runId, timeoutMs: 30_000 },
+                      { timeoutMs: 30_000 },
+                    ),
+                  ),
+                );
+              },
+              heldInputs.map((input) => input.runId),
+            );
+            for (const outcome of outcomes) {
+              expect(outcome).toMatchObject({ status: "ok" });
+            }
+            expect(launched).toHaveLength(2);
             expect(new Set(launched).size).toBe(2);
+            expect(new Set(launched)).toEqual(new Set(heldInputs.map((input) => input.runId)));
             await expect
               .poll(async () => (await listSessionPendingInputs(scope)).items.length)
               .toBe(0);

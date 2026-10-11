@@ -3,7 +3,6 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
-import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { decodeXml } from "../src/shared/xml.ts";
@@ -15,6 +14,7 @@ import {
 } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
+import type { GlossaryEntry } from "./lib/control-ui-i18n-sync-plan.ts";
 import {
   type NativeI18nInventoryEntry,
   type NativeI18nSite,
@@ -36,12 +36,10 @@ type NativeInterpolation = {
   value: string;
 };
 
-type Candidate = NativeI18nSite & {
-  line: number;
-  source: string;
-  surface: NativeI18nSurface;
-  sourceContext?: string;
-};
+type Candidate = NativeI18nSite &
+  Pick<NativeI18nEntry, "source" | "surface" | "sourceContext"> & {
+    line: number;
+  };
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
   glossaryHash: string;
@@ -67,12 +65,11 @@ export type NativeI18nQualityFinding = {
   translated: string;
   words?: string[];
 };
-type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
   force?: boolean;
   refreshIds?: string[];
-  glossary?: Array<{ source: string; target: string }>;
-  translate?: NativeTranslator;
+  glossary?: GlossaryEntry[];
+  translate?: typeof translateNativeEntries;
   translationsDir?: string;
 };
 type NativeI18nCommand = {
@@ -1088,23 +1085,22 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
-  const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
+  const entriesByIdentity = new Map<
+    string,
+    { source: string; surface: NativeI18nSurface; sites: Map<string, Candidate> }
+  >();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
-    entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
-    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
-    sitesByIdentity.set(identity, sites);
+    let entry = entriesByIdentity.get(identity);
+    if (!entry) {
+      entry = { source: candidate.source, surface: candidate.surface, sites: new Map() };
+      entriesByIdentity.set(identity, entry);
+    }
+    entry.sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
   }
-  return [...entryByIdentity]
+  return [...entriesByIdentity]
     .map(([identity, entry]) => {
-      const sites = [
-        ...expectDefined(
-          sitesByIdentity.get(identity),
-          `native i18n sites for ${identity}`,
-        ).values(),
-      ].toSorted(
+      const sites = [...entry.sites.values()].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
       );
@@ -1246,37 +1242,36 @@ async function syncNativeI18n(options: {
   return entries;
 }
 
-async function loadGlossary(locale: string): Promise<Array<{ source: string; target: string }>> {
+async function loadGlossary(locale: string): Promise<GlossaryEntry[]> {
   try {
     return JSON.parse(
       await readFile(
         path.join(ROOT, "ui", "src", "i18n", ".i18n", `glossary.${locale}.json`),
         "utf8",
       ),
-    ) as Array<{ source: string; target: string }>;
+    ) as GlossaryEntry[];
   } catch {
     return [];
   }
 }
 
-function glossaryHash(glossary: readonly { source: string; target: string }[]): string {
+function glossaryHash(glossary: readonly GlossaryEntry[]): string {
   return createHash("sha256").update(JSON.stringify(glossary)).digest("hex");
 }
 
 function adjacentDuplicateWords(value: string, locale: string): string[] {
   const words = [...value.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((match) => match[0]);
   const duplicates = new Set<string>();
-  for (let index = 1; index < words.length; index += 1) {
+  let previous: string | undefined;
+  for (const word of words) {
     if (
-      expectDefined(words[index - 1], `native i18n word before index ${index}`)
-        .normalize("NFKC")
-        .toLocaleLowerCase(locale) ===
-      expectDefined(words[index], `native i18n word at index ${index}`)
-        .normalize("NFKC")
-        .toLocaleLowerCase(locale)
+      previous !== undefined &&
+      previous.normalize("NFKC").toLocaleLowerCase(locale) ===
+        word.normalize("NFKC").toLocaleLowerCase(locale)
     ) {
-      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
+      duplicates.add(word);
     }
+    previous = word;
   }
   return [...duplicates].toSorted(compareCodePoints);
 }
@@ -1360,20 +1355,15 @@ export function validateNativeLocaleArtifact(
   locale: string,
   inventory: readonly NativeI18nEntry[],
   artifactValue: unknown,
-  glossary: readonly { source: string; target: string }[] = [],
+  glossary: readonly GlossaryEntry[] = [],
   reportObsolete?: (message: string) => void,
 ): NativeI18nQualityFinding[] {
   const errors: string[] = [];
   const obsolete: string[] = [];
-  if (!artifactValue || typeof artifactValue !== "object" || Array.isArray(artifactValue)) {
+  if (!isRecord(artifactValue)) {
     throw new Error(`invalid native locale artifact ${locale}: expected an object`);
   }
-  const artifact = artifactValue as {
-    glossaryHash?: unknown;
-    locale?: unknown;
-    translations?: unknown;
-    version?: unknown;
-  };
+  const artifact = artifactValue;
   if (artifact.version !== 2) {
     errors.push(`version must be 2, got ${JSON.stringify(artifact.version)}`);
   }

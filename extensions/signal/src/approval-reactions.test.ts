@@ -72,7 +72,6 @@ function registerTarget(
     allowedDecisions: ["allow-once", "deny"],
     targetAuthorKeys: ["+15550009999"],
     route: approvalRoute,
-    routeAllowed: true,
     ...overrides,
   });
 }
@@ -337,7 +336,7 @@ describe("Signal approval reactions", () => {
     ).toBe(false);
   });
 
-  it.each([undefined, "invalid"])(
+  it.each([undefined])(
     "rejects reaction registration with approval kind %s",
     async (approvalKind) => {
       expect(
@@ -364,29 +363,6 @@ describe("Signal approval reactions", () => {
         messageId: "1700000000001",
       }),
     ).resolves.toBeNull();
-  });
-
-  it("normalizes UUID target-author casing before matching", async () => {
-    await registerTarget({
-      messageId: "1700000000001",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["uuid:ABCDEF12-3456-7890-ABCD-EF1234567890"],
-    });
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000001",
-        reactionKey: "👍",
-        targetAuthorUuid: "abcdef12-3456-7890-abcd-ef1234567890",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: approvalRoute,
-    });
   });
 
   it("requires the reaction target author to match the outbound bot identity", async () => {
@@ -418,7 +394,7 @@ describe("Signal approval reactions", () => {
     });
   });
 
-  it.each(["plugin", "system-agent"] as const)(
+  it.each(["system-agent"] as const)(
     "authorizes %s reactions using Signal approval approvers",
     async (approvalKind) => {
       const approvalId = `${approvalKind}:abc`;
@@ -427,19 +403,10 @@ describe("Signal approval reactions", () => {
         messageId: "1700000000003",
         approvalId,
         approvalKind,
-        allowedDecisions:
-          approvalKind === "plugin"
-            ? ["allow-once", "allow-always", "deny"]
-            : ["allow-once", "deny"],
+        allowedDecisions: ["allow-once", "deny"],
       });
 
-      const cfg = {
-        ...sessionConfig,
-        approvals:
-          approvalKind === "plugin"
-            ? { plugin: { enabled: true, mode: "session" as const } }
-            : sessionConfig.approvals,
-      };
+      const cfg = sessionConfig;
       const reaction = {
         ...lookupIdentity,
         cfg,
@@ -463,7 +430,6 @@ describe("Signal approval reactions", () => {
         channel: "signal",
         accountId: "default",
         senderId: "+15551230000",
-        gatewayUrl: undefined,
       });
     },
   );

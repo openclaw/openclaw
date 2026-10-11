@@ -181,7 +181,7 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const mode = config.mode ?? "final";
+  const mode = config.mode;
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
   }

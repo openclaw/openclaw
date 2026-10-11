@@ -36,29 +36,21 @@ export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
     return null;
   }
   const parentDir = path.dirname(normalized);
-  if (path.basename(parentDir) === "lib") {
-    const prefix = path.dirname(parentDir);
-    return {
-      prefix,
-      globalRoot: normalized,
-      binDir: path.join(prefix, "bin"),
-    };
+  const hasLibParent = path.basename(parentDir) === "lib";
+  const windows = process.platform === "win32";
+  if (!hasLibParent && !windows && !options.allowDirectNodeModulesRoot) {
+    return null;
   }
-  if (process.platform === "win32") {
-    return {
-      prefix: parentDir,
-      globalRoot: normalized,
-      binDir: parentDir,
-    };
-  }
-  if (options.allowDirectNodeModulesRoot) {
-    return {
-      prefix: parentDir,
-      globalRoot: normalized,
-      binDir: path.join(normalized, ".bin"),
-    };
-  }
-  return null;
+  const prefix = hasLibParent ? path.dirname(parentDir) : parentDir;
+  return {
+    prefix,
+    globalRoot: normalized,
+    binDir: hasLibParent
+      ? path.join(prefix, "bin")
+      : windows
+        ? prefix
+        : path.join(normalized, ".bin"),
+  };
 }
 
 /**

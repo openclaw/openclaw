@@ -1,4 +1,3 @@
-// Legacy runtime agent config migrations for memory, sandbox, and runtime policy keys.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -11,11 +10,9 @@ import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js"
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
 import { expandToolGroups, mergeAlsoAllowPolicy } from "../../../agents/tool-policy.js";
 import {
-  defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
@@ -26,67 +23,6 @@ const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkOverlap", parentKey: "chunking", canonicalKey: "overlap" },
   { legacyKey: "maxResults", parentKey: "query", canonicalKey: "maxResults" },
 ] as const;
-
-const MEMORY_SEARCH_RULE: LegacyConfigRule = {
-  path: ["memorySearch"],
-  message:
-    'top-level memorySearch was moved; use memory.search instead. Run "openclaw doctor --fix".',
-};
-
-const AGENT_MEMORY_SEARCH_OWNER_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "memorySearch"],
-    message: 'agents.defaults.memorySearch moved to memory.search. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.memorySearch moved to agents.entries.*.memory.search. Run "openclaw doctor --fix".',
-    match: (value) => someAgentEntry(value, (agent) => agent.memorySearch !== undefined),
-  },
-];
-
-const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
-  {
-    path: ["memorySearch", "provider"],
-    message:
-      'memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: isLegacyMemorySearchAutoProvider,
-  },
-  {
-    path: ["memory", "search", "provider"],
-    message:
-      'memory.search.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: isLegacyMemorySearchAutoProvider,
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: (value) =>
-      someAgentEntry(value, (agent) =>
-        isLegacyMemorySearchAutoProvider(getAgentMemorySearchRecord(agent)?.provider),
-      ),
-  },
-];
-
-const LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES: LegacyConfigRule[] = [
-  {
-    path: ["memory", "search"],
-    message:
-      'memory.search uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
-    match: hasLegacyMemorySearchFlatKeys,
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
-    match: (value) =>
-      someAgentEntry(value, (agent) =>
-        hasLegacyMemorySearchFlatKeys(getAgentMemorySearchRecord(agent)),
-      ),
-  },
-];
 
 function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
   const memorySearch = getRecord(value);
@@ -103,69 +39,6 @@ function getAgentMemorySearchRecord(
 ): Record<string, unknown> | null {
   return getRecord(agent.memorySearch) ?? getRecord(getRecord(agent.memory)?.search);
 }
-
-const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "sandbox", "browser", "network"],
-    message:
-      'agents.defaults.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the sidecar and restore the dedicated browser network.',
-    match: isUnsupportedSandboxBrowserNetwork,
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the affected sidecar and restore the dedicated browser network.',
-    match: (value) =>
-      someAgentEntry(value, (agent) =>
-        isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
-      ),
-  },
-];
-
-const PROFILE_CONFIGURED_TOOL_SECTION_RULES: LegacyConfigRule[] = [
-  {
-    path: ["tools"],
-    message:
-      'tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
-    match: (value) => toolProfileConfiguredSectionsNeedExplicitRepair(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
-    match: (value, root) => {
-      const globalTools = getRecord(root.tools);
-      const inheritedProfile =
-        typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
-      const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
-      return someAgentEntry(value, (agent) => {
-        const agentTools = getRecord(agent.tools);
-        return toolProfileConfiguredSectionsNeedExplicitRepair(
-          agentTools,
-          inheritedProfile,
-          inheritedAlsoAllow,
-          collectEffectiveConfiguredToolSectionGrants(globalTools, agentTools),
-          getRecord(globalTools?.byProvider),
-        );
-      });
-    },
-  },
-];
-
-const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "silentReply"],
-    message:
-      'agents.defaults.silentReply.internal was removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasOwnRecordProperty(value, "internal"),
-  },
-  {
-    path: ["surfaces"],
-    message:
-      'surfaces.*.silentReply.internal was removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasSurfaceLegacySilentReplyPolicy(value),
-  },
-];
 
 function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "auto";
@@ -185,10 +58,7 @@ function migrateLegacyMemorySearchFlatKeys(
     }
     const legacyValue = memorySearch[legacyKey];
     if (memorySearch[parentKey] === undefined) {
-      memorySearch[parentKey] = { [canonicalKey]: legacyValue };
-      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
-      delete memorySearch[legacyKey];
-      continue;
+      memorySearch[parentKey] = {};
     }
     const canonicalParent = getRecord(memorySearch[parentKey]);
     if (!canonicalParent) {
@@ -361,10 +231,10 @@ function readOwnToolPolicyGrantList(
 }
 
 function resolveToolProfileForMigration(
-  tools: Record<string, unknown>,
+  tools: Record<string, unknown> | null,
   inheritedProfile?: string,
 ): string | undefined {
-  return typeof tools.profile === "string" ? tools.profile : inheritedProfile;
+  return typeof tools?.profile === "string" ? tools.profile : inheritedProfile;
 }
 
 function collectProfileConfiguredSectionRepairGrants(params: {
@@ -499,10 +369,7 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
         inheritedByProvider,
         providerKey,
       );
-      const inheritedProviderProfile =
-        typeof inheritedProviderPolicy?.profile === "string"
-          ? inheritedProviderPolicy.profile
-          : undefined;
+      const inheritedProviderProfile = resolveToolProfileForMigration(inheritedProviderPolicy);
       const hasProviderProfile =
         typeof getRecord(policy)?.profile === "string" || Boolean(inheritedProviderProfile);
       if (!hasProviderProfile) {
@@ -528,10 +395,9 @@ function addProfileConfiguredSectionGrants(
   inheritedProfile?: string,
   inheritedAlsoAllow?: string[],
   configuredGrantsOverride?: string[],
-  materializeProfile = true,
 ): void {
   const tools = getRecord(value);
-  if (!tools || !materializeProfile) {
+  if (!tools) {
     return;
   }
   const profile = resolveToolProfileForMigration(tools, inheritedProfile);
@@ -546,7 +412,7 @@ function addProfileConfiguredSectionGrants(
     configuredGrants,
   });
   const allow = readToolPolicyGrantList(tools, "allow");
-  if (repairGrants.length === 0 || allow.length === 0 || profile === "full") {
+  if (repairGrants.length === 0) {
     return;
   }
   const ownAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
@@ -575,7 +441,6 @@ function addByProviderProfileConfiguredSectionGrants(
   pathLabel: string,
   changes: string[],
   configuredGrantsOverride?: string[],
-  inheritedProfile?: string,
   inheritedByProvider?: Record<string, unknown> | null,
 ): void {
   const tools = getRecord(value);
@@ -596,11 +461,10 @@ function addByProviderProfileConfiguredSectionGrants(
       providerKey,
     );
     const ownsProviderProfile = typeof getRecord(providerPolicy)?.profile === "string";
-    const inheritedProviderProfile =
-      typeof inheritedProviderPolicy?.profile === "string"
-        ? inheritedProviderPolicy.profile
-        : undefined;
-    const providerInheritedProfile = inheritedProviderProfile ?? inheritedProfile;
+    const inheritedProviderProfile = resolveToolProfileForMigration(inheritedProviderPolicy);
+    if (!ownsProviderProfile && !inheritedProviderProfile) {
+      continue;
+    }
     const providerInheritedAlsoAllow = readOwnToolPolicyGrantList(
       inheritedProviderPolicy,
       "alsoAllow",
@@ -609,10 +473,9 @@ function addByProviderProfileConfiguredSectionGrants(
       providerPolicy,
       `${pathLabel}.byProvider.${providerKey}`,
       changes,
-      providerInheritedProfile,
+      inheritedProviderProfile,
       providerInheritedAlsoAllow,
       configuredGrants,
-      ownsProviderProfile || Boolean(inheritedProviderProfile),
     );
   }
 }
@@ -640,20 +503,18 @@ function bindingMatchHasLegacyDmPeerKind(binding: unknown): boolean {
   return peer !== null && peer.kind === "dm";
 }
 
-const BINDING_DM_PEER_KIND_RULE: LegacyConfigRule = {
-  path: ["bindings"],
-  message:
-    'bindings[].match.peer.kind uses the retired "dm" alias; use "direct". Run "openclaw doctor --fix".',
-  match: (value) =>
-    Array.isArray(value) && value.some((binding) => bindingMatchHasLegacyDmPeerKind(binding)),
-};
-
-/** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "bindings.match.peer.kind.dm-to-direct",
-    describe: "Move deprecated bindings match.peer.kind dm values to direct",
-    legacyRules: [BINDING_DM_PEER_KIND_RULE],
+    legacyRules: [
+      {
+        path: ["bindings"],
+        message:
+          'bindings[].match.peer.kind uses the retired "dm" alias; use "direct". Run "openclaw doctor --fix".',
+        match: (value) =>
+          Array.isArray(value) && value.some((binding) => bindingMatchHasLegacyDmPeerKind(binding)),
+      },
+    ],
     apply: (raw, changes) => {
       if (!Array.isArray(raw.bindings)) {
         return;
@@ -673,24 +534,43 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         );
       }
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "tools.profile-configured-sections-alsoAllow",
-    describe: "Repair explicit configured-section tool grants filtered by profiles",
-    legacyRules: PROFILE_CONFIGURED_TOOL_SECTION_RULES,
+    legacyRules: [
+      {
+        path: ["tools"],
+        message:
+          'tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
+        match: (value) => toolProfileConfiguredSectionsNeedExplicitRepair(value),
+      },
+      {
+        path: ["agents"],
+        message:
+          'agents.entries.*.tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
+        match: (value, root) => {
+          const globalTools = getRecord(root.tools);
+          const inheritedProfile = resolveToolProfileForMigration(globalTools);
+          const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
+          return someAgentEntry(value, (agent) => {
+            const agentTools = getRecord(agent.tools);
+            return toolProfileConfiguredSectionsNeedExplicitRepair(
+              agentTools,
+              inheritedProfile,
+              inheritedAlsoAllow,
+              collectEffectiveConfiguredToolSectionGrants(globalTools, agentTools),
+              getRecord(globalTools?.byProvider),
+            );
+          });
+        },
+      },
+    ],
     apply: (raw, changes) => {
       const globalTools = getRecord(raw.tools);
-      const inheritedProfile =
-        typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
+      const inheritedProfile = resolveToolProfileForMigration(globalTools);
       const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
       addProfileConfiguredSectionGrants(raw.tools, "tools", changes);
-      addByProviderProfileConfiguredSectionGrants(
-        raw.tools,
-        "tools",
-        changes,
-        undefined,
-        inheritedProfile,
-      );
+      addByProviderProfileConfiguredSectionGrants(raw.tools, "tools", changes);
       visitAgentEntries(raw, (agent, path) => {
         const agentTools = getRecord(agent.tools);
         const configuredGrants = collectEffectiveConfiguredToolSectionGrants(
@@ -710,28 +590,70 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           `${path}.tools`,
           changes,
           configuredGrants,
-          resolveToolProfileForMigration(agentTools ?? {}, inheritedProfile),
           getRecord(globalTools?.byProvider),
         );
       });
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "silentReply.internal-removed",
-    describe: "Remove legacy internal silent reply config",
-    legacyRules: SILENT_REPLY_LEGACY_RULES,
+    legacyRules: [
+      {
+        path: ["agents", "defaults", "silentReply"],
+        message:
+          'agents.defaults.silentReply.internal was removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove it.',
+        match: (value) => hasOwnRecordProperty(value, "internal"),
+      },
+      {
+        path: ["surfaces"],
+        message:
+          'surfaces.*.silentReply.internal was removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove it.',
+        match: (value) => hasSurfaceLegacySilentReplyPolicy(value),
+      },
+    ],
     apply: removeLegacySilentReplyConfig,
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "agents.sandbox.browser.network-none",
-    describe: "Disable sandbox browser sidecars that use unsupported network mode none",
-    legacyRules: UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES,
+    legacyRules: [
+      {
+        path: ["agents", "defaults", "sandbox", "browser", "network"],
+        message:
+          'agents.defaults.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the sidecar and restore the dedicated browser network.',
+        match: isUnsupportedSandboxBrowserNetwork,
+      },
+      {
+        path: ["agents"],
+        message:
+          'agents.entries.*.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the affected sidecar and restore the dedicated browser network.',
+        match: (value) =>
+          someAgentEntry(value, (agent) =>
+            isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
+          ),
+      },
+    ],
     apply: migrateUnsupportedSandboxBrowserNetworks,
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "memorySearch->memory.search",
-    describe: "Move memory search config to its canonical memory owner",
-    legacyRules: [MEMORY_SEARCH_RULE, ...AGENT_MEMORY_SEARCH_OWNER_RULES],
+    legacyRules: [
+      {
+        path: ["memorySearch"],
+        message:
+          'top-level memorySearch was moved; use memory.search instead. Run "openclaw doctor --fix".',
+      },
+      {
+        path: ["agents", "defaults", "memorySearch"],
+        message:
+          'agents.defaults.memorySearch moved to memory.search. Run "openclaw doctor --fix".',
+      },
+      {
+        path: ["agents"],
+        message:
+          'agents.entries.*.memorySearch moved to agents.entries.*.memory.search. Run "openclaw doctor --fix".',
+        match: (value) => someAgentEntry(value, (agent) => agent.memorySearch !== undefined),
+      },
+    ],
     apply: (raw, changes) => {
       const agents = getRecord(raw.agents);
       const defaults = getRecord(agents?.defaults);
@@ -776,24 +698,59 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         );
       });
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "memorySearch.flat-fields->nested-fields",
-    describe: "Move legacy flat memory search fields to canonical nested fields",
-    legacyRules: LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES,
+    legacyRules: [
+      {
+        path: ["memory", "search"],
+        message:
+          'memory.search uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+        match: hasLegacyMemorySearchFlatKeys,
+      },
+      {
+        path: ["agents"],
+        message:
+          'agents.entries.*.memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+        match: (value) =>
+          someAgentEntry(value, (agent) =>
+            hasLegacyMemorySearchFlatKeys(getAgentMemorySearchRecord(agent)),
+          ),
+      },
+    ],
     apply: (raw, changes) =>
       migrateCanonicalMemorySearches(raw, changes, migrateLegacyMemorySearchFlatKeys),
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "memorySearch.provider-auto->openai",
-    describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
-    legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
+    legacyRules: [
+      {
+        path: ["memorySearch", "provider"],
+        message:
+          'memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+        match: isLegacyMemorySearchAutoProvider,
+      },
+      {
+        path: ["memory", "search", "provider"],
+        message:
+          'memory.search.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+        match: isLegacyMemorySearchAutoProvider,
+      },
+      {
+        path: ["agents"],
+        message:
+          'agents.entries.*.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+        match: (value) =>
+          someAgentEntry(value, (agent) =>
+            isLegacyMemorySearchAutoProvider(getAgentMemorySearchRecord(agent)?.provider),
+          ),
+      },
+    ],
     apply: (raw, changes) =>
       migrateCanonicalMemorySearches(raw, changes, rewriteLegacyMemorySearchAutoProvider),
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "session.typingMode->agents.defaults.typingMode",
-    describe: "Move session typing mode to agent defaults",
     legacyRules: [
       {
         path: ["session", "typingMode"],
@@ -816,6 +773,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
       );
       delete session.typingMode;
     },
-  }),
+  },
 ];
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

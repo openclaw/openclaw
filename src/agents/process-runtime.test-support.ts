@@ -30,6 +30,11 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "lifecycle-creation.retention.test-support",
     distWorkerPath: "agents/lifecycle-creation.retention.test-support.js",
   },
+  modelGenerationRetention: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "prepared-model-runtime-generation.retention.test-support",
+    distWorkerPath: "agents/prepared-model-runtime-generation.retention.test-support.js",
+  },
   settingsStorage: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sessions/settings-storage",
@@ -44,11 +49,6 @@ export const agentProcessTestEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sessions/tools/read.retention.test-support",
     distWorkerPath: "agents/sessions/tools/read.retention.test-support.js",
-  },
-  outputAccumulator: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "sessions/tools/output-accumulator",
-    distWorkerPath: "agents/sessions/tools/output-accumulator.js",
   },
   transcriptLifecycleRetention: {
     currentModuleUrl: import.meta.url,

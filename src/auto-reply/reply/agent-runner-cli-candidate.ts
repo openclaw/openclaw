@@ -29,13 +29,18 @@ import {
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
-import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
+import {
+  buildFallbackCandidateTurnParams,
+  buildReplyRunStateParams,
+  resolveRunModelHasVision,
+} from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
@@ -106,12 +111,10 @@ export async function runCliFallbackCandidate(
   const cliReplyToMode = cliThreadRequired
     ? cliThreadingContext.replyToMode
     : (turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode);
-  const isRestartSentinelContinuation =
-    turn.sessionCtx.InputProvenance?.kind === "internal_system" &&
-    turn.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
-  const cliCurrentMessageId = isRestartSentinelContinuation
-    ? turn.sessionCtx.ReplyToId
-    : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
+  const cliCurrentMessageId =
+    cliThreadingContext.currentMessageId != null
+      ? String(cliThreadingContext.currentMessageId)
+      : undefined;
   const commandDetailsVisible = turn.resolvedVerboseLevel === "full";
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
@@ -146,7 +149,8 @@ export async function runCliFallbackCandidate(
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
-  const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  const toolAuthorityFingerprint =
+    await turn.replyOperation?.bindToolAuthorityRouteAsync(toolAuthorityRoute);
   return params.timing.measure("cli_run", () =>
     withAdmittedCliCandidate(
       {
@@ -161,7 +165,7 @@ export async function runCliFallbackCandidate(
           lifecycleGeneration: params.lifecycleGeneration,
           isFinalFallbackAttempt: params.isFinalFallbackAttempt,
           abortSignal: params.runAbortSignal,
-          trigger: turn.isHeartbeat ? "heartbeat" : "user",
+          trigger: resolveReplyRunTrigger(turn),
           inputProvenance: turn.followupRun.run.inputProvenance,
         },
         provider: params.cliExecutionProvider,
@@ -178,6 +182,18 @@ export async function runCliFallbackCandidate(
         settleResult,
       }) => {
         let sessionEntry = initialSessionEntry;
+        const clearCliBinding = () =>
+          clearCliSessionInStore({
+            agentId: turn.followupRun.run.agentId,
+            provider: params.cliExecutionProvider,
+            expectedCliSessionId: cliSessionBinding?.sessionId,
+            expectedSessionId: sessionEntry?.sessionId,
+            assertCommitAllowed: assertSettlementCurrent,
+            sessionKey: turn.sessionKey,
+            sessionStore: turn.activeSessionStore,
+            storePath: turn.storePath,
+            activeSessionEntry: sessionEntry,
+          });
         // The CLI owner must see explicit pins before provider scoping can discard them.
         const authProfileId = allowCliAuthProfileForwarding
           ? resolveCliExecutionAuthProfileId({
@@ -218,6 +234,8 @@ export async function runCliFallbackCandidate(
           turn.followupRun.run.agentId,
         );
         let droppedCliSessionReplacement = false;
+        await params.prepareAgentRunStart();
+        assertSettlementCurrent();
         const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
@@ -241,36 +259,11 @@ export async function runCliFallbackCandidate(
                   ) {
                     return;
                   }
-                  await clearCliSessionInStore({
-                    agentId: turn.followupRun.run.agentId,
-                    provider: params.cliExecutionProvider,
-                    expectedCliSessionId: cliSessionBinding.sessionId,
-                    expectedSessionId: sessionEntry?.sessionId,
-                    assertCommitAllowed: assertSettlementCurrent,
-                    sessionKey: turn.sessionKey,
-                    sessionStore: turn.activeSessionStore,
-                    storePath: turn.storePath,
-                    activeSessionEntry: sessionEntry,
-                  });
+                  await clearCliBinding();
                 }
               : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
-          onAssistantText: async (text) => {
-            const classified = params.presentation.classifyStreamingPartial({ text });
-            if (classified.skip || !classified.text) {
-              return;
-            }
-            const textForTyping = classified.text;
-            const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
-            const onPartialReply = turn.opts?.onPartialReply;
-            return await params.presentation.presentWithTyping(
-              turn.typingSignals.signalTextDelta(textForTyping),
-              () =>
-                sanitized.skip || !sanitized.text || !onPartialReply
-                  ? false
-                  : onPartialReply({ text: sanitized.text }),
-            );
-          },
+          onAssistantText: (text) => params.presentation.presentPartialReply({ text }, "cli"),
           onCompletedReply: async (text, assistantMessageIndex) => {
             params.runAbortSignal?.throwIfAborted();
             assertSettlementCurrent();
@@ -354,9 +347,8 @@ export async function runCliFallbackCandidate(
                   })
               : undefined,
           runParams: {
-            preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
-            preparedRunAdmission: params.preparedRunAdmission,
-            messageActionTurnCapability: params.messageActionTurnCapability,
+            ...buildFallbackCandidateTurnParams(params),
+            ...buildReplyRunStateParams(turn.followupRun.run),
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,
@@ -369,28 +361,11 @@ export async function runCliFallbackCandidate(
             runtimePolicySessionKey:
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
-            trigger: turn.isHeartbeat ? "heartbeat" : "user",
-            sessionFile: turn.followupRun.run.sessionFile,
-            workspaceDir: turn.followupRun.run.workspaceDir,
-            cwd: turn.followupRun.run.cwd,
             config: params.runtimeConfig,
-            toolOverrides: turn.followupRun.run.toolOverrides,
-            prompt: turn.commandBody,
-            transcriptPrompt: turn.transcriptCommandBody,
-            media: turn.followupRun.media,
-            suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
-            userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-            onUserMessagePersisted: params.notifyUserMessagePersisted,
-            prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
             storePath: turn.storePath,
-            currentInboundEventKind: turn.followupRun.currentInboundEventKind,
-            currentInboundContext: turn.followupRun.currentInboundContext,
-            inputProvenance: turn.followupRun.run.inputProvenance,
             // Candidate zero is the primary attempt; later candidates are
             // fallbacks. Carry the runner-owned fact instead of inferring from
             // this shared dispatch path, or primary CLI runs lose delegation.
@@ -414,43 +389,20 @@ export async function runCliFallbackCandidate(
             model: params.model,
             thinkLevel: params.candidateThinkLevel,
             fastMode: params.candidateFastMode.fastMode,
-            fastModeStartedAtMs: params.fastModeStartedAtMs,
             fastModeAutoOnSeconds: params.candidateFastMode.fastModeAutoOnSeconds,
-            fastModeAutoProgressState: params.fastModeAutoProgressState,
-            isFinalFallbackAttempt: params.isFinalFallbackAttempt,
             timeoutMs: turn.followupRun.run.timeoutMs,
             runTimeoutOverrideMs: turn.followupRun.run.runTimeoutOverrideMs,
             runId: params.runId,
-            lane: params.runLane,
-            extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
-            sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-            taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
-            // Heartbeat ambient routes are never implicit message recipients.
-            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
-            cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
-            silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
-            terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
             cliSessionBindingFacts: turn.followupRun.run.cliSessionBindingFacts,
-            ownerNumbers: turn.followupRun.run.ownerNumbers,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
             forkCliSessionOnResume,
             ...forkRunParams,
             authProfileId,
-            bootstrapContextMode: turn.opts?.bootstrapContextMode,
-            bootstrapContextRunKind: params.bootstrapContextRunKind,
-            bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
-            images: params.currentTurnImages.images,
-            imageOrder: params.currentTurnImages.imageOrder,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
-            skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
-            clientCaps: turn.followupRun.run.clientCaps,
-            bootstrapUserProfileId: turn.followupRun.run.bootstrapUserProfileId,
-            gatewayUiCommandTarget: turn.followupRun.run.gatewayUiCommandTarget,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
             senderId: turn.followupRun.run.senderId,
@@ -462,43 +414,25 @@ export async function runCliFallbackCandidate(
             groupSpace: turn.followupRun.run.groupSpace,
             spawnedBy: turn.followupRun.run.spawnedBy,
             chatId: turn.followupRun.originatingChatId,
-            channelContext: turn.followupRun.run.channelContext,
             currentThreadTs: cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
             currentMessageId: cliCurrentMessageId,
             replyToMode: cliReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
-            senderIsOwner: turn.followupRun.run.senderIsOwner,
-            approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
-            toolsAllow: turn.opts?.toolsAllow,
-            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
-            disableTools: turn.opts?.disableTools,
             toolAuthorityFingerprint,
-            abortSignal: params.runAbortSignal,
             // Native input is already host-authored. Keep its stable delivery
             // context out of the model-output normalization wrapper.
             onBlockReply: onNativeBlockReply,
             onPartialReply: turn.opts?.onPartialReply,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
-            replyOperation: turn.replyOperation,
           },
         });
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.
           return await settleCliSessionResult(candidateResult, async () => {
-            await clearCliSessionInStore({
-              agentId: turn.followupRun.run.agentId,
-              provider: params.cliExecutionProvider,
-              expectedCliSessionId: cliSessionBinding?.sessionId,
-              expectedSessionId: sessionEntry?.sessionId,
-              assertCommitAllowed: assertSettlementCurrent,
-              sessionKey: turn.sessionKey,
-              sessionStore: turn.activeSessionStore,
-              storePath: turn.storePath,
-              activeSessionEntry: sessionEntry,
-            });
+            await clearCliBinding();
             params.classifyResult(candidateResult);
           });
         }

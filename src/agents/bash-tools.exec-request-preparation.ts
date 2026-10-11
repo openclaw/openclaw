@@ -15,7 +15,9 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { omitGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { OPENCLAW_CLI_ENV_VAR, buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -42,7 +44,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
-  required?: boolean;
+  awaitResults?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
@@ -73,11 +75,11 @@ export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
   }
-  if (args.required !== undefined && typeof args.required !== "boolean") {
-    throw new ToolInputError("exec required must be a boolean");
+  if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
+    throw new ToolInputError("exec awaitResults must be a boolean");
   }
-  if (args.required === true && args.background === true) {
-    throw new ToolInputError("required exec cannot be detached with background=true");
+  if (args.awaitResults === true && args.background === true) {
+    throw new ToolInputError("exec with awaitResults=true cannot be detached with background=true");
   }
   if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
@@ -149,6 +151,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
       const read = await readSessionEntriesFromStoreInWorker({
         agentId: notifyAgentSession.agentId,
         sessionKeys: [notifySessionKey],
+        snapshotFields: [],
         storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
           agentId: notifyAgentSession.agentId,
         }),
@@ -173,6 +176,9 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
+    // Preserve conversation provenance for passive subagent completion notices.
+    notifyFromConversationTurn:
+      defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
 }
 
@@ -385,6 +391,7 @@ export function resolvePreparedExecEnvironment(params: {
   storeSecretEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
+  localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
@@ -510,10 +517,13 @@ export function resolvePreparedExecEnvironment(params: {
 
   // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
   // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
-  if (params.host === "node" && params.defaultPathPrepend.length > 0) {
-    params.warnings.push(
-      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-    );
+  // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
+  if (params.host === "node") {
+    if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
+      params.warnings.push(
+        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+      );
+    }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);
   }
@@ -537,20 +547,31 @@ export function resolvePreparedExecEnvironment(params: {
       }
     }
   }
-  const preparedEnv = {
+  const preparedEnv: Record<string, string> = {
     ...params.localProcessEnv,
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
   };
+  // Inherited Git parameters can contain credentials; keep them out of request overrides.
+  const gitPolicyEnv =
+    params.host === "gateway" && params.localGitConfigParameters
+      ? {
+          GIT_CONFIG_PARAMETERS: [
+            resolveEnvironmentValue(preparedEnv, "GIT_CONFIG_PARAMETERS") ??
+              resolveEnvironmentValue(env, "GIT_CONFIG_PARAMETERS"),
+            params.localGitConfigParameters,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        }
+      : undefined;
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
-  Object.assign(env, preparedEnv);
-
-  Object.assign(env, routingEnv);
+  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
   return {
-    env,
+    env: executionEnv,
     ...(params.host === "node" && routingEnv ? { executionContext } : {}),
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }

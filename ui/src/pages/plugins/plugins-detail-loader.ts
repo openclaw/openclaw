@@ -28,8 +28,6 @@ export async function loadInstalledPluginDetail(params: {
   const { pluginId, plugin, catalog: cachedCatalog, gateway } = params;
   const current = params.getDetail();
   const previous = current?.pluginId === pluginId ? current : null;
-  // Refresh presentation in place, but rotate request ownership even when reads
-  // are paused for removal so an earlier inspection cannot publish a false error.
   const initial = pluginId
     ? {
         ...previous,
@@ -48,15 +46,16 @@ export async function loadInstalledPluginDetail(params: {
   if (!plugin?.installed || !initial || !scope || !params.canInspect) {
     return;
   }
-  let detail: PluginsPageDetail = initial;
   const { client } = scope;
-  const isCurrent = () => gateway.isCurrent(scope) && params.getDetail() === detail;
-  const publish = (next: PluginsPageDetail) => {
+  // A new detail snapshot retires this read, including when uninstall pauses inspection.
+  let ownedDetail: PluginsPageDetail = initial;
+  const isCurrent = () => gateway.isCurrent(scope) && params.getDetail() === ownedDetail;
+  const publish = (patch: Partial<PluginsPageDetail>) => {
     if (!isCurrent()) {
       return;
     }
-    detail = next;
-    params.onChange(next);
+    ownedDetail = { ...ownedDetail, ...patch };
+    params.onChange(ownedDetail);
   };
   const tools =
     isGatewayMethodAdvertised({ hello: gateway.snapshot?.hello }, "tools.catalog") === true
@@ -70,11 +69,10 @@ export async function loadInstalledPluginDetail(params: {
       return;
     }
     publish({
-      ...detail,
       inspection,
       tools: undefined,
-      catalog: inspection.catalog ?? detail.catalog,
-      catalogLoading: Boolean(plugin.catalogId && !inspection.catalog && !detail.catalog),
+      catalog: inspection.catalog ?? initial.catalog,
+      catalogLoading: Boolean(plugin.catalogId && !inspection.catalog && !initial.catalog),
     });
     void tools.then((catalog) => {
       if (!catalog) {
@@ -92,7 +90,7 @@ export async function loadInstalledPluginDetail(params: {
           });
         }
       }
-      publish({ ...detail, tools: [...toolDetails.values()] });
+      publish({ tools: [...toolDetails.values()] });
     });
     if (!plugin.catalogId) {
       return;
@@ -104,13 +102,13 @@ export async function loadInstalledPluginDetail(params: {
         undefined,
         plugin.version,
       );
-      publish({ ...detail, catalog, catalogLoading: false });
+      publish({ catalog, catalogLoading: false });
     } catch {
       // Remote enrichment is optional; settle its placeholder without hiding local controls.
-      publish({ ...detail, catalogLoading: false });
+      publish({ catalogLoading: false });
     }
   } catch (error) {
-    publish({ ...detail, error: formatUiError(error) });
+    publish({ error: formatUiError(error) });
   }
 }
 
@@ -143,7 +141,6 @@ export async function loadPluginCatalogDetail(params: {
     context.replace("plugins", { pathname: pathForRoute("plugins", context.basePath) });
     return;
   }
-  // Same-selection refreshes retain presentation; a new object fences older requests.
   const detail: PluginsPageCatalogDetail | null = id ? { id, result: previous, error: null } : null;
   if (current?.id !== id) {
     void params.showInstalled(null);

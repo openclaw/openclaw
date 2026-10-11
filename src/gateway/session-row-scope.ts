@@ -17,10 +17,7 @@ import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openc
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
-type SessionRowScopeTarget = {
-  agentId: string;
-  storeTarget: { agentId: string; storePath: string };
-};
+type SessionRowScopeTarget = Pick<records.Row, "agentId" | "storeTarget">;
 type SessionRowScopeQuery = { agentId?: string; storePath?: string };
 type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
@@ -378,7 +375,7 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
     : matching(query);
   const pending: records.Lookup[] = [];
   for (const row of candidates) {
-    if (row?.unresolvedDatabaseFacts === "category" && matches(row)) {
+    if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
       pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
       if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
         break;
@@ -393,7 +390,7 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates
-      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+      : candidates.map((row) => (dirty.has(records.identity(row)) ? acquire(row) : row));
   // Each candidate path returns an owned array. Finish all acquisitions before
   // compacting it, since acquiring one dirty row can update another row's facts.
   let selectedCount = 0;

@@ -38,15 +38,10 @@ function extendSchemaDefs(
     return defs;
   }
 
-  const next: SchemaDefs = defs
-    ? {
-        $defs: new Map(defs.$defs),
-        definitions: new Map(defs.definitions),
-      }
-    : {
-        $defs: new Map<string, unknown>(),
-        definitions: new Map<string, unknown>(),
-      };
+  const next: SchemaDefs = {
+    $defs: new Map(defs?.$defs),
+    definitions: new Map(defs?.definitions),
+  };
   if (defsEntry) {
     for (const [key, value] of Object.entries(defsEntry)) {
       next.$defs.set(key, value);
@@ -80,11 +75,6 @@ function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unkn
     current = current[key];
   }
   return current;
-}
-
-function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
-  const tokens = parseLocalSchemaRefPointer(ref);
-  return tokens ? resolveJsonPointerPath(rootDocument, tokens) : undefined;
 }
 
 export const SCHEMA_MAP_KEYS = new Set([
@@ -161,7 +151,7 @@ function inlineLocalSchemaRefsWithDefs(
       }
       return { ...obj };
     }
-    const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+    const nextRefStack = new Set(refStack);
     nextRefStack.add(refValue);
     const inlined = inlineLocalSchemaRefsWithDefs(
       resolved,
@@ -203,14 +193,10 @@ function inlineLocalSchemaRefsWithDefs(
     setOwnSchemaProperty(result, key, next);
   }
   if (state.unresolvedLocalRefs) {
-    if ("$defs" in obj) {
-      result.$defs = obj.$defs;
-    }
-    if ("definitions" in obj) {
-      result.definitions = obj.definitions;
-    }
-    if ("components" in obj) {
-      result.components = obj.components;
+    for (const key of ["$defs", "definitions", "components"]) {
+      if (key in obj) {
+        result[key] = obj[key];
+      }
     }
   }
   return result;
@@ -266,7 +252,7 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
         typeof node.$ref !== "string" ||
         !/^#\/(\$defs|definitions)\/[^/]+$/.test(node.$ref) ||
         node.nullable === true ||
-        resolveLocalJsonPointer(schema, node.$ref) === undefined
+        tryResolveLocalRef(node.$ref, undefined, schema) === undefined
       ) {
         return false;
       }

@@ -41,7 +41,7 @@ class RealtimePlayoutTest {
 
   private fun session(id: String) =
     RealtimePlayout.Session(
-      onState = { _, _, _ -> },
+      onState = { _, _ -> },
       onMark = { mark -> acknowledgements += "$id/$mark" },
       onFailure = { error -> failures += "$id/$error" },
     )
@@ -202,7 +202,7 @@ class RealtimePlayoutTest {
     PlayoutAudioTrack.presentedFrames = 0
     var releasedAtAcknowledgement = false
     val owner =
-      RealtimePlayout.Session({ _, _, _ -> }, {
+      RealtimePlayout.Session({ _, _ -> }, {
         releasedAtAcknowledgement = PlayoutAudioTrack.track?.state == AudioTrack.STATE_UNINITIALIZED
       }, { error(it) })
     playout.audio(owner, ByteArray(100), statusOwner)
@@ -385,7 +385,7 @@ class RealtimePlayoutTest {
   fun cancellationStopsAlreadyQueuedAcknowledgements() {
     val acknowledged = mutableListOf<String>()
     val owner =
-      RealtimePlayout.Session({ _, _, _ -> }, { name ->
+      RealtimePlayout.Session({ _, _ -> }, { name ->
         acknowledged += name
         job.cancel()
       }, { error(it) })

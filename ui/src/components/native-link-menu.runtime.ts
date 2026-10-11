@@ -6,7 +6,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { promoteToPopoverTopLayer, renderMenuTrigger } from "./menu-surface.ts";
 import "./web-awesome.ts";
 
 export type NativeLinkMenuAction = "inline" | "external" | "copy";
@@ -53,14 +53,7 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
           this.onClose();
         }}
       >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${t("nativeLinkMenu.label")}
-          style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
+        ${renderMenuTrigger({ x: clampedX, y: clampedY }, t("nativeLinkMenu.label"))}
         ${(
           [
             ["inline", "s", "openInline", icons.panelRightOpen],

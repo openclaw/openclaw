@@ -6,6 +6,7 @@ import {
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
+import { readGitHubPublicationSession } from "../github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "../github-publication-failure.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
@@ -19,7 +20,6 @@ import {
   resolveSessionMutationAuthorization,
 } from "../session-sharing.js";
 import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import {
   isIneligiblePersonalGatewayCaller,
@@ -100,6 +100,7 @@ export async function prepareGitHubPublicationOptionsRead(
       "req" | "hasCurrentClientAuthority" | "sessionMutationCommitGuard"
     >,
   { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+  signal?: AbortSignal,
 ) {
   // Store discovery is stable within this request; session rows remain live reads.
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
@@ -109,6 +110,7 @@ export async function prepareGitHubPublicationOptionsRead(
   const userId = client?.authenticatedUserId;
   const access = client?.internal?.operatorAccessAuthority;
   const assertConnection = () => {
+    signal?.throwIfAborted();
     authority.assertCurrent();
     if (
       client?.authenticatedUserProfile?.profileId !== profileReference ||
@@ -142,9 +144,12 @@ export async function prepareGitHubPublicationOptionsRead(
       ? { kind: "ineligible" }
       : !profile
         ? { kind: "absent" }
-        : { kind: "eligible", action: preparePersonalGitHubAction(options) };
+        : {
+            kind: "eligible",
+            action: preparePersonalGitHubAction(options, "operator.read", signal),
+          };
   const readSession = (key: string, agentId?: string) => {
-    const loaded = loadGatewaySessionEntryReadOnly(key, { agentId, targetDiscoveryCache });
+    const loaded = readGitHubPublicationSession(key, { agentId, targetDiscoveryCache });
     const filter = createSessionListEntryFilter({
       cfg: options.context.getRuntimeConfig(),
       client: currentClient(),
@@ -195,9 +200,11 @@ export async function prepareGitHubPublicationOptionsRead(
 export function preparePersonalGitHubAction(
   options: Request,
   scope: "operator.read" | "operator.write" = "operator.read",
+  signal?: AbortSignal,
 ): PersonalGitHubAction {
   const { client, context } = options;
   const resolveOwner = () => {
+    signal?.throwIfAborted();
     if (
       !client?.connId ||
       client.connect?.role !== "operator" ||
@@ -237,7 +244,7 @@ export function preparePersonalGitHubSessionAction(
 } {
   const action = preparePersonalGitHubAction(options, "operator.write");
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, targetDiscoveryCache });
+  const initial = readGitHubPublicationSession(sessionKey, { agentId, targetDiscoveryCache });
   if (!initial.entry?.sessionId) {
     throw new Error("GitHub publication session was not found.");
   }
@@ -245,7 +252,7 @@ export function preparePersonalGitHubSessionAction(
   const lifecycleRevision = initial.entry.lifecycleRevision ?? null;
   const assertCurrent = () => {
     action.assertCurrent();
-    const current = loadGatewaySessionEntryReadOnly(initial.canonicalKey, {
+    const current = readGitHubPublicationSession(initial.canonicalKey, {
       agentId: initial.agentId,
       targetDiscoveryCache,
     });

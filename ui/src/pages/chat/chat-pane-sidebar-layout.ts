@@ -179,8 +179,12 @@ export function renderSidebarRegion(params: {
   callbacks: SidebarRegionCallbacks;
   layout: SidebarLayout;
   narrow: boolean;
+  /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
+  sideFocusLocked?: boolean;
+  sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
+  background?: TemplateResult;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
@@ -207,27 +211,49 @@ export function renderSidebarRegion(params: {
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
-  const activePanelId = params.layout.columns[0]?.activePanelId;
-  const activePanelSlot = params.layout.columns[0]?.panels.find(
-    (panel) => panel.id === activePanelId,
-  )?.slot;
-  const regionLoading = panelDefinitions.find(
-    (definition) => definition.slot === activePanelSlot,
-  )?.loading;
   return html`<div
-    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
+    class="sidebar-region ${params.background ? "sidebar-region--background" : ""} ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
-    } ${params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
+    } ${
+      params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""
+    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
     style=${styleMap({
       "--side-panel-width": `${column?.width ?? 480}px`,
       "--side-panel-height": `${column?.height ?? 360}px`,
     })}
   >
+    ${
+      params.background
+        ? html`<div
+            class="sidebar-region__background"
+            ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
+            style=${styleMap({
+              gridArea: chatMain
+                ? "main-header / main-header / main / main"
+                : "side-header / side-header / side / side",
+            })}
+          >
+            ${params.background}
+          </div>`
+        : nothing
+    }
     <div class="sidebar-region__header">${params.header ?? nothing}</div>
     ${
       regionError !== undefined
         ? regionError === null
-          ? (regionLoading ?? null)
+          ? column?.panels
+              .filter(
+                (panel) =>
+                  panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
+              )
+              .map(
+                (panel) => html`<div
+                  class="side-panel__panel"
+                  data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
+                >
+                  ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
+                </div>`,
+              )
           : null
         : html`<openclaw-chat-sidebar-region
             .panelIdPrefix=${panelIdPrefix}
@@ -237,6 +263,8 @@ export function renderSidebarRegion(params: {
             .panelDefinitions=${panelDefinitions}
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
+            .sideFocusLocked=${params.sideFocusLocked === true}
+            .sideFocusOrigin=${params.sideFocusOrigin}
             .availableWidth=${params.availableWidth}
           ></openclaw-chat-sidebar-region>`
     }
@@ -333,18 +361,26 @@ export function createSidebarFullMessageLoader(
       fullMessageCaches.set(state, cache);
     }
     const maxChars = request.maxChars ?? DETAIL_FULL_MESSAGE_MAX_CHARS;
+    const pendingInput = request.messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX);
+    const sameConversation = uiConversationMatches(
+      state,
+      scope.sessionKey,
+      request.sessionKey,
+      request.agentId,
+      scope.agentId,
+    );
+    const sessionId =
+      request.sessionId ??
+      (sameConversation && !pendingInput && scope.displayedSessionId !== scope.sessionId
+        ? scope.displayedSessionId
+        : undefined);
     const cacheable =
-      !request.messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) &&
+      !pendingInput &&
+      sameConversation &&
       scope.sessionId !== undefined &&
       scope.sessionId === scope.displayedSessionId &&
-      scope.lifecycleRevision !== undefined &&
-      uiConversationMatches(
-        state,
-        scope.sessionKey,
-        request.sessionKey,
-        request.agentId,
-        scope.agentId,
-      );
+      (sessionId === undefined || sessionId === scope.sessionId) &&
+      scope.lifecycleRevision !== undefined;
     const key = JSON.stringify([scope.sessionKey, scope.agentId, request.messageId, maxChars]);
     const cached = cacheable ? cache.messages.get(key) : undefined;
     if (cached) {
@@ -355,6 +391,7 @@ export function createSidebarFullMessageLoader(
       {
         sessionKey: request.sessionKey,
         ...(request.agentId ? { agentId: request.agentId } : {}),
+        ...(sessionId ? { sessionId } : {}),
         messageId: request.messageId,
         maxChars,
       },

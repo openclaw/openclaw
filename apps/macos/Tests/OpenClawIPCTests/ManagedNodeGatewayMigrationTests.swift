@@ -559,6 +559,10 @@ struct ManagedNodeGatewayMigrationTests {
             }
             let live = ManagedNodeGatewayMigration.liveOperations(
                 checkCurrent: { throw CancellationError() },
+                restorationInstaller: {
+                    Issue.record("Verifying the original Node service must not resolve an installer")
+                    throw CancellationError()
+                },
                 verifyHealth: {},
                 setServiceHosting: { _ in },
                 statusHandler: { _ in })
@@ -724,7 +728,7 @@ struct ManagedNodeGatewayMigrationTests {
         }
     }
 
-    private static func writePinFixture(databaseURL: URL, key: String) throws {
+    fileprivate static func writePinFixture(databaseURL: URL, key: String) throws {
         let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
         try database.execute("""
         PRAGMA user_version = 1;
@@ -1056,13 +1060,102 @@ extension AppStateIsolationTests {
         }
     }
 
-    @Test(arguments: ["unchanged", "definition", "attach-only"])
+    @Test func `operator repin before Node rollback dispatch is preserved, not overwritten`() async throws {
+        try await self.withNodeMigrationFixture { fixture in
+            let state = AppProfile.current.stateDirectoryURL()
+            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
+            try #require(!FileManager.default.fileExists(atPath: databaseURL.path))
+            defer {
+                for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+            }
+            let key = try GatewayLaunchAgentManager.runtimePinKey(
+                profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
+            let installer = BundledRuntime(root: fixture.disableMarker.deletingLastPathComponent()
+                .appendingPathComponent("runtime/current-build"))
+            let refusal = GatewayLaunchAgentManager.runtimePinSelectionChanged
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {"ok":true,"service":{"loaded":false,
+            "runtimeIntent":{"status":"known","revision":"before-rollback"}}}
+            """)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { args in
+                if args.first == "status", !args.contains("--deep"),
+                   GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                       .contains(where: { $0.contains("--deep") })
+                {
+                    // The intercept reserves this final absence response before the hook. Only
+                    // the bundled observation arms the following install's stale-expectation refusal.
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+                    {"ok":false,"error":"\(refusal)"}
+                    """)
+                } else if args.first == "install" {
+                    do {
+                        try await ManagedNodeGatewayMigrationTests.writePinFixture(databaseURL: databaseURL, key: key)
+                        if !args.contains("--expected-runtime-pin") {
+                            let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+                            try database.execute("DELETE FROM config_machine_state")
+                        }
+                    } catch { Issue.record(error) }
+                }
+            }
+            let node = try #require(fixture.cli.prefix.first)
+            let entrypoint = try #require(fixture.cli.prefix.last)
+            let candidate = ManagedNodeGatewayMigration.Candidate(
+                cli: fixture.cli, snapshot: nil, version: fixture.version, port: fixture.port, allowUnconfigured: false)
+            var healthChecks = 0
+            var operations = ManagedNodeGatewayMigration.liveOperations(
+                checkCurrent: {},
+                resolveLegacyCLI: { throw ManagedNodeGatewayMigration.Failure(message: "pre-seed probe failed") },
+                restorationInstaller: { installer },
+                verifyHealth: { healthChecks += 1 },
+                setServiceHosting: { _ in },
+                statusHandler: { _ in })
+            operations.recapture = { previous, _ in previous }
+            do {
+                _ = try await ManagedNodeGatewayMigration.run(
+                    candidate: candidate, targetVersion: fixture.version, operations: operations)
+                Issue.record("Expected the Node rollback custody refusal")
+            } catch {
+                #expect(error.localizedDescription.contains("Node restoration also failed: " + refusal))
+            }
+            #expect(healthChecks == 0)
+            #expect(try await GatewayLaunchAgentManager
+                .runtimePinRecord(stateDirectory: state, profile: .current) != nil)
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let installs = calls.filter { $0.first == "install" }
+            #expect(installs.count == 1)
+            let install = try #require(installs.first)
+            #expect(install == [
+                "install", "--force", "--port", String(fixture.port), "--runtime", "node",
+                "--restore-service-cli",
+                #"{"entrypoint":"\#(entrypoint)","executable":"\#(node)","sqliteLibrary":null}"#,
+                "--expected-runtime-pin", #"{"definition":null,"revision":"before-rollback"}"#,
+            ])
+            #expect(calls.last == install)
+            let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+            #expect(commands.count == 4)
+            #expect(commands.map { Array($0.prefix(2)) } == [
+                fixture.cli.prefix, installer.cliCommand, fixture.cli.prefix, installer.cliCommand,
+            ])
+        }
+    }
+
+    @Test(arguments: ["unchanged", "definition", "attach-only", "missing-installer"])
     func `pre-seed probe failure restores absent Node only while its original custody remains`(
         ownershipChange: String) async throws
     {
         try await self.withNodeMigrationFixture { fixture in
+            let node = try #require(fixture.cli.prefix.first)
+            let entrypoint = try #require(fixture.cli.prefix.last)
             let candidate = ManagedNodeGatewayMigration.Candidate(
                 cli: fixture.cli, snapshot: nil, version: fixture.version, port: fixture.port, allowUnconfigured: false)
+            let installer = BundledRuntime(root: fixture.disableMarker.deletingLastPathComponent()
+                .appendingPathComponent("runtime/current-build"))
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","revision":"absent"}}}
+            """)
+            var installerResolutions = 0
             var healthChecks = 0
             var operations = ManagedNodeGatewayMigration.liveOperations(
                 checkCurrent: {},
@@ -1071,20 +1164,49 @@ extension AppStateIsolationTests {
                     if ownershipChange == "attach-only" { try Data().write(to: fixture.disableMarker) }
                     throw ManagedNodeGatewayMigration.Failure(message: "retained selection probe failed")
                 },
+                restorationInstaller: { installerResolutions += 1
+                    if ownershipChange == "missing-installer" {
+                        throw ManagedNodeGatewayMigration.Failure(message: "Reinstall OpenClaw.app.")
+                    }
+                    return installer
+                },
                 verifyHealth: { healthChecks += 1 },
                 setServiceHosting: { _ in },
                 statusHandler: { _ in })
             // The candidate was already verified after core update; fail the real pre-seed revalidation.
             operations.recapture = { previous, _ in previous }
-            await #expect(throws: ManagedNodeGatewayMigration.Failure.self) {
-                try await ManagedNodeGatewayMigration.run(
+            do {
+                _ = try await ManagedNodeGatewayMigration.run(
                     candidate: candidate, targetVersion: fixture.version, operations: operations)
+                Issue.record("Expected the pre-seed migration failure")
+            } catch {
+                #expect(error.localizedDescription.contains("retained selection probe failed"))
+                if ownershipChange == "missing-installer" {
+                    #expect(error.localizedDescription
+                        .contains("Node restoration also failed: Reinstall OpenClaw.app."))
+                }
             }
             let installs = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }
             #expect(installs == (ownershipChange != "unchanged" ? [] : [
-                ["install", "--force", "--port", String(fixture.port), "--runtime", "node"],
+                [
+                    "install",
+                    "--force",
+                    "--port",
+                    String(fixture.port),
+                    "--runtime",
+                    "node",
+                    "--restore-service-cli",
+                    #"{"entrypoint":"\#(entrypoint)","executable":"\#(node)","sqliteLibrary":null}"#,
+                    "--expected-runtime-pin",
+                    #"{"definition":null,"revision":"absent"}"#,
+                ],
             ]))
+            #expect(installerResolutions == (["unchanged", "missing-installer"].contains(ownershipChange) ? 1 : 0))
+            let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("--deep") || $0.contains("install") }
+            #expect(commands.count == (ownershipChange == "unchanged" ? 2 : 0))
+            #expect(commands.allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
             #expect(healthChecks == (ownershipChange == "unchanged" ? 1 : 0))
         }
     }

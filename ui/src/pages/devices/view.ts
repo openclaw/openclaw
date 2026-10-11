@@ -98,11 +98,7 @@ function renderBindings(state: BindingState) {
                 : html`${t("devices.binding.defaultBindingHint")} ${t("devices.binding.noNodes")}`,
               control: renderBindingSelect(null, state),
             })}
-            ${
-              state.agents.length === 0
-                ? renderSettingsRow({ title: t("devices.binding.noAgents") })
-                : state.agents.map((agent) => renderAgentBinding(agent, state))
-            }
+            ${state.agents.map((agent) => renderAgentBinding(agent, state))}
           `
     }
   `;

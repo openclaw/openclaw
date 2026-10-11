@@ -132,8 +132,6 @@ export function resolveReferenceImageCapabilityError(params: {
     : undefined;
 }
 
-const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
-
 function resolveMediaProviderDefaultTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? clampTimerTimeoutMs(timeoutMs)
@@ -169,8 +167,7 @@ type ParsedSize = {
 };
 
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
-  const configured = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
-  const trimmed = normalizeOptionalString(configured);
+  const trimmed = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
   if (!trimmed) {
     return DEFAULT_PROVIDER;
   }
@@ -230,7 +227,6 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-/** Builds ordered provider/model candidates for one media capability request. */
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -395,7 +391,6 @@ function deriveAspectRatioFromSize(size?: string): string | undefined {
   return `${parsed.width / divisor}:${parsed.height / divisor}`;
 }
 
-/** Chooses the closest supported aspect ratio for a request. */
 export function resolveClosestAspectRatio(params: {
   requestedAspectRatio?: string;
   requestedSize?: string;
@@ -460,11 +455,10 @@ export function resolveClosestSize(params: {
   });
 }
 
-/** Chooses the closest supported resolution by numeric rank or custom order. */
+/** Chooses the closest supported resolution within the same numeric unit. */
 export function resolveClosestResolution<TResolution extends string>(params: {
   requestedResolution?: TResolution;
   supportedResolutions?: readonly TResolution[];
-  order?: readonly TResolution[];
 }): TResolution | undefined {
   const supported = normalizeSupportedValues(params.supportedResolutions);
   if (supported.length === 0) {
@@ -474,34 +468,18 @@ export function resolveClosestResolution<TResolution extends string>(params: {
     return params.requestedResolution;
   }
   const requestedNumeric = parseResolutionRank(params.requestedResolution);
-  if (requestedNumeric) {
-    const bestValue = selectClosestValue(supported, (candidate) => {
-      const candidateNumeric = parseResolutionRank(candidate);
-      if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
-        return undefined;
-      }
-      return {
-        primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
-        secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
-      };
-    });
-    if (bestValue) {
-      return bestValue;
-    }
-  }
-  const order: readonly string[] = params.order ?? IMAGE_RESOLUTION_ORDER;
-  const requestedIndex = params.requestedResolution
-    ? order.indexOf(params.requestedResolution)
-    : -1;
-  if (requestedIndex < 0) {
+  if (!requestedNumeric) {
     return undefined;
   }
-
   return selectClosestValue(supported, (candidate) => {
-    const candidateIndex = order.indexOf(candidate);
-    return candidateIndex < 0
-      ? undefined
-      : { primary: Math.abs(candidateIndex - requestedIndex), secondary: candidateIndex };
+    const candidateNumeric = parseResolutionRank(candidate);
+    if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
+      return undefined;
+    }
+    return {
+      primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
+      secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
+    };
   });
 }
 
@@ -542,7 +520,6 @@ export function normalizeDurationToClosestMax(
   return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
 }
 
-/** Builds user-visible metadata describing provider normalization decisions. */
 export function buildMediaGenerationNormalizationMetadata(params: {
   normalization?: MediaGenerationNormalizationMetadataInput;
   requestedSizeForDerivedAspectRatio?: string;
@@ -633,7 +610,6 @@ function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
   return failures.join(" | ");
 }
 
-/** Formats setup guidance when no model is configured for a media capability. */
 export function buildNoCapabilityModelConfiguredMessage(params: {
   capabilityLabel: string;
   modelConfigKey: string;

@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { Button, StringSelectMenu, parseCustomId } from "./components.js";
+import { parseCustomId } from "./components.base.js";
+import { Button, StringSelectMenu } from "./components.message.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
@@ -93,11 +94,10 @@ describe("Client.deployCommands", () => {
         name: "one",
         options: [
           {
-            type: 3,
+            type: 7,
             name: "value",
             description: "Value",
             required: false,
-            autocomplete: false,
             channel_types: [1, 0],
           },
         ],
@@ -116,7 +116,7 @@ describe("Client.deployCommands", () => {
           {
             description: "Value",
             name: "value",
-            type: 3,
+            type: 7,
             description_localized: "Value",
             channel_types: [0, 1],
           },

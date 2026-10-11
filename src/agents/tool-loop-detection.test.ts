@@ -17,7 +17,6 @@ vi.mock("./embedded-agent-messaging.js", () => ({
   isMessagingToolSendAction: (toolName: string) => toolName === "telegram",
 }));
 
-const config = { enabled: true };
 const WARNING_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const HISTORY_SIZE = 30;
@@ -44,7 +43,7 @@ function createLoop(toolName: string, params: unknown) {
         append({ result: result(index) }, args(index));
       }
     },
-    detect: (toolParams = params) => detectToolCallLoop(state, toolName, toolParams, config),
+    detect: (toolParams = params) => detectToolCallLoop(state, toolName, toolParams),
   };
 }
 
@@ -112,30 +111,22 @@ function createSendLoop() {
 }
 
 describe("tool-loop-detection", () => {
-  it("is disabled by default", () => {
-    const state = createState();
-    for (let index = 0; index < CRITICAL_THRESHOLD; index++) {
-      recordToolCall(state, "read", { path: "/same.txt" });
-    }
-    expect(detectToolCallLoop(state, "read", { path: "/same.txt" })).toEqual({ stuck: false });
-  });
-
   it("warns only for history belonging to the current run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
     for (let index = 0; index < WARNING_THRESHOLD; index++) {
-      recordToolCall(state, "read", params, `call-${index}`, config, { runId: "run-1" });
+      recordToolCall(state, "read", params, `call-${index}`, { runId: "run-1" });
     }
-    expect(detectToolCallLoop(state, "read", params, config, { runId: "run-1" })).toMatchObject({
+    expect(detectToolCallLoop(state, "read", params, { runId: "run-1" })).toMatchObject({
       stuck: true,
       level: "warning",
       detector: "generic_repeat",
       count: WARNING_THRESHOLD,
     });
-    expect(detectToolCallLoop(state, "read", params, config, { runId: "run-2" })).toEqual({
+    expect(detectToolCallLoop(state, "read", params, { runId: "run-2" })).toEqual({
       stuck: false,
     });
-    expect(detectToolCallLoop(state, "read", params, config)).toEqual({ stuck: false });
+    expect(detectToolCallLoop(state, "read", params)).toEqual({ stuck: false });
   });
 
   it("allows calls without history", () => {
@@ -589,6 +580,27 @@ describe("tool-loop-detection", () => {
     });
   });
 
+  it.each(["Unknown tool: missing_a", "Unknown tool id: missing_a"])(
+    "preserves unknown-tool evidence across loop vetoes: %s",
+    (error) => {
+      const loop = createLoop("tool_call", { tool: "missing_a" });
+      for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD; index++) {
+        loop.fail(new Error(error));
+      }
+      loop.record(veto);
+      recordToolCallOutcome(loop.state, { toolName: "read", toolParams: {}, result: veto });
+      expect(loop.detect()).toMatchObject({
+        stuck: true,
+        detector: "unknown_tool_repeat",
+        count: UNKNOWN_TOOL_THRESHOLD,
+        message: expect.stringContaining("unavailable tool missing_a"),
+      });
+      const differentTool = { tool: "missing_b" };
+      loop.fail(new Error("Unknown tool id: missing_b"), differentTool);
+      expect(loop.detect(differentTool)).toEqual({ stuck: false });
+    },
+  );
+
   it.each([
     { outcome: "missing", count: WARNING_THRESHOLD - 1, level: "warning" },
     { outcome: "stable", count: CRITICAL_THRESHOLD - 1, level: "critical" },
@@ -614,7 +626,7 @@ describe("tool-loop-detection", () => {
         });
       }
     }
-    expect(detectToolCallLoop(state, "list", { dir: "/workspace" }, config)).toMatchObject({
+    expect(detectToolCallLoop(state, "list", { dir: "/workspace" })).toMatchObject({
       stuck: true,
       level,
       detector: "ping_pong",
@@ -671,7 +683,7 @@ describe("tool-loop-detection", () => {
   it("does not attach outcomes to matching calls from another run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
-    recordToolCall(state, "read", params, "call-1", config, { runId: "run-1" });
+    recordToolCall(state, "read", params, "call-1", { runId: "run-1" });
     recordToolCallOutcome(state, {
       toolName: "read",
       toolParams: params,

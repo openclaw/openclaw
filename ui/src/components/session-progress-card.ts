@@ -1,6 +1,6 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -16,7 +16,7 @@ import {
   type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
 
-type SessionProgressCardPlacement = "board" | "composer";
+type SessionProgressCardPlacement = "board" | "composer" | "details";
 
 const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
   {
@@ -115,7 +115,10 @@ class ProgressActivityTimeDirective extends AsyncDirective {
   }
 
   protected override disconnected(): void {
-    this.stopTimer();
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
   }
 
   protected override reconnected(): void {
@@ -128,13 +131,6 @@ class ProgressActivityTimeDirective extends AsyncDirective {
       return;
     }
     this.timer = setInterval(() => this.setValue(this.renderTime()), 30_000);
-  }
-
-  private stopTimer(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
   }
 
   private renderTime() {
@@ -348,6 +344,7 @@ export function renderSessionProgressCard(
   composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
   onClearSaved?: (card: ProgressCard) => void,
+  headingMenu?: TemplateResult,
 ) {
   if (!card) {
     return nothing;
@@ -394,7 +391,7 @@ export function renderSessionProgressCard(
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
   const dismiss = renderProgressCardAction(card, "dismiss", onDismiss);
   const clearSaved = renderProgressCardAction(card, "clear-saved", onClearSaved);
-  if (placement === "composer") {
+  if (placement === "composer" || placement === "details") {
     const steps = card.steps ?? [];
     const currentStep = currentProgressStep(steps);
     const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
@@ -427,8 +424,8 @@ export function renderSessionProgressCard(
           ? progressStepMarker(presentedCurrentStatus ?? "pending")
           : icons.clock;
     return html`<details
-      class="session-progress-card session-progress-card--composer"
-      data-progress-card-placement="composer"
+      class="session-progress-card session-progress-card--composer ${placement === "details" ? "session-progress-card--details" : ""}"
+      data-progress-card-placement=${placement}
       data-complete=${String(complete)}
       ${composerDisclosure(
         composerDisclosureContext?.sessionIdentity ?? card.sessionKey,
@@ -470,7 +467,7 @@ export function renderSessionProgressCard(
           >
         </span>
         <span class="session-progress-card__summary-controls">
-          ${renderRefresh(card, refreshAction)} ${clearSaved} ${dismiss}
+          ${renderRefresh(card, refreshAction)} ${headingMenu ?? nothing} ${clearSaved} ${dismiss}
           <span
             class="session-progress-card__summary-chevron session-progress-card__chevron"
             aria-hidden="true"

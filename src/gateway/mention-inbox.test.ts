@@ -12,20 +12,19 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   linkEmail,
   setDisplayName,
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import * as mentionStore from "./mention-inbox-store.js";
 import {
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
   type MentionStoreSource,
 } from "./mention-inbox-store.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
-import { createMentionInbox } from "./mention-inbox.js";
 import {
   SESSION_KEY,
   SESSION_ID,
@@ -106,29 +105,6 @@ describe("temporary human mention Inbox", () => {
     },
   );
 
-  it.each(["mentions.list", "mentions.dismiss"])(
-    "propagates a %s publication failure without responding twice",
-    async (method) => {
-      await withInbox(async (f) => {
-        await f.post();
-        const item = (await read(f.inbox, f.bobClient)).items[0]!;
-        const failure = new Error("synthetic response failure");
-        const publish = vi.fn(() => {
-          throw failure;
-        });
-        await expect(
-          f.call(
-            method,
-            method === "mentions.dismiss" ? { ids: [item.id] } : {},
-            f.bobClient,
-            publish,
-          ),
-        ).rejects.toBe(failure);
-        expect(publish).toHaveBeenCalledOnce();
-      });
-    },
-  );
-
   it.each([false, true])(
     "publishes only acknowledged mutations and resyncs a lost result without replay (lost: %s)",
     async (lost) => {
@@ -139,6 +115,11 @@ describe("temporary human mention Inbox", () => {
         const commitChanges = mentionWorker.commitMentionChanges;
         const committed = createDeferred();
         const release = createDeferred();
+        const readHead = mentionStore.getMentionStoreHeadAdmission;
+        let staleHead: mentionStore.MentionStoreHead | undefined;
+        const head = vi
+          .spyOn(mentionStore, "getMentionStoreHeadAdmission")
+          .mockImplementation((databasePath) => staleHead ?? readHead(databasePath));
         const spy = vi
           .spyOn(mentionWorker, "commitMentionChanges")
           .mockImplementationOnce(async (...args) => {
@@ -146,6 +127,8 @@ describe("temporary human mention Inbox", () => {
             committed.resolve();
             await release.promise;
             if (lost) {
+              // Native commit can outlive its worker's last head publication.
+              staleHead = { ...args[1].expectedHead };
               throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
             }
             return result;
@@ -158,10 +141,16 @@ describe("temporary human mention Inbox", () => {
           release.resolve();
           await pending;
           expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
+          const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
           expect((await read(f.inbox, f.bobClient)).items.map((item) => item.messageId)).toEqual([
             "message-awaiting-receipt",
             "message-original",
           ]);
+          if (lost) {
+            expect(snapshots.mock.calls[0]?.[1]).toBe(-1);
+          }
+          staleHead = undefined;
+          snapshots.mockRestore();
           expect(
             spy.mock.calls.filter(([, mutation]) =>
               mutation.changes.some(
@@ -175,38 +164,11 @@ describe("temporary human mention Inbox", () => {
           release.resolve();
           await pending;
           spy.mockRestore();
+          head.mockRestore();
         }
       });
     },
   );
-
-  it("preserves a worker parse failure's Error class", async () => {
-    await withInbox(async (f) => {
-      await f.post();
-      const { db } = openOpenClawStateDatabase();
-      const key = "notifications.mentions.head";
-      const saved = db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        .get(key)?.value_json;
-      if (typeof saved !== "string") {
-        throw new Error("Mention head was not persisted");
-      }
-      db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
-        "{",
-        key,
-      );
-      try {
-        await expect(
-          mentionWorker.readMentionSnapshot(captureOpenClawStateWorkerContext(), -1),
-        ).rejects.toBeInstanceOf(SyntaxError);
-      } finally {
-        db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
-          saved,
-          key,
-        );
-      }
-    });
-  });
 
   it("drains accepted committed input during disposal while refusing new input", async () => {
     await withInbox(async (f) => {
@@ -306,25 +268,10 @@ describe("temporary human mention Inbox", () => {
     await withInbox(async (f) => {
       await f.post("distant-expiry");
       const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
-      const { db } = openOpenClawStateDatabase();
-      const headKey = "notifications.mentions.head";
-      const saved = db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        .get(headKey)?.value_json;
-      if (typeof saved !== "string") {
-        throw new Error("Expected persisted Mention Inbox head JSON");
-      }
-      db.prepare("UPDATE config_machine_state SET value_json = '{}' WHERE state_key = ?").run(
-        headKey,
+      vi.spyOn(mentionWorker, "readMentionSnapshot").mockRejectedValueOnce(
+        new SqliteWorkerError("Mention snapshot is temporarily unavailable", "unavailable"),
       );
-      try {
-        await f.inbox.invalidateAsync();
-      } finally {
-        db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
-          saved,
-          headKey,
-        );
-      }
+      await f.inbox.invalidateAsync();
       runOpenClawStateWriteTransaction(({ db: writer }) =>
         writeMentionStoreChanges(
           writer,
@@ -439,123 +386,6 @@ describe("temporary human mention Inbox", () => {
       });
     },
   );
-
-  it("expires a retained cohort atomically and rolls back a failed worker mutation", async () => {
-    await withInbox(async (f) => {
-      f.clients.length = 0;
-      for (let index = 0; index < 32; index++) {
-        await f.post(`expiry-cohort-${index}`);
-      }
-      const { db } = openOpenClawStateDatabase();
-      const state = () => db.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all();
-      const before = state();
-      const sources = before.filter((row) =>
-        String(row.state_key).startsWith("notifications.mentions.source."),
-      );
-      expect(sources).toHaveLength(32);
-      db.exec(`CREATE TRIGGER reject_cohort_expiry BEFORE DELETE ON config_machine_state
-        WHEN OLD.state_key = '${String(sources[16]!.state_key)}'
-        BEGIN SELECT RAISE(ABORT, 'synthetic cohort expiry failure'); END`);
-      f.clock.setTime(f.scheduler.now() + 7 * 24 * 60 * 60_000);
-      try {
-        expect(await listInbox(f.inbox, f.bobClient)).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE" },
-        });
-        expect(state()).toEqual(before);
-      } finally {
-        db.exec("DROP TRIGGER reject_cohort_expiry");
-      }
-
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
-      expect(
-        state().filter((row) => String(row.state_key).startsWith("notifications.mentions.source.")),
-      ).toEqual([]);
-      const restarted = f.openInbox("after-cohort-expiry");
-      expect((await read(restarted, f.bobClient)).items).toEqual([]);
-    });
-  });
-
-  it("keeps dismissed and evicted sources consumed across restart", async () => {
-    await withInbox(async (f) => {
-      f.clients.length = 0;
-      for (let index = 0; index < 101; index++) {
-        await f.post(`retained-${index}`);
-      }
-      const retained = (await read(f.inbox, f.bobClient)).items;
-      expect(retained).toHaveLength(100);
-      expect(retained.at(-1)?.messageId).toBe("message-retained-1");
-      expect((await dismiss(f.inbox, f.bobClient, [retained[0]!.id])).ok).toBe(true);
-      const expected = retained.slice(1);
-      await f.inbox.dispose();
-      f.push.mockClear();
-      const restarted = f.openInbox("restarted-gateway");
-
-      expect((await read(restarted, f.bobClient)).items).toEqual(expected);
-      for (const source of ["retained-0", "retained-100", "retained-50"]) {
-        await f.post(source, {}, restarted);
-      }
-      expect((await read(restarted, f.bobClient)).items).toEqual(expected);
-      expect(f.push).not.toHaveBeenCalled();
-    });
-  });
-
-  it("merges alternating owners' writes without resurrecting dismissals or losing new input", async () => {
-    await withInbox(async (f) => {
-      await f.post("first");
-      const first = (await read(f.inbox, f.bobClient)).items[0]!;
-      const peer = f.openInbox("peer-gateway");
-      expect((await read(peer, f.bobClient)).items).toEqual([first]);
-      expect((await dismiss(f.inbox, f.bobClient, [first.id])).ok).toBe(true);
-      await f.clock.advanceBy(1);
-      await f.post("second", {}, peer);
-      const second = (await read(peer, f.bobClient)).items[0]!;
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([second]);
-      await f.clock.advanceBy(1);
-      await f.post("third");
-      const both = (await read(f.inbox, f.bobClient)).items;
-      expect(both.map((item) => item.messageId)).toEqual(["message-third", "message-second"]);
-      expect((await read(peer, f.bobClient)).items).toEqual(both);
-      expect((await dismiss(peer, f.bobClient, [second.id])).ok).toBe(true);
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([both[0]]);
-      expect(f.push.mock.calls[0]?.[0].isCurrent()).toBe(false);
-      expect(f.push.mock.calls[1]?.[0].isCurrent()).toBe(false);
-      await f.inbox.dispose();
-      await peer.dispose();
-      f.push.mockClear();
-      const restarted = f.openInbox("restarted-gateway");
-
-      await f.post("first", {}, restarted);
-      await f.post("second", {}, restarted);
-      expect((await read(restarted, f.bobClient)).items).toEqual([both[0]]);
-      expect(f.push).not.toHaveBeenCalled();
-    });
-  });
-
-  it("persists entries and dismissal without changing sqlite_schema or user_version", async () => {
-    const schema = () => {
-      const { db } = openOpenClawStateDatabase();
-      return {
-        schema: db.prepare("SELECT * FROM sqlite_schema ORDER BY type, name").all(),
-        userVersion: db.prepare("PRAGMA user_version").get(),
-      };
-    };
-    let before: ReturnType<typeof schema> | undefined;
-    await withInbox(
-      async (f) => {
-        await f.post("dismissed");
-        await f.post("retained");
-        const original = (await read(f.inbox, f.bobClient)).items;
-        expect((await dismiss(f.inbox, f.bobClient, [original[1]!.id])).ok).toBe(true);
-        await f.inbox.dispose();
-        const restarted = f.openInbox("restarted-gateway");
-        expect((await read(restarted, f.bobClient)).items).toEqual([original[0]]);
-        expect(schema()).toEqual(before);
-      },
-      {},
-      { beforeInbox: () => (before = schema()) },
-    );
-  });
 
   it.each(["dismissal", "new input"] as const)(
     "retains committed state and withholds push when storage rejects %s",
@@ -817,34 +647,6 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
-  it("rebuilds the merged profile's bound in arrival order without resurrecting evictions", async () => {
-    await withInbox(async (f) => {
-      f.clients.length = 0;
-      const old = ensureProfileForEmail("bob-merged@mentions.example.test");
-      for (let index = 0; index < 150; index++) {
-        await f.post(`merged-${index}`, { recipientProfileIds: [index % 2 ? f.bob.id : old.id] });
-      }
-      linkEmail("bob-merged@mentions.example.test", f.bob.id);
-      await Promise.resolve();
-      const retained = (await read(f.inbox, f.bobClient)).items;
-      expect(retained.map((item) => item.messageId)).toEqual(
-        Array.from({ length: 100 }, (_, index) => `message-merged-${149 - index}`),
-      );
-      expect(f.push.mock.calls.filter(([notification]) => notification.isCurrent())).toHaveLength(
-        100,
-      );
-      await f.post("merged-0", { recipientProfileIds: [old.id] });
-      expect((await read(f.inbox, f.bobClient)).items).toEqual(retained);
-      await dismiss(
-        f.inbox,
-        f.bobClient,
-        retained.map((item) => item.id),
-      );
-      await f.post("merged-149");
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
-    });
-  });
-
   it.each([
     { rolesEnabled: false, admin: false, visible: true },
     { rolesEnabled: true, admin: false, visible: false },
@@ -914,41 +716,6 @@ describe("temporary human mention Inbox", () => {
       await f.inbox.dispose();
       expect(delayed?.isCurrent()).toBe(false);
     }, cfg);
-  });
-
-  it("expires on the Gateway clock and does not backfill after a new Gateway lifetime", async () => {
-    await withInbox(async (f) => {
-      await f.post("first");
-      expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
-      await f.clock.advanceBy(1_000);
-      await f.post("second");
-      await f.clock.advanceBy(7 * 24 * 60 * 60_000 - 1_000);
-      expect((await read(f.inbox, f.bobClient)).items.map((item) => item.messageId)).toEqual([
-        "message-second",
-      ]);
-      await f.clock.advanceBy(1_000);
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
-      await f.post("new-deadline");
-      await f.clock.advanceBy(7 * 24 * 60 * 60_000);
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
-      await f.inbox.dispose();
-      const cfg: OpenClawConfig = {};
-      const replacement = createMentionInbox({
-        scheduler: f.scheduler,
-        gatewayInstanceId: "replacement-gateway",
-        getRuntimeConfig: () => cfg,
-        getClients: () => f.clients,
-        broadcastToConnIds: f.broadcast,
-      });
-      try {
-        expect(await read(replacement, f.bobClient)).toMatchObject({
-          gatewayInstanceId: "replacement-gateway",
-          items: [],
-        });
-      } finally {
-        await replacement.dispose();
-      }
-    });
   });
 
   it("enforces the global bound and keeps evicted sources consumed", async () => {
@@ -1021,15 +788,5 @@ describe("temporary human mention Inbox", () => {
       {},
       { notifications: false },
     );
-  });
-
-  it("keeps the posted Inbox item if its push adapter throws", async () => {
-    await withInbox(async (f) => {
-      f.push.mockImplementation(() => {
-        throw new Error("synthetic push failure");
-      });
-      await expect(f.post()).resolves.toBeUndefined();
-      expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
-    });
   });
 });

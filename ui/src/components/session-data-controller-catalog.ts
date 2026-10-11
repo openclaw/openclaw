@@ -68,7 +68,6 @@ export interface SessionCatalogDataOwner {
   readonly sessionScopeGeneration: number;
   sessionCatalogRevision: number;
   readonly sessionCatalogPageDepths: Map<string, number>;
-  readonly sessionCatalogRevisions: Map<string, number>;
   sessionCatalogGatewayClient(): GatewayBrowserClient | null;
   synchronizeSessionScope(): void;
   requestSessionDataUpdate(): void;
@@ -242,9 +241,6 @@ export function applySessionCatalogHostEvent(
   }
   owner.sessionCatalogs = update.catalogs;
   owner.requestSessionDataUpdate();
-  owner.sessionCatalogRevision += owner.sessionCatalogLive.refetching ? 1 : 0;
-  const catalogRevision = owner.sessionCatalogRevisions.get(update.catalogId) ?? 0;
-  owner.sessionCatalogRevisions.set(update.catalogId, catalogRevision + 1);
 }
 
 export function applySessionCatalogContinuation(
@@ -262,13 +258,6 @@ export function applySessionCatalogContinuation(
   owner.sessionCatalogLive.discoveryPages.clear();
   owner.sessionCatalogs = bindAdoptedCatalogSession(owner.sessionCatalogs, detail);
   owner.requestSessionDataUpdate();
-  // Invalidate in-flight reads and load-more merges so a pre-adoption
-  // snapshot cannot clobber the patched rows; Gateway events reconfirm them.
-  owner.sessionCatalogRevision += 1;
-  owner.sessionCatalogRevisions.set(
-    detail.catalogId,
-    (owner.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
-  );
 }
 
 export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Promise<void> {
@@ -280,7 +269,6 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     return;
   }
   const generation = owner.sessionScopeGeneration;
-  const revision = owner.sessionCatalogRevision;
   // Publish the existing request lifecycle to settled-empty presentation too.
   owner.requestSessionDataUpdate();
   await refreshSessionCatalogsLive({
@@ -288,25 +276,16 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     client,
     agentId,
     generation,
-    revision,
     currentGeneration: () => owner.sessionScopeGeneration,
-    currentRevision: () => owner.sessionCatalogRevision,
     currentClient: () => owner.sessionCatalogGatewayClient(),
     catalogs: () => owner.sessionCatalogs,
     pageDepths: owner.sessionCatalogPageDepths,
     connected: () => owner.isSessionDataHostConnected,
     catalogChangedEvents: sessionCatalogChangesAdvertised(owner),
-    applyFinal: (catalogs, revisedCatalogIds) => {
+    applyFinal: (catalogs) => {
       owner.sessionCatalogs = owner.sessionCatalogLive.resumeDiscovery(catalogs);
       owner.sessionCatalogRefreshStatus = completePanelRefresh();
       owner.requestSessionDataUpdate();
-      for (const catalogId of revisedCatalogIds) {
-        owner.sessionCatalogRevisions.set(
-          catalogId,
-          (owner.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
-        );
-      }
-      owner.sessionCatalogRevision += 1;
     },
     continueRefresh: () => discoverHiddenSessionCatalogPages(owner),
     applyError: (error) => {
@@ -366,10 +345,6 @@ async function discoverHiddenSessionCatalogPages(owner: SessionCatalogDataOwner)
 
 export function invalidateSessionCatalogs(owner: SessionCatalogDataOwner): void {
   owner.sessionCatalogLive.clear();
-  owner.sessionCatalogRevision += 1;
-  for (const { id } of owner.sessionCatalogs) {
-    owner.sessionCatalogRevisions.set(id, (owner.sessionCatalogRevisions.get(id) ?? 0) + 1);
-  }
   void requestSessionCatalogRefresh(owner);
 }
 
@@ -405,7 +380,6 @@ export async function loadMoreSessionCatalog(
     return;
   }
   const generation = owner.sessionScopeGeneration;
-  const revision = owner.sessionCatalogRevisions.get(catalogId) ?? 0;
   owner.loadingMoreSessionCatalogIds = new Set([...owner.loadingMoreSessionCatalogIds, catalogId]);
   owner.requestSessionDataUpdate();
   try {
@@ -415,7 +389,7 @@ export async function loadMoreSessionCatalog(
       hostIds: Object.keys(cursors),
       cursors,
     });
-    if (!isCurrentSessionCatalogRequest(owner, catalogId, client, generation, revision)) {
+    if (!isCurrentSessionCatalogRequest(owner, client, generation)) {
       return;
     }
     const page = result.catalogs.find((candidate) => candidate.id === catalogId);
@@ -475,10 +449,9 @@ export async function loadMoreSessionCatalog(
       candidate.id === catalogId ? merged.catalog : candidate,
     );
     owner.requestSessionDataUpdate();
-    owner.sessionCatalogRevisions.set(catalogId, revision + 1);
     owner.sessionCatalogRevision += 1;
   } catch (error) {
-    if (!isCurrentSessionCatalogRequest(owner, catalogId, client, generation, revision)) {
+    if (!isCurrentSessionCatalogRequest(owner, client, generation)) {
       return;
     }
     // Preserve rows and cursors: retrying Load More requests this page again.
@@ -488,7 +461,6 @@ export async function loadMoreSessionCatalog(
         : candidate,
     );
     owner.requestSessionDataUpdate();
-    owner.sessionCatalogRevisions.set(catalogId, revision + 1);
     owner.sessionCatalogRevision += 1;
   } finally {
     if (generation === owner.sessionScopeGeneration) {
@@ -502,15 +474,11 @@ export async function loadMoreSessionCatalog(
 
 function isCurrentSessionCatalogRequest(
   owner: SessionCatalogDataOwner,
-  catalogId: string,
   client: GatewayBrowserClient,
   generation: number,
-  revision: number,
 ): boolean {
   return (
-    generation === owner.sessionScopeGeneration &&
-    revision === (owner.sessionCatalogRevisions.get(catalogId) ?? 0) &&
-    client === owner.sessionCatalogGatewayClient()
+    generation === owner.sessionScopeGeneration && client === owner.sessionCatalogGatewayClient()
   );
 }
 
@@ -531,7 +499,6 @@ export async function archiveSessionCatalog(
     await scope.client.request("sessions.catalog.archive", params);
     if (generation === owner.sessionScopeGeneration && owner.isSessionMutationScopeCurrent(scope)) {
       owner.sessionCatalogs = excludeSessionCatalogRows(owner.sessionCatalogs, new Set([key]));
-      // Retire pre-delete reads before releasing the optimistic hide.
       owner.invalidateSessionCatalogs();
     }
   } finally {

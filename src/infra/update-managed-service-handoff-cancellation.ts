@@ -10,12 +10,16 @@ import type {
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
 import {
+  managedHandoffOriginalGeneration,
   readManagedHandoffOriginalAdmission,
   readOriginalUpdateDependents,
   type ManagedHandoffOriginalAdmission,
 } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
-import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
+import {
+  managedHandoffLeaseRow,
+  type createManagedHandoffLeaseRows,
+} from "./update-managed-service-handoff-rows.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 type CancellationDependencies = Pick<
@@ -167,12 +171,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
             helper: currentRow.helper,
             executor: currentRow.executor,
             action: currentRow.action,
-            cancellation: {
-              key: currentRow.key,
-              owner: currentRow.owner,
-              payload: currentRow.payload,
-              updatedAt: currentRow.updatedAt,
-            },
+            cancellation: managedHandoffOriginalGeneration(currentRow),
           });
           if (!parseManagedHandoffLeasePayload(payload)) {
             throw new Error("Original cancellation payload is invalid");
@@ -219,12 +218,10 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
               paired.some(
                 (item) =>
                   item.version !== 2 ||
-                  !isDeepStrictEqual(item.mutationOriginal, {
-                    key: lease.key,
-                    owner: lease.owner,
-                    payload: lease.payload,
-                    updatedAt: lease.updatedAt,
-                  }) ||
+                  !isDeepStrictEqual(
+                    item.mutationOriginal,
+                    managedHandoffOriginalGeneration(lease),
+                  ) ||
                   !canRelease(item) ||
                   !storedCurrent(item, db) ||
                   descendants(db, item).length > 0 ||
@@ -238,13 +235,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
               return false;
             }
             for (const generation of [...generations, ...paired]) {
-              if (
-                !deleteRow(db, generation.key, {
-                  owner: generation.owner,
-                  payload_json: generation.payload,
-                  updated_at: generation.updatedAt,
-                })
-              ) {
+              if (!deleteRow(db, generation.key, managedHandoffLeaseRow(generation))) {
                 // Roll back the paired release rather than commit half a settlement.
                 throw new Error("Original cancellation settlement changed");
               }

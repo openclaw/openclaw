@@ -45,7 +45,7 @@ export function buildConfiguredFallbackModel(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
-  const { provider, modelId, cfg, workspaceDir, runtimeHooks } = params;
+  const { provider, modelId, cfg } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds, {
     floorSeconds: true,
@@ -82,8 +82,7 @@ export function buildConfiguredFallbackModel(params: {
   const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
   const staticCatalogBaseUrl = normalizeOptionalString(staticCatalogModel?.baseUrl);
   const fallbackTransport = resolveProviderTransport({
-    provider,
-    modelId,
+    ...params,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
       providerConfiguredApi ??
@@ -99,9 +98,6 @@ export function buildConfiguredFallbackModel(params: {
       providerConfiguredBaseUrl ??
       manifestAliasBaseUrl ??
       staticCatalogBaseUrl,
-    cfg,
-    workspaceDir,
-    runtimeHooks,
   });
   if (
     !hasConfiguredModelRouteSupport({

@@ -70,6 +70,12 @@ export function applyXaiOAuthConfig(
     providers: {
       xai: {
         ...provider,
+        // ID-keyed auth patches preserve omitted fields. Explicit undefined removes old facts.
+        models: provider.models.map((model) => ({
+          ...model,
+          thinkingLevelMap: undefined,
+          compat: { ...model.compat, supportedReasoningEfforts: undefined },
+        })),
         apiKey: undefined,
         authHeader: undefined,
         headers: undefined,

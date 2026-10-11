@@ -20,7 +20,16 @@ export type SessionNativeBindingParticipants = {
 };
 
 export type SessionNativeBindingDeletion = SessionNativeBindingParticipants & {
-  plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
+  plan: Extract<
+    SqliteSessionReclamationPlan,
+    {
+      kind:
+        | "entry"
+        | "lifecycle-artifacts"
+        | "maintenance-finalize"
+        | "lifecycle-projection-commit";
+    }
+  >;
 };
 
 export type SessionNativeBindingReceipt = {
@@ -34,6 +43,9 @@ export type SessionNativeBindingReceipt = {
 
 export type SessionNativeBindingCandidate = {
   kind: "session-native-binding-deletion";
-  result: Extract<SqliteSessionReclamationResult, { kind: "entry" }>;
+  result: Extract<
+    SqliteSessionReclamationResult,
+    { kind: SessionNativeBindingDeletion["plan"]["kind"] }
+  >;
   publication?: SessionEntryReplacementPublication;
 };

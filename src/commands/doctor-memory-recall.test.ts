@@ -224,7 +224,6 @@ describe("memory recall doctor integration", () => {
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
     expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({
-      cfg,
       prompter,
       scope: {
         agentId: "agent-default",

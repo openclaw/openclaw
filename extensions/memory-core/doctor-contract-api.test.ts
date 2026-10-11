@@ -17,7 +17,6 @@ import {
   resetDoctorPluginState,
   type RawLegacyDoctorConfig,
 } from "./doctor-contract-api.test-support.js";
-import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
 import { searchKeyword } from "./src/memory/manager-search.js";
 import { resetMemoryCoreDreamingStateForTests } from "./src/test-helpers.js";
@@ -301,8 +300,6 @@ async function searchMigratedKeywordRows(agentPath: string, query: string) {
     limit: 10,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-    buildFtsQuery,
-    bm25RankToScore,
   });
 }
 

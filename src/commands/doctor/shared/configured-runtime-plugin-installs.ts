@@ -4,21 +4,12 @@ import {
   type ConfiguredAgentHarnessRuntimeOptions,
 } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 
 type ConfiguredRuntimePluginInstallCandidate = {
-  /** Runtime/plugin id used in config and plugin installation records. */
   pluginId: string;
-  /** Human-readable plugin label for prompts and notes. */
   label: string;
-  /** npm package spec for an official runtime plugin install. */
-  npmSpec?: string;
-  /** ClawHub install spec when the runtime plugin is sourced from ClawHub. */
-  clawhubSpec?: string;
-  /** True when the install source is trusted to link official runtime support. */
-  trustedSourceLinkedOfficialInstall?: boolean;
-  /** Default installer choice when multiple official sources are available. */
-  defaultChoice?: PluginPackageInstall["defaultChoice"];
+  npmSpec: string;
+  trustedSourceLinkedOfficialInstall: true;
   /** Keep this official runtime package on the same release cohort as OpenClaw. */
   versionBoundToOpenClaw?: boolean;
 };
@@ -65,12 +56,9 @@ export function resolveConfiguredRuntimePluginInstallCandidate(
 export function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
   const acp = asOptionalRecord(cfg.acp);
   const backend = typeof acp?.backend === "string" ? acp.backend.trim().toLowerCase() : "";
-  return (
-    (backend === "acpx" ||
-      acp?.enabled === true ||
-      asOptionalRecord(acp?.dispatch)?.enabled === true) &&
-    (!backend || backend === "acpx")
-  );
+  return backend
+    ? backend === "acpx"
+    : acp?.enabled === true || asOptionalRecord(acp?.dispatch)?.enabled === true;
 }
 
 /** Collect runtime ids without loading plugin metadata during startup planning. */

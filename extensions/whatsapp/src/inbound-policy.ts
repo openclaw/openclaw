@@ -3,18 +3,13 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
-import type {
-  ChannelGroupPolicy,
-  DmPolicy,
-  GroupPolicy,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
@@ -22,19 +17,7 @@ import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { isSelfChatMode } from "./targets-runtime.js";
 
-type ResolvedWhatsAppInboundPolicy = {
-  account: ResolvedWhatsAppAccount;
-  dmPolicy: DmPolicy;
-  groupPolicy: GroupPolicy;
-  configuredAllowFrom: string[];
-  dmAllowFrom: string[];
-  groupAllowFrom: string[];
-  isSelfChat: boolean;
-  providerMissingFallbackApplied: boolean;
-  isSamePhone: (value?: string | null) => boolean;
-  resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
-  resolveConversationRequireMention: (conversationId: string) => boolean;
-};
+type ResolvedWhatsAppInboundPolicy = ReturnType<typeof resolveWhatsAppInboundPolicy>;
 
 function normalizeWhatsAppIngressPhone(value: string): string | null {
   const trimmed = value.trim();
@@ -48,7 +31,7 @@ export function resolveWhatsAppInboundPolicy(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   selfE164?: string | null;
-}): ResolvedWhatsAppInboundPolicy {
+}) {
   const account = resolveWhatsAppAccount({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -86,14 +69,14 @@ export function resolveWhatsAppInboundPolicy(params: {
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
-    resolveConversationGroupPolicy: (conversationId) =>
+    resolveConversationGroupPolicy: (conversationId: string) =>
       resolveChannelGroupPolicy({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
         groupId: resolveWhatsAppGroupConversationId(conversationId),
         hasGroupAllowFrom: groupAllowFrom.length > 0,
       }),
-    resolveConversationRequireMention: (conversationId) =>
+    resolveConversationRequireMention: (conversationId: string) =>
       resolveChannelGroupRequireMention({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",

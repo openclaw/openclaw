@@ -122,7 +122,10 @@ vi.mock("./agentsapi-files.js", async (importOriginal) => ({
   uploadInputs: mocks.uploadInputs,
   collectOutputs: mocks.collectOutputs,
 }));
-vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiNativeToolTranscript: vi.fn() }));
+vi.mock("./agentsapi-transcript.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agentsapi-transcript.js")>()),
+  recordAgentsApiNativeToolTranscript: vi.fn(),
+}));
 vi.mock("./agentsapi-messages.js", () => ({
   AgentsApiMessageProjection: class {
     reply = {};
@@ -172,6 +175,52 @@ afterEach(() => {
 });
 
 describe("Agents API attempt environment selection", () => {
+  it.each<Partial<AgentHarnessAttemptParamsV2>>([
+    { config: { tools: { web: { search: { enabled: false } } } } },
+    { toolOverrides: { webSearch: false } },
+    {
+      config: { tools: { web: { search: { enabled: false } } } },
+      toolOverrides: { webSearch: true },
+    },
+  ])("enforces the effective search disable on creation and resume (%j)", async (overrides) => {
+    const run = (binding?: AgentsApiBinding, policy = overrides) =>
+      attempt(
+        undefined,
+        binding,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        policy,
+      );
+    const created = await run();
+    expect(created.result.terminal).toEqual({ kind: "ok" });
+    expect(await requestBody(0)).toHaveProperty("agent.tools", [
+      { type: "programmatic_tool_calling", enabled: true },
+    ]);
+    const binding = created.bind.mock.calls[0]![0];
+    mocks.fetch.mockClear();
+    expect((await run(binding)).result.terminal).toEqual({ kind: "ok" });
+    expect(await requestBody(0)).toEqual({ agent: { reasoning: { effort: null } } });
+    mocks.fetch.mockClear();
+    for (const [saved, policy] of [
+      [savedBinding(undefined), overrides],
+      [binding, {}],
+    ] as const) {
+      const rejected = await run(saved, policy);
+      expect(rejected.result.terminal).toMatchObject({
+        kind: "failed",
+        error: expect.objectContaining({
+          message: expect.stringContaining("web-search policy changed"),
+        }),
+      });
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      expect(rejected.bind).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([
     { nativeTools: [] },
     {
@@ -880,7 +929,7 @@ async function attempt(
     params,
     binding,
     bind,
-    vi.fn(),
+    vi.fn<() => void>(),
     vi.fn(),
     {
       agentId: "main",

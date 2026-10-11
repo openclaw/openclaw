@@ -89,38 +89,38 @@ describe("transcript prepend anchor", () => {
     expect(anchor.update(scroller, instance, measureRows)).toBe(false);
   });
 
-  it.each([
-    { offset: 0, top: 50 },
-    { offset: 1100, top: 130 },
-  ])("settles an unreachable message anchor at scroll boundary $offset", ({ offset, top }) => {
-    const { scroller, bubble, instance, anchor, measureRows } = fixture();
-    anchor.messageKeys = messages("visible");
-    anchor.capture(scroller, false);
-    anchor.messageKeys = messages("older", "visible");
-    anchor.capture(scroller, false);
-    scroller.scrollTop = offset;
-    bubble.getBoundingClientRect = () => rect(top, 180);
-    anchor.update(scroller, instance, measureRows);
-    anchor.update(scroller, instance, measureRows);
-    expect(anchor.messageKey).toBeNull();
-    expect(scroller.scrollTop).toBe(offset);
-    expect(anchor.update(scroller, instance, measureRows)).toBe(false);
-  });
-
-  it.each([
-    [messages(), messages("visible")],
-    [messages("visible"), messages("visible", "new")],
-    [messages("visible"), messages("replacement")],
-    [messages("removed", "visible"), messages("visible")],
-  ])("does not restore startup, append, replacement, or trimming", (previous, next) => {
-    const { scroller, instance, anchor, measureRows } = fixture();
-    anchor.messageKeys = previous;
-    anchor.capture(scroller, false);
-    anchor.messageKeys = next;
-    anchor.capture(scroller, false);
-    expect(anchor.update(scroller, instance, measureRows)).toBe(false);
-    expect(measureRows).not.toHaveBeenCalled();
-  });
+  it.each<[string, string[], string[], boolean, number?, number?, boolean?]>([
+    ["start boundary", ["visible"], ["older", "visible"], true, 0, 50],
+    ["end boundary", ["visible"], ["older", "visible"], true, 1100, 130],
+    ["stable bubble", ["visible"], ["older", "visible"], true, 200, 90],
+    ["removed bubble", ["visible"], ["older", "visible"], true, 200, 90, true],
+    ["startup", [], ["visible"], false],
+    ["append", ["visible"], ["visible", "new"], false],
+    ["replacement", ["visible"], ["replacement"], false],
+    ["trimming", ["removed", "visible"], ["visible"], false],
+  ])(
+    "settles %s without a scroll write",
+    (_name, previous, next, restoring, offset = 200, top = 90, removed = false) => {
+      const { scroller, bubble, instance, anchor, measureRows } = fixture();
+      anchor.messageKeys = messages(...previous);
+      anchor.capture(scroller, false);
+      anchor.messageKeys = messages(...next);
+      anchor.capture(scroller, false);
+      scroller.scrollTop = offset;
+      bubble.getBoundingClientRect = () => rect(top, 180);
+      expect(anchor.update(scroller, instance, measureRows)).toBe(restoring);
+      if (removed) {
+        bubble.remove();
+      }
+      expect(anchor.update(scroller, instance, measureRows)).toBe(restoring);
+      expect(anchor.messageKey).toBeNull();
+      expect(scroller.scrollTop).toBe(offset);
+      expect(anchor.update(scroller, instance, measureRows)).toBe(false);
+      if (!restoring) {
+        expect(measureRows).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps the original reader target when another projection commits before restoration", () => {
     const { scroller, bubble, instance, anchor, measureRows } = fixture();
@@ -154,6 +154,7 @@ describe("transcript prepend anchor", () => {
       canFollowEnd: () => true,
       isProgrammaticScroll: () => false,
       cancelScroll: () => anchor.clear(),
+      onLayoutCorrection: vi.fn(),
       requestUpdate: vi.fn(),
       onOffset: vi.fn(() => false),
       onReaderScroll: vi.fn(),
@@ -200,23 +201,4 @@ describe("transcript prepend anchor", () => {
       controller.hostDisconnected();
     }
   });
-
-  it.each([false, true])(
-    "retires restoration without a write when the bubble is stable or removed=$removed",
-    (removed) => {
-      const { scroller, bubble, instance, anchor, measureRows } = fixture();
-      anchor.messageKeys = messages("visible");
-      anchor.capture(scroller, false);
-      anchor.messageKeys = messages("older", "visible");
-      anchor.capture(scroller, false);
-      anchor.update(scroller, instance, measureRows);
-      if (removed) {
-        bubble.remove();
-      }
-      scroller.scrollTop = 200;
-      expect(anchor.update(scroller, instance, measureRows)).toBe(true);
-      expect(scroller.scrollTop).toBe(200);
-      expect(anchor.update(scroller, instance, measureRows)).toBe(false);
-    },
-  );
 });

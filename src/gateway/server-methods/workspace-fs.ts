@@ -7,6 +7,10 @@ import { createAsyncLock, readFileWindowFully } from "@openclaw/fs-safe/advanced
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import type {
+  SessionFileBrowserEntry,
+  SessionFileRelevance,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   getAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
@@ -192,7 +196,7 @@ export async function readWorkspaceFile(
     return {
       buffer,
       stat: { size: buffer.length, mtimeMs: stat.mtimeMs },
-      canonicalPath: path.relative(workspaceRoot.rootReal, filePath).split(path.sep).join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, filePath),
       // The existing remote bridge does not provide an atomic old-content CAS.
       readOnly: true,
     };
@@ -201,7 +205,7 @@ export async function readWorkspaceFile(
     const read = await workspaceRoot.read(browserPath, { maxBytes: opts?.maxBytes });
     return {
       ...read,
-      canonicalPath: path.relative(workspaceRoot.rootReal, read.realPath).split(path.sep).join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, read.realPath),
     };
   } catch (err) {
     if (err instanceof FsSafeError && err.code === "too-large") {
@@ -235,10 +239,7 @@ export async function readWorkspaceFilePrefix(
     const bytesRead = await readFileWindowFully(handle, buffer, 0);
     return {
       buffer: buffer.subarray(0, bytesRead),
-      canonicalPath: path
-        .relative(workspaceRoot.rootReal, opened.realPath)
-        .split(path.sep)
-        .join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, opened.realPath),
       stat: opened.stat,
     };
   } catch {
@@ -294,10 +295,7 @@ export async function updateWorkspaceFile(
     }
     return {
       status: "updated",
-      canonicalPath: path
-        .relative(workspaceRoot.rootReal, current.realPath)
-        .split(path.sep)
-        .join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, current.realPath),
       hash: sha256Hex(content),
       stat,
     };
@@ -374,6 +372,10 @@ export function decodeUtf8Strict(buffer: Buffer): string | undefined {
   }
 }
 
+export function workspaceRelativePath(root: string, resolved: string): string {
+  return path.relative(root, resolved).split(path.sep).join("/");
+}
+
 /** Collapses `.` segments and separators into a canonical root-relative path. */
 export function normalizeRelativePath(value: string | undefined): string {
   if (!value) {
@@ -404,6 +406,34 @@ export function resolveWorkspacePath(
 /** Protocol timestamps are integer milliseconds. */
 export function toUpdatedAtMs(mtimeMs: number): number {
   return Math.floor(mtimeMs);
+}
+
+export function toWorkspaceBrowserEntry(
+  browserPath: string,
+  dirent: WorkspaceDirEntry,
+  relevance?: ReadonlyMap<string, SessionFileRelevance>,
+): SessionFileBrowserEntry | undefined {
+  const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : undefined;
+  if (!kind) {
+    return undefined;
+  }
+  let sessionKind = kind === "file" ? relevance?.get(browserPath) : undefined;
+  if (kind === "directory" && relevance) {
+    const prefix = browserPath ? `${browserPath}/` : "";
+    for (const [filePath, fileKind] of relevance) {
+      if (filePath.startsWith(prefix) && filePath !== browserPath) {
+        sessionKind = !sessionKind || sessionKind === fileKind ? fileKind : "mixed";
+      }
+    }
+  }
+  return {
+    path: browserPath,
+    name: dirent.name,
+    kind,
+    ...(kind === "file" ? { size: dirent.size } : {}),
+    updatedAtMs: toUpdatedAtMs(dirent.mtimeMs),
+    ...(sessionKind ? { sessionKind } : {}),
+  };
 }
 
 export function sortDirents<T extends { name: string }>(dirents: readonly T[]): T[] {

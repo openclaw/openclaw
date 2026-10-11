@@ -24,7 +24,7 @@ function hasStateStatus(
   return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
 }
 
-function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
+export function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
   return (
     isRecord(value) &&
     hasStateStatus(value.execution, EXECUTION_STATUSES) &&
@@ -74,7 +74,6 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   if (!record.runId || !record.childSessionKey || !record.requesterSessionKey) {
     return null;
   }
-  rememberSubagentRunVersion(record, subagentRunRowVersion(row)!);
   return record;
 }
 

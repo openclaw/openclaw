@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
@@ -8,6 +9,28 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+
+/** SQLite recovers committed WAL frames; these checks do not scan table or index contents. */
+export function sqliteWalAdmissionRefusal(
+  database: DatabaseSync,
+  pathname: string,
+): string | undefined {
+  let probe = "wal-sidecars";
+  try {
+    const journal = fs.statSync(`${pathname}-journal`, { throwIfNoEntry: false });
+    if (journal && journal.size > 0) {
+      return "rollback-journal-present";
+    }
+    // Admission has already read the schema through SQLite's recovered header.
+    probe = "journal-mode";
+    if (database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "wal") {
+      return "journal-mode-not-wal";
+    }
+    return undefined;
+  } catch {
+    return `${probe}-failed`;
+  }
+}
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -28,10 +51,17 @@ export type SqliteIntegrityCheck = {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  integrityGateReason?: "revoked" | "stale-lease" | "dirty-receipt" | "no-proof" | "lease-class";
-  integrityGateMode?: "full";
+  because?: string;
+  integrityGateReason?:
+    | "revoked"
+    | "stale-lease-full"
+    | "process-death"
+    | "dirty-receipt"
+    | "no-proof"
+    | "lease-class";
+  integrityGateMode?: "full" | "deferred";
   integrityGateMs?: number;
-  integrityGateOutcome?: "healthy" | "failed" | "cached";
+  integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
   integrityCheckSyncMs?: number;
   integrityOutsideCheckMs?: number;
   integrityWorkerCheckMs?: number;
@@ -198,14 +228,9 @@ export function confirmSqliteFileIntegrity(
 ): SqliteIntegrityConfirmation {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let initial: SqliteFileGeneration;
-    try {
-      initial = readStableSqliteFileGeneration(pathname);
-    } catch (error) {
-      return unboundSqliteIntegrityFailure(error);
-    }
-
     let database: DatabaseSync;
     try {
+      initial = readStableSqliteFileGeneration(pathname);
       database = openNodeSqliteDatabase(pathname, { readOnly: true });
     } catch (error) {
       // A failed SQLite open exposes no descriptor identity. Path snapshots
@@ -314,9 +339,7 @@ function runSqliteCheck(
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(
-    `SQLite ${pragma} failed for ${databaseLabel}: ${details}. Run openclaw doctor --fix for explicit repair; if repair is refused, preserve the database and WAL and restore a verified backup.`,
-  );
+  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
@@ -385,7 +408,12 @@ function readTaskDeliveryCascadeForeignKeyId(database: DatabaseSync): bigint | u
 }
 
 function createSqliteIntegrityError(message: string, cause?: unknown): Error {
-  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  const error =
+    cause === undefined
+      ? new Error(
+          `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`,
+        )
+      : new Error(message, { cause });
   error.name = "SqliteIntegrityError";
   return error;
 }

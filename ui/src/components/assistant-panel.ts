@@ -14,6 +14,10 @@ import {
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import {
+  prepareSessionNavigationHandoff,
+  runSessionNavigationIntent,
+} from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -43,6 +47,7 @@ import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
 
@@ -110,6 +115,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       .watchStore(() => this.store)
       .watchStore(() => this.context?.agentSelection)
       .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.gateway);
   }
 
@@ -399,17 +405,42 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   private openHomePage(): void {
-    if (this.context) {
-      const { sessionKey, agentId } = this.homeTarget;
-      const target = sessionNavigationTarget({
-        context: this.context,
-        face: "chat",
-        sessionKey,
-        agentId,
-        focusComposer: true,
-      });
-      this.context.navigate("chat", target.options);
+    const context = this.context;
+    if (!context) {
+      return;
     }
+    const { sessionKey, agentId } = this.homeTarget;
+    const { pageRouteId, pageSessionKey } = this;
+    const { client, hello } = context.gateway.snapshot;
+    const target = sessionNavigationTarget({
+      context,
+      face: "chat",
+      sessionKey,
+      agentId,
+      focusComposer: true,
+    });
+    // Full-page Home is explicit selection, even when its URL already owns an unbound split.
+    runSessionNavigationIntent(this, {
+      face: "chat",
+      sessionKey,
+      agentId,
+      commit: () => {
+        if (
+          this.context !== context ||
+          this.pageRouteId !== pageRouteId ||
+          this.pageSessionKey !== pageSessionKey ||
+          context.gateway.snapshot.client !== client ||
+          context.gateway.snapshot.hello !== hello ||
+          this.homeTarget.sessionKey !== sessionKey ||
+          this.homeTarget.agentId !== agentId
+        ) {
+          return false;
+        }
+        prepareSessionNavigationHandoff(context.gateway, target.options.pathname, sessionKey);
+        context.navigate("chat", target.options);
+        return true;
+      },
+    });
   }
 
   private setOpen(open: boolean): void {
@@ -502,7 +533,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
                     aria-pressed=${this.destination === destination}
                     @click=${() => this.openDestination(destination)}
                   >
-                    ${t(destination === "home" ? "assistantPanel.home" : "nav.askOpenClaw")}
+                    ${destination === "home" ? t("assistantPanel.home") : askBrandLabel()}
                   </button>`
                 : nothing,
             )}

@@ -795,8 +795,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  // mock-isolation: Compaction hooks use fixture tools without consulting the active channel registry.
   vi.doMock("../channel-tools.js", () => ({
-    listChannelSupportedActions: vi.fn(() => undefined),
     resolveChannelMessageToolHints: vi.fn(() => undefined),
   }));
 
@@ -877,8 +877,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
+  // mock-isolation: Compaction hook fixtures exercise lifecycle behavior without credential-source admission.
   vi.doMock("../auth-profiles/source-check.js", () => ({
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({

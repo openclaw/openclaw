@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -29,15 +29,23 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("rechecks a foreign commit before the next worker operation", async () => {
+it("observes a managed schema publication before a placement write", async () => {
   const context = captureOpenClawStateWorkerContext();
   const backend = runWithSqliteWorkerStateContext(context, () =>
     createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
   );
-  const peer = new (requireNodeSqlite().DatabaseSync)(context.admission.databasePath);
+  const peer = openNodeSqliteDatabase(context.admission.databasePath);
   try {
+    const command = {
+      type: "workerPlacements.retire" as const,
+      input: {
+        sessionId: "schema-fenced-placement",
+        expectedState: "local" as const,
+        expectedGeneration: 1,
+      },
+    };
+    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
     peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-    const command = { type: "database.inspectIdle" as const, input: undefined };
     expect(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toThrow(
       "newer schema version",
     );

@@ -20,6 +20,7 @@ import {
   listTelegramAccountIds,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import {
   createTelegramPollExtraToolSchemas,
@@ -53,36 +54,11 @@ async function handleTelegramRuntimeAction(
   return result;
 }
 
-const TELEGRAM_MESSAGE_ACTION_MAP = {
-  delete: "deleteMessage",
-  edit: "editMessage",
-  "emoji-list": "emoji-list",
-  poll: "poll",
-  react: "react",
-  read: "read",
-  send: "sendMessage",
-  sticker: "sendSticker",
-  "sticker-search": "searchSticker",
-  "topic-create": "createForumTopic",
-  "topic-edit": "editForumTopic",
-} as const satisfies Partial<Record<ChannelMessageActionName, string>>;
-
-const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
-  "createForumTopic",
-  "delete",
-  "deleteMessage",
-  "edit",
-  "editForumTopic",
-  "editMessage",
-  "poll",
-  "react",
-  "send",
-  "sendMessage",
-  "sendSticker",
-  "sticker",
-  "topic-create",
-  "topic-edit",
-]);
+const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set(
+  Object.entries(TELEGRAM_MESSAGE_ACTION_MAP).flatMap(([action, runtimeAction]) =>
+    ["read", "emoji-list", "sticker-search"].includes(action) ? [] : [action, runtimeAction],
+  ),
+);
 
 async function prepareTelegramSendPayload({
   ctx,
@@ -99,8 +75,7 @@ async function prepareTelegramSendPayload({
   if (!quoteText) {
     return payload;
   }
-  const rawTelegramData = payload.channelData?.telegram;
-  const telegramData = asNonArrayRecord(rawTelegramData);
+  const telegramData = asNonArrayRecord(payload.channelData?.telegram);
   return {
     ...payload,
     channelData: {
@@ -125,19 +100,12 @@ function resolveTelegramActionDiscovery({
   if (accounts.length === 0) {
     return null;
   }
-  const unionGate = createUnionActionGate(accounts, (account) =>
-    createTelegramActionGate({
-      cfg,
-      accountId: account.accountId,
-    }),
+  const actionGate = (account: (typeof accounts)[number]) =>
+    createTelegramActionGate({ cfg, accountId: account.accountId });
+  const unionGate = createUnionActionGate(accounts, actionGate);
+  const pollEnabled = accounts.some(
+    (account) => resolveTelegramPollActionGateState(actionGate(account)).enabled,
   );
-  const pollEnabled = accounts.some((account) => {
-    const accountGate = createTelegramActionGate({
-      cfg,
-      accountId: account.accountId,
-    });
-    return resolveTelegramPollActionGateState(accountGate).enabled;
-  });
   const buttonsEnabled = accounts.some((account) =>
     isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
   );
@@ -240,33 +208,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
     };
   },
-  extractToolSend: ({ args }) => {
-    return extractToolSend(args, "sendMessage");
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   isToolDeliveryAction: ({ args }) =>
     typeof args.action === "string" && TELEGRAM_TOOL_DELIVERY_ACTIONS.has(args.action),
-  handleAction: async ({
-    action,
-    params,
-    reply,
-    progressSnapshot,
-    cfg,
-    accountId,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
-    sessionKey,
-    inboundEventKind,
-    toolContext,
-    conversationReadOrigin,
-    requesterAccountId,
-    requesterSenderId,
-    gatewayClientScopes,
-    deliveryRetryOwner,
-    onPlatformSendDispatch,
-    assertDirectAdapterHandoff,
-    skipQueue,
-  }) => {
+  handleAction: async (ctx) => {
+    const { action, params, cfg, accountId, toolContext } = ctx;
     const telegramAction =
       TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
     if (!telegramAction) {
@@ -298,21 +244,23 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
       cfg,
       {
-        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
-        mediaLocalRoots,
-        mediaReadFile,
-        sessionKey,
-        inboundEventKind,
-        gatewayClientScopes,
-        deliveryRetryOwner,
-        onPlatformSendDispatch,
-        assertDirectAdapterHandoff,
-        skipQueue,
-        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-        ...(requesterAccountId ? { requesterAccountId } : {}),
-        ...(requesterSenderId ? { requesterSenderId } : {}),
-        ...(reply ? { reply } : {}),
-        ...(progressSnapshot ? { progressSnapshot } : {}),
+        ...(ctx.mediaAccess !== undefined ? { mediaAccess: ctx.mediaAccess } : {}),
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        sessionKey: ctx.sessionKey,
+        inboundEventKind: ctx.inboundEventKind,
+        gatewayClientScopes: ctx.gatewayClientScopes,
+        deliveryRetryOwner: ctx.deliveryRetryOwner,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        skipQueue: ctx.skipQueue,
+        ...(ctx.conversationReadOrigin
+          ? { conversationReadOrigin: ctx.conversationReadOrigin }
+          : {}),
+        ...(ctx.requesterAccountId ? { requesterAccountId: ctx.requesterAccountId } : {}),
+        ...(ctx.requesterSenderId ? { requesterSenderId: ctx.requesterSenderId } : {}),
+        ...(ctx.reply ? { reply: ctx.reply } : {}),
+        ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

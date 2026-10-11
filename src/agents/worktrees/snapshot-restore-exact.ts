@@ -10,9 +10,7 @@ import { restoreProvisionedFiles } from "./provisioned-files.js";
 import {
   assertExactStateSourceIdentity,
   hasExactWorktreeIndex,
-  requireExactManagedWorktreeHead,
-  requireExactWorktreeRepository,
-  withExactStateGitLocks,
+  withExactSnapshotRestore,
 } from "./removal-git.js";
 import { restoreExactStateMetadata, type ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord, ProvisionedFileState } from "./types.js";
@@ -55,7 +53,7 @@ const binding = (record: ManagedWorktreeRecord) =>
 export async function readExactRestoreReceipt(
   record: ManagedWorktreeRecord,
   options: GitOptions,
-): Promise<Receipt | undefined> {
+): Promise<(Receipt & { ref: string }) | undefined> {
   const found = await runGit(
     record.repoRoot,
     ["rev-parse", "--verify", "--quiet", receiptRef(record) + "^{commit}"],
@@ -81,7 +79,7 @@ export async function readExactRestoreReceipt(
   ) {
     throw new Error("Exact restore receipt ownership changed; source and snapshot preserved");
   }
-  return { ...receipt, commit };
+  return { ...receipt, commit, ref: receiptRef(record) };
 }
 
 export async function clearExactRestoreReceipt(
@@ -260,21 +258,7 @@ export async function restoreExactSnapshotFallback<T>(params: {
     assertCurrent();
     await params.add(assertCurrent);
   }
-  await requireExactWorktreeRepository(record, record.path, options);
-  return await withExactStateGitLocks(record, assertCurrent, async () => {
-    await requireExactManagedWorktreeHead(
-      { ...record, removedAt: undefined },
-      {
-        ownerKind: record.ownerKind,
-        ownerId: record.ownerId,
-        createdAt: record.createdAt,
-        lastActiveAt: record.lastActiveAt,
-        head: metadata.head,
-        branchHead: metadata.branchHead,
-        indexSha256: metadata.indexSha256,
-      },
-      options,
-    );
+  return await withExactSnapshotRestore(record, metadata, options, assertCurrent, async () => {
     const temporaryRoot = path.join(record.path, ".openclaw-restore-" + receipt.nonce);
     if (
       metadata.files.some(

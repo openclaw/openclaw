@@ -146,7 +146,13 @@ extension GatewayProcessManager {
             }
             return .installedService
         } catch {
-            if self.isCurrentGatewayStart(generation) { self.recordNodeMigrationFailure(error.localizedDescription) }
+            if self.isCurrentGatewayStart(generation) {
+                self.recordNodeMigrationFailure(error.localizedDescription)
+                if error.localizedDescription.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                    self.desiredActive = false
+                    self.fail(error.localizedDescription)
+                }
+            }
             return .failed(error.localizedDescription)
         }
     }
@@ -198,6 +204,9 @@ extension GatewayProcessManager {
             self.status = .starting
             let result = await self.enableLaunchAgentIfNeeded(
                 port: candidate.port, generation: generation, nodeMigration: candidate)
+            if let failure = result.error, failure.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                throw GatewayHostingError(message: failure)
+            }
             guard self.isCurrentGatewayStart(generation) else { throw CancellationError() }
             if let failure = result.error {
                 self.recordNodeMigrationFailure(failure)
@@ -271,8 +280,7 @@ extension GatewayProcessManager {
             let reason = self.installation == .unreadable
                 ? Installation.ownershipFailure
                 : "This Gateway is externally managed. Start it with its installation owner."
-            self.status = .failed(reason)
-            self.lastFailureReason = reason
+            self.fail(reason)
             return
         }
         do {
@@ -299,8 +307,7 @@ extension GatewayProcessManager {
             await self.observeChildReadiness(pid: pid, port: port, generation: startGeneration)
         } catch {
             guard self.isCurrentGatewayStart(startGeneration) else { return }
-            self.status = .failed(error.localizedDescription)
-            self.lastFailureReason = error.localizedDescription
+            self.fail(error.localizedDescription)
             self.appendLog("[gateway] \(error.localizedDescription)\n")
             self.logger.error("gateway child launch failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -325,8 +332,7 @@ extension GatewayProcessManager {
         case let .failed(reason):
             self.terminalChildFailureGeneration = generation
             self.desiredActive = false
-            self.status = .failed(reason)
-            self.lastFailureReason = reason
+            self.fail(reason)
             self.appendLog("[gateway] \(reason)\n")
         }
     }
@@ -353,8 +359,7 @@ extension GatewayProcessManager {
         if !healthy, self.gatewayStartGeneration == generation {
             self.desiredActive = false
             if let failure {
-                self.status = .failed(failure)
-                self.lastFailureReason = failure
+                self.fail(failure)
             }
         }
     }
@@ -587,8 +592,7 @@ extension GatewayProcessManager {
                 })
             if try self.bundledRuntimeUpdateIsPaused(generation: generation) { return completion(.deferred) }
             if let error = result.error {
-                self.status = .failed(error)
-                self.lastFailureReason = error
+                self.fail(error)
                 throw GatewayHostingError(message: error)
             }
             guard result.installed

@@ -23,7 +23,7 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
     startTask: () => ({
-      ...startAwaitedReadMock(async () => ({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] })),
+      ...startAwaitedReadMock(async () => ({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] })),
       release: () => startAwaitedReadMock(async () => {}),
     }),
     close: readPool.close,
@@ -33,7 +33,7 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
 import { captureOpenClawStateReadSource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-worker.ts"))};
 import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 async function useReadPool() {
-  const transport = captureOpenClawStateReadSource().createTransport({ type: "fleet.list" });
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
   const authority = { signal: new AbortController().signal, assertCurrent() {} };
   try {
     expect(await transport.startRead({
@@ -47,7 +47,7 @@ async function useReadPool() {
       },
       location: "/synthetic/state.sqlite",
       checkFreshAdmission: false,
-    }, authority).result).toMatchObject({ value: { ok: true, type: "fleet.list" } });
+    }, authority).result).toMatchObject({ value: { ok: true, type: "backup.runs" } });
   } finally {
     await transport.startClose().result;
   }
@@ -309,7 +309,7 @@ import { afterAll, expect, it, vi } from "vitest";
 ${unavailableSharedStateWorkerFixture}
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
 import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
-import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
+import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync, retainAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
 import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
 import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
@@ -351,6 +351,8 @@ it("retains its native handle and lease when resource teardown refuses cleanup",
     throw new Error("Synthetic independent singleton cleanup refused");
   });
   probe.resets.push([failedIndependentKey, resets.get(failedIndependentKey)]);
+  // Failed resource custody retains its native borrower until cleanup succeeds.
+  const releaseBorrow = retainAgentDatabase(database.db);
   registerOpenClawAgentDatabaseAsyncResource({
     agentId: database.agentId,
     path: database.path,
@@ -360,6 +362,7 @@ it("retains its native handle and lease when resource teardown refuses cleanup",
       if (!probe.allowClose) {
         throw new Error("Synthetic retired lease cleanup refused: leaseId=" + lease.leaseId + " path=" + database.path);
       }
+      releaseBorrow();
     },
   });
   console.log("retained-lease-identity: " + JSON.stringify({ leaseId: lease.leaseId, path: database.path }));
@@ -440,7 +443,7 @@ edge.create.mockImplementation(() => ({
       ...startAwaitedReadMock(async () => generation === "c" ? {
         ok: true, type: "workspace.snapshot", sourceAdmitted: true,
         snapshot: { identity: createWorkspaceStateIdentity("/fixture/workspace"), setupExists: false, setup: { version: 1 } },
-      } : { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] }),
+      } : { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
       release: () => startAwaitedReadMock(async () => {}),
     };
   },
@@ -459,7 +462,7 @@ it("rebinds the shared read pool to generation " + generation, async () => {
     expect(probe.reads).toEqual(["a", "b", "c"]);
     expect(probe.closes).toEqual(["a", "b"]);
   } else {
-    await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).resolves.toMatchObject({ type: "fleet.list" });
+    await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).resolves.toMatchObject({ type: "backup.runs" });
   }
   expect(edge.create).toHaveBeenCalledOnce();
   expect(edge.close).not.toHaveBeenCalled();

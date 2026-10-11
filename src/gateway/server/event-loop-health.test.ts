@@ -19,7 +19,7 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
-import { registerSkillUsageTracking } from "../../skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../../skills/workshop/skill-usage.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,

@@ -30,21 +30,39 @@ function renderJson(source: string, fenced = false) {
 }
 
 describe("source-preserving JSON tree", () => {
-  it.each([false, true])(
-    "retains duplicate members, key order and numeric lexemes (fenced=%s)",
-    (fenced) => {
-      const source = String.raw`{"2":1.00,"1":1E+03,"a":9007199254740993,"a":1e400,"nested":{"a":-0,"a":1e-999}}`;
-      const body = renderJson(source, fenced);
-      expect(
-        [...body.querySelectorAll(".code-block-json-key")].map((node) => node.textContent),
-      ).toEqual(['"2"', '"1"', '"a"', '"a"', '"nested"', '"a"', '"a"']);
-      expect(
-        [...body.querySelectorAll(".code-block-json-value--literal")].map(
-          (node) => node.textContent,
-        ),
-      ).toEqual(["1.00", "1E+03", "9007199254740993", "1e400", "-0", "1e-999"]);
-      const button = body.querySelector<HTMLElement>(".code-block-copy")!;
-      expect(readMarkdownCodeBlockCopyText(button)).toBe(source);
+  it.each([
+    {
+      source: String.raw`{"2":1.00,"1":1E+03,"a":9007199254740993,"a":1e400,"nested":{"a":-0,"a":1e-999}}`,
+      keys: ['"2"', '"1"', '"a"', '"a"', '"nested"', '"a"', '"a"'],
+      literals: ["1.00", "1E+03", "9007199254740993", "1e400", "-0", "1e-999"],
+    },
+    {
+      source: '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}',
+      keys: ['"nested"', '"text"'],
+      literals: [],
+    },
+  ])(
+    "preserves source lexemes and indentation in Tree, Raw and Copy: $source",
+    ({ source, keys, literals }) => {
+      for (const fenced of [false, true]) {
+        const body = renderJson(source, fenced);
+        expect(
+          [...body.querySelectorAll(".code-block-json-key")].map((node) => node.textContent),
+        ).toEqual(keys);
+        expect(
+          [...body.querySelectorAll(".code-block-json-value--literal")].map(
+            (node) => node.textContent,
+          ),
+        ).toEqual(literals);
+        body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
+        expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
+          true,
+        );
+        expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
+        expect(
+          readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
+        ).toBe(source);
+      }
     },
   );
 
@@ -58,17 +76,6 @@ describe("source-preserving JSON tree", () => {
     expect(body.querySelector(".code-block-json-key")?.textContent).toBe('"\\u0061"');
     expect(body.querySelector(".code-block-json-value--string")?.textContent).toBe('"\\u0061"');
     expect(body.querySelector("img, script, strong")).toBeNull();
-    expect(
-      readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-    ).toBe(source);
-  });
-
-  it.each([false, true])("preserves authored indentation in Raw and Copy (fenced=%s)", (fenced) => {
-    const source = '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}';
-    const body = renderJson(source, fenced);
-    body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
-    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
-    expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
     expect(
       readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
     ).toBe(source);
@@ -115,29 +122,19 @@ describe("source-preserving JSON tree", () => {
     },
   );
 
-  it.each(["[".repeat(1000) + "0" + "]".repeat(1000), "[" + "0,".repeat(3000) + "0]"])(
-    "keeps bounded-tree fallback literal and complete",
-    (source) => {
-      const body = renderJson(source);
-      expect(body.querySelector(".code-block-json-tree")).toBeNull();
-      expect(body.querySelector("pre code")?.textContent).toBe(source);
-      expect(
-        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-      ).toBe(source);
-    },
-  );
-
-  it.each([" ".repeat(20_000) + "{}", '{"text":"**literal** ' + "x".repeat(20_000) + '"}'])(
-    "keeps over-budget JSON-shaped source literal without constructing a tree",
-    (source) => {
-      const body = renderJson(source);
-      expect(body.querySelector(".code-block-json-tree, strong")).toBeNull();
-      expect(body.querySelector("pre code")?.textContent).toBe(source);
-      expect(
-        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-      ).toBe(source);
-    },
-  );
+  it.each([
+    "[".repeat(1000) + "0" + "]".repeat(1000),
+    "[" + "0,".repeat(3000) + "0]",
+    " ".repeat(20_000) + "{}",
+    '{"text":"**literal** ' + "x".repeat(20_000) + '"}',
+  ])("keeps over-budget trees literal and complete", (source) => {
+    const body = renderJson(source);
+    expect(body.querySelector(".code-block-json-tree, strong")).toBeNull();
+    expect(body.querySelector("pre code")?.textContent).toBe(source);
+    expect(
+      readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
+    ).toBe(source);
+  });
 
   it("leaves inputs above the shared parsing limit to the existing literal-text renderer", () => {
     const source = '{"text":"**literal** ' + "x".repeat(40_000) + '"}';

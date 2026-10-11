@@ -11,6 +11,7 @@ const root = process.cwd();
 let cwd: string;
 let base: string;
 let harness: string;
+let commitNumber = 0;
 const git = (...args: string[]) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const write = (file: string, text = "fixture\n") => {
@@ -19,7 +20,8 @@ const write = (file: string, text = "fixture\n") => {
 };
 const commit = () => {
   git("add", ".");
-  git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
+  // Identical orphan trees must stay distinct even when Git timestamps coincide.
+  git("-c", "commit.gpgsign=false", "commit", "-qm", `fixture ${commitNumber++}`);
 };
 const skip = () => canSkipNpmLockSetup({ cwd, base });
 
@@ -141,6 +143,8 @@ describe("npm lock setup admission", () => {
     } else {
       git("checkout", "--orphan", "unrelated");
       commit();
+      expect(git("rev-parse", "HEAD")).not.toBe(base);
+      expect(() => git("merge-base", base, "HEAD")).toThrow();
     }
     expect(skip()).toBe(true);
   });

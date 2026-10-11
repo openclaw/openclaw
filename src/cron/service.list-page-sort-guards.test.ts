@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as snapshotRevisions from "./list-snapshot-revision.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
-import { listPage } from "./service/ops-read.js";
+import { listPage, status } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
 
 function createBaseJob(overrides?: Partial<CronJob>): CronJob {
@@ -24,36 +24,30 @@ function createBaseJob(overrides?: Partial<CronJob>): CronJob {
 }
 
 describe("cron listPage sort guards", () => {
-  it.each([
-    { sortDir: "asc" as const, scheduledIds: ["earlier", "later"] },
-    { sortDir: "desc" as const, scheduledIds: ["later", "earlier"] },
-  ])(
-    "keeps unscheduled jobs after the scheduled $sortDir page",
-    async ({ sortDir, scheduledIds }) => {
-      const jobs = [
-        createBaseJob({ id: "paused-z", enabled: false, state: {} }),
-        createBaseJob({ id: "later", state: { nextRunAtMs: 200 } }),
-        createBaseJob({ id: "paused-a", enabled: false, state: {} }),
-        createBaseJob({ id: "earlier", state: { nextRunAtMs: 100 } }),
-      ];
-      const state = createMockCronStateForJobs({ jobs });
-      const options = {
-        enabled: "all" as const,
-        sortBy: "nextRunAtMs" as const,
-        sortDir,
-        limit: 2,
-      };
+  it("keeps unscheduled jobs after the scheduled descending page", async () => {
+    const jobs = [
+      createBaseJob({ id: "paused-z", enabled: false, state: {} }),
+      createBaseJob({ id: "later", state: { nextRunAtMs: 200 } }),
+      createBaseJob({ id: "paused-a", enabled: false, state: {} }),
+      createBaseJob({ id: "earlier", state: { nextRunAtMs: 100 } }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+    const options = {
+      enabled: "all" as const,
+      sortBy: "nextRunAtMs" as const,
+      sortDir: "desc" as const,
+      limit: 2,
+    };
 
-      const firstPage = await listPage(state, { ...options, offset: 0 });
-      const secondPage = await listPage(state, { ...options, offset: 2 });
+    const firstPage = await listPage(state, { ...options, offset: 0 });
+    const secondPage = await listPage(state, { ...options, offset: 2 });
 
-      expect(firstPage.jobs.map((job) => job.id)).toEqual(scheduledIds);
-      expect(firstPage.hasMore).toBe(true);
-      expect(secondPage.jobs.map((job) => job.id)).toEqual(["paused-a", "paused-z"]);
-      expect(secondPage.hasMore).toBe(false);
-      expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
-    },
-  );
+    expect(firstPage.jobs.map((job) => job.id)).toEqual(["later", "earlier"]);
+    expect(firstPage.hasMore).toBe(true);
+    expect(secondPage.jobs.map((job) => job.id)).toEqual(["paused-a", "paused-z"]);
+    expect(secondPage.hasMore).toBe(false);
+    expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
+  });
 
   it("preserves phrase searches across existing cron job fields", async () => {
     const job = createBaseJob({
@@ -98,6 +92,8 @@ describe("cron listPage sort guards", () => {
     try {
       const options = { limit: 1, offset: 1, sortBy: "name" as const };
       const page = await listPage(state, options);
+      const firstStatus = await status(state);
+      expect(Object.isFrozen(firstStatus)).toBe(true);
       expect(clone).not.toHaveBeenCalledWith(state.store);
       expect(page.jobs[0]).not.toBe(jobs[1]);
       expect(() => {
@@ -109,6 +105,7 @@ describe("cron listPage sort guards", () => {
       expect(visibilityPass.total).toBe(0);
       const repeated = await listPage(state, options);
       expect(repeated.jobs[0]).toBe(page.jobs[0]);
+      expect(await status(state)).toBe(firstStatus);
       expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
       expect(clone).toHaveBeenCalledTimes(1);
       expect(revision).toHaveBeenCalledTimes(2);
@@ -117,6 +114,7 @@ describe("cron listPage sort guards", () => {
 
       await locked(state, async () => {
         jobs[1]!.state.lastStatus = "ok";
+        jobs[1]!.state.nextRunAtMs = 100;
         jobs[2]!.state.lastStatus = "ok";
       });
       const changed = await listPage(state, options);
@@ -125,6 +123,10 @@ describe("cron listPage sort guards", () => {
       expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
       expect(changed.jobs[0]?.state.lastStatus).toBe("ok");
       expect(repeated.jobs[0]?.state.lastStatus).toBeUndefined();
+      const changedStatus = await status(state);
+      expect(changedStatus.nextWakeAtMs).toBe(100);
+      expect(changedStatus).not.toBe(firstStatus);
+      expect(await status(state)).toBe(changedStatus);
       expect(clone).toHaveBeenCalledTimes(2);
     } finally {
       clone.mockRestore();

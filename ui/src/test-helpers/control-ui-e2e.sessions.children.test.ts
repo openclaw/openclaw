@@ -64,58 +64,49 @@ it("uses current child ownership before archive partitioning", async ({ connect 
   expect((await request("sessions.list", { archived: "all" })).payload.count).toBe(rows.length);
 });
 
-it.for([false, true])(
-  "returns a complete child total after filtering a complete fixture (materialized: %s)",
-  async (materialized, { connect }) => {
+it.for(["empty", "materialized", "scoped"])(
+  "preserves child pagination for a %s fixture",
+  async (kind, { connect }) => {
     const parent = "agent:main:parent";
+    const child = {
+      key: "agent:main:child",
+      sessionId: "session:agent:main:child",
+      spawnedBy: parent,
+      archived: false,
+      pinned: false,
+    };
+    const scoped = kind === "scoped";
+    const page = {
+      sessions: scoped ? [child] : [{ key: parent }],
+      count: 1,
+      totalCount: scoped ? 200 : 1,
+      offset: 0,
+      hasMore: scoped,
+      nextOffset: scoped ? 1 : null,
+    };
     const { request, controls } = await connect({
-      methodResponses: {
-        "sessions.list": {
-          sessions: [{ key: parent }],
-          count: 1,
-          totalCount: 1,
-          offset: 0,
-          hasMore: false,
-          nextOffset: null,
-        },
-      },
+      methodResponses: { "sessions.list": page },
     });
-    const children = materialized ? ["agent:main:child-one", "agent:main:child-two"] : [];
+    const children =
+      kind === "materialized" ? ["agent:main:child-one", "agent:main:child-two"] : [];
     for (const key of children) {
       controls.setMethodResponse("sessions.create", { key, entry: { spawnedBy: parent } });
       await request("sessions.create", {});
     }
 
-    const result = (await request("sessions.list", { spawnedBy: parent })).payload;
-    expect(result).toMatchObject({
-      count: children.length,
-      totalCount: children.length,
-      hasMore: false,
-      nextOffset: null,
-    });
-    expect(result.sessions).toEqual(children.map((key) => expect.objectContaining({ key })));
+    const result = (
+      await request("sessions.list", { spawnedBy: parent, ...(scoped ? { limit: 1 } : {}) })
+    ).payload;
+    if (scoped) {
+      expect(result).toEqual({ ...page, sessions: [{ ...child, snapshotAt: expect.any(Number) }] });
+    } else {
+      expect(result).toMatchObject({
+        count: children.length,
+        totalCount: children.length,
+        hasMore: false,
+        nextOffset: null,
+      });
+      expect(result.sessions).toEqual(children.map((key) => expect.objectContaining({ key })));
+    }
   },
 );
-
-it("preserves metadata for an already scoped child page", async ({ connect }) => {
-  const child = {
-    key: "agent:main:child",
-    sessionId: "session:agent:main:child",
-    spawnedBy: "agent:main:parent",
-    archived: false,
-    pinned: false,
-  };
-  const page = {
-    sessions: [child],
-    count: 1,
-    totalCount: 200,
-    hasMore: true,
-    offset: 0,
-    nextOffset: 1,
-  };
-  const { request } = await connect({ methodResponses: { "sessions.list": page } });
-
-  expect(
-    (await request("sessions.list", { spawnedBy: child.spawnedBy, limit: 1 })).payload,
-  ).toEqual({ ...page, sessions: [{ ...child, snapshotAt: expect.any(Number) }] });
-});

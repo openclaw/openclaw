@@ -409,9 +409,12 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Logs (stdout and stderr):");
+    expect(output()).not.toContain("Warm-up:");
+    expect(output()).toContain("Readiness is not confirmed");
     const errors = output(runtime.error);
     expect(errors).not.toContain("suppressed");
-    expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
+    expect(errors.match(/Recent Gateway log error/g)).toHaveLength(1);
+    expect(errors).toContain("may be from an earlier run");
   });
 
   it("does not claim an indeterminate port is not listening", () => {
@@ -494,7 +497,7 @@ describe("printDaemonStatus", () => {
       gateway,
       rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
     });
-    expectMockLineContains(runtime.log, "Connectivity probe: ok");
+    expectMockLineContains(runtime.log, "Connectivity check: ok");
     expect(
       runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
     ).toEqual(["Capability: write-capable"]);
@@ -663,7 +666,7 @@ describe("printDaemonStatus", () => {
       runtimeLabel: "running",
       runtimeText: "running (pid 8000)",
       targetRole: "diagnostic-only",
-      suffix: " (diagnostic only, not the probe target)",
+      suffix: " (diagnostic only, not the check target)",
       rpcOk: false,
     },
     {
@@ -722,7 +725,7 @@ describe("printDaemonStatus", () => {
     },
   );
 
-  it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
+  it("does not claim ownership or warm-up from reachability when a stale gateway PID is still held", () => {
     // inspectGatewayRestart can set healthy from reachability after ownership failed,
     // while still returning non-empty staleGatewayPids. That must not be treated as
     // owns-port proof, or this message would contradict the stale-PID diagnostic below.
@@ -741,7 +744,8 @@ describe("printDaemonStatus", () => {
     });
 
     const logged = output();
-    expect(logged).toContain("Warm-up: launch agents can take a few seconds");
+    expect(logged).toContain("Readiness is not confirmed");
+    expect(logged).not.toContain("Warm-up:");
     expect(logged).not.toContain("Gateway process is running and owns the gateway port");
     const errors = output(runtime.error);
     expect(errors).toContain("Gateway runtime PID does not own the listening port");
@@ -880,10 +884,10 @@ describe("printDaemonStatus", () => {
 
     const errors = output(runtime.error);
     const logs = output();
-    expect(errors).toContain("Read probe: timed out under event-loop load");
+    expect(errors).toContain("Read check: timed out under event-loop load");
     expect(errors).toContain("Gateway event loop: degraded max=5100ms p99=5079ms util=1 cpu=0.94");
     expect(logs).toContain("Gateway accepted the connection");
-    expect(errors).not.toContain("Connectivity probe: failed");
+    expect(errors).not.toContain("Connectivity check: failed");
     expect(logs).not.toContain("not a warm-up delay");
   });
   it("does not warn about the service install when it matches the CLI version", () => {

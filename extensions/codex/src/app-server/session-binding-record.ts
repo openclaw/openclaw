@@ -24,11 +24,11 @@ import {
   readCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
-import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import {
   legacyAppPolicyEntrySchema,
   readStoredCodexAppServerBinding,
   type CodexAppServerThreadBinding,
+  type PluginAppPolicyContext,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record-codec.js";
 
@@ -103,13 +103,21 @@ export function ownsStoredSessionGeneration(
   );
 }
 
-/** The same physical-generation check serves execution and read-only projections. */
+/** Final effect guards retain the live row until raw SDK binding writers retire. */
 export function readCurrentCodexAppServerBinding(
   state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
 ): CodexAppServerThreadBinding | undefined {
   const key = bindingStoreKey(identity);
   return decodeCurrentCodexAppServerBinding(key, state.lookup(key), identity);
+}
+
+export async function readCurrentCodexAppServerBindingAsync(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+): Promise<CodexAppServerThreadBinding | undefined> {
+  const key = bindingStoreKey(identity);
+  return decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
 }
 
 function decodeCurrentCodexAppServerBinding(
@@ -178,20 +186,17 @@ export function preserveCodexNativeSubagentSubmissions(
   nextBinding: CodexAppServerThreadBinding,
   value: unknown,
 ): unknown {
-  return currentBinding.threadId === nextBinding.threadId &&
-    codexNativeSubagentHistoryConnectionFingerprint(currentBinding) ===
-      codexNativeSubagentHistoryConnectionFingerprint(nextBinding) &&
-    isDeepStrictEqual(currentBinding.pendingSupervisionBranch, nextBinding.pendingSupervisionBranch)
-    ? value
+  return currentBinding.threadId === nextBinding.threadId
+    ? preserveNativePendingAssignments(currentBinding, nextBinding, value)
     : undefined;
 }
 
-export function readCurrentCodexNativeSubagentSubmissions(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+export async function readCurrentCodexNativeSubagentSubmissions(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
-): readonly CodexNativeSubagentSubmission[] {
-  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+): Promise<readonly CodexNativeSubagentSubmission[]> {
+  const stored = await readCurrentNativeSubagentBinding(state, identity, owner);
   if (!stored) {
     return [];
   }
@@ -201,24 +206,24 @@ export function readCurrentCodexNativeSubagentSubmissions(
     : [];
 }
 
-export function readCurrentNativePendingAssignments(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+export async function readCurrentNativePendingAssignments(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
-): readonly CodexNativeSubagentPendingAssignment[] {
-  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+): Promise<readonly CodexNativeSubagentPendingAssignment[]> {
+  const stored = await readCurrentNativeSubagentBinding(state, identity, owner);
   return (
     readNativePendingAssignments(stored?.nativeSubagentAssignments)?.assignments ?? []
   ).filter((entry) => matchesNativeAssignmentLifecycle(entry.owner, owner));
 }
 
-function readCurrentNativeSubagentBinding(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+async function readCurrentNativeSubagentBinding(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
-): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
+): Promise<Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined> {
   const key = bindingStoreKey(identity);
-  const raw = state.lookup(key);
+  const raw = await state.lookup(key);
   const stored = readStoredCodexAppServerBinding(raw);
   if (raw !== undefined && !stored) {
     throw new Error(`Invalid Codex app-server binding row: ${key}`);
@@ -336,4 +341,24 @@ export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyConte
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
+}
+
+export function storedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (identity.kind === "session") {
+    return { sessionId: identity.sessionId };
+  }
+  return current?.sessionId ? { sessionId: current.sessionId } : {};
+}
+
+export function preservedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (current?.sessionId) {
+    return { sessionId: current.sessionId };
+  }
+  return storedSessionGeneration(identity, current);
 }

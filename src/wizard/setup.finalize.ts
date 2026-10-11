@@ -41,12 +41,7 @@ import {
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
-import {
-  cancelProcessExitAfterTuiReturn,
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-} from "../tui/tui.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -499,6 +494,15 @@ export async function finalizeSetupWizard(
 
   try {
     if (!opts.skipHealth) {
+      const showHealthCheckHelp = () =>
+        prompter.note(
+          [
+            t("common.docs"),
+            "https://docs.openclaw.ai/gateway/health",
+            "https://docs.openclaw.ai/gateway/troubleshooting",
+          ].join("\n"),
+          t("wizard.finalize.healthCheckHelp"),
+        );
       const probeLinks = resolveLocalControlUiProbeLinks({
         bind: nextConfig.gateway?.bind ?? "loopback",
         port: settings.port,
@@ -558,14 +562,7 @@ export async function finalizeSetupWizard(
           if (!(err instanceof ExitError)) {
             runtime.error(formatHealthCheckFailure(err));
           }
-          await prompter.note(
-            [
-              t("common.docs"),
-              "https://docs.openclaw.ai/gateway/health",
-              "https://docs.openclaw.ai/gateway/troubleshooting",
-            ].join("\n"),
-            t("wizard.finalize.healthCheckHelp"),
-          );
+          await showHealthCheckHelp();
         }
       } else if (gateway.status !== "skipped") {
         runtime.error(
@@ -575,14 +572,7 @@ export async function finalizeSetupWizard(
             ),
           ),
         );
-        await prompter.note(
-          [
-            t("common.docs"),
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          t("wizard.finalize.healthCheckHelp"),
-        );
+        await showHealthCheckHelp();
         await prompter.note(
           buildGatewayRecoveryProjection({
             gateway,
@@ -611,20 +601,15 @@ export async function finalizeSetupWizard(
 
     const controlUiBasePath =
       nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const controlUiLinkOptions = {
       bind: settings.bind,
       port: settings.port,
       customBindHost: settings.customBindHost,
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind: settings.bind,
-      port: settings.port,
-      customBindHost: settings.customBindHost,
-      basePath: controlUiBasePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
+    const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
     if (opts.skipHealth || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -986,26 +971,16 @@ export async function finalizeSetupWizard(
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
         if (sessionGateway) {
-          // The temporary Gateway can own the same provider and child-process teardown as
-          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
-          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
-            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
+          // Setup owns this temporary Gateway; settle it before returning or
+          // propagating a TUI failure to the CLI finalizer.
+          await closeSessionGatewayForOnboarding({
+            sessionGateway,
+            runtime,
+            reason: "onboarding tui exited",
           });
-          try {
-            await closeSessionGatewayForOnboarding({
-              sessionGateway,
-              runtime,
-              reason: "onboarding tui exited",
-            });
-            sessionGateway = undefined;
-          } finally {
-            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
-          }
+          sessionGateway = undefined;
         }
       }
-      // Setup owns the temporary Gateway, so its cleanup must finish before
-      // the in-process TUI fallback is allowed to terminate the process.
-      scheduleProcessExitAfterTuiReturn();
       launchedTui = true;
     }
 

@@ -305,8 +305,6 @@ export async function inspectPreparedDoctorRehearsal(params: {
   ]);
   const { preparePluginDoctorMigrationBackupResources } =
     await import("../plugins/doctor-contract-registry.js");
-  const { collectDoctorSkillWorkshopBackupResources } =
-    await import("./doctor-update-rehearsal-workshop.js");
   const { isSqliteSnapshotFile } = await import("../infra/sqlite-file-header.js");
   const shared = paths.resolveOpenClawStateSqlitePath(env);
   if (!inspectPath(shared)?.isFile()) {
@@ -356,32 +354,14 @@ export async function inspectPreparedDoctorRehearsal(params: {
     }),
   ];
   const resourceWarnings: PluginDoctorMigrationBackupWarning[] = [];
-  const inventories = await Promise.allSettled([
-    preparePluginDoctorMigrationBackupResources({
-      config,
-      env,
-      stateDir,
-      warnings: resourceWarnings,
-      requireLocalResources: true,
-    }),
-    collectDoctorSkillWorkshopBackupResources({ config, env }),
-  ]);
-  // Every native reader must settle before the caller can remove a rejected copy.
-  const [pluginInventory, workshopInventory] = inventories;
-  if (pluginInventory.status === "rejected") {
-    if (workshopInventory.status === "rejected") {
-      throw new AggregateError(
-        [pluginInventory.reason, workshopInventory.reason],
-        "Migration resource inventories failed.",
-      );
-    }
-    throw pluginInventory.reason;
-  }
-  if (workshopInventory.status === "rejected") {
-    throw workshopInventory.reason;
-  }
-  const pluginScope = pluginInventory.value;
-  const resources = [...pluginScope.resources, ...workshopInventory.value];
+  const pluginScope = await preparePluginDoctorMigrationBackupResources({
+    config,
+    env,
+    stateDir,
+    warnings: resourceWarnings,
+    requireLocalResources: true,
+  });
+  const resources = pluginScope.resources;
   const selectedMigrationRoots = configuredMigrationRoots
     .filter(({ pluginId }) => !pluginScope.deferredPluginIds.has(pluginId))
     .map((root) => root.path);

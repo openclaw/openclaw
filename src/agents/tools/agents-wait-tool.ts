@@ -22,7 +22,7 @@ const MAX_WAIT_IDS = 1_000;
 const AgentsWaitToolSchema = Type.Object({
   ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: MAX_WAIT_IDS }),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  required: Type.Optional(
+  awaitResults: Type.Optional(
     Type.Boolean({
       description:
         "Join required collector results until settlement or cancellation, without polling; mutually exclusive with timeoutSeconds. Child and agent budgets still apply.",
@@ -77,11 +77,15 @@ const AgentsWaitOutputSchema = Type.Object(
 
 type WaitError = NonNullable<Static<typeof AgentsWaitOutputSchema>["errors"]>[number];
 
+type CollectorOwnerScope = {
+  currentSessionKeys: ReadonlySet<string>;
+  currentAgentId?: string;
+  config?: OpenClawConfig;
+};
+
 function ownsRun(
   entry: SubagentRunRecord,
-  currentSessionKeys: ReadonlySet<string>,
-  currentAgentId?: string,
-  config?: OpenClawConfig,
+  { currentSessionKeys, currentAgentId, config }: CollectorOwnerScope,
 ): boolean {
   const owner = entry.swarmRequesterSessionKey?.trim();
   if (!owner) {
@@ -140,13 +144,9 @@ function completionResult(
 export type CollectorCompletionResult = NonNullable<ReturnType<typeof completionResult>>;
 
 /** Park one host bridge until its collector completes; registry writes wake it without polling. */
-export async function waitForCollectorCompletion(params: {
-  runId: string;
-  currentSessionKeys: ReadonlySet<string>;
-  currentAgentId?: string;
-  config?: OpenClawConfig;
-  signal?: AbortSignal;
-}): Promise<CollectorCompletionResult> {
+export async function waitForCollectorCompletion(
+  params: CollectorOwnerScope & { runId: string; signal?: AbortSignal },
+): Promise<CollectorCompletionResult> {
   const state = await waitForCollector({
     ...params,
     ids: [params.runId],
@@ -162,9 +162,7 @@ export async function waitForCollectorCompletion(params: {
 function readWaitState(
   entries: ReadonlyMap<string, SubagentRunRecord>,
   ids: readonly string[],
-  currentSessionKeys: ReadonlySet<string>,
-  currentAgentId?: string,
-  config?: OpenClawConfig,
+  owner: CollectorOwnerScope,
 ) {
   const errors: WaitError[] = [];
   const completed: Array<{
@@ -179,7 +177,7 @@ function readWaitState(
       errors.push({ runId, error: "not_found" });
       continue;
     }
-    if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
+    if (!ownsRun(entry, owner)) {
       errors.push({ runId, error: "not_owner" });
       continue;
     }
@@ -205,16 +203,15 @@ function readWaitState(
   };
 }
 
-async function waitForCollector(params: {
-  ids: readonly string[];
-  currentSessionKeys: ReadonlySet<string>;
-  currentAgentId?: string;
-  config?: OpenClawConfig;
-  timeoutMs?: number;
-  waitForAll?: boolean;
-  signal?: AbortSignal;
-  abortError: () => Error;
-}) {
+async function waitForCollector(
+  params: CollectorOwnerScope & {
+    ids: readonly string[];
+    timeoutMs?: number;
+    waitForAll?: boolean;
+    signal?: AbortSignal;
+    abortError: () => Error;
+  },
+) {
   const deadline =
     params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
   let changed: boolean;
@@ -245,13 +242,7 @@ async function waitForCollector(params: {
             callbackAbort = params.abortError();
             throw callbackAbort;
           }
-          return readWaitState(
-            entries,
-            params.ids,
-            params.currentSessionKeys,
-            params.currentAgentId,
-            params.config,
-          );
+          return readWaitState(entries, params.ids, params);
         });
       } catch (error) {
         if (params.signal?.aborted && error !== callbackAbort) {
@@ -312,11 +303,13 @@ export function createAgentsWaitTool(opts: {
     outputSchema: AgentsWaitOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Static<typeof AgentsWaitToolSchema>;
-      if (params.required !== undefined && typeof params.required !== "boolean") {
-        throw new ToolInputError("agents_wait required must be a boolean.");
+      if (params.awaitResults !== undefined && typeof params.awaitResults !== "boolean") {
+        throw new ToolInputError("agents_wait awaitResults must be a boolean.");
       }
-      if (params.required && params.timeoutSeconds !== undefined) {
-        throw new ToolInputError("required agents_wait cannot also specify timeoutSeconds.");
+      if (params.awaitResults && params.timeoutSeconds !== undefined) {
+        throw new ToolInputError(
+          "agents_wait with awaitResults=true cannot also specify timeoutSeconds.",
+        );
       }
       if (params.ids.length > MAX_WAIT_IDS) {
         throw new ToolInputError(`agents_wait supports at most ${MAX_WAIT_IDS} ids.`);
@@ -337,8 +330,8 @@ export function createAgentsWaitTool(opts: {
         currentSessionKeys,
         currentAgentId: opts.agentId,
         config: opts.config,
-        timeoutMs: params.required ? undefined : timeoutSeconds * 1_000,
-        waitForAll: params.required,
+        timeoutMs: params.awaitResults ? undefined : timeoutSeconds * 1_000,
+        waitForAll: params.awaitResults,
         signal,
         abortError: () => createAbortError("agents_wait aborted."),
       });

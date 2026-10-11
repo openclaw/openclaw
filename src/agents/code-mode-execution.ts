@@ -73,35 +73,41 @@ export async function runCodeModeExec(params: {
   code: string;
   assistantTurnId?: string;
   restartSafe: boolean;
-  required?: boolean;
+  awaitResults?: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
   const { config } = params;
-  const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
-    prepareInput: true,
-    validateInput: true,
-  });
-  params.onRuntime?.(runtime);
-  const bridgeDispatch = { started: false };
-  const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
-  const namespaceCatalog = runtime.namespaceEntries();
-  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const codeModeReplayId = codeModeReplayIdForToolCall(
     params.ctx,
     params.toolCallId,
     params.code,
     params.assistantTurnId,
   );
+  const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
+    prepareInput: true,
+    validateInput: true,
+    callIdScope: codeModeReplayId.replace(/^cm_replay_/, ""),
+  });
+  params.onRuntime?.(runtime);
+  const bridgeDispatch = { started: false };
+  const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
+  const namespaceCatalog = runtime.namespaceEntries();
+  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
   const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
     reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),
     mcpIds: namespaceRuntime.mcpBindings.keys(),
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
-  const owner = createCodeModeRunOwner(params.ctx, config, params.required, !params.restartSafe);
+  const owner = createCodeModeRunOwner(
+    params.ctx,
+    config,
+    params.awaitResults,
+    !params.restartSafe,
+  );
   const { approvalWait } = owner;
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);

@@ -87,12 +87,7 @@ export function mergeFeishuReplyDeliveryResults(
   return createFeishuReplyDeliveryResult({
     results: visible,
     visibleReplySent: visible.length > 0,
-    content:
-      content === undefined
-        ? acceptedContent.length > 0
-          ? acceptedContent.join("\n\n")
-          : undefined
-        : content,
+    content: content ?? (acceptedContent.length > 0 ? acceptedContent.join("\n\n") : undefined),
   });
 }
 

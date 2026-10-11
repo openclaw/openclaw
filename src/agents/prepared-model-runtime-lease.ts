@@ -30,7 +30,10 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import {
+  configuredPreparedPluginGenerations,
+  retainPreparedPluginGeneration,
+} from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   retirePreparedModelRuntimeOwnerIfUnused,
   type PreparedModelRuntimeOwnerRetention,
@@ -99,6 +102,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       });
     }
   };
+  // Re-admission on a superseded configured generation moves the run to its replacement.
+  let admittedGeneration = options.pluginGeneration;
   const deriveSelections = options.deriveRuntimePluginSelections;
   // Caller choices belong to this invocation; only config-derived choices may change after a wait.
   const requestedSelections = deriveSelections
@@ -123,6 +128,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     // Dynamic work arriving inside that window must retry after the new owners become visible.
     const replacement = context.getPendingReplacement();
     const currentOwner = context.owners.get(key);
+    const configuredCatalog = resolveConfiguredOwner(context.owners, input)?.pluginGeneration
+      ?.remoteCatalog;
     const attempt = [
       key,
       replacement,
@@ -131,10 +138,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       currentOwner?.snapshot,
       currentOwner?.pending,
       currentOwner?.needsRefresh,
+      configuredCatalog,
       lastExternalPublication,
+      admittedGeneration,
     ];
     if (previousAttempt?.every((value, index) => value === attempt[index])) {
-      // Failed construction can retire its owner, hiding supersession from this checkpoint.
+      // Failed dynamic owners can disappear. A newly accepted catalog is still progress;
+      // rebuilding without either identity changing would spin.
       throw (
         supersededPublication ??
         new PreparedModelRuntimeOwnerNotPublishedError(
@@ -155,7 +165,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
     if (
       provenance === "run" &&
-      !options.pluginGeneration &&
+      !admittedGeneration &&
       (replacement || context.getGatewayLifecycleActive())
     ) {
       try {
@@ -192,7 +202,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     let pluginMetadataSnapshot = options.pluginMetadataSnapshot;
     if (deriveSelections) {
       pluginMetadataSnapshot =
-        options.pluginGeneration?.pluginMetadataSnapshot ??
+        admittedGeneration?.pluginMetadataSnapshot ??
         pluginMetadataSnapshot ??
         resolvePluginMetadataSnapshot({
           config: input.config,
@@ -217,7 +227,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       );
     }
     key = ownerKey(input);
-    if (provenance === "run" && context.getGatewayLifecycleActive() && options.pluginGeneration) {
+    if (provenance === "run" && context.getGatewayLifecycleActive() && admittedGeneration) {
       const configuredOwner = resolveConfiguredOwner(context.owners, input);
       if (configuredOwner?.pending) {
         assertPreparedModelRuntimeAdmissionCanWait(configuredOwner);
@@ -230,14 +240,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }
       if (
         configuredOwner &&
-        (configuredOwner.needsRefresh ||
-          configuredOwner.pluginGeneration !== options.pluginGeneration)
+        (configuredOwner.needsRefresh || configuredOwner.pluginGeneration !== admittedGeneration)
       ) {
-        const borrowed = getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration);
+        const borrowed = getPreparedModelRuntimeBorrowedSnapshot(admittedGeneration);
         if (
           !configuredOwner.needsRefresh &&
           borrowed &&
-          borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
+          borrowed.metadataSnapshot === admittedGeneration.pluginMetadataSnapshot &&
           preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
           borrowed.agentId === input.agentId &&
           borrowed.agentDir === input.agentDir &&
@@ -247,19 +256,29 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           !input.readOnly &&
           !input.loadRuntimePlugins &&
           !input.skipCredentials &&
-          !input.env &&
-          preparedPluginGenerationSupportsSelections(options.pluginGeneration, input)
+          !input.env
         ) {
           // A turn may finish under its still-open parent lease after reload. Its historic
           // generation must never publish over the configured owner for newly admitted work.
-          assertAdmission();
-          return {
-            snapshot: borrowed,
-            pluginGeneration: options.pluginGeneration,
-            [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
-          };
+          if (preparedPluginGenerationSupportsSelections(admittedGeneration, input)) {
+            assertAdmission();
+            return {
+              snapshot: borrowed,
+              pluginGeneration: admittedGeneration,
+              [Symbol.asyncDispose]: retainPreparedPluginGeneration(admittedGeneration),
+            };
+          }
+          // Acquisition precedes run side effects. A run admitted on a superseded configured
+          // generation is admitted afresh on its replacement; nested parents stay confined.
+          if (
+            configuredOwner.pluginGeneration &&
+            configuredPreparedPluginGenerations.has(admittedGeneration)
+          ) {
+            admittedGeneration = configuredOwner.pluginGeneration;
+            continue;
+          }
         }
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
+        throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
         );
       }
@@ -268,7 +287,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
       options.catalogMode === "static" &&
-      !options.pluginGeneration &&
+      !admittedGeneration &&
       !options.pluginMetadataSnapshot &&
       !input.readOnly &&
       !input.loadRuntimePlugins &&
@@ -304,10 +323,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       (existing.provenance === "run" || existing.provenance === "ephemeral");
     // A static owner cannot satisfy explicit live discovery; publish a new exact generation.
     const ownerGenerationChanged =
-      (options.pluginGeneration !== undefined &&
+      (admittedGeneration !== undefined &&
         !preparedPluginGenerationReusesBase(
           existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
-          options.pluginGeneration,
+          admittedGeneration,
         )) ||
       (options.catalogMode === "live" && existing?.catalogMode === "static");
     if (existing?.pending && ownerGenerationChanged) {
@@ -361,7 +380,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           undefined,
           provenance,
           options.catalogMode,
-          options.pluginGeneration,
+          admittedGeneration,
           pluginMetadataSnapshot,
         );
         // Publication installs its exact owner synchronously before exposing the pending promise.

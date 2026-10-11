@@ -31,9 +31,11 @@ export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean 
   return [
     "entry_invalid",
     "historical_duplicate_settled",
+    "legacy_import_deferred",
     "transcript_malformed",
     "transcript_missing",
     "retained_plugin_source_index_rebuilt",
+    "retained_plugin_receipt_superseded",
   ].includes(issue.code);
 }
 

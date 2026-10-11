@@ -18,7 +18,6 @@ import {
   type ChannelSetupWizardTextInput,
   type OpenClawConfig,
   createSetupTranslator,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
@@ -213,48 +212,41 @@ function resolveSignalSetupAccount(params: {
   return account?.account ?? signal?.account;
 }
 
-async function promptSignalAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: t("wizard.signal.allowlistTitle"),
-    noteLines: [
-      t("wizard.signal.allowlistIntro"),
-      t("wizard.signal.examples"),
-      "- +15555550123",
-      "- uuid:123e4567-e89b-12d3-a456-426614174000",
-      t("wizard.signal.multipleEntries"),
-      `Docs: ${formatDocsLink("/signal", "signal")}`,
-    ],
-    message: t("wizard.signal.allowFromPrompt"),
-    placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
-    parseEntries: parseSignalAllowFromEntries,
-    getExistingAllowFrom: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? [],
-    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
-      setAccountAllowFromForChannel({
-        cfg,
-        channel,
-        accountId,
-        allowFrom,
-        setupSurface: signalSetupAdapter,
-      }),
-  });
-}
-
 export const signalDmPolicy = createChannelDmPolicy({
   label: "Signal",
   channel,
   resolveAccount: (cfg, accountId) =>
     resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }),
   setupSurface: () => signalSetupAdapter,
-  promptAllowFrom: promptSignalAllowFrom,
+  promptAllowFrom: async (params) =>
+    promptParsedAllowFromForAccount({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
+      prompter: params.prompter,
+      noteTitle: t("wizard.signal.allowlistTitle"),
+      noteLines: [
+        t("wizard.signal.allowlistIntro"),
+        t("wizard.signal.examples"),
+        "- +15555550123",
+        "- uuid:123e4567-e89b-12d3-a456-426614174000",
+        t("wizard.signal.multipleEntries"),
+        `Docs: ${formatDocsLink("/signal", "signal")}`,
+      ],
+      message: t("wizard.signal.allowFromPrompt"),
+      placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
+      parseEntries: parseSignalAllowFromEntries,
+      getExistingAllowFrom: ({ cfg, accountId }) =>
+        resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? [],
+      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+        setAccountAllowFromForChannel({
+          cfg,
+          channel,
+          accountId,
+          allowFrom,
+          setupSurface: signalSetupAdapter,
+        }),
+    }),
 });
 
 function resolveSignalCliPath(params: {

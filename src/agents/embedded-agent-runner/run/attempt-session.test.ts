@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -10,6 +13,14 @@ import { registerMemoryPromptPreparation } from "../../../plugins/memory-state.j
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  createAnthropicModelFixture,
+  createCompactionEvent,
+  expectCompactionResult,
+  runCompactionScenario,
+  structuredSummary,
+  testing as safeguardTesting,
+} from "../../agent-hooks/compaction-safeguard.test-support.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
@@ -35,7 +46,6 @@ const hoisted = vi.hoisted(() => ({
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
-  installToolAuthoredSourceReplyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
   isSilentOverflowProneModel: vi.fn(),
@@ -79,10 +89,11 @@ vi.mock("./attempt-client-tools.js", () => ({
 vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./message-tool-terminal.js")>()),
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
-  installToolAuthoredSourceReplyTerminalHook: hoisted.installToolAuthoredSourceReplyTerminalHook,
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -192,6 +203,7 @@ function createInput(options?: { activationError?: Error }) {
         deferredDirectoryToolsCallable: false,
       } as never,
       effectiveCwd: "/workspace",
+      effectiveWorkspace: "/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       initialSystemPrompt: "system prompt",
       markStage: (stage: string) => events.push(`stage:${stage}`),
@@ -271,6 +283,49 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
+    const fixture = createInput();
+    const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");
+    await writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "## Compaction fixture\nWORKSPACE_RULE_MARKER\n",
+    );
+    fixture.input.effectiveWorkspace = workspaceDir;
+    fixture.input.effectiveCwd = "/sandbox";
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      model: createAnthropicModelFixture(),
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              postCompactionSections: ["Compaction fixture"],
+              recentTurnsPreserve: 0,
+              qualityGuard: { enabled: false },
+            },
+          },
+        },
+      },
+    };
+    const { buildEmbeddedExtensionFactories } =
+      await vi.importActual<typeof import("../extensions.js")>("../extensions.js");
+    hoisted.buildEmbeddedExtensionFactories.mockImplementation(buildEmbeddedExtensionFactories);
+    safeguardTesting.setSummarizeCompactionHistoryForTest(async () => structuredSummary());
+    try {
+      await prepareEmbeddedAttemptAgentSession(fixture.input);
+      const { result } = await runCompactionScenario(
+        fixture.input.sessionManager,
+        createCompactionEvent(),
+      );
+      expect(expectCompactionResult(result).summary).toContain(
+        "<workspace-critical-rules>\n## Compaction fixture\nWORKSPACE_RULE_MARKER\n</workspace-critical-rules>",
+      );
+    } finally {
+      safeguardTesting.setSummarizeCompactionHistoryForTest();
+    }
+  });
+
   it("cancels a hydrated directory tool's approval with its captured permission generation", async () => {
     const fixture = createInput();
     const generation = new AbortController();
@@ -532,7 +587,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     const admit = await prepare!();
     expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
     expect(steer).not.toHaveBeenCalled();
-    admit?.();
+    await admit?.((commit) => commit?.());
     expect(state.pendingSystemPrompt?.renderedPrefix).toBe("## Tools\nread");
     expect(steer).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -661,11 +716,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
-    // Only author-declared reply tools may end the batch with their own reply.
-    expect(hoisted.installToolAuthoredSourceReplyTerminalHook).toHaveBeenCalledWith({
-      agent: fixture.activeSession.agent,
-      sourceReplyCapableToolNames: new Set(["order_status"]),
-    });
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,
@@ -684,9 +734,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     const fixture = createInput();
     fixture.input.onSystemPromptChanged = vi.fn();
     const entered = createDeferredCore();
-    const release = createDeferredCore<() => void>();
-    const originalAdmission = vi.fn();
-    const currentAdmission = vi.fn();
+    const release = createDeferredCore<(onAdmitted: () => void) => Promise<void>>();
+    const originalAdmission = vi.fn(async (onAdmitted: () => void) => onAdmitted());
+    const currentAdmission = vi.fn(async (onAdmitted: () => void) => onAdmitted());
     const prepareReplay = vi
       .fn()
       .mockImplementationOnce(() => {
@@ -708,7 +758,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("current permissions");
     expect(originalAdmission).not.toHaveBeenCalled();
     expect(currentAdmission).not.toHaveBeenCalled();
-    admit?.();
+    await admit?.((commit) => commit?.());
     expect(currentAdmission).toHaveBeenCalledOnce();
   });
 
@@ -766,11 +816,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
   });
 
   it.each([false, true])(
-    "checks replay ownership synchronously after preparation with cancellation %s",
+    "checks replay ownership before admission with cancellation %s",
     async (cancel) => {
       const fixture = createInput();
       const controller = new AbortController();
-      const assertInitialUserTurnReplay = vi.fn();
+      const assertInitialUserTurnReplay = vi.fn(async (onAdmitted: () => void) => onAdmitted());
       await prepareEmbeddedAttemptAgentSession({
         ...fixture.input,
         runAbortSignal: controller.signal,
@@ -781,11 +831,59 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       const reason = new Error("closed after preparation");
       if (cancel) {
         controller.abort(reason);
-        expect(() => admit?.()).toThrow(reason);
+        await expect(admit?.((commit) => commit?.())).rejects.toThrow(reason);
         expect(assertInitialUserTurnReplay).not.toHaveBeenCalled();
       } else {
-        admit?.();
+        await admit?.((commit) => commit?.());
         expect(assertInitialUserTurnReplay).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["allow", "abort", "replace"] as const)(
+    "rechecks permission ownership inside awaited replay admission: %s",
+    async (closure) => {
+      const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
+        createSystemUpdateInput();
+      const controller = new AbortController();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const prepared = await prepareEmbeddedAttemptAgentSession({
+        ...fixture.input,
+        runAbortSignal: controller.signal,
+        prepareSystemPromptUpdate,
+        prepareInitialUserTurnReplay: async () => async (onAdmitted) => {
+          entered.resolve();
+          await release.promise;
+          onAdmitted();
+        },
+      });
+      prepared.setPermissionPromptPreparation(async () => () => "## Tools\nread");
+      const admit = await fixture.setPromptPreparation.mock.lastCall?.[0]?.();
+      const start = vi.fn();
+      const admission = admit?.((commit) => {
+        commit?.();
+        start();
+      });
+      const settled = Promise.allSettled([admission]);
+      await entered.promise;
+      expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
+      if (closure === "abort") {
+        controller.abort(new Error("run closed during replay admission"));
+      } else if (closure === "replace") {
+        prepared.setPermissionPromptPreparation(async () => () => "replacement permissions");
+      }
+      release.resolve();
+      const [result] = await settled;
+      if (closure === "allow") {
+        expect(result.status).toBe("fulfilled");
+        expect(start).toHaveBeenCalledOnce();
+        expect(steer).toHaveBeenCalledOnce();
+      } else {
+        expect(result.status).toBe("rejected");
+        expect(start).not.toHaveBeenCalled();
+        expect(steer).not.toHaveBeenCalled();
+        expect(state.pendingSystemPrompt?.renderedPrefix).toBe(pinnedPrompt);
       }
     },
   );
@@ -803,6 +901,20 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
     });
+  });
+
+  it.each([
+    ["settled-tool-finalization", true],
+    [undefined, false],
+  ] as const)("sets compactionForbidden for operation %s to %s", async (operation, expected) => {
+    const fixture = createInput();
+    fixture.input.attempt = { ...fixture.input.attempt, operation };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ compactionForbidden: expected }),
+    );
   });
 
   it("publishes session ownership before activation can fail", async () => {

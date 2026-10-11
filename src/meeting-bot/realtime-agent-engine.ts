@@ -1,49 +1,30 @@
 // Shared STT plus agent-consult meeting engine.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";
-import {
-  createRealtimeVoiceSessionHarness,
-  type RealtimeVoiceSessionHarness,
-} from "../talk/realtime-session-harness.js";
 import {
   convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
 } from "./realtime-audio-format.js";
-import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import {
+  createMeetingRealtimeHarness,
   formatMeetingAgentAudioModelLog,
   formatMeetingAgentTtsResultLog,
   formatMeetingTranscriptSummaryLog,
-  meetingOutputBytesPerMs,
   normalizeMeetingTtsPromptText,
   resolveMeetingRealtimeTranscriptionProvider,
 } from "./realtime-engine-support.js";
-import {
-  MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-  MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-  MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-  type MeetingAgentConsultParams,
-  type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeEngineConfig,
-  type MeetingRuntimePlatform,
+import type {
+  MeetingRealtimeAudioEngineHandle,
+  startMeetingRealtimeEngine,
 } from "./realtime-engine.js";
 
-export async function startMeetingAgentRealtimeEngine(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  platform: MeetingRuntimePlatform;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  logPrefix?: "node";
-  transport: MeetingRealtimeAudioTransport;
-  logger: RuntimeLogger;
-  providers?: RealtimeTranscriptionProviderPlugin[];
-  consultAgent: (params: MeetingAgentConsultParams) => Promise<{ text: string }>;
-}): Promise<MeetingRealtimeAudioEngineHandle> {
+export async function startMeetingAgentRealtimeEngine(
+  params: Omit<
+    Parameters<typeof startMeetingRealtimeEngine>[0],
+    "providers" | "talkSessionId" | "talkContext" | "tools" | "handleToolCall"
+  > & { providers?: RealtimeTranscriptionProviderPlugin[] },
+): Promise<MeetingRealtimeAudioEngineHandle> {
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   let sttSession: RealtimeTranscriptionSession | null = null;
@@ -177,9 +158,7 @@ export async function startMeetingAgentRealtimeEngine(params: {
       });
   };
 
-  // The closures above only run after harness creation; they capture this later `const`.
-  // Annotated because the consult closure references harness inside its own initializer.
-  const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
+  const harness = createMeetingRealtimeHarness(params, {
     talk: {
       sessionId: `${params.platform.sessionIdPrefix}:${params.meetingSessionId}:agent`,
       mode: "stt-tts",
@@ -202,29 +181,8 @@ export async function startMeetingAgentRealtimeEngine(params: {
       }),
       outputAudioDone: () => ({ meetingSessionId: params.meetingSessionId }),
     },
-    echoSuppression: params.transport.inputAudioIsolated
-      ? undefined
-      : {
-          bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
-          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-        },
-    talkback: {
-      debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-      logger: params.logger,
-      logPrefix: `${params.platform.logScope} ${agentLogScope}`,
-      responseStyle: "Brief, natural spoken answer for a live meeting.",
-      fallbackText: "I hit an error while checking that. Please try again.",
-      consult: ({ question, responseStyle, signal }) =>
-        params.consultAgent({
-          meetingSessionId: params.meetingSessionId,
-          requesterSessionKey: params.requesterSessionKey,
-          args: { question, responseStyle },
-          transcript: harness.transcript,
-          abortSignal: signal,
-        }),
-      deliver: enqueueSpeakText,
-    },
+    logPrefix: `${params.platform.logScope} ${agentLogScope}`,
+    deliver: enqueueSpeakText,
   });
 
   params.transport.onFatal(() => {

@@ -218,6 +218,32 @@ describe("conversation identity", () => {
     );
   });
 
+  it.each(["exec", "cron", "heartbeat"] as const)(
+    "binds synthetic %s metadata to its originating direct route, not its execution sender",
+    (source) => {
+      const identity = conversationIdentityFromMsgContext({
+        ctx: {
+          Provider: "reef",
+          ChatType: "direct",
+          From: "reef:owner",
+          To: "reef:owner",
+          InternalTurnSource: source,
+          OriginatingChannel: "reef",
+          OriginatingTo: "reef:peer-b",
+          AccountId: "work",
+          MessageThreadId: "thread-b",
+        },
+      });
+      expect(identity).toMatchObject({
+        kind: "direct",
+        accountId: "work",
+        deliveryTarget: "reef:peer-b",
+        peerId: "peer-b",
+        threadId: "thread-b",
+      });
+    },
+  );
+
   it.each([
     { fallback: { origin: { provider: "reef", accountId: "work" } }, label: "origin" },
     { fallback: { lastChannel: "reef", lastAccountId: "work" }, label: "last route" },

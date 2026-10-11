@@ -11,7 +11,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { requireGit, runGit } from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 
 const identity = {
@@ -195,7 +195,7 @@ describe("empty managed workspaces", () => {
     await service.remove({ id: created.id, reason: "archive-again" });
     now += SNAPSHOT_RETENTION_MS + 1;
     const unavailableLease = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(fsSync.existsSync(created.repoRoot)).toBe(true);

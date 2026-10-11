@@ -187,11 +187,12 @@ const YARN_DLX_OPTIONS: PackageManagerContextOptions = {
   contextOptionsWithValue: YARN_DLX_OPTIONS_WITH_VALUE,
 };
 
-function findFirstNonOptionIndex(
+function scanPackageManagerOptions(
   argv: string[],
   startIdx: number,
   params: PackageManagerOptions,
-  terminator: "skip" | "stop" | "reject" = "skip",
+  terminator: "skip" | "stop" | "reject",
+  context?: { options: PackageManagerContextOptions; scope: "leading" | "before-terminator" },
 ): number | null {
   let idx = startIdx;
   while (idx < argv.length) {
@@ -201,7 +202,7 @@ function findFirstNonOptionIndex(
       continue;
     }
     if (token === "--") {
-      if (terminator === "reject") {
+      if (terminator === "reject" || context?.scope === "before-terminator") {
         return null;
       }
       if (terminator === "stop") {
@@ -211,10 +212,22 @@ function findFirstNonOptionIndex(
       continue;
     }
     if (!token.startsWith("-")) {
-      return idx;
+      if (context?.scope === "before-terminator") {
+        idx += 1;
+        continue;
+      }
+      return context ? null : idx;
     }
     const parsedOption = parseInlineOptionToken(token);
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
+    if (
+      context &&
+      (params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
+        context.options.contextOptionsWithValue.has(flag) ||
+        context.options.contextFlagOptions?.has(flag))
+    ) {
+      return idx;
+    }
     if (
       params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
       params.optionsWithValue.has(flag)
@@ -222,7 +235,7 @@ function findFirstNonOptionIndex(
       idx += parsedOption.hasInlineValue ? 1 : 2;
       continue;
     }
-    if (params.flagOptions.has(flag)) {
+    if (params.flagOptions.has(flag) || context?.scope === "before-terminator") {
       idx += 1;
       continue;
     }
@@ -231,56 +244,24 @@ function findFirstNonOptionIndex(
   return null;
 }
 
+function findFirstNonOptionIndex(
+  argv: string[],
+  startIdx: number,
+  params: PackageManagerOptions,
+  terminator: "skip" | "stop" | "reject" = "skip",
+): number | null {
+  return scanPackageManagerOptions(argv, startIdx, params, terminator);
+}
+
 function hasContextOption(
   argv: string[],
   startIdx: number,
   params: PackageManagerContextOptions,
   scope: "leading" | "before-terminator" = "leading",
 ): boolean {
-  let idx = startIdx;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (token === "--") {
-      if (scope === "before-terminator") {
-        return false;
-      }
-      idx += 1;
-      continue;
-    }
-    if (!token.startsWith("-")) {
-      if (scope === "leading") {
-        return false;
-      }
-      idx += 1;
-      continue;
-    }
-    const parsedOption = parseInlineOptionToken(token);
-    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (
-      params.caseSensitiveOptionsWithValue?.has(parsedOption.name) ||
-      params.contextOptionsWithValue.has(flag) ||
-      params.contextFlagOptions?.has(flag)
-    ) {
-      return true;
-    }
-    if (params.optionsWithValue.has(flag)) {
-      idx += parsedOption.hasInlineValue ? 1 : 2;
-      continue;
-    }
-    if (params.flagOptions.has(flag)) {
-      idx += 1;
-      continue;
-    }
-    if (scope === "leading") {
-      return false;
-    }
-    idx += 1;
-  }
-  return false;
+  return (
+    scanPackageManagerOptions(argv, startIdx, params, "skip", { options: params, scope }) !== null
+  );
 }
 
 export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolean {

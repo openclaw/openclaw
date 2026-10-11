@@ -37,20 +37,13 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   return "";
 }
 
-export type MSTeamsDebounceEntry = {
-  context: MSTeamsTurnContext;
-  rawText: string;
-  text: string;
-  attachments: MSTeamsAttachmentLike[];
-  wasMentioned: boolean;
-  implicitMentionKinds: Array<"reply_to_bot">;
-  turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
-};
+export type MSTeamsDebounceEntry = Awaited<ReturnType<typeof prepareMSTeamsDebounceEntry>>;
 
 export async function prepareMSTeamsDebounceEntry(params: {
   context: MSTeamsTurnContext;
+  accountId: string;
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
-}): Promise<MSTeamsDebounceEntry> {
+}) {
   const activity = params.context.activity;
   const attachments: MSTeamsAttachmentLike[] = Array.isArray(activity.attachments)
     ? activity.attachments
@@ -66,7 +59,11 @@ export async function prepareMSTeamsDebounceEntry(params: {
   const implicitMentionKinds: Array<"reply_to_bot"> =
     conversationId &&
     replyToId &&
-    (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+    (await wasMSTeamsMessageSentWithPersistence({
+      conversationId,
+      messageId: replyToId,
+      accountId: params.accountId,
+    }))
       ? ["reply_to_bot"]
       : [];
 

@@ -1,7 +1,12 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
-import { getWorkboardRuntime, getWorkboardState, type WorkboardHost } from "./runtime.ts";
+import {
+  getWorkboardRuntime,
+  getWorkboardState,
+  hasCurrentWorkboardCards,
+  type WorkboardHost,
+  type WorkboardClientContext,
+} from "./runtime.ts";
 
 const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
 
@@ -95,13 +100,12 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
   }
 }
 
-export function configureWorkboardLiveRefresh(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-  refresh?: () => Promise<boolean>;
-  shouldDefer?: () => boolean;
-}): boolean {
+export function configureWorkboardLiveRefresh(
+  params: WorkboardClientContext & {
+    refresh?: () => Promise<boolean>;
+    shouldDefer?: () => boolean;
+  },
+): boolean {
   const runtime = getWorkboardRuntime(params.host);
   const requiresCanonicalReload = Boolean(
     params.client && runtime.liveRefreshEntry?.client !== params.client,
@@ -124,6 +128,9 @@ export function handleWorkboardChanged(host: WorkboardHost, payload: unknown): b
     return false;
   }
   const runtime = getWorkboardRuntime(host);
+  if (!runtime.liveRefreshEntry?.refresh && hasCurrentWorkboardCards(host, payload)) {
+    return false;
+  }
   if (runtime.liveChangeEpoch !== change.epoch) {
     runtime.liveChangeEpoch = change.epoch;
     runtime.liveHighestSeenRevision = change.revision;

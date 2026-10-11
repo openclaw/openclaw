@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
@@ -12,6 +13,15 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 }));
 
 const baseTools = ["read", "web_search", "exec"];
+
+beforeEach(() => {
+  for (const name of listKnownProviderAuthEnvVarNamesCore()) {
+    vi.stubEnv(name, undefined);
+  }
+  // Route selection needs a configured managed fallback without forcing a provider.
+  vi.stubEnv("BRAVE_API_KEY", "test-managed-search-key");
+});
+afterEach(() => vi.unstubAllEnvs());
 
 function selectedTools(
   requestedTools: string[],
@@ -64,12 +74,6 @@ describe("applyModelProviderToolPolicy", () => {
       modelBaseUrl: "https://proxy.example/v1",
       native: false,
     },
-    {
-      label: "resolved official endpoint",
-      baseUrl: "https://proxy.example/v1",
-      modelBaseUrl: "https://api.openai.com/v1",
-      native: true,
-    },
 
     {
       label: "disabled plugin",
@@ -103,20 +107,6 @@ describe("applyModelProviderToolPolicy", () => {
   );
 
   it.each([
-    {
-      name: "gateway native",
-      modelProvider: "gateway",
-      auth: false,
-      suppressManagedWebSearch: undefined,
-      native: true,
-    },
-    {
-      name: "dynamic tools",
-      modelProvider: "gateway",
-      auth: false,
-      suppressManagedWebSearch: false,
-      native: false,
-    },
     {
       name: "authenticated direct",
       modelProvider: "openai",

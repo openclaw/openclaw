@@ -384,17 +384,11 @@ enum ManagedNodeGatewayMigration {
         cli: GatewayLaunchAgentManager.InstalledServiceCLI,
         profile: AppProfile) async throws -> String
     {
-        let environment = GatewayLaunchAgentManager.daemonEnvironment(
-            runtime: nil,
+        guard case let .ready(_, version) = await CLIInstaller.managedStatus(
+            expectedVersion: nil,
             installedCLI: cli,
-            environment: ProcessInfo.processInfo.environment,
-            profile: profile,
-            searchPaths: CommandResolver.preferredPaths())
-        let response = await ShellExecutor.runDetailed(
-            command: cli.prefix + ["--version"], cwd: nil, env: environment, timeout: 15)
-        guard response.success,
-              let version = GatewayEnvironment.normalizeGatewayVersionOutput(response.stdout),
-              Semver.parse(version) != nil
+            serviceProfile: profile,
+            usesBundledRuntime: false)
         else { throw Failure(message: "The installed Node Gateway version could not be verified.") }
         return version
     }
@@ -410,6 +404,9 @@ enum ManagedNodeGatewayMigration {
         checkCurrent: @escaping @MainActor @Sendable () throws -> Void,
         resolveLegacyCLI: @escaping @MainActor @Sendable () throws -> GatewayLaunchAgentManager.InstalledServiceCLI? = {
             nil
+        },
+        restorationInstaller: @escaping @MainActor () throws -> BundledRuntime = {
+            try BundledRuntime.resolve(bundle: .main)
         },
         verifyHealth: @escaping () async throws -> Void,
         setServiceHosting: @escaping (Candidate) -> Void,
@@ -534,17 +531,16 @@ enum ManagedNodeGatewayMigration {
                 let verified = try await self.captureServiceCustody(requireService: false)
                 if try custody.action(current: verified) == .verifyOriginalNode { return }
                 if verified.definition.plist == nil { try await self.checkAbsentService(candidate) }
-                // --runtime node clears the newly selected Bun pin. PATH starts with the captured
-                // Node directory; the retained package and environment are from the same version.
+                // --runtime node clears the newly selected Bun pin without pinning the restored Node.
                 var arguments = ["install", "--force", "--port", String(candidate.port), "--runtime", "node"]
                 if candidate.allowUnconfigured { arguments.append("--allow-unconfigured") }
                 let expectedAuthority = try verified.serviceAuthority()
-                if let error = await GatewayLaunchAgentManager
+                if let error = try await GatewayLaunchAgentManager
                     .runDaemonCommand(
                         arguments,
                         timeout: self.serviceInstallTimeout,
-                        installedCLI: candidate.cli,
-                        legacyAuthority: candidate.cli,
+                        runtime: restorationInstaller(),
+                        restoring: candidate.cli,
                         expectedServiceAuthority: expectedAuthority,
                         checkCurrent: {
                             if verified.definition.plist == nil { try await self.checkAbsentService(candidate) }

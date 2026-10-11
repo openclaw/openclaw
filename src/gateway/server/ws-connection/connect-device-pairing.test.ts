@@ -288,7 +288,7 @@ describe("gateway connect pairing exemptions", () => {
     });
     let reconnect: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
     const selfHandler = vi.spyOn(usersHandlers, "users.self");
-    const listHandler = vi.spyOn(sessionReadHandlers, "sessions.list");
+    const listPreparation = vi.spyOn(sessionReadHandlers["sessions.list"]!, "prepareRead");
     const personalSpies: { mockRestore: () => void }[] = [];
     const connectOptions = {
       token: auth.token,
@@ -380,7 +380,7 @@ describe("gateway connect pairing exemptions", () => {
         visibility: "draft",
         sharingRole: "admin",
       });
-      const listRequest = listHandler.mock.lastCall?.[0];
+      const listRequest = listPreparation.mock.lastCall?.[0];
       if (!listRequest?.client) {
         throw new Error("expected the sessions.list RPC client");
       }
@@ -490,7 +490,7 @@ describe("gateway connect pairing exemptions", () => {
         spy.mockRestore();
       }
       selfHandler.mockRestore();
-      listHandler.mockRestore();
+      listPreparation.mockRestore();
       setLoggerOverride({ level: "silent", consoleLevel: "silent" });
       reconnect?.close();
       started.ws.close();
@@ -980,6 +980,12 @@ describe("gateway connect pairing exemptions", () => {
       expect((await getPairedDevice(paired.identity.deviceId))?.approvedScopes).toEqual([
         "operator.read",
       ]);
+      expect((await listDevicePairing()).pending).toContainEqual(
+        expect.objectContaining({
+          deviceId: paired.identity.deviceId,
+          scopes: ["operator.write"],
+        }),
+      );
     } finally {
       ws?.close();
       await started.server.close();

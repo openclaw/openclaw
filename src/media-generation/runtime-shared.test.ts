@@ -381,7 +381,6 @@ describe("media-generation runtime shared normalization", () => {
       resolveClosestResolution({
         requestedResolution: "480P",
         supportedResolutions: ["360P", "540P", "720P"],
-        order: ["360P", "480P", "540P", "720P"],
       }),
     ).toBe("540P");
   });
@@ -391,7 +390,6 @@ describe("media-generation runtime shared normalization", () => {
       resolveClosestResolution({
         requestedResolution: "4K",
         supportedResolutions: ["768P", "1080P"],
-        order: ["360P", "480P", "540P", "720P", "768P", "1080P"],
       }),
     ).toBeUndefined();
   });
@@ -417,13 +415,6 @@ describe("media-generation runtime shared normalization", () => {
           supportedResolutions: ordered(["invalid", "360P", "600P"]),
         }),
       ).toBe("600P");
-      expect(
-        resolveClosestResolution({
-          requestedResolution: "medium",
-          supportedResolutions: ordered(["invalid", "small", "large"]),
-          order: ["small", "medium", "large"],
-        }),
-      ).toBe("small");
     }
   });
 

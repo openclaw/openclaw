@@ -15,14 +15,13 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { getPendingWakeCommit } from "../registry/subagent-registry-requester-wake-commit.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   blockSubagentCompletionDelivery,
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
@@ -78,7 +77,7 @@ describe("persisted subagent requester wakes", () => {
     persistOwner(input);
     let committed: RequesterWakeCommittedWrite | undefined;
     await expect(
-      mutateRequesterSettleWakeBatch({
+      mutateRequesterCompletionBatch({
         entries: [input.subagent],
         operation: { kind: "complete" },
         context: captureOpenClawStateWorkerContext(),
@@ -137,20 +136,21 @@ describe("persisted subagent requester wakes", () => {
       const driver = requesterWakeDriver([input]);
       const generation = driver.controller.bumpCleanupGeneration(input.subagent);
 
-      await settleRequesterCompletionBatch({
-        entries: [{ subagent: input.subagent }],
-        outcome: {
-          delivered,
-          path: "direct",
-          error: delivered ? undefined : "requester unavailable",
+      await mutateRequesterCompletionBatch({
+        entries: [input.subagent],
+        operation: {
+          kind: "settle",
+          outcome: {
+            delivered,
+            path: "direct",
+            error: delivered ? undefined : "requester unavailable",
+          },
         },
-        isCurrent: () => true,
+        assertCurrent: () => {},
         databaseOptions: { database },
       });
 
-      expect(
-        driver.controller.isCleanupAttemptCurrent(input.subagent.runId, input.subagent, generation),
-      ).toBe(delivered);
+      expect(driver.controller.isCleanupAttemptCurrent(input.subagent, generation)).toBe(delivered);
       expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.cleanupHandled).toBe(
         false,
@@ -352,10 +352,10 @@ describe("persisted subagent requester wakes", () => {
       }
       const driver = requesterWakeDriver(inputs);
       const completionStore = await import("./subagent-completion-admission.store.js");
-      const mutate = completionStore.mutateRequesterSettleWakeBatch;
+      const mutate = completionStore.mutateRequesterCompletionBatch;
       let replayAttempts = 0;
       const observed = vi
-        .spyOn(completionStore, "mutateRequesterSettleWakeBatch")
+        .spyOn(completionStore, "mutateRequesterCompletionBatch")
         .mockImplementation((params) => {
           if (
             params.operation.kind === "transition" &&
@@ -793,7 +793,7 @@ describe("persisted subagent requester wakes", () => {
       const before = structuredClone(input);
       if (change === "superseded generation") {
         before.subagent.delivery!.generation = 2;
-        upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(before.subagent));
+        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(before.subagent)], []);
       }
       const blocked = blockSubagentCompletionDelivery({
         subagent: input.subagent,
@@ -835,16 +835,19 @@ describe("persisted subagent requester wakes", () => {
       }
       const siblingBefore = structuredClone(sibling.subagent);
 
-      await settleRequesterCompletionBatch({
-        entries: [{ subagent: paused.subagent }],
-        outcome: {
-          delivered: !storeReplaced,
-          path: "direct",
-          ...(storeReplaced
-            ? { storeReplaced: true, disposition: "intentional_non_delivery" as const }
-            : {}),
+      await mutateRequesterCompletionBatch({
+        entries: [paused.subagent],
+        operation: {
+          kind: "settle",
+          outcome: {
+            delivered: !storeReplaced,
+            path: "direct",
+            ...(storeReplaced
+              ? { storeReplaced: true, disposition: "intentional_non_delivery" as const }
+              : {}),
+          },
         },
-        isCurrent: () => true,
+        assertCurrent: () => {},
         databaseOptions: { database },
       });
       database = await reopenCompletionFixtureOwners();
@@ -931,7 +934,7 @@ describe("persisted subagent requester wakes", () => {
           } else {
             updated.requesterSettleWake!.rearmGeneration = 2;
           }
-          upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(updated));
+          writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(updated)], []);
         }
         throw new Error("requester unavailable");
       });
@@ -993,10 +996,10 @@ describe("persisted subagent requester wakes", () => {
       persistOwner(input);
       const before = structuredClone(input.subagent);
       const settle = () =>
-        settleRequesterCompletionBatch({
-          entries: [{ subagent: input.subagent }],
-          outcome: { delivered: true, path: "direct" },
-          isCurrent: () => true,
+        mutateRequesterCompletionBatch({
+          entries: [input.subagent],
+          operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+          assertCurrent: () => {},
           databaseOptions: { database },
         });
       database.db.exec(

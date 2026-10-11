@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import { listAgentEntries } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import {
@@ -31,7 +32,7 @@ export type AgentToAgentPolicy = SessionVisibilityDecisionPolicy & {
   matchesAllow: (agentId: string) => boolean;
 };
 
-/** Session operation whose visibility error copy should be rendered. */
+/** Session operation to authorize; send-only grants never apply to read/status actions. */
 export type SessionAccessAction = SessionVisibilityDecisionAction;
 
 /** Result of checking whether one session operation may target a session. */
@@ -214,19 +215,10 @@ function matchesCompiledWildcard(
   return true;
 }
 
-/** Compile agent-to-agent allow rules into reusable matching predicates. */
-export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
-  const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled !== false;
-  const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-  const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
+function compileAgentAllowMatcher(patterns: string[]): (agentId: string) => boolean {
+  const allowPatterns = patterns.map(compileAgentAllowPattern);
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
-  const matchesAllow = (agentId: string) => {
-    // Agent-to-agent is on by default; omitted/empty `allow` permits every agent pair.
-    // Blank entries compile to `deny`, so a configured-but-blank list still fails closed.
-    if (allowPatterns.length === 0) {
-      return true;
-    }
+  return (agentId: string) => {
     const lowerAgentId = hasWildcardPatterns ? agentId.toLowerCase() : "";
     return allowPatterns.some((pattern) => {
       if (pattern.kind === "all") {
@@ -241,10 +233,33 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
-  const isAllowed = (requesterAgentId: string, targetAgentId: string) =>
-    requesterAgentId === targetAgentId ||
-    (enabled && matchesAllow(requesterAgentId) && matchesAllow(targetAgentId));
-  return { enabled, matchesAllow, isAllowed };
+}
+
+/** Compile participation and independent outbound-send rules; reads never use send grants. */
+export function createAgentToAgentPolicy(
+  cfg: OpenClawConfig,
+  options?: { sandboxed?: boolean },
+): AgentToAgentPolicy {
+  const enabled = cfg.tools?.agentToAgent?.enabled !== false;
+  const allow = cfg.tools?.agentToAgent?.allow;
+  // The shipped global empty list is unrestricted; explicit per-agent [] instead denies sends.
+  const matchesAllow = allow?.length ? compileAgentAllowMatcher(allow) : () => true;
+  return {
+    enabled,
+    matchesAllow,
+    isAllowed: (requester, target) =>
+      requester === target || (enabled && matchesAllow(requester) && matchesAllow(target)),
+    resolveSendAccess: (requester, target) => {
+      if (options?.sandboxed && resolveSandboxSessionToolsVisibility(cfg) === "spawned") {
+        return undefined;
+      }
+      // Reads never traverse the fleet; sends compile only the requester's destinations.
+      const send = listAgentEntries(cfg).find(
+        (entry) => normalizeLowercaseStringOrEmpty(entry.id) === requester,
+      )?.tools?.agentToAgent?.send;
+      return send ? compileAgentAllowMatcher(send)(target) : undefined;
+    },
+  };
 }
 
 function toSessionAccessResult(
