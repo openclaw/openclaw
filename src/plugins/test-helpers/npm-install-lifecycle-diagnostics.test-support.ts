@@ -9,9 +9,10 @@ export async function observeNpmInstallLifecycle(
     onTestFailed,
     onTestFinished,
   }: Pick<TestContext, "signal" | "onTestFailed" | "onTestFinished">,
+  scenario: "successor" | "authority" = "successor",
 ) {
   // E2E silences console output; timeout evidence must still reach the runner.
-  const diagnostics = createFixtureDiagnostics(`plugin-${source}-successor`, (message) => {
+  const diagnostics = createFixtureDiagnostics(`plugin-${source}-${scenario}`, (message) => {
     process.stderr.write(`${message}\n`);
   });
   const observe = (phase: string, details: { version?: string } = {}) =>

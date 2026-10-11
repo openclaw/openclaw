@@ -9,6 +9,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import { installPluginFromNpmPackArchive, installPluginFromNpmSpec } from "./install.js";
+import { observeNpmInstallLifecycle } from "./test-helpers/npm-install-lifecycle-diagnostics.test-support.js";
 import { packPlugins, startStaticRegistry } from "./test-helpers/npm-registry-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,10 +38,11 @@ afterEach(async () => {
   }
 });
 
-it.each(["npm", "npm-pack"] as const)(
+it.for(["npm", "npm-pack"] as const)(
   "refuses a returned Promise after real %s preparation without moving the original project",
   { timeout: 120_000 },
-  async (source) => {
+  async (source, context) => {
+    const observe = await observeNpmInstallLifecycle(source, context, "authority");
     const rootDir = tempDirs.make("openclaw-managed-npm-authority-");
     const npmDir = path.join(rootDir, "managed-npm");
     const packageName = "managed-authority-fixture";
@@ -48,16 +50,19 @@ it.each(["npm", "npm-pack"] as const)(
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(rootDir, "state"));
     vi.stubEnv("NPM_CONFIG_CACHE", path.join(rootDir, "npm-cache"));
     vi.stubEnv("npm_config_cache", path.join(rootDir, "npm-cache"));
+    observe("fixtures-pack-start");
     const versions = await packPlugins(rootDir, [
       { packageName, version: "1.0.0", indexJs: "export const revision = 1;\n" },
       { packageName, version: "2.0.0", indexJs: "export const revision = 2;\n" },
     ]);
+    observe("fixtures-pack-end");
     const registry = await startStaticRegistry(
       [{ packageName, latest: "2.0.0", versions }],
       servers,
     );
     vi.stubEnv("NPM_CONFIG_REGISTRY", registry);
     vi.stubEnv("npm_config_registry", registry);
+    observe("registry-ready");
     const install = (
       version: string,
       options: Pick<
@@ -65,6 +70,7 @@ it.each(["npm", "npm-pack"] as const)(
         "beforePersistentApply" | "onBeforePluginArtifactCommit"
       > = {},
     ) => {
+      observe("install-start", { version });
       const params = {
         npmDir,
         mode: "update" as const,
@@ -81,6 +87,7 @@ it.each(["npm", "npm-pack"] as const)(
           });
     };
     const original = await install("1.0.0");
+    observe("install-returned", { version: "1.0.0" });
     if (!original.ok) {
       throw new Error(original.error);
     }
@@ -94,11 +101,13 @@ it.each(["npm", "npm-pack"] as const)(
       path.join(original.targetDir, "dist", "index.js"),
     ];
     const before = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
+    observe("original-project-snapshotted");
     const events: string[] = [];
     const preparedVersions: string[] = [];
     const onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler = async ({
       stagedArtifactDir,
     }) => {
+      observe("artifact-fence", { version: "2.0.0" });
       const manifest = JSON.parse(
         await fs.readFile(path.join(stagedArtifactDir, "package.json"), "utf8"),
       ) as { version: string };
@@ -106,6 +115,7 @@ it.each(["npm", "npm-pack"] as const)(
       events.push("prepared");
     };
     const beforePersistentApply = vi.fn<() => unknown>(() => {
+      observe("publish-fence", { version: "2.0.0" });
       events.push("asserted");
       return Promise.resolve();
     });
@@ -115,6 +125,7 @@ it.each(["npm", "npm-pack"] as const)(
       beforePersistentApply,
       onBeforePluginArtifactCommit,
     });
+    observe("install-returned", { version: "2.0.0" });
 
     expect(preparedVersions).toEqual(["2.0.0"]);
     expect(result).toEqual({
