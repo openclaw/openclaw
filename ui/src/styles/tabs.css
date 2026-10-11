@@ -10,6 +10,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
+  letter-spacing: inherit;
   text-align: inherit;
   cursor: var(--cursor-action);
 }

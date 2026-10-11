@@ -56,6 +56,9 @@ it("keeps hub typography, selected ink, and compact height when native defaults 
       const label = getComputedStyle(voice);
       expect.soft(label.fontSize, `${width}px typography`).toBe("12px");
       expect.soft(label.fontWeight, `${width}px typography`).toBe("550");
+      expect
+        .soft(label.letterSpacing, `${width}px typography`)
+        .toBe(getComputedStyle(document.body).letterSpacing);
       expect.soft(label.color, `${width}px unselected ink`).toBe(tokenColor("muted"));
       expect
         .soft(tabs.getBoundingClientRect().height, `${width}px track height`)

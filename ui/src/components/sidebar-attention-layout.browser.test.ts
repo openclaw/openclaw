@@ -370,7 +370,17 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
       // The track hairline is the header/list separator; it must span the panel.
       expect(track).not.toBeNull();
-      expect(Number.parseFloat(getComputedStyle(track!).borderBottomWidth)).toBeGreaterThan(0);
+      const colorProbe = document.createElement("span");
+      colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
+      track.append(colorProbe);
+      const separatorColor = getComputedStyle(colorProbe).color;
+      colorProbe.remove();
+      const paint = document.createElement("canvas").getContext("2d")!;
+      paint.fillStyle = separatorColor;
+      paint.fillRect(0, 0, 1, 1);
+      expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
+      expect(getComputedStyle(track).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
+      expect(getComputedStyle(track).paddingBottom).toBe("2px");
       expect(track!.getBoundingClientRect().width).toBeGreaterThanOrEqual(
         nav.getBoundingClientRect().width - 1,
       );
