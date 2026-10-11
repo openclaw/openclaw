@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, SimpleStreamOptions } from "../types.js";
+import type { FirstStreamEventInternalOptions } from "../utils/stream-first-event-timeout.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 import { buildOpenAISdkRequestOptions } from "./openai-transport-params.js";
@@ -353,15 +354,16 @@ describe("openai completions transport", () => {
     vi.useFakeTimers();
     try {
       const onFirstEventTimeout = vi.fn();
+      const options: SimpleStreamOptions & FirstStreamEventInternalOptions = {
+        apiKey: "test-key",
+        firstEventTimeoutMs: 5,
+        onFirstEventTimeout,
+        onResponse: () => responseReady.resolve(),
+      };
       const stream = createOpenAICompletionsTransportStreamFn()(
         makeCompletionsModel(),
         { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-        {
-          apiKey: "test-key",
-          firstEventTimeoutMs: 5,
-          onFirstEventTimeout,
-          onResponse: () => responseReady.resolve(),
-        },
+        options,
       );
       if (stream instanceof Promise) {
         throw new Error("OpenAI Chat transport must return its event stream synchronously");

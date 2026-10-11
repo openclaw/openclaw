@@ -25,6 +25,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
+import { shortHash } from "../utils/hash.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
@@ -114,7 +115,7 @@ function estimateJsonChars(value: unknown, fallback: number): number {
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
   messages: unknown[];
-  tools?: unknown[];
+  tools?: CompletionsRequest["tools"];
   response_format?: unknown;
 }): number {
   let adjustedChars = 0;
@@ -253,9 +254,13 @@ const contextOutputBudgets = new WeakMap<
   {
     model: string;
     cap: number;
-    inputTokens: number;
+    inputHash: string;
   }
 >();
+
+function completionsInputHash(payload: CompletionsRequest): string {
+  return shortHash(JSON.stringify([payload.messages, payload.tools, payload.response_format]));
+}
 
 // Hooks may replace or mutate the payload. Only an unchanged automatic context
 // clamp can turn a provider's length finish into compaction recovery.
@@ -274,7 +279,7 @@ export function resolveCompletionsContextOutputBudget(
     (payload.tools !== undefined && !Array.isArray(payload.tools)) ||
     limits.length === 0 ||
     limits.some((value) => value !== budget.cap) ||
-    estimateOpenAICompletionsInputTokens(payload) !== budget.inputTokens
+    completionsInputHash(payload) !== budget.inputHash
   ) {
     return undefined;
   }
@@ -558,7 +563,7 @@ export function buildOpenAICompletionsRequest(
     contextOutputBudgets.set(params, {
       model: params.model,
       cap: contextOutputCap,
-      inputTokens: estimateOpenAICompletionsInputTokens(params),
+      inputHash: completionsInputHash(params),
     });
   }
   return params;

@@ -1,8 +1,7 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
-import type { AssistantMessageEvent, Model } from "../types.js";
+import type { AssistantMessageEvent, Model, SimpleStreamOptions } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { isContextOverflow } from "../utils/overflow.js";
 import type { FirstStreamEventInternalOptions } from "../utils/stream-first-event-timeout.js";
@@ -32,7 +31,7 @@ async function runResponse(
     chunks?: ChatCompletionChunk[];
     response?: () => Response;
     model?: Partial<Model<"openai-completions">>;
-    options?: OpenAICompletionsOptions & FirstStreamEventInternalOptions;
+    options?: SimpleStreamOptions & FirstStreamEventInternalOptions;
     onActivity?: () => void;
   } = {},
 ) {
@@ -147,6 +146,15 @@ describe("compatible context-capped responses", () => {
       name: "hook-changed model",
       options: {
         onPayload: (payload: unknown) => ({ ...asPayload(payload), model: "another-model" }),
+      },
+    },
+    {
+      name: "hook-replaced same-size input",
+      options: {
+        onPayload: (payload: unknown) => ({
+          ...asPayload(payload),
+          messages: [{ role: "user", content: "y".repeat(32_000) }],
+        }),
       },
     },
     {
