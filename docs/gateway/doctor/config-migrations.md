@@ -540,7 +540,10 @@ Keep this marker when removing a pin. Subsequent Doctor runs, restarts, and
 updates will not recreate it. Account pins cover only accounts present during
 migration. For trusted official plugins with older Doctor contracts, Doctor uses
 historical listener facts shipped with the Gateway. The installed plugin retains
-ownership of its other config migrations. Other plugins can remain pending while
+ownership of its other config migrations. During an update, these listener repairs
+also run when an installed official plugin is deferred until package convergence;
+its deferred code is not loaded, and replacement plugins retain their ownership.
+Other plugins can remain pending while
 other channels finish. Replacing a pending plugin runs the same migration through
 the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin

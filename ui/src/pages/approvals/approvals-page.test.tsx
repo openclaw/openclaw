@@ -10,10 +10,15 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import "./approvals-page.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { ApprovalsPage } from "./approvals-page.tsx";
 
-type TestApprovalsPage = HTMLElement & { updateComplete: Promise<boolean> };
+type TestApprovalsPage = HTMLElement;
 
 function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["items"][number] {
   return {
@@ -45,55 +50,33 @@ function createPage(
   replaceGatewaySource: () => void;
 } {
   const client = { request } as GatewayBrowserClient;
-  let snapshot = {
+  const initialGateway = createApplicationGateway({
     phase: "connected",
     client,
     ...(auth ? { hello: { auth } } : {}),
-  } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } as unknown as ApplicationContext["gateway"];
-  const context = { basePath: "", gateway } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-approvals-page") as TestApprovalsPage;
-  provider.append(page);
-  document.body.append(provider);
+  } as ApplicationGatewaySnapshot);
+  let currentGateway = initialGateway;
+  const context = {
+    basePath: "",
+    gateway: currentGateway.gateway,
+  } as unknown as ApplicationContext;
+  const provider = createSolidApplicationContextProvider(context);
+  const { container: page } = mountSolid(() => <ApprovalsPage />, { wrapper: provider.wrapper });
+  flush();
   return {
     page,
     replaceGatewaySource() {
-      provider.setContext({ ...context, gateway: { ...gateway } });
+      currentGateway = createApplicationGateway(currentGateway.gateway.snapshot);
+      provider.setContext({ ...context, gateway: currentGateway.gateway });
+      flush();
     },
     emitGatewayEvent(event, payload) {
-      const frame = { event, payload, type: "event" } as GatewayEventFrame;
-      for (const listener of eventListeners) {
-        listener(frame);
-      }
+      initialGateway.publishEvent({ event, payload, type: "event" } as GatewayEventFrame);
     },
     updateGateway(next) {
-      snapshot = { ...snapshot, ...next };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      currentGateway.publish({ ...currentGateway.gateway.snapshot, ...next });
     },
   };
-}
-
-async function settle(page: TestApprovalsPage): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await page.updateComplete;
 }
 
 beforeEach(async () => {
@@ -142,7 +125,9 @@ describe("ApprovalsPage", () => {
       .mockResolvedValueOnce({ items: [terminal("second", 1_000)] });
     const { page } = createPage(stubGrants(request));
 
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first"),
+    );
 
     expect(request).toHaveBeenNthCalledWith(1, "approval.history", { limit: 50 });
     const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
@@ -158,7 +143,9 @@ describe("ApprovalsPage", () => {
       button.textContent?.includes("Load more"),
     );
     loadMore?.click();
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(2),
+    );
 
     expect(request).toHaveBeenNthCalledWith(2, "approval.history", {
       cursor: "next",
@@ -171,7 +158,9 @@ describe("ApprovalsPage", () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
     const { page } = createPage(stubGrants(request));
 
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom"),
+    );
 
     const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
     expect(body).not.toContain("No resolved approvals");
@@ -189,13 +178,21 @@ describe("ApprovalsPage", () => {
       .mockResolvedValueOnce({ items: [terminal("newly-resolved", 2_000)] });
     const { page, emitGatewayEvent } = createPage(stubGrants(request));
 
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain(
+        "No resolved approvals",
+      ),
+    );
     expect(page.querySelector(".approval-history-table")?.textContent).toContain(
       "No resolved approvals",
     );
 
     emitGatewayEvent(event, { id: "newly-resolved", decision: "deny" });
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain(
+        "echo newly-resolved",
+      ),
+    );
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
@@ -216,20 +213,23 @@ describe("ApprovalsPage", () => {
       .mockResolvedValueOnce({ items: [terminal("newest", 3_000), terminal("first", 2_000)] });
     const { page, emitGatewayEvent } = createPage(stubGrants(request));
 
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first"),
+    );
     const loadMore = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Load more"),
     );
     loadMore?.click();
-    await settle(page);
+    flush();
     expect(request).toHaveBeenCalledTimes(2);
 
     emitGatewayEvent("exec.approval.resolved", { id: "newest", decision: "deny" });
     expect(request).toHaveBeenCalledTimes(2);
 
     resolveOlderPage({ items: [terminal("older", 1_000)] });
-    await settle(page);
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo newest"),
+    );
 
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
@@ -246,7 +246,7 @@ describe("ApprovalsPage", () => {
       scopes,
     });
 
-    await settle(page);
+    flush();
 
     expect(request).not.toHaveBeenCalled();
     expect(page.querySelector(".approval-history-table")).toBeNull();
@@ -257,7 +257,7 @@ describe("ApprovalsPage", () => {
     const request = vi.fn().mockResolvedValue({ items: [] });
     const { page } = createPage(stubGrants(request), { role: "operator" });
 
-    await settle(page);
+    await waitForSolid(() => expect(page.querySelector(".approval-history-table")).not.toBeNull());
 
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("approval.history", { limit: 50 });
@@ -278,7 +278,7 @@ describe("ApprovalsPage", () => {
       scopes: ["operator.approvals"],
     });
 
-    await settle(page);
+    flush();
     expect(request).toHaveBeenCalledOnce();
 
     updateGateway({
@@ -286,9 +286,9 @@ describe("ApprovalsPage", () => {
         auth: { role: "operator", scopes: ["operator.read"] },
       } as ApplicationGatewaySnapshot["hello"],
     });
-    await settle(page);
+    flush();
     emitGatewayEvent("exec.approval.resolved", { id: "inaccessible", decision: "deny" });
-    await settle(page);
+    flush();
     expect(request).toHaveBeenCalledOnce();
     expect(page.querySelector(".approval-history-table")).toBeNull();
 
@@ -297,12 +297,15 @@ describe("ApprovalsPage", () => {
         auth: { role: "operator", scopes: ["operator.admin"] },
       } as ApplicationGatewaySnapshot["hello"],
     });
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo current"),
+    );
     expect(request).toHaveBeenCalledTimes(2);
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo current");
 
     resolveStaleHistory({ items: [terminal("stale", 1_000)] });
-    await settle(page);
+    await staleHistory;
+    flush();
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo current");
     expect(page.querySelector(".approval-history-table")?.textContent).not.toContain("echo stale");
   });
@@ -323,8 +326,11 @@ describe("ApprovalsPage", () => {
       const { page, updateGateway, replaceGatewaySource } = createPage(
         request as GatewayBrowserClient["request"],
       );
-      await settle(page);
-      await settle(page);
+      await waitForSolid(() =>
+        expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+          "Old Gateway automation",
+        ),
+      );
       expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
         "Old Gateway automation",
       );
@@ -335,14 +341,18 @@ describe("ApprovalsPage", () => {
       } else {
         updateGateway({ client: { request } as unknown as GatewayBrowserClient });
       }
-      await settle(page);
+      flush();
       expect(page.querySelector(".standing-grants-table")?.textContent).not.toContain(
         "Old Gateway automation",
       );
       expect(page.querySelector(".standing-grants-table button")).toBeNull();
 
       nextGrants.resolve({ grants: [standingGrant("Current Gateway automation")] });
-      await settle(page);
+      await waitForSolid(() =>
+        expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+          "Current Gateway automation",
+        ),
+      );
       expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
         "Current Gateway automation",
       );
@@ -374,10 +384,11 @@ describe("ApprovalsPage", () => {
       const { page, updateGateway, replaceGatewaySource } = createPage(
         request as GatewayBrowserClient["request"],
       );
-      await settle(page);
-      await settle(page);
+      await waitForSolid(() =>
+        expect(page.querySelector(".standing-grants-table button")).not.toBeNull(),
+      );
       page.querySelector<HTMLButtonElement>(".standing-grants-table button")!.click();
-      await settle(page);
+      flush();
 
       replaced = true;
       if (replacement === "source") {
@@ -385,12 +396,15 @@ describe("ApprovalsPage", () => {
       } else {
         updateGateway({ client: { request } as unknown as GatewayBrowserClient });
       }
-      await settle(page);
-      await settle(page);
+      await waitForSolid(() =>
+        expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+          "Current Gateway automation",
+        ),
+      );
       const currentButton = page.querySelector<HTMLButtonElement>(".standing-grants-table button")!;
       expect(currentButton.disabled).toBe(false);
       currentButton.click();
-      await settle(page);
+      flush();
       expect(currentButton.disabled).toBe(true);
       expect(currentButton.textContent).toContain("Revoking");
 
@@ -399,14 +413,17 @@ describe("ApprovalsPage", () => {
       } else {
         oldRevoke.reject(new Error("Old Gateway revoke failed"));
       }
-      await settle(page);
+      await Promise.allSettled([oldRevoke.promise]);
+      flush();
       expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Until revoked");
       expect(page.textContent).not.toContain("Old Gateway revoke failed");
       expect(currentButton.disabled).toBe(true);
       expect(currentButton.textContent).toContain("Revoking");
 
       currentRevoke.resolve({ outcome: "revoked" });
-      await settle(page);
+      await waitForSolid(() =>
+        expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked"),
+      );
       expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
       expect(page.querySelector(".standing-grants-table button")).toBeNull();
     },
@@ -439,8 +456,9 @@ describe("ApprovalsPage", () => {
     });
     const { page } = createPage(request as unknown as GatewayBrowserClient["request"]);
 
-    await settle(page);
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Nightly backup"),
+    );
 
     const ledger = page.querySelector(".standing-grants-table");
     expect(ledger?.textContent).toContain("Nightly backup");
@@ -453,7 +471,9 @@ describe("ApprovalsPage", () => {
     expect(revoke?.getAttribute("aria-label")).toBe("Revoke: Nightly backup — id -un");
     expect(ledger?.querySelector("th:last-child")?.textContent?.trim()).toBe("Revoke");
     revoke?.click();
-    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked"),
+    );
 
     expect(request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
     expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");

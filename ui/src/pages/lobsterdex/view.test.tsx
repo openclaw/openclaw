@@ -1,10 +1,33 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdexEntries, recordLobsterVisit } from "../../components/lobster-dex.ts";
 import { i18n } from "../../i18n/index.ts";
-import { renderLobsterdex } from "./view.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { LobsterdexView } from "./view.tsx";
+
+type ViewProps = Parameters<typeof LobsterdexView>[0];
+function render(props: ViewProps, container: HTMLElement) {
+  let setProps!: (props: ViewProps) => void;
+  const view = mountSolid(
+    () => {
+      const [state, setState] = createSignal(props);
+      setProps = setState;
+      return <LobsterdexView {...state()} />;
+    },
+    { container },
+  );
+  flush();
+  return {
+    ...view,
+    update(next: ViewProps) {
+      setProps(next);
+      flush();
+    },
+  };
+}
 
 describe("renderLobsterdex", () => {
   beforeEach(async () => {
@@ -24,7 +47,7 @@ describe("renderLobsterdex", () => {
       ["crimson", { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt }] as const,
     ]);
     const container = document.createElement("div");
-    render(renderLobsterdex(entries), container);
+    render({ entries }, container);
 
     expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/49 visited");
 
@@ -92,18 +115,17 @@ describe("renderLobsterdex", () => {
     "discovers %s by palette, not an existing visitor name, and retains shiny sightings",
     (id, name, hint, flavor) => {
       const container = document.createElement("div");
-      const renderDex = () => render(renderLobsterdex(getLobsterdexEntries()), container);
       // Names are not palette identity. Remembered visitors must neither
       // reveal the new palette nor be renamed by it.
       recordLobsterVisit("crimson", { name });
-      renderDex();
+      const view = render({ entries: getLobsterdexEntries() }, container);
       const card = () => container.querySelector(`#lobsterdex-${id}`);
       expect(card()?.querySelector("h3")?.textContent).toBe("?");
       expect(card()?.textContent).toContain(hint);
 
       recordLobsterVisit(id, { name, shiny: true });
       recordLobsterVisit(id, { name: "Impostor" });
-      renderDex();
+      view.update({ entries: getLobsterdexEntries() });
       expect(card()?.querySelector("h3")?.textContent).toBe(name);
       expect(getLobsterdexEntries().get("crimson")?.name).toBe(name);
       expect(card()?.textContent).toContain(flavor);

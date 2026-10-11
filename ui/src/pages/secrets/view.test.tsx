@@ -1,16 +1,15 @@
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
-import { renderSecretsStore } from "./view.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { SecretsStore } from "./view.tsx";
 
-type SecretsStoreViewProps = Parameters<typeof renderSecretsStore>[0];
+type SecretsStoreViewProps = Parameters<typeof SecretsStore>[0];
 
-const containers: HTMLElement[] = [];
+const mounts: ReturnType<typeof mountSolid>[] = [];
 
 afterEach(() => {
-  for (const container of containers.splice(0)) {
-    render(null, container);
-    container.remove();
+  for (const view of mounts.splice(0)) {
+    view.unmount();
   }
 });
 
@@ -18,9 +17,6 @@ function mount(
   entries: SecretStoreEntry[],
   overrides: Partial<SecretsStoreViewProps> = {},
 ): HTMLElement {
-  const container = document.createElement("div");
-  containers.push(container);
-  document.body.append(container);
   const noop = vi.fn();
   const props: SecretsStoreViewProps = {
     entries,
@@ -53,8 +49,9 @@ function mount(
     onSubmitBulk: noop,
     onDelete: noop,
   };
-  render(renderSecretsStore({ ...props, ...overrides }), container);
-  return container;
+  const view = mountSolid(() => <SecretsStore {...props} {...overrides} />);
+  mounts.push(view);
+  return view.container;
 }
 
 describe("secrets store view", () => {

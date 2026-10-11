@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
@@ -37,6 +38,31 @@ export function readGoalChatUserMessages(scope: GoalChatScope) {
       ? [message]
       : [];
   });
+}
+
+export function expectGoalChatRetryResponses(
+  responses: readonly Mock<RespondFn>[],
+  runId: string,
+  goalId: string | undefined,
+) {
+  expect(
+    responses.some((response) => {
+      const [ok, result] = response.mock.calls[0]!;
+      return ok && isRecord(result) && result.status === "started";
+    }),
+  ).toBe(true);
+  for (const response of responses) {
+    const [ok, result, error] = response.mock.calls[0]!;
+    if (ok) {
+      if (isRecord(result) && result.status === "in_flight") {
+        expect(result).toEqual({ status: "in_flight", runId });
+      } else {
+        expect(result).toMatchObject({ status: "started", goalId });
+      }
+    } else {
+      expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    }
+  }
 }
 
 export function registerGoalChatRestartSettlementCase(fixture: {

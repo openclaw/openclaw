@@ -1245,7 +1245,7 @@ src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	1
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	1
 src/agents/embedded-agent-runner/compact.hooks.harness.ts	7
 src/agents/embedded-agent-runner/compaction-diagnostics.ts	5
-src/agents/embedded-agent-runner/context-engine-maintenance.ts	3
+src/agents/embedded-agent-runner/context-engine-maintenance.ts	1
 src/agents/embedded-agent-runner/delivery-evidence.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
 src/agents/embedded-agent-runner/extra-params.ts	4
@@ -2836,7 +2836,6 @@ ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/secrets/view.ts	3
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2

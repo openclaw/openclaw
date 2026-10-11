@@ -261,7 +261,9 @@ describe("state lease group admission", () => {
     const context = sourceContext();
     const first = fixture(context);
     const second = fixture(context, "target");
-    const beforeCommit = vi.fn();
+    const callbacks: string[] = [];
+    const beforeTransaction = vi.fn(() => callbacks.push("prepare"));
+    const beforeCommit = vi.fn(() => callbacks.push("commit"));
     await withOpenClawStateLeasesWorkerAdmission(
       [first.lease, second.lease],
       context,
@@ -271,12 +273,16 @@ describe("state lease group admission", () => {
         // Schema and domain commands share their retained actor, not a grant port or stage.
         for (let index = 0; index < 2; index += 1) {
           const current = job(scope.createAdmission);
-          expect(current.request("transaction", facts(scope.identities))).toBe(1);
+          if (index === 0) {
+            expect(current.request("transaction", facts(scope.identities))).toBe(1);
+          }
           expect(current.request("commit", facts(scope.identities))).toBe(1);
         }
       },
-      { assertCurrent() {}, beforeCommit },
+      { assertCurrent() {}, beforeTransaction, beforeCommit },
     );
+    expect(callbacks).toEqual(["prepare", "commit", "prepare", "commit"]);
+    expect(beforeTransaction).toHaveBeenCalledTimes(2);
     expect(beforeCommit).toHaveBeenCalledTimes(2);
     const firstJob = expectDefined(jobs[0], "schema job");
     const secondJob = expectDefined(jobs[1], "domain job");
