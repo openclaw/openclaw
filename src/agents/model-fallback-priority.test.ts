@@ -72,7 +72,7 @@ describe("priority scope and route resolution", () => {
   it("recomputes cached priority after configuration changes", () => {
     const cfg = config();
     expect(chain(cfg, { manifestPlugins: undefined })[1]).toBe("beta/peer");
-    cfg.agents!.defaults!.models!["alpha/main"].fallbackPriority = ["beta/small"];
+    cfg.agents!.defaults!.models!["alpha/main"]!.fallbackPriority = ["beta/small"];
     expect(chain(cfg, { manifestPlugins: undefined })[1]).toBe("beta/small");
   });
 

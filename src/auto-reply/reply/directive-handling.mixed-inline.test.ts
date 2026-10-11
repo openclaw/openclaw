@@ -131,7 +131,7 @@ describe("mixed inline directives", () => {
     "publishes $directive without retaining withdrawn fallback consent",
     async ({ directive, policy }) => {
       const sessionKey = "agent:main:dm:fallback-selection";
-      onTestFinished(() => clearFollowupQueue(sessionKey));
+      onTestFinished(() => void clearFollowupQueue(sessionKey));
       const queue = getFollowupQueue(sessionKey, { mode: "followup" });
       queue.lastRun = {
         agentId: "main",

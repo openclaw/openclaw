@@ -93,7 +93,7 @@ afterEach(() => unsubscribeLifecycle());
 describe("applySessionModelSelection", () => {
   it("clears queued fallback policy when the model picker selects a strict route", async () => {
     const sessionKey = "agent:main:dm:picker-fallback-policy";
-    onTestFinished(() => clearFollowupQueue(sessionKey));
+    onTestFinished(() => void clearFollowupQueue(sessionKey));
     const queue = getFollowupQueue(sessionKey, { mode: "followup" });
     queue.lastRun = {
       agentId: "main",
