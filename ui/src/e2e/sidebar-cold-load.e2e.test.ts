@@ -130,23 +130,27 @@ async function waitForSavedSidebar(page: Page, view: "sessions" | "pages") {
     await expect
       .poll(() =>
         page.evaluate(
-          ({ databaseName, storeName, view }) =>
+          ({ databaseName, storeName, view: expectedView }) =>
             new Promise<boolean>((resolve, reject) => {
               const open = indexedDB.open(databaseName);
-              open.onerror = () => reject(open.error ?? new Error("Sidebar snapshot open failed"));
-              open.onsuccess = () => {
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Sidebar snapshot open failed")),
+              );
+              open.addEventListener("success", () => {
                 const database = open.result;
                 const transaction = database.transaction(storeName, "readonly");
                 const request = transaction.objectStore(storeName).getAll();
-                transaction.oncomplete = () => {
+                transaction.addEventListener("complete", () => {
                   database.close();
-                  resolve(request.result.some((record) => record.model.navigationView === view));
-                };
-                transaction.onabort = () => {
+                  resolve(
+                    request.result.some((record) => record.model.navigationView === expectedView),
+                  );
+                });
+                transaction.addEventListener("abort", () => {
                   database.close();
                   reject(transaction.error ?? new Error("Sidebar snapshot read failed"));
-                };
-              };
+                });
+              });
             }),
           { databaseName: CHAT_SNAPSHOT_DB_NAME, storeName: SIDEBAR_SNAPSHOT_STORE_NAME, view },
         ),
