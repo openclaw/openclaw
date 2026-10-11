@@ -82,5 +82,4 @@ describe("non-loading system ownership", () => {
     );
     await expect(absent()).rejects.toMatchObject({ ownership: { status: "unverifiable" } });
   });
-
 });

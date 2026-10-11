@@ -366,7 +366,6 @@ describe("loaded-only systemd runtime", () => {
     expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe("unknown");
     expect(systemctl).not.toHaveBeenCalled();
   });
-
 });
 
 describe("owned recovery inspection of collected systemd units", () => {
