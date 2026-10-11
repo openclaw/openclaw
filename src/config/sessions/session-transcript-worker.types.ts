@@ -146,6 +146,7 @@ import type {
   SessionTranscriptInventoryWorkerValues,
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
+import type { TranscriptPageReadResult } from "./session-transcript-page-read.types.js";
 import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
@@ -157,6 +158,7 @@ import type {
   SessionHistoricalEvictionCandidatesWorkerInput,
   SessionArchivedEvictionCandidatesWorkerInput,
   SessionTranscriptMatchWorkerInput,
+  SessionTranscriptPageReadWorkerInput,
   SessionTranscriptSearchWorkerInput,
   SessionProjectionStatusWorkerInput,
   SessionTranscriptAnchorsWorkerInput,
@@ -301,6 +303,7 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | SessionTranscriptPageReadWorkerInput
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
   | TrajectoryEventsWorkerInput
@@ -386,6 +389,7 @@ export type SessionHistoryWorkerPreparedInput =
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "transcript-page-read": { kind: "transcript-page-read"; result: TranscriptPageReadResult };
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -552,6 +556,12 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    readTranscriptPage: (
+      input: Omit<SessionTranscriptPageReadWorkerInput, "kind" | "database">,
+      signal?: AbortSignal,
+      /** Uses only the remaining operation allowance. */
+      timeoutMs?: number,
+    ) => Promise<TranscriptPageReadResult>;
     readRetirement: CancellableSessionHistoryReader<
       SessionRetirementReadWorkerInput,
       SessionRetirementReadResult
