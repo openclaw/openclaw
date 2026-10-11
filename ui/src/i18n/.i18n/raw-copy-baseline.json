@@ -320,28 +320,28 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-diary.tsx",
       "text": "memory-wiki"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-diary.tsx",
       "text": "plugins.entries.memory-wiki.enabled = true"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-scene.tsx",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-scene.tsx",
       "text": "Z"
     },
     {

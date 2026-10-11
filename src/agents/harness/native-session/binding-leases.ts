@@ -72,25 +72,23 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
     prepare: (raw: TRecord | undefined) => {
       next?: TRecord;
       ttlMs?: number;
-      assertCurrent?: () => void;
     },
     assertCurrent?: () => void,
     authority?: NativeSessionBindingAuthority,
   ): Promise<boolean> => {
-    let assertPreparedCurrent: (() => void) | undefined;
     const mutationAuthority = await authority?.prepareMutation();
     const store = state.withCurrent({
       sessionEntryCurrent: mutationAuthority?.sessionEntryCurrent,
       assertCurrent: () => {
         assertCurrent?.();
         mutationAuthority?.assertCurrent();
-        assertPreparedCurrent?.();
       },
     });
     let observed = await store.observe(key);
     while (true) {
       const prepared = prepare(observed.value);
-      assertPreparedCurrent = prepared.assertCurrent;
+      // Expiry during the worker wait is best effort; a replacement still changes
+      // the compared row, and current caller authority gates the commit.
       const outcome = await store.compareAndApply(
         key,
         observed.comparison,
@@ -108,7 +106,6 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (outcome.status !== "conflict") {
         return prepared.next !== undefined;
       }
-      assertPreparedCurrent = undefined;
       observed = outcome.current;
     }
   };
@@ -163,27 +160,10 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
             return {};
           }
           const applied = apply(current, ownedToken);
-          const nextLease = applied.next?.lease;
           result = applied.result;
           return {
             next: applied.next,
             ttlMs: typeof ttlMs === "function" ? applied.next && ttlMs(applied.next) : ttlMs,
-            assertCurrent: () => {
-              // Row comparison cannot detect elapsed time. Fence owned or newly
-              // written leases, while allowing adoption to retain expired metadata.
-              if (
-                (ownedToken && lease!.expiresAt <= Date.now()) ||
-                (nextLease &&
-                  (nextLease.token !== lease?.token || nextLease.expiresAt !== lease?.expiresAt) &&
-                  nextLease.expiresAt <= Date.now())
-              ) {
-                const failure = options.errors.lostLease(key);
-                if (owner) {
-                  owner.failure = failure;
-                }
-                throw failure;
-              }
-            },
           };
         },
         assertOwnerCurrent,
@@ -276,6 +256,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (!acquired) {
         throw options.errors.acquisitionRejected(key);
       }
+      state.assertLeaseCurrent(key, token);
       const nested = new Map(owned);
       nested.set(key, owner);
       // Exact-token renewal keeps bounded native requests serialized while a
@@ -352,11 +333,6 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
             next: {
               ...current,
               lease: { token: owner.token, expiresAt: now + options.lease.staleMs },
-            },
-            assertCurrent: () => {
-              if (lease.expiresAt <= Date.now()) {
-                throw options.errors.lostLease(key);
-              }
             },
           };
         },

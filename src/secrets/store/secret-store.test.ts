@@ -100,14 +100,16 @@ describe("secret store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(now - ageMs);
       await write(name, "temporary-value", { kind, allowedHosts });
-      expect(consumeGitHubSetupHandoff({ name, nowMs: now, database })).toBe(
-        accepted ? "temporary-value" : undefined,
-      );
+      const consumption = consumeGitHubSetupHandoff({ name, nowMs: now, database });
+      const duplicate = accepted
+        ? consumeGitHubSetupHandoff({ name, nowMs: now, database })
+        : undefined;
+      expect(await consumption).toBe(accepted ? "temporary-value" : undefined);
       if (accepted) {
+        expect(await duplicate).toBeUndefined();
         expect(countStoredRows(database, name)).toBe(0);
-        expect(consumeGitHubSetupHandoff({ name, database })).toBeUndefined();
         await write("DEPLOY_TOKEN", "unrelated-value");
-        expect(consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
+        expect(await consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
         expect(await readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual(
           { ok: true, value: "unrelated-value" },
         );

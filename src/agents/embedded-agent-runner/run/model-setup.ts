@@ -78,7 +78,7 @@ async function prepareNativeSessionRuntime(
     agentId: admission.agentId,
     sessionKey: admission.sessionKey,
   });
-  const readOwnership = async () => {
+  const readOwnership = async (admittedEntry?: SessionEntry) => {
     assertCallerCurrent();
     const publication = prepareSessionRowPublicationScope([
       admission.storePath,
@@ -134,6 +134,9 @@ async function prepareNativeSessionRuntime(
         stop();
       }
     };
+    if (admittedEntry) {
+      return await consume(admittedEntry, assertCallerCurrent);
+    }
     if (isIncognitoSessionKey(admission.sessionKey)) {
       return await withSessionEntryReadOnlyInWorker(
         admission,
@@ -187,7 +190,7 @@ async function prepareNativeSessionRuntime(
       (...source) => publication.prepareSource(...source),
     );
   };
-  const ownership = await readOwnership();
+  const ownership = await readOwnership(admission.entry);
   if (!ownership) {
     throw new AgentHarnessPreflightError(
       "The pinned runtime's native session ownership is unavailable. Reattach the original native session instead of starting a replacement model run.",
