@@ -35,6 +35,22 @@ it.each(["ValidationException: The input is too long for the model", "context le
   },
 );
 
+it("recognizes Hugging Face TGI input validation overflow", () => {
+  // TGI wraps router/src/validation.rs errors as "Input validation error: ..." with HTTP 422.
+  const tgi = (message: string) => `422 Input validation error: ${message}`;
+  expect(
+    isContextOverflowError(
+      tgi(
+        "`inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+      ),
+    ),
+  ).toBe(true);
+  expect(
+    isContextOverflowError(tgi("`inputs` must have less than 32768 tokens. Given: 40000")),
+  ).toBe(true);
+  expect(isContextOverflowError(tgi("`max_new_tokens` must be <= 4096. Given: 8192"))).toBe(false);
+});
+
 it("recognizes a deactivated model", () => {
   expect(classifyFailoverReason("model_is_deactivated: this model has been deactivated")).toBe(
     "model_not_found",
