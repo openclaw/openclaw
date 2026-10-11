@@ -91,7 +91,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     #values = new Map(properties.map(([key, property]) => [key, property.default]));
     #upgraded = new Map<string, unknown>();
     #publish = new Map<string, () => void>();
-    #changed = new Set<string>();
     #dispose?: () => void;
     #unsubscribe?: () => void;
     #application?: ApplicationContext;
@@ -151,10 +150,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           throw new TypeError(`Cannot reflect non-primitive bridge property ${key}`);
         }
       }
-      if (this.#solidOwned) {
-        this.#publish.get(key)?.();
-      } else {
-        this.#changed.add(key);
+      this.#publish.get(key)?.();
+      if (!this.#solidOwned) {
         void this.#commit();
       }
     }
@@ -239,10 +236,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (!this.#dispose) {
           runWithOwner(null, () => this.#mount());
         }
-        for (const key of this.#changed) {
-          this.#publish.get(key)?.();
-        }
-        this.#changed.clear();
       }
     };
 
@@ -276,7 +269,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           );
           this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
-            get: () => value().value,
+            get: () => {
+              value();
+              return this.#values.get(key);
+            },
           });
         }
         // Provider child memos must not subscribe to component setup reads.
@@ -310,7 +306,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 
     #disposeRoot() {
       this.#publish.clear();
-      this.#changed.clear();
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       const outlet = this.#start?.parentNode;
