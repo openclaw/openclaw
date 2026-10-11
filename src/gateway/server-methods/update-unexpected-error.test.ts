@@ -145,9 +145,7 @@ describe("update.run unexpected-error diagnostics", () => {
                     execute: (command, executeOptions) => {
                       const shouldFail =
                         recordingFailure === "state"
-                          ? command.type === "updateRuns.recordStep" &&
-                            command.input.step.step === "requested" &&
-                            command.input.step.status === "failed"
+                          ? command.type === "updateRuns.recordStep"
                           : command.type === "updateRuns.recordDiagnostics";
                       if (shouldFail) {
                         write.mockRestore();

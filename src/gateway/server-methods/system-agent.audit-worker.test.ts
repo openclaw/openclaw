@@ -98,7 +98,7 @@ it("persists real chat, greeting, and reset flows through the audit owner", asyn
       scope: "system-agent-transcript",
       maxEntries: 1_000,
     });
-    transcript.register("seed", { role: "user", text: "Earlier question", at: 1 }, 1);
+    transcript.upsert("seed", { role: "user", text: "Earlier question", at: 1 }, 1);
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
     const callChat = async (params: SystemAgentChatParams) => {
@@ -182,7 +182,7 @@ it.each(["failed", "revoked"] as const)(
           scope: "system-agent-transcript",
           maxEntries: 1_000,
         });
-        store.register("private", { role: "assistant", text: "Private history", at: 1 }, 1);
+        store.upsert("private", { role: "assistant", text: "Private history", at: 1 }, 1);
         expect(await readTranscriptTailAsync(10)).toEqual([
           { role: "assistant", text: "Private history", at: 1 },
         ]);
