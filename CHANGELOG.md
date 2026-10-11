@@ -8,6 +8,7 @@ Each release has its complete changelog below. Audited contribution records are 
 
 - [Unreleased](CHANGELOG/Unreleased.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/Unreleased.md)
 - [2026.10.5](CHANGELOG/2026.10.5.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.10.5.md)
+- [2026.10.5-beta.2](CHANGELOG/2026.10.5-beta.2.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.10.5-beta.2.md)
 - [2026.10.5-beta.1](CHANGELOG/2026.10.5-beta.1.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.10.5-beta.1.md)
 - [2026.9.9](CHANGELOG/2026.9.9.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.9.9.md)
 - [2026.9.8](CHANGELOG/2026.9.8.md) · [Raw](https://github.com/openclaw/openclaw/raw/refs/heads/main/CHANGELOG/2026.9.8.md)
