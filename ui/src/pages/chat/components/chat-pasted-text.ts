@@ -33,7 +33,7 @@ export function isSentPastedTextAttachment(item: AssistantAttachmentItem): item 
   );
 }
 
-export class ChatPastedText extends OpenClawLightDomContentsElement {
+class ChatPastedText extends OpenClawLightDomContentsElement {
   @property() src?: string;
   @property({ attribute: false }) sizeBytes?: number;
   @property({ attribute: false }) scope = "";
@@ -116,3 +116,18 @@ export class ChatPastedText extends OpenClawLightDomContentsElement {
 }
 
 customElements.define("openclaw-chat-pasted-text", ChatPastedText);
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-pasted-text": HTMLAttributes<ChatPastedText> & {
+        "prop:src"?: ChatPastedText["src"];
+        "prop:sizeBytes"?: ChatPastedText["sizeBytes"];
+        "prop:scope"?: ChatPastedText["scope"];
+        "prop:onOpen"?: ChatPastedText["onOpen"];
+        "prop:composerAction"?: ChatPastedText["composerAction"];
+        "prop:composerRemoveAction"?: ChatPastedText["composerRemoveAction"];
+      };
+    }
+  }
+}

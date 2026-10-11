@@ -5,6 +5,10 @@ import path from "node:path";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
@@ -18,6 +22,7 @@ import {
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
   LEASE_ID,
+  NODE_RUNTIME_IDENTITY,
   OPERATION_ID,
   PROFILE,
   tempDirs,
@@ -663,6 +668,35 @@ describe("Crabbox profile warm images", () => {
 
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
       expect(calls.at(-1)?.argv[1]).toBe("stop");
+    },
+  );
+
+  it.each([
+    ["the captured runtime", NODE_RUNTIME_IDENTITY, false],
+    [
+      "a different runtime",
+      { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "f".repeat(64) },
+      true,
+    ],
+  ] as const)(
+    "prepares the node runtime on a fork only for %s",
+    async (_label, identity, prepares) => {
+      const initial = createWarmProvider();
+      await captureWarmImage(initial.provider);
+      const { provider, calls } = createWarmProvider(undefined, initial.stateDir);
+      const prepareNodeRuntime = vi.fn(async () => ({
+        nodeBootstrap: createNodeBootstrapFixture(),
+        workerBundle: createWorkerArchiveFixture(),
+      }));
+
+      await provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
+        assertCurrent: () => {},
+        nodeRuntimeIdentity: identity,
+        prepareNodeRuntime,
+      });
+
+      expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(true);
+      expect(prepareNodeRuntime).toHaveBeenCalledTimes(prepares ? 1 : 0);
     },
   );
 

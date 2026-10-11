@@ -38,12 +38,14 @@ import {
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
 } from "./sqlite-database-admission.js";
+import { parseSqliteTableDefinition } from "./sqlite-schema-contract-assembly.js";
+import { getAdmittedSqliteSchemaFacts, type SqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS = 1_024;
 
-const ensuredWebPushBindingDatabases = new WeakSet<DatabaseSync>();
+const webPushBindingSchemas = new WeakSet<SqliteSchemaFacts>();
 const ensureWebPushApprovalDeliveryStateSchema = createOpenClawStateSchemaEnsurer({
   table: "web_push_approval_deliveries",
   indexes: ["idx_web_push_approval_deliveries_subscription"],
@@ -63,16 +65,33 @@ export function ensureWebPushSubscriptionBindingColumns(db: DatabaseSync): void 
 }
 
 function ensureWebPushSubscriptionBindingSchema(database: OpenClawStateDatabase): void {
-  const options = webPushDatabaseOptions(database);
-  if (ensuredWebPushBindingDatabases.has(database.db)) {
-    return;
+  const schema = getAdmittedSqliteSchemaFacts(database.db);
+  if (schema) {
+    if (webPushBindingSchemas.has(schema)) {
+      return;
+    }
+    const table = schema.tableSql.get("web_push_subscriptions");
+    const columns = table
+      ? parseSqliteTableDefinition(table, "web_push_subscriptions").columns
+      : undefined;
+    if (
+      columns?.has("device_id") &&
+      columns.has("user_profile_id") &&
+      columns.has("preferences_json")
+    ) {
+      webPushBindingSchemas.add(schema);
+      return;
+    }
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => ensureWebPushSubscriptionBindingColumns(db),
-    options,
+    webPushDatabaseOptions(database),
     { operationLabel: "web-push.subscription-binding.schema.ensure" },
   );
-  ensuredWebPushBindingDatabases.add(database.db);
+  const installed = getAdmittedSqliteSchemaFacts(database.db);
+  if (installed) {
+    webPushBindingSchemas.add(installed);
+  }
 }
 
 function ensureWebPushApprovalDeliverySchema(database: OpenClawStateDatabase): void {

@@ -197,3 +197,13 @@ export class ChatQuestionCard extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-chat-question-card")) {
   customElements.define("openclaw-chat-question-card", ChatQuestionCard);
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> & {
+        "prop:props"?: ChatQuestionCard["props"];
+      };
+    }
+  }
+}

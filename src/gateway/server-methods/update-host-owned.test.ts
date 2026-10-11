@@ -2,10 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as ocmUpdate from "../../infra/ocm-update-client.js";
-import * as packageRoot from "../../infra/openclaw-root.js";
-import * as immutableInstall from "../../infra/update-immutable-install.js";
-import * as updateLedger from "../../infra/update-run-ledger.js";
 import {
   adoptUpdateCampaignMock,
   invokeUpdateRun,
@@ -20,6 +16,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it("refuses an app-owned Gateway update before delegation, history, or restart effects", async () => {
+  const packageRoot = await import("../../infra/openclaw-root.js");
+  const ocmUpdate = await import("../../infra/ocm-update-client.js");
   const root = tempDirs.make("openclaw-app-update-");
   const installOwner = {
     schemaVersion: 1,
@@ -30,7 +28,10 @@ it("refuses an app-owned Gateway update before delegation, history, or restart e
   await fs.writeFile(path.join(root, "openclaw-install-owner.json"), JSON.stringify(installOwner));
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
   const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
-  const createRun = vi.spyOn(updateLedger, "createUpdateRun");
+  const createRun = vi.spyOn(
+    await import("../../infra/update-run-write.async.js"),
+    "createUpdateRunAsync",
+  );
   const respond = vi.fn();
 
   await invokeUpdateRun({}, respond);
@@ -51,6 +52,9 @@ it("refuses an app-owned Gateway update before delegation, history, or restart e
 });
 
 it("refuses immutable activation before manager delegation, history, campaign, or handoff", async () => {
+  const packageRoot = await import("../../infra/openclaw-root.js");
+  const immutableInstall = await import("../../infra/update-immutable-install.js");
+  const ocmUpdate = await import("../../infra/ocm-update-client.js");
   const root = tempDirs.make("openclaw-immutable-update-rpc-");
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
   vi.spyOn(immutableInstall, "inspectImmutableInstall").mockResolvedValue({
@@ -59,7 +63,10 @@ it("refuses immutable activation before manager delegation, history, campaign, o
     currentSha: "a".repeat(40),
   });
   const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
-  const createRun = vi.spyOn(updateLedger, "createUpdateRun");
+  const createRun = vi.spyOn(
+    await import("../../infra/update-run-write.async.js"),
+    "createUpdateRunAsync",
+  );
   const respond = vi.fn();
 
   await invokeUpdateRun({}, respond);
@@ -84,6 +91,7 @@ it("refuses immutable activation before manager delegation, history, campaign, o
 });
 
 it("refuses an immutable surface discovered after initial admission before campaign adoption", async () => {
+  const immutableInstall = await import("../../infra/update-immutable-install.js");
   vi.spyOn(immutableInstall, "inspectImmutableInstall").mockResolvedValue(null);
   resolveUpdateInstallSurfaceMock.mockResolvedValue({
     kind: "immutable",

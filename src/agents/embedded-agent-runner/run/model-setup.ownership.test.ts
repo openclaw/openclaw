@@ -7,7 +7,6 @@ import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-ex
 import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
-import { bindReplyOperationDatabaseAdmission } from "../../../auto-reply/reply/reply-turn-database-admission.js";
 import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
@@ -16,12 +15,10 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
-import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -136,11 +133,12 @@ async function createFixture(
   const resolve = async (
     assertCurrent = () => {},
     preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
+    sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>,
   ) =>
     resolveEmbeddedRunModelSetup({
       assertCurrent,
       runParams,
-      sessionAdmission: await assertAgentHarnessRunAdmission(runParams),
+      sessionAdmission: sessionAdmission ?? (await assertAgentHarnessRunAdmission(runParams)),
       provider: generation.provider,
       modelId: generation.modelId,
       agentDir: generation.preparedModelRuntime.agentDir,
@@ -226,43 +224,6 @@ describe("model chat and native model ownership", () => {
     },
   );
 
-  it("rejects unpublished native row changes while awaiting the ownership hook", async () => {
-    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env });
-    fixture.harness.resolveSessionRuntimeOwnershipAsync = async () => {
-      await Promise.resolve();
-      // Model a retained native SDK write without the session-row publication owner.
-      database.db
-        .prepare("UPDATE session_windows SET previous_session_id = ? WHERE session_id = ?")
-        .run("changed-predecessor", fixture.entry.sessionId);
-      return { model: "native", auth: "native" };
-    };
-    registerAgentHarness(fixture.harness);
-    const operation = createReplyOperation({
-      sessionId: fixture.entry.sessionId,
-      sessionKey: fixture.target.sessionKey,
-      resetTriggered: false,
-    });
-    const admission = await loadSessionEntryForAdmission(fixture.target);
-    const bound = bindReplyOperationDatabaseAdmission(
-      operation,
-      fixture.target,
-      undefined,
-      admission.databaseClaim,
-    );
-    fixture.runParams.replyOperation = operation;
-    try {
-      expect(bound.operationAdmission.reader).toBeDefined();
-      await expect(fixture.resolve()).rejects.toMatchObject({
-        name: "AgentHarnessPreflightError",
-        cause: { name: "SessionEntryChangedDuringReadError" },
-      });
-    } finally {
-      await bound.releaseWorkerDatabaseClaim?.();
-      operation.complete();
-    }
-  });
-
   it("keeps native ownership through unrelated runtime, auth and display publications", async () => {
     const nativeOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>(
       ({ assertCurrent, sessionKey }) => {
@@ -300,39 +261,6 @@ describe("model chat and native model ownership", () => {
     await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
     expect(nativeOwner).toHaveBeenCalledTimes(2);
     expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
-  it("rechecks caller authority after a native ownership worker read", async () => {
-    const nativeOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
-    const fixture = await createFixture({}, nativeOwner);
-    const run = projectionLane.pool.run.bind(projectionLane.pool);
-    const revoked = new Error("Native model setup authority revoked");
-    let changed = false;
-    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        !changed &&
-        reply.ok &&
-        typeof reply.value === "object" &&
-        !Array.isArray(reply.value) &&
-        reply.value.kind === "session-exact-entries"
-      ) {
-        changed = true;
-      }
-      return reply;
-    });
-    try {
-      const setup = fixture.resolve(() => {
-        if (changed) {
-          throw revoked;
-        }
-      });
-      await expect(setup).rejects.toBe(revoked);
-      expect(nativeOwner).not.toHaveBeenCalled();
-      expect(changed).toBe(true);
-    } finally {
-      spy.mockRestore();
-    }
   });
 
   it.each(["current", "changed-again", "revoked"] as const)(
@@ -755,7 +683,7 @@ describe("model chat and native model ownership", () => {
     });
   });
 
-  it("rechecks native ownership and predecessor without main-thread SQL", async () => {
+  it("reuses admitted ownership and refreshes the predecessor at dispatch without main-thread SQL", async () => {
     const predecessors: Array<string | undefined> = [];
     const fixture = await createFixture({}, ({ assertCurrent, readPreviousSessionId }) => {
       for (let i = 0; i < 3; i++) {
@@ -767,7 +695,16 @@ describe("model chat and native model ownership", () => {
     await patchSessionEntryCore(fixture.target, () => ({
       previousSessionId: "initial-predecessor",
     }));
-    const setup = await fixture.resolve();
+    const admission = await assertAgentHarnessRunAdmission(fixture.runParams);
+    const workerRead = vi.spyOn(projectionLane.pool, "run");
+    let setup: Awaited<ReturnType<typeof fixture.resolve>>;
+    try {
+      setup = await fixture.resolve(undefined, undefined, admission);
+      expect(workerRead).not.toHaveBeenCalled();
+      expect(predecessors).toEqual(Array(3).fill("initial-predecessor"));
+    } finally {
+      workerRead.mockRestore();
+    }
     predecessors.length = 0;
     const hostSql = observeHostDataSql();
     try {

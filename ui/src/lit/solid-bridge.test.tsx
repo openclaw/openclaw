@@ -9,13 +9,14 @@ import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-tr
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
 type Methods = { show(): void; close(): void; setPayload(value: object): object };
 type Host = SolidBridgeElement<Props, Methods>;
 const mounted = vi.fn<(value: object) => void>();
 const disposed = vi.fn();
+const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
   (props, host) => {
@@ -53,6 +54,7 @@ const Bridge = defineSolidBridge<Props, Methods>(
       count: { default: 0, type: Number, attribute: "item-count" },
       payload: { default: null, attribute: false },
     },
+    propertyChanged: changed,
     methods: {
       show: (host) => {
         host.enabled = true;
@@ -75,6 +77,7 @@ function createHost() {
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();
+  changed.mockReset();
 });
 afterEach(async () => {
   cleanup();
@@ -103,6 +106,24 @@ it("mounts once, mirrors attributes/properties, and preserves synchronous impera
   await host.updateComplete;
   expect(host.querySelector("output")?.textContent).toBe("property:4:false");
   expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
+  const host = createHost();
+  document.body.append(host);
+  await host.updateComplete;
+  const observations: string[] = [];
+  changed.mockImplementation((current, key) => {
+    observations.push(`${key}:${current.label}:${current.querySelector("output")?.textContent}`);
+  });
+  host.label = "next";
+  expect(observations).toEqual(["label:next:initial:0:false"]);
+  expect(changed).toHaveBeenCalledWith(host, "label");
+  host.label = "next";
+  expect(changed).toHaveBeenCalledTimes(1);
+  await host.updateComplete;
+  expect(host.querySelector("output")?.textContent).toBe("next:0:false");
+  changed.mockReset();
 });
 
 it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
@@ -440,4 +461,40 @@ it("releases a disconnected Solid root while the custom element itself is retain
   expect(control.deref()).toBeUndefined();
   expect(weak.deref()).toBeUndefined();
   expect(host.isConnected).toBe(false);
+});
+
+it("updates a Lit leaf without replacing its input and releases it with its Solid owner", () => {
+  const [label, setLabel] = createSignal("First");
+  const view = mountSolid(() => (
+    <LitContent render={() => html`<label>${label()}<input /></label>`} />
+  ));
+  try {
+    flush();
+    const input = view.container.querySelector("input")!;
+    input.value = "Draft";
+    setLabel("Second");
+    flush();
+    expect(view.container.textContent).toBe("Second");
+    expect(view.container.querySelector("input")).toBe(input);
+    expect(input.value).toBe("Draft");
+  } finally {
+    view.unmount();
+  }
+  expect(view.container.childNodes).toHaveLength(0);
+});
+
+it("keeps sanitized content directly inside its styled host", () => {
+  const view = mountSolid(() => (
+    <LitContent
+      tag="div"
+      class="chat-text"
+      render={() =>
+        html`<p>Summary</p>
+          <pre>Result</pre>`
+      }
+    />
+  ));
+  flush();
+  expect(view.container.querySelector(".chat-text > p")?.textContent).toBe("Summary");
+  expect(view.container.querySelector(".chat-text > :last-child")?.tagName).toBe("PRE");
 });

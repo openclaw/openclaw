@@ -1,27 +1,15 @@
-// Importing the module keeps this file a module, so the block below augments it.
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
+import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaSwitch from "@awesome.me/webawesome/dist/components/switch/switch.js";
-import "../components/mcp-app-catalog.tsx";
-import type { McpAppResourceMentionDetail } from "../components/mcp-app-resources.tsx";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
-import type { McpAppContextStripElement as McpAppContextStrip } from "../components/solid/mcp-app-context-strip.tsx";
-import type { ChatPastedText } from "../pages/chat/components/chat-pasted-text.ts";
-import type { ChatQuestionCard } from "../pages/chat/components/chat-question-card.ts";
-import "@solidjs/web";
-import "../components/tooltip.ts";
+import type { JSX } from "@solidjs/web";
+import type { MascotMood } from "../components/mascot-pose.ts";
 export type { JSX } from "@solidjs/web";
 
+// Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
+type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
-type McpAppCatalog = HTMLElementTagNameMap["openclaw-mcp-app-catalog"];
-type McpAppResources = HTMLElementTagNameMap["openclaw-mcp-app-resources"];
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-mcp-app-context-strip": McpAppContextStrip;
-  }
-}
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -31,52 +19,17 @@ declare module "@solidjs/web" {
       "onOpenclaw-composer-dismiss-invocations"?: EventHandlerUnion<T, CustomEvent>;
     }
     interface IntrinsicElements {
-      "wa-popup": HTMLAttributes<WaPopup> &
-        Properties<WaPopup> & {
-          active?: boolean;
-          placement?: WaPopup["placement"];
-          strategy?: WaPopup["strategy"];
-          "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
-        };
-      "wa-switch": HTMLAttributes<WaSwitch> &
-        Properties<WaSwitch> & {
-          size?: WaSwitch["size"];
-          checked?: boolean;
-          disabled?: boolean;
-        };
-      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> &
-        Properties<OpenClawModalDialog> & {
-          label?: string;
-          description?: string;
-          open?: boolean;
-          manual?: boolean;
-          "onModal-cancel"?: EventHandlerUnion<OpenClawModalDialog, CustomEvent>;
-        };
-      "openclaw-chat-pasted-text": HTMLAttributes<ChatPastedText> & {
-        "prop:src"?: ChatPastedText["src"];
-        "prop:sizeBytes"?: ChatPastedText["sizeBytes"];
-        "prop:scope"?: ChatPastedText["scope"];
-        "prop:onOpen"?: ChatPastedText["onOpen"];
-        "prop:composerAction"?: ChatPastedText["composerAction"];
-        "prop:composerRemoveAction"?: ChatPastedText["composerRemoveAction"];
+      "wa-popup": LegacyAttributes<WaPopup> & {
+        active?: boolean;
+        placement?: WaPopup["placement"];
+        strategy?: WaPopup["strategy"];
+        "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
       };
-      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> & {
-        "prop:props"?: ChatQuestionCard["props"];
+      "wa-switch": LegacyAttributes<WaSwitch> & {
+        size?: WaSwitch["size"];
+        checked?: boolean;
+        disabled?: boolean;
       };
-      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalog> &
-        Properties<McpAppCatalog> & {
-          surface?: McpAppCatalog["surface"];
-        };
-      "openclaw-mcp-app-resources": HTMLAttributes<McpAppResources> &
-        Properties<McpAppResources> & {
-          "onOpenclaw-mcp-app-resource-mention"?: EventHandlerUnion<
-            McpAppResources,
-            CustomEvent<McpAppResourceMentionDetail>
-          >;
-        };
-      "openclaw-mcp-app-context-strip": HTMLAttributes<McpAppContextStrip> &
-        Properties<McpAppContextStrip>;
-
       "openclaw-tooltip": HTMLAttributes<Tooltip> & {
         "prop:content"?: Tooltip["content"];
         "prop:contentTemplate"?: Tooltip["contentTemplate"];
@@ -86,9 +39,16 @@ declare module "@solidjs/web" {
         "prop:placement"?: Tooltip["placement"];
         content?: string;
         disabled?: boolean;
-        "open-on-click"?: boolean;
         placement?: Tooltip["placement"];
+        "open-on-click"?: boolean;
         "auto-size"?: boolean;
+      };
+      "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
+        "prop:agentId"?: string;
+      };
+      "openclaw-mascot": LegacyAttributes<HTMLElement> & {
+        mood?: MascotMood;
+        "prop:size"?: number;
       };
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {
@@ -101,16 +61,22 @@ declare module "@solidjs/web" {
           "onWa-select"?: EventHandlerUnion<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;
         };
       "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
-        Properties<WaDropdownItem> & {
-          value?: string;
-          disabled?: boolean;
-          checked?: boolean;
-          type?: WaDropdownItem["type"];
-          variant?: WaDropdownItem["variant"];
-          href?: string;
-          target?: WaDropdownItem["target"];
-          rel?: string;
+        Properties<WaDropdownItem> &
+        Partial<
+          Pick<
+            WaDropdownItem,
+            "value" | "type" | "variant" | "disabled" | "checked" | "href" | "target" | "rel"
+          >
+        >;
+      "wa-popover": LegacyAttributes<WaPopover> &
+        Partial<Pick<WaPopover, "for" | "placement">> & {
+          "without-arrow"?: boolean;
+          "onWa-show"?: (event: Event) => void;
+          "onWa-hide"?: (event: Event) => void;
         };
+    }
+    interface SVGAttributes<T> {
+      "xml:space"?: "default" | "preserve";
     }
     interface SVGAttributes<T> {
       "xml:space"?: "default" | "preserve";
