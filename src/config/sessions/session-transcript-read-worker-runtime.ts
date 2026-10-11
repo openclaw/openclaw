@@ -20,7 +20,7 @@ import type {
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
-} from "./session-transcript-worker.types.js";
+} from "./session-transcript-worker-read.types.js";
 
 // Callers retain writer admission and validate snapshots before consuming parallel reads.
 const modelContextReads = createSessionTranscriptReadPool<

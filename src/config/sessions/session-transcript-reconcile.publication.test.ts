@@ -18,7 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import {
   reconcileSessionTranscriptIndexes,

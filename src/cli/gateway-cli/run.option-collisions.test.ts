@@ -23,6 +23,11 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import {
+  registerGatewayRunCleanupReceiptTests,
+  type GatewayLoopStart,
+  type GatewayLoopParams,
+} from "./run-cleanup-receipt.test-support.js";
+import {
   failedGatewayRunConfigSnapshot,
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
@@ -55,15 +60,6 @@ const isTerminalInteractive = vi.fn(() => true);
 const offerInvalidConfigRecovery = vi.fn(async () => ({ status: "declined" as const }));
 const parkCurrentLaunchAgentForMaintenance = vi.fn(async () => false);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
-type GatewayLoopParams = {
-  start: GatewayLoopStart;
-  beginBoot?: (startedAtMs: number) => Promise<void> | void;
-  completeBoot?: (completion: unknown) => void;
-  onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
-  ownsProcessLifecycle?: boolean;
-  runtime?: unknown;
-};
 const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
 });
@@ -470,6 +466,8 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
+
+  registerGatewayRunCleanupReceiptTests({ runGatewayCli, runGatewayLoop });
 
   it("rejects invalid gateway ports before startup", async () => {
     await expect(

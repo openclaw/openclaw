@@ -183,12 +183,16 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     await this.withManagerOperation(() => this.runSessionStartupCatchup());
   }
 
-  protected async markSessionStartupCatchupDirtyFiles(inspectSources = false): Promise<string[]> {
-    if (!this.sources.has("sessions") || this.closed) {
+  protected async markSessionStartupCatchupDirtyFiles(
+    inspectSources = false,
+    // Accepted discovery finishes while closing; startup catch-up yields to close instead.
+    stopped = () => this.closed,
+  ): Promise<string[]> {
+    if (!this.sources.has("sessions") || stopped()) {
       return [];
     }
     const corpusEntries = await this.listSessionCorpusEntries();
-    if (this.closed) {
+    if (stopped()) {
       return [];
     }
     const existingRows = await this.database.readSourceState({
@@ -206,7 +210,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         ...(entry.storePath ? { storePath: entry.storePath } : {}),
       })),
     );
-    if (this.closed) {
+    if (stopped()) {
       return [];
     }
     const statsByEntry = new Map(
@@ -216,6 +220,9 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       await runWithConcurrency(
         corpusEntries.map(
           (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
+            if (stopped()) {
+              return null;
+            }
             // Missing rows can be intentional: parsing applies provenance admission
             // that corpus metadata cannot express. Recheck on every catch-up so a
             // later user turn can make a previously excluded session eligible.
@@ -271,7 +278,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         issues: fileStates.length === 0 ? ["no eligible session transcripts found"] : [],
       });
     }
-    if (this.closed) {
+    if (stopped()) {
       return dirtyFiles;
     }
     if (hasStaleIndexedPaths) {
@@ -288,7 +295,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   }
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
-    const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
+    const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles(false, () => this.closing);
     if (!this.sessionsDirty || this.closing || this.closed) {
       return dirtyFiles;
     }

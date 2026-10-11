@@ -3,6 +3,7 @@ import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  SqliteDatabaseGenerationSlot,
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseRecordWriteRevision as readWriteRevision,
   type Admission,
@@ -30,8 +31,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
-  exchange(this: void, location?: string): void;
-  publish(this: void): void;
+  exchange(this: void, record: Admission): void;
+  publish(this: void, record: Admission): void;
 }) {
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
   function withSqliteDatabaseWriteScope<T>(
@@ -41,7 +42,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   ): T {
     const record = owner.admission(database);
     const tracked = record
-      ? Atomics.load(new Int32Array(record.generation), 7) > 0
+      ? Atomics.load(
+          new Int32Array(record.generation),
+          SqliteDatabaseGenerationSlot.writeScopeCount,
+        ) > 0
       : state.localScopeRevisions.has(database);
     if (!tracked) {
       const value = run();
@@ -51,9 +55,16 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       return value;
     }
     const keys = normalizedWriteScopes(scope);
-    if (record && record.writeScopes.size < Atomics.load(new Int32Array(record.generation), 7)) {
+    if (
+      record &&
+      record.writeScopes.size <
+        Atomics.load(
+          new Int32Array(record.generation),
+          SqliteDatabaseGenerationSlot.writeScopeCount,
+        )
+    ) {
       // Only cold actor-key registration needs metadata exchange. Inactive actors add none.
-      owner.exchange(record.location);
+      owner.exchange(record);
     }
     const previous = state.writeScopes.get(database);
     state.writeScopes.set(database, keys);
@@ -91,15 +102,23 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       if (!record.writeScopes.has(key)) {
         record.writeScopes.set(key, new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
         if (threadId === 0) {
-          Atomics.add(new Int32Array(record.generation), 7, 1);
+          Atomics.add(
+            new Int32Array(record.generation),
+            SqliteDatabaseGenerationSlot.writeScopeCount,
+            1,
+          );
         }
         changed = true;
       }
     }
     if (changed) {
       // Scope discovery is cold metadata, shared through the existing admission exchange.
-      Atomics.add(new Int32Array(record.generation), 2, 1);
-      owner.publish();
+      Atomics.add(
+        new Int32Array(record.generation),
+        SqliteDatabaseGenerationSlot.publicationRevision,
+        1,
+      );
+      owner.publish(record);
     }
   }
 
@@ -112,8 +131,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return JSON.stringify([
       record.identity,
       record.generationId,
-      Atomics.load(generation, 0),
-      (Atomics.load(generation, 6) + (pending === null ? 1 : 0)) | 0,
+      Atomics.load(generation, SqliteDatabaseGenerationSlot.schemaRevision),
+      (Atomics.load(generation, SqliteDatabaseGenerationSlot.unscopedWriteRevision) +
+        (pending === null ? 1 : 0)) |
+        0,
       keys.map((key) => [
         key,
         (Atomics.load(new Int32Array(record.writeScopes.get(key)!), 0) +
@@ -285,7 +306,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
           (state.localUnscopedRevisions.get(database) ?? 0) + 1,
         );
         if (record) {
-          Atomics.add(new Int32Array(record.generation), 6, 1);
+          Atomics.add(
+            new Int32Array(record.generation),
+            SqliteDatabaseGenerationSlot.unscopedWriteRevision,
+            1,
+          );
         }
       }
     },

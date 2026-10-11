@@ -34,9 +34,6 @@ it.each(
       );
       root = await mountMenu({ context, onAction, compact: surface === "compact assignment" });
       await shown;
-      const settings = menuItem(root, "Session settings");
-      settings.focus();
-      await userEvent.keyboard("{Enter}");
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
       const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
@@ -99,9 +96,7 @@ it.each(
       .element(page.getByRole("button", { name: "Previous", exact: true }))
       .not.toBeInTheDocument();
     if (surface === "compact assignment") {
-      await expect
-        .poll(() => document.activeElement?.getAttribute("value"))
-        .toBe("compact:back-settings");
+      await expect.poll(() => document.activeElement?.getAttribute("value")).toBe("compact:back");
     }
     await userEvent.keyboard("{End}");
     await expect

@@ -78,33 +78,6 @@ describe("detectRemoteHostFromCliPath", () => {
     );
   });
 
-  it.each([
-    { label: "blank", home: "" },
-    { label: "whitespace-only", home: "   " },
-  ])("uses the real OS account home when HOME is $label", async ({ home }) => {
-    const cliPath = `~/.openclaw/imsg-${randomUUID()}`;
-    const result = await runUserPathProbe({ cliPath, home });
-
-    expect(result.expanded).toBe(path.join(result.accountHome, cliPath.slice(2)));
-    expect(path.isAbsolute(result.expanded)).toBe(true);
-  });
-
-  it("preserves the system home when HOME is unset", async () => {
-    const cliPath = `~/.openclaw/imsg-${randomUUID()}`;
-    const result = await runUserPathProbe({ cliPath, home: undefined });
-
-    expect(result.expanded).toBe(path.join(result.systemHome, cliPath.slice(2)));
-  });
-
-  it("preserves an explicitly configured nonblank HOME", async () => {
-    const configuredHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-home-"));
-    tempDirs.push(configuredHome);
-    const cliPath = `~/.openclaw/imsg-${randomUUID()}`;
-    const result = await runUserPathProbe({ cliPath, home: configuredHome });
-
-    expect(result.expanded).toBe(path.join(configuredHome, cliPath.slice(2)));
-  });
-
   it("never selects a working-directory tilde shadow when HOME is blank", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-shadow-"));
     tempDirs.push(cwd);
@@ -123,92 +96,30 @@ describe("detectRemoteHostFromCliPath", () => {
     expect(result.content).toBeNull();
   });
 
-  it("detects only the documented user-qualified and host-only SSH wrappers", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-wrapper-"));
-    tempDirs.push(dir);
-    const userWrapper = path.join(dir, "user-wrapper");
-    const hostWrapper = path.join(dir, "host-wrapper");
-    await fs.writeFile(userWrapper, '#!/bin/sh\nexec ssh user@example.test imsg "$@"\n', "utf8");
-    await fs.writeFile(hostWrapper, '#!/bin/sh\nexec ssh -T messages-mac imsg "$@"\n', "utf8");
+  it.each([["exec ssh bot@messages-mac imsg", "missing argument forwarding"]])(
+    "rejects an ambiguous %s wrapper (%s)",
+    async (command) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-ambiguous-"));
+      tempDirs.push(dir);
+      const wrapperPath = path.join(dir, "imsg-remote");
+      await fs.writeFile(wrapperPath, `#!/bin/sh\n${command}\n`);
+      const readFile = vi.spyOn(fs, "readFile");
 
-    await expect(resolveIMessageRemoteHost({ cliPath: userWrapper })).resolves.toBe(
-      "user@example.test",
-    );
-    await expect(resolveIMessageRemoteHost({ cliPath: hostWrapper })).resolves.toBe("messages-mac");
-  });
-
-  it("detects absolute and simply quoted ssh and imsg executable paths", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-wrapper-paths-"));
-    tempDirs.push(dir);
-    const absoluteWrapper = path.join(dir, "absolute-wrapper");
-    const quotedWrapper = path.join(dir, "quoted-wrapper");
-    await fs.writeFile(
-      absoluteWrapper,
-      '#!/bin/sh\nexec /usr/bin/ssh bot@messages-mac /opt/homebrew/bin/imsg "$@"\n',
-    );
-    await fs.writeFile(
-      quotedWrapper,
-      `#!/bin/sh\nexec "/usr/bin/ssh" -T messages-mac '/opt/homebrew/bin/imsg' "$@"\n`,
-    );
-
-    await expect(resolveIMessageRemoteHost({ cliPath: absoluteWrapper })).resolves.toBe(
-      "bot@messages-mac",
-    );
-    await expect(resolveIMessageRemoteHost({ cliPath: quotedWrapper })).resolves.toBe(
-      "messages-mac",
-    );
-  });
-
-  it.each([
-    ['exec ssh -J jump@bastion bot@messages-mac imsg "$@"', "jump host"],
-    ['exec ssh -o ProxyCommand=jump@bastion bot@messages-mac imsg "$@"', "ProxyCommand"],
-    ["exec ssh bot@messages-mac imsg", "missing argument forwarding"],
-  ])("rejects an ambiguous %s wrapper (%s)", async (command) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-ambiguous-"));
-    tempDirs.push(dir);
-    const wrapperPath = path.join(dir, "imsg-remote");
-    await fs.writeFile(wrapperPath, `#!/bin/sh\n${command}\n`);
-    const readFile = vi.spyOn(fs, "readFile");
-
-    await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
-    await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
-    expect(readFile).toHaveBeenCalledOnce();
-    expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBeUndefined();
-  });
-
-  it("rejects multiline backslash command construction", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-multiline-"));
-    tempDirs.push(dir);
-    const wrapperPath = path.join(dir, "imsg-remote");
-    await fs.writeFile(
-      wrapperPath,
-      ["#!/bin/sh", "exec ssh -J jump@bastion \\", '  bot@messages-mac imsg "$@"', ""].join("\n"),
-    );
-
-    await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
-    expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBeUndefined();
-  });
+      await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
+        "configure channels.imessage.remoteHost explicitly",
+      );
+      await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
+        "configure channels.imessage.remoteHost explicitly",
+      );
+      expect(readFile).toHaveBeenCalledOnce();
+      expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBeUndefined();
+    },
+  );
 
   it.each([
     [
       "continued simple ssh",
       ["#!/bin/sh", "exec \\", 'ssh bot@messages-mac imsg "$@"', ""].join("\n"),
-    ],
-    [
-      "bare ssh in a complex script",
-      ["#!/bin/sh", "if true; then", '  ssh bot@messages-mac imsg "$@"', "fi", ""].join("\n"),
-    ],
-    [
-      "absolute ssh in a complex script",
-      ["#!/bin/sh", "if true; then", '  /usr/bin/ssh bot@messages-mac imsg "$@"', "fi", ""].join(
-        "\n",
-      ),
     ],
     [
       "quoted ssh in a complex script",

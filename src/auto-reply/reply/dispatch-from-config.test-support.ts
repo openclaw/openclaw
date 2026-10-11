@@ -606,21 +606,8 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.loadSessionStoreEntry.mockReset();
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.loadSessionStore.mockReset();
-  sessionStoreMocks.loadSessionStore.mockReturnValue({});
-  sessionStoreMocks.readSessionEntry.mockReset();
-  sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore.mockReset();
   sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReset();
-  sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
-    (params: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
-      existing:
-        params.store[params.sessionKey] ??
-        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
-        sessionStoreMocks.currentEntry,
-    }),
-  );
   transcriptMocks.persistAcpDispatchTranscript.mockClear();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();

@@ -1,8 +1,17 @@
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import {
+  pluginStatePublication,
+  pluginStateReadDependenciesAffected,
+} from "../plugin-state/plugin-state-publication.js";
+import {
+  onSessionIdentityMutation,
+  onSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import * as records from "./session-row-projection-record.js";
+import type { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 
 /** Apply committed metadata before observers without reacquiring it from SQLite. */
 export function createSessionRowPublication(owner: {
@@ -47,6 +56,8 @@ export function createSessionRowPublication(owner: {
       if (next && databaseFacts) {
         next.retainedDatabaseFacts = databaseFacts;
         next.preparedAcpMeta = databaseFacts.acpMeta;
+        next.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
+        next.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
         next.hasBoard = databaseFacts.hasBoard;
       }
       owner.enqueue(next);
@@ -133,6 +144,12 @@ export function createSessionRowPublication(owner: {
       (!readSessionActivitySummary(entry) || previousFacts.activitySummaryWatermark)
         ? previousFacts
         : undefined);
+    const sameRuntimeOwner =
+      sameSession &&
+      previousFacts.entry.agentHarnessId === entry.agentHarnessId &&
+      previousFacts.entry.modelSelectionLocked === entry.modelSelectionLocked &&
+      previousFacts.entry.pluginOwnerId === entry.pluginOwnerId &&
+      previousFacts.entry.previousSessionId === entry.previousSessionId;
     // Entry-only writes preserve Board/transcript facts. Shared facets retain their
     // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
@@ -142,6 +159,10 @@ export function createSessionRowPublication(owner: {
             entry,
             hasBoard: projection.hasBoard,
             activitySummaryWatermark: projection.activitySummaryWatermark,
+            runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
+            runtimeOwnershipDependencies: sameRuntimeOwner
+              ? previousFacts.runtimeOwnershipDependencies
+              : undefined,
             acpMeta:
               sameSession && previousFacts.entry.sessionStartedAt === entry.sessionStartedAt
                 ? previousFacts.acpMeta
@@ -253,4 +274,73 @@ export function createSessionRowPublication(owner: {
     }
     owner.defer(row);
   };
+}
+
+export function subscribeSessionRowPublications({
+  rows,
+  dirty,
+  revisions,
+  advanceRevision,
+  ensureMaterialized,
+  publishTranscript,
+  invalidateMembership,
+  mark,
+  mutateGeneration,
+}: {
+  rows: ReadonlyMap<string, records.Row>;
+  dirty: Set<string>;
+  revisions: Pick<
+    ReturnType<typeof createSessionRowProjectionRevisions>,
+    "invalidate" | "publishFacts"
+  >;
+  advanceRevision: () => void;
+  ensureMaterialized: () => Promise<void>;
+  publishTranscript: Parameters<typeof sessionChanges.subscribeFacts>[0];
+  invalidateMembership: Parameters<typeof sessionChanges.subscribeFacts>[0];
+  mark: Parameters<typeof sessionChanges.subscribeProjection>[0];
+  mutateGeneration: Parameters<typeof onSessionIdentityMutation>[0];
+}): Array<() => void> {
+  return [
+    pluginStatePublication.subscribeFacts((change) => {
+      const changed: records.Row[] = [];
+      for (const row of rows.values()) {
+        if (
+          !row.runtimeOwnershipDependencies ||
+          !pluginStateReadDependenciesAffected(row.runtimeOwnershipDependencies, change)
+        ) {
+          continue;
+        }
+        row.databaseFactsRevision++;
+        row.pendingDatabaseFacts = undefined;
+        if (row.retainedDatabaseFacts) {
+          row.retainedDatabaseFacts = {
+            ...row.retainedDatabaseFacts,
+            runtimeOwnership: undefined,
+            runtimeOwnershipDependencies: undefined,
+          };
+        }
+        row.preparedRuntimeOwnership = undefined;
+        row.runtimeOwnershipDependencies = undefined;
+        dirty.add(records.identity(row));
+        changed.push(row);
+      }
+      if (changed.length > 0) {
+        advanceRevision();
+        revisions.invalidate(true);
+        for (const row of changed) {
+          revisions.publishFacts(row);
+        }
+        // Facts install synchronously; preparation starts after the publication frame.
+        queueMicrotask(() => void ensureMaterialized().catch(() => {}));
+      }
+    }),
+    sessionChanges.subscribeFacts(publishTranscript),
+    sessionChanges.subscribeFacts(invalidateMembership),
+    sessionChanges.subscribeProjection(mark),
+    // Participant writers publish facts before their display-only lifecycle notice.
+    onSessionLifecycleEvent((change) =>
+      mark(change.reason === "participants" ? { ...change, facts: { kind: "unchanged" } } : change),
+    ),
+    onSessionIdentityMutation(mutateGeneration),
+  ];
 }

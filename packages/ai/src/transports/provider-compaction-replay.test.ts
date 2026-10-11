@@ -361,17 +361,28 @@ describe("prepared compaction replay eligibility", () => {
   };
 
   it.each([
-    { apiKey: undefined, extraParams: { anthropicServerCompaction: true }, expected: false },
-    { apiKey: "test-key", extraParams: {}, expected: false },
-    { apiKey: "test-key", extraParams: { anthropicServerCompaction: true }, expected: true },
+    { apiKey: undefined, extraParams: {}, expected: false },
+    { apiKey: "test-key", extraParams: {}, expected: true },
+    { apiKey: "test-key", extraParams: { anthropicServerCompaction: false }, expected: false },
     {
-      apiKey: "test-sk-ant-oat-fixture",
-      extraParams: { anthropicServerCompaction: true },
+      apiKey: "test-key",
+      extraParams: {},
+      model: { ...anthropic, id: "claude-opus-4-5" },
       expected: false,
     },
-  ])("requires known eligible authentication and opt-in: $expected", ({ expected, ...options }) => {
-    expect(resolveCompactionReplayEligibility(anthropic, options)).toBe(expected);
-  });
+    {
+      apiKey: "test-key",
+      extraParams: { anthropicServerCompaction: true },
+      model: { ...anthropic, id: "claude-opus-4-5" },
+      expected: true,
+    },
+    { apiKey: "test-sk-ant-oat-fixture", extraParams: {}, expected: false },
+  ])(
+    "requires known eligible authentication and an enabled model: $expected",
+    ({ expected, model: replayModel = anthropic, ...options }) => {
+      expect(resolveCompactionReplayEligibility(replayModel, options)).toBe(expected);
+    },
+  );
 
   it("keeps Responses checkpoint replay independent of new compaction generation", () => {
     expect(

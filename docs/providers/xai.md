@@ -701,7 +701,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     Other Responses-compatible providers can opt in with
     `params.responsesCompactEndpoint: true`; non-Responses routes ignore the
     setting. The public OpenAI Responses API also enables this endpoint by
-    default for budget compaction. Its inline `context_management`
+    default for budget compaction and `/compact`. Its inline `context_management`
     compaction is separately controlled by `responsesServerCompaction`.
 
     Endpoint failures fall back to OpenClaw's client-side summarization.

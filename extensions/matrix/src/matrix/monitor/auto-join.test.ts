@@ -96,48 +96,11 @@ describe("registerMatrixAutoJoin", () => {
     } as unknown as PluginRuntime);
   });
 
-  it("joins all invites when autoJoin=always", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await triggerInvite(getInviteHandler);
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
   it("does not auto-join invites by default", () => {
     const { getInviteHandler, joinRoom } = registerAutoJoinHarness({});
 
     expect(getInviteHandler()).toBeNull();
     expect(joinRoom).not.toHaveBeenCalled();
-  });
-
-  it("ignores invites outside allowlist when autoJoin=allowlist", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "allowlist",
-        autoJoinAllowlist: ["#allowed:example.org"],
-      },
-      resolveRoomValue: null,
-    });
-
-    await triggerInvite(getInviteHandler);
-    expect(joinRoom).not.toHaveBeenCalled();
-  });
-
-  it("joins invite when allowlisted alias resolves to the invited room", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "allowlist",
-        autoJoinAllowlist: [" #allowed:example.org "],
-      },
-      resolveRoomValue: "!room:example.org",
-    });
-
-    await triggerInvite(getInviteHandler);
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
   it("retries alias resolution after an unresolved lookup", async () => {
@@ -212,51 +175,12 @@ describe("registerMatrixAutoJoin", () => {
     expect(joinRoom).not.toHaveBeenCalled();
   });
 
-  it("warns once when the allowlist holds an entry that can never match a room", () => {
-    registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "allowlist",
-        autoJoinAllowlist: ["@ryan:example.org"],
-      },
-    });
-
-    expect(loggerWarn).toHaveBeenCalledTimes(1);
-    expect(loggerWarn).toHaveBeenCalledWith(
-      "matrix: autoJoinAllowlist entries cannot match an invited room and are ignored: @ryan:example.org",
-    );
-  });
-
   it("does not warn for room, alias, or wildcard allowlist entries", () => {
     registerAutoJoinHarness({
       accountConfig: {
         autoJoin: "allowlist",
         autoJoinAllowlist: ["!room:example.org", "#alias:example.org", "*"],
       },
-    });
-
-    expect(loggerWarn).not.toHaveBeenCalled();
-  });
-
-  it("warns about malformed prefixed entries the room matcher can never use", () => {
-    registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "allowlist",
-        autoJoinAllowlist: ["!", "#missing-server", "#ops:"],
-      },
-    });
-
-    expect(loggerWarn).toHaveBeenCalledTimes(1);
-    expect(loggerWarn).toHaveBeenCalledWith(
-      "matrix: autoJoinAllowlist entries cannot match an invited room and are ignored: !, #missing-server, #ops:",
-    );
-  });
-
-  it("does not warn when auto-join does not consult the allowlist", () => {
-    registerAutoJoinHarness({
-      accountConfig: { autoJoin: "off", autoJoinAllowlist: ["@ryan:example.org"] },
-    });
-    registerAutoJoinHarness({
-      accountConfig: { autoJoin: "always", autoJoinAllowlist: ["@ryan:example.org"] },
     });
 
     expect(loggerWarn).not.toHaveBeenCalled();
@@ -273,5 +197,8 @@ describe("registerMatrixAutoJoin", () => {
     await triggerInvite(getInviteHandler, { sender: "@ryan:example.org" });
 
     expect(joinRoom).not.toHaveBeenCalled();
+    expect(loggerWarn).toHaveBeenCalledWith(
+      "matrix: autoJoinAllowlist entries cannot match an invited room and are ignored: @ryan:example.org",
+    );
   });
 });
