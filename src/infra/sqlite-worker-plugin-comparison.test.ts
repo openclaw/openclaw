@@ -79,6 +79,30 @@ describe("plugin state data-only comparison", () => {
     expect(messages).not.toHaveBeenCalled();
   });
 
+  it.each([{ action: "set" }, { action: "keep" }] as const)(
+    "converges after an unannounced native deletion ($action)",
+    async ({ action }) => {
+      const { store, legacy, native } = fixture(`native-deletion-${action}`);
+      legacy.register("counter", { count: 1 });
+      const before = await store.observe("counter");
+      const { db } = native();
+      // Native binding transactions carry their own receipt, without plugin-state postimages.
+      executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
+      const change =
+        action === "set"
+          ? ({ operation: "update", action, value: { count: 2 } } as const)
+          : ({ operation: "update", action } as const);
+      const conflict = await store.compareAndApply("counter", before.comparison, change);
+      expect(conflict).toMatchObject({ status: "conflict", current: { value: undefined } });
+      if (conflict.status !== "conflict") {
+        throw new Error("Expected the deleted row to conflict");
+      }
+      expect(await store.compareAndApply("counter", conflict.current.comparison, change)).toEqual({
+        status: action === "set" ? "applied" : "unchanged",
+      });
+    },
+  );
+
   it.each([
     { operation: "update", present: true },
     { operation: "delete", present: true },
@@ -92,12 +116,8 @@ describe("plugin state data-only comparison", () => {
         legacy.delete("counter");
       }
       const before = await store.observe("counter");
-      const postMessage = Worker.prototype.postMessage;
-      const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-        this: Worker,
-        message,
-        transferList,
-      ) {
+      const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+      Worker.prototype.postMessage = function (this: Worker, message, transferList) {
         const request = asOptionalRecord(message);
         if (request?.type === "execute" && request.input instanceof Uint8Array) {
           const command = asOptionalRecord(deserialize(request.input));
@@ -107,8 +127,8 @@ describe("plugin state data-only comparison", () => {
             legacy.register("counter", { count: 2 });
           }
         }
-        return postMessage.call(this, message, transferList);
-      });
+        return dispatch.call(this, message, transferList);
+      };
       const result = await store.compareAndApply(
         "counter",
         before.comparison,

@@ -147,7 +147,7 @@ bot registration.
 `openclaw doctor --fix` migrates old `webhookPort` and `webhookHost` settings to
 `legacyWebhook`, using Doctor's normal config backup and write flow. Host-only
 settings preserve that host with port `8788`. Named accounts preserve their
-effective endpoint. Existing canonical settings, including an inherited `false`,
+effective endpoint. Existing settings, including an inherited `false`,
 take precedence over retired keys. Doctor and startup report the effective
 listener and Gateway destination without changing the external callback URL.
 

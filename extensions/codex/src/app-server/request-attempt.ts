@@ -4,7 +4,10 @@ import type {
   CodexRequestWaiterSummary,
   CodexRequestWireOutcome,
 } from "./request-observation.js";
-import { CodexAppServerRpcError } from "./rpc-error.js";
+import {
+  CodexAppServerLocalRequestCancellationError,
+  CodexAppServerRpcError,
+} from "./rpc-error.js";
 
 type CodexRequestWaitOptions = {
   timeoutMs?: number;
@@ -46,6 +49,21 @@ export type CodexRequestAttempt = {
   failLocal: (error: Error) => void;
   markWritten: () => void;
 };
+
+export function remainingCodexRequestTime(
+  method: string,
+  signal: AbortSignal | undefined,
+  deadline?: number,
+): number | undefined {
+  if (signal?.aborted) {
+    throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false, signal.reason);
+  }
+  const remainingMs = deadline === undefined ? undefined : deadline - performance.now();
+  if (remainingMs !== undefined && remainingMs <= 0) {
+    throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
+  }
+  return remainingMs;
+}
 
 /** One caller per wire attempt; local waiter expiry need not imply a native response. */
 export function createCodexRequestAttempt(params: {

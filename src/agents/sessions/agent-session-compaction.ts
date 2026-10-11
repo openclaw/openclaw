@@ -1,5 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import {
   capCompactionSummary,
   compactWithoutSummary,
@@ -70,11 +71,15 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
-  private onContextReplaced?: (tokensAfter: number, tokensBefore: number) => void;
+  private onContextReplaced?: (
+    tokensAfter: number,
+    tokensBefore: number,
+    details?: unknown,
+  ) => void;
   private assertContextReplacementActive?: () => void;
 
   [agentSessionSetContextReplacementHook](
-    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
+    callback: ((tokensAfter: number, tokensBefore: number, details?: unknown) => void) | undefined,
     assertActive?: () => void,
   ): void {
     this.onContextReplaced = callback;
@@ -186,6 +191,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         tokensBefore: outcome.result.tokensBefore,
         tokensAfter: outcome.tokensAfter,
         willRetry,
+        ...(parseCompactionDetails(outcome.result.details)?.qualityDegraded
+          ? { qualityDegraded: true }
+          : {}),
       },
     });
   }
@@ -484,7 +492,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const sessionContext = this.sessionManager.buildSessionContext();
       // Publish the committed replacement and accounting together after its receipt.
       this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-      onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
+      onContextReplaced?.(
+        tokensAfter,
+        completedCompaction.tokensBefore,
+        completedCompaction.details,
+      );
       return { entryId, tokensAfter };
     });
     if (committed === undefined) {

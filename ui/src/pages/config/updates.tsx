@@ -34,7 +34,7 @@ import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
-import { locale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { UpdatesStatus } from "./updates-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -480,7 +480,7 @@ export function Updates(props: UpdatesViewProps) {
   const campaign = () => props.update.updateSchedule?.campaign;
   const separateCampaign = () => run() && campaign() && run()!.origin.campaignId !== campaign()!.id;
   const campaignLabel = () => {
-    locale();
+    getLocale();
     return formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs);
   };
   const showHold = () => {

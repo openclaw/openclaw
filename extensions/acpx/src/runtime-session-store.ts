@@ -92,7 +92,6 @@ export type GenerationHandle = OpenClawRuntimeHandle & { [acpxGenerationKey]?: A
 export const acpxOperationScope = new AsyncLocalStorage<{
   generation: AcpxGeneration;
   closeRecord?: AcpLoadedSessionRecord;
-  recordId?: string;
 }>();
 
 export function readSessionRecordName(record: unknown): string {
@@ -200,12 +199,6 @@ export function createResetAwareSessionStore(
         return undefined;
       }
       const record = await baseStore.load(sessionId);
-      if (
-        scope?.generation.retired ||
-        freshSessionKeys.has(scope?.generation.resource ?? normalized)
-      ) {
-        return undefined;
-      }
       if (scope && record) {
         captureGenerationRecord(scope.generation, record);
       }
@@ -220,9 +213,6 @@ export function createResetAwareSessionStore(
       });
       if (!lease) {
         return record;
-      }
-      if (scope?.generation.retired) {
-        return undefined;
       }
       const leasedRecord = withOpenClawLeaseSessionMetadata(record, lease);
       if (scope) {
@@ -281,9 +271,6 @@ export function createResetAwareSessionStore(
           })
         ) {
           const existing = await params.leaseStore.load(leaseIdentity.leaseId);
-          if (scope?.generation.retired) {
-            return;
-          }
           const ownsExisting =
             !existing ||
             (existing.gatewayInstanceId === leaseIdentity.gatewayInstanceId &&

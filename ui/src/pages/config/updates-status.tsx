@@ -4,12 +4,12 @@ import {
   formatUpdateTargetLabel,
 } from "../../app/update-schedule-projection.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { locale, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesViewProps } from "./updates.tsx";
 
 export function UpdatesStatus(props: UpdatesViewProps) {
   const status = createMemo(() => {
-    locale();
+    getLocale();
     const run = props.update.updateRun;
     const running = run?.status === "running";
     const campaign = props.update.updateSchedule?.campaign;

@@ -77,6 +77,16 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "../../process/exec-result",
     distWorkerPath: "process/exec-result.js",
   },
+  cliCleanupScope: {
+    currentModuleUrl,
+    sourceWorkerName: "../runtime-cleanup-scope",
+    distWorkerPath: "cli/runtime-cleanup-scope.js",
+  },
+  oneShotExit: {
+    currentModuleUrl,
+    sourceWorkerName: "../one-shot-exit",
+    distWorkerPath: "cli/one-shot-exit.js",
+  },
   signalExitBarrier: {
     currentModuleUrl,
     sourceWorkerName: "../signal-exit-barrier",

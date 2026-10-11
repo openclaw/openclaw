@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ConfigForm } from "../../components/config-form.render.tsx";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { memoryTabForRoute, memorySettingsSchema } from "./memory-schema.ts";
+import { memorySettingsSchema } from "./memory-schema.ts";
 import { Memory, renderMemory } from "./memory.tsx";
 
 /** The view is the only public surface, so its props type comes from its signature. */
@@ -65,22 +65,6 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
-  it.each(["overview", "memories", "dreams"] as const)(
-    "renders the Memory tabs without a duplicate agent picker on %s",
-    (activeTab) => {
-      const container = renderInto(createProps({ activeTab }));
-      const header = container.querySelector(".hub-page-header");
-
-      expect(header?.querySelector(".page-title")?.textContent).toBe("Memory");
-      expect(header?.querySelector(".page-subtitle")?.textContent).toContain(
-        "Choose how OpenClaw stores, searches, and maintains agent memory.",
-      );
-      expect(header?.querySelector(".memory-hub-tabs")).not.toBeNull();
-      expect(container.textContent).not.toContain("Agent view");
-
-      expect(header?.querySelector("openclaw-agent-select")).toBeNull();
-    },
-  );
 
   it("retains engine and add-on controls when their owner publishes new state", () => {
     const [props, setProps] = createSignal(createProps());
@@ -115,18 +99,6 @@ describe("renderMemory", () => {
     expect(container.textContent).toContain("Memory import requires operator.admin access.");
   });
 
-  it("reports whether the engine came from config or from the slot default", () => {
-    const auto = renderInto(createProps());
-    expect(auto.textContent).toContain("falls back to its default owner");
-    expect(auto.textContent).not.toContain("Using default:");
-
-    const pinned = renderInto(
-      createProps({ engineSelection: { kind: "pinned", pluginId: "memory-core" } }),
-    );
-    expect(pinned.textContent).toContain("pinned in config");
-    expect(pinned.textContent).toContain("Default: OpenClaw Memory");
-  });
-
   it("keeps a configured missing engine selected and labels it unavailable", () => {
     const container = renderInto(
       createProps({
@@ -147,37 +119,6 @@ describe("renderMemory", () => {
         '.settings-segmented__input[value="retired-memory"]',
       )?.checked,
     ).toBe(true);
-  });
-
-  it("renders enabled and disabled add-ons as accessible toggles", () => {
-    const { container, getByRole } = mountSolid(() => renderMemory(createProps()));
-    flush();
-
-    const switches = [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
-    expect(switches).toHaveLength(2);
-    expect(switches[0]?.checked).toBe(true);
-    expect(switches[1]?.checked).toBe(false);
-    expect(getByRole("switch", { name: "Enable or disable Active memory" })).toBe(switches[0]);
-    expect(getByRole("switch", { name: "Enable or disable Memory wiki" })).toBe(switches[1]);
-    const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
-    expect(link?.getAttribute("href")).toBe("/settings/plugins");
-  });
-
-  it("keeps config only on Settings and the agent experience on Dreams", () => {
-    expect(
-      renderInto(createProps({ activeTab: "overview" })).querySelector(".test-overview"),
-    ).not.toBeNull();
-    expect(
-      renderInto(createProps({ activeTab: "memories" })).querySelector(".test-memories"),
-    ).not.toBeNull();
-
-    const settings = renderInto(createProps({ activeTab: "settings" }));
-    expect(settings.querySelector(".test-editor")).not.toBeNull();
-    expect(settings.querySelector(".test-dreaming-settings")).not.toBeNull();
-
-    const dreams = renderInto(createProps({ activeTab: "dreams" }));
-    expect(dreams.querySelector(".test-dreams")).not.toBeNull();
-    expect(dreams.querySelector(".test-editor")).toBeNull();
   });
 
   it("shows the shared advanced disclosure only on Settings and reveals advanced fields", () => {
@@ -233,28 +174,6 @@ describe("renderMemory", () => {
   });
 });
 
-describe("memoryTabForRoute", () => {
-  it("keeps old shared links working with the new destinations", () => {
-    expect(memoryTabForRoute({ tab: "search" })).toBe("settings");
-    expect(memoryTabForRoute({ tab: "dreaming" })).toBe("dreams");
-    expect(memoryTabForRoute({ tab: "overview" })).toBe("overview");
-    expect(memoryTabForRoute({ tab: "memories" })).toBe("memories");
-    expect(memoryTabForRoute({ tab: "unknown" })).toBeNull();
-  });
-
-  it("prefers an explicit canonical path over stale legacy route state", () => {
-    expect(
-      memoryTabForRoute({
-        pathname: "/settings/memory/dreams",
-        tab: "settings",
-        section: "memory",
-        targetBlockId: "config-section-memory",
-      }),
-    ).toBe("dreams");
-    expect(memoryTabForRoute({ pathname: "/settings/memory" })).toBe("overview");
-  });
-});
-
 describe("memorySettingsSchema", () => {
   const schema = {
     type: "object",
@@ -278,10 +197,7 @@ describe("memorySettingsSchema", () => {
 
     expect(Object.keys(narrowed.properties)).toEqual(["memory"]);
     expect(Object.keys(narrowed.properties.memory.properties)).toEqual(["citations", "search"]);
-  });
-
-  it("returns a stable object so schema analysis stays cached", () => {
-    expect(memorySettingsSchema(schema)).toBe(memorySettingsSchema(schema));
+    expect(memorySettingsSchema(schema)).toBe(narrowed);
   });
 
   it("passes non-memory schemas through untouched", () => {

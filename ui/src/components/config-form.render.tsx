@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ConfigUiHints } from "../api/types.ts";
-import { locale, t } from "../lib/reactive/i18n.ts";
+import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { ConfigNode } from "./config-form.node.tsx";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
@@ -219,7 +219,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
 
 export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
   const sections = createMemo((): Section[] => {
-    locale();
+    getLocale();
     const schema = props.schema;
     if (!schema || schemaType(schema) !== "object" || !schema.properties) {
       return [];

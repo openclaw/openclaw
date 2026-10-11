@@ -2,6 +2,7 @@
 
 export type { Generated, Selectable } from "kysely";
 export { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 export {
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,

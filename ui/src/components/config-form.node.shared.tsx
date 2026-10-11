@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo } from "solid-js";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
-import { locale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import "../components/tooltip.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import {
@@ -181,7 +181,7 @@ export function SegmentedControl(props: {
     props.options.findIndex((option) => configValuesEqual(option, props.resolvedValue)),
   );
   const options = createMemo(() => {
-    locale();
+    getLocale();
     return props.options.map((option, index) => ({
       value: String(index),
       label: configEnumOptionLabel(option, props.options),

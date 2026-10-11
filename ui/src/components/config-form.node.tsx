@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
-import { locale, t } from "../lib/reactive/i18n.ts";
+import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraftHost } from "./config-form.bridge.tsx";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
@@ -116,7 +116,7 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
   const node = createMemo(() => resolveNode(props.params.schema, props.params));
   const params = createMemo(() => ({ ...props.params, schema: node().schema }));
   const meta = createMemo(() => {
-    locale();
+    getLocale();
     return resolveConfigFieldMeta(params().path, params().schema, params().hints);
   });
   const unsupported = createMemo(() => {
@@ -178,7 +178,7 @@ function ResolvedNode(props: {
   node: ReturnType<typeof resolveNode>;
 }): JSX.Element {
   const meta = createMemo(() => {
-    locale();
+    getLocale();
     return resolveConfigFieldMeta(props.params.path, props.params.schema, props.params.hints);
   });
   return (
@@ -248,7 +248,7 @@ function ResolvedNode(props: {
 
 function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const meta = createMemo(() => {
-    locale();
+    getLocale();
     return resolveConfigFieldMeta(props.params.path, props.params.schema, props.params.hints);
   });
   const checked = () =>

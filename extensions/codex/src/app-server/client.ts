@@ -48,7 +48,7 @@ import {
   type RpcRequest,
 } from "./protocol.js";
 import { dispatchCodexRequestAttempt } from "./request-admission.js";
-import { createCodexRequestAttempt } from "./request-attempt.js";
+import { createCodexRequestAttempt, remainingCodexRequestTime } from "./request-attempt.js";
 import type { CodexRequestWaiterFinished } from "./request-observation.js";
 import {
   isCodexAppServerOverloadError,
@@ -70,21 +70,6 @@ import {
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
-
-function remainingRequestTime(
-  method: string,
-  signal: AbortSignal | undefined,
-  deadline?: number,
-): number | undefined {
-  if (signal?.aborted) {
-    throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false, signal.reason);
-  }
-  const remainingMs = deadline === undefined ? undefined : deadline - performance.now();
-  if (remainingMs !== undefined && remainingMs <= 0) {
-    throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
-  }
-  return remainingMs;
-}
 
 export {
   getCodexAppServerClientInstanceId,
@@ -340,6 +325,11 @@ export class CodexAppServerClient {
     return this.initializeDiagnostics.snapshot(this.closed, beforeClientClose);
   }
 
+  /** Outstanding methods across this physical client, including peer turns; never arguments. */
+  getPendingRequestMethods(): string[] {
+    return [...new Set([...this.pending.values()].map(({ method }) => method))].toSorted();
+  }
+
   getServerVersion(): string | undefined {
     return this.runtimeIdentity?.serverVersion;
   }
@@ -537,7 +527,7 @@ export class CodexAppServerClient {
         ? performance.now() + options.timeoutMs
         : undefined;
     for (let retry = 0; ; retry += 1) {
-      const remainingTimeoutMs = remainingRequestTime(method, options.signal, deadline);
+      const remainingTimeoutMs = remainingCodexRequestTime(method, options.signal, deadline);
       try {
         return await this.requestOnce<T>(
           method,
@@ -577,12 +567,12 @@ export class CodexAppServerClient {
     deadline: number | undefined,
     signal: AbortSignal | undefined,
   ): Promise<void> {
-    const remainingMs = remainingRequestTime(method, signal, deadline);
+    const remainingMs = remainingCodexRequestTime(method, signal, deadline);
     const delayMs = remainingMs === undefined ? backoffMs : Math.min(backoffMs, remainingMs);
     try {
       await sleepWithAbort(delayMs, signal, { ref: false });
     } catch (error) {
-      remainingRequestTime(method, signal);
+      remainingCodexRequestTime(method, signal);
       throw error;
     }
   }
@@ -663,7 +653,7 @@ export class CodexAppServerClient {
         if (this.closed) {
           throw this.closeError ?? new Error("codex app-server client is closed");
         }
-        remainingRequestTime(method, options.signal, deadline);
+        remainingCodexRequestTime(method, options.signal, deadline);
       },
       () => {
         this.writeMessage(

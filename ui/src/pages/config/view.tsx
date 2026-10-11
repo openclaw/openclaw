@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, createSignal, For, untrack } from "solid-js";
 import "../../styles/lobster-pet.css";
 import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
@@ -287,7 +287,9 @@ export function Config(props: ConfigProps) {
         }}
       />
     );
-    return <>{props.renderSection ? props.renderSection(editor) : editor}</>;
+    // The section renderer is a stable factory; recreating it discards live field nodes.
+    const renderSection = untrack(() => props.renderSection);
+    return renderSection ? renderSection(editor) : editor;
   }
   return (
     <>

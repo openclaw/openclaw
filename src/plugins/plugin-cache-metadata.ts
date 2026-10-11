@@ -48,13 +48,16 @@ export type PluginCacheMetadata = {
       cwd: string | undefined;
       value: string | undefined;
     };
-    bundledProviderPolicySurfaces: Map<
-      string,
-      {
-        version: number | undefined;
-        selection: PluginCacheMetadata["metadata"]["bundledPluginsDir"];
-        read: () => BundledProviderPolicySurface | null;
-      }
+    bundledProviderPolicySurfaces: WeakMap<
+      object,
+      Map<
+        string,
+        {
+          version: number | undefined;
+          selection: PluginCacheMetadata["metadata"]["bundledPluginsDir"];
+          read: () => BundledProviderPolicySurface | null;
+        }
+      >
     >;
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;

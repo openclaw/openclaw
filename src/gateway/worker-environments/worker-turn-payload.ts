@@ -389,7 +389,7 @@ export async function finalizeWorkerTurnResult(
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   assertResultCurrent();
-  const currentPlacement = params.placements.get(placement.sessionId);
+  const currentPlacement = params.placements.preparedWorkspaceResultPlacement(params.turnClaim);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1

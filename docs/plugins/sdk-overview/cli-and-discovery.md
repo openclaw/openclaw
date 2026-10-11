@@ -142,6 +142,14 @@ to the host before registration remain caller-owned; command identity and
 function-valued argument or option data do not change. Reload or disablement
 rejects new callback invocations while admitted asynchronous actions finish.
 
+OpenClaw reports errors that escape plugin command actions and command hooks:
+the message goes to stderr, or into the standard JSON failure envelope on stdout
+in `--json` or `machineOutput` mode, and the command exits with code 1. `--debug`
+adds the stack. Throw an `Error` with a user-facing message; catch it locally only
+when the command owns a different exit code or failure output. Option and argument
+parsers should reject values with Commander's `InvalidArgumentError` or an error
+with `code: "commander.invalidArgument"` so Commander names the rejected option.
+
 ## CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local

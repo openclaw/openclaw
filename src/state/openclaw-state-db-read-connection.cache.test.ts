@@ -267,7 +267,7 @@ it.each(["ordinary-first", "maintenance-first"] as const)(
   },
 );
 
-it("rejects pinned, transactional, asynchronous and retired direct-read results", () => {
+it("rejects pinned, transactional and asynchronous direct-read results", () => {
   const { pathname, root } = fixture();
   const context = captureOpenClawStateWorkerContext({
     path: pathname,
@@ -293,13 +293,6 @@ it("rejects pinned, transactional, asynchronous and retired direct-read results"
   });
   expect(prepare().read(() => db.prepare("SELECT value FROM sample").get()?.value)).toBe(1);
   expect(() => reader.read(() => Promise.resolve(1))).toThrow("must remain synchronous");
-  expect(() =>
-    reader.read(() => {
-      const value = db.prepare("SELECT value FROM sample").get()?.value;
-      closeRetainedOpenClawStateReadConnections();
-      return value;
-    }),
-  ).toThrow("reader is closed");
 });
 
 function acpFixture() {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "../config/io.health-state.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -50,9 +52,40 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     for (const directory of tempDirs.dirs) {
       retireFixtureAdmissions(directory);
     }
+    const openFiles = findOpenFixtureFiles();
+    assert.deepEqual(openFiles, [], "Fixture files remain open after database cleanup");
     cleanup();
   });
 });
+
+function findOpenFixtureFiles(): string[] {
+  const openFiles: Array<{ descriptor: string; filename: string }> = [];
+  if (process.platform === "linux") {
+    for (const descriptor of fs.readdirSync("/proc/self/fd")) {
+      try {
+        openFiles.push({ descriptor, filename: fs.readlinkSync(`/proc/self/fd/${descriptor}`) });
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
+  } else if (process.platform === "darwin") {
+    let descriptor = "";
+    for (const field of execFileSync("/usr/sbin/lsof", ["-p", String(process.pid), "-Ffn"], {
+      encoding: "utf8",
+    }).split("\n")) {
+      if (field.startsWith("f")) {
+        descriptor = field.slice(1);
+      } else if (field.startsWith("n")) {
+        openFiles.push({ descriptor, filename: field.slice(1) });
+      }
+    }
+  }
+  return openFiles
+    .filter(({ filename }) => [...tempDirs.dirs].some((root) => isPathInside(root, filename)))
+    .map(({ descriptor, filename }) => `${descriptor}: ${filename}`);
+}
 
 function retireFixtureAdmissions(root: string): void {
   for (const admission of captureSqliteDatabaseAdmissions()) {

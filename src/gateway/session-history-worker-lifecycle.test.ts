@@ -17,6 +17,7 @@ import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
   historyClearTimeout,
@@ -26,7 +27,6 @@ import {
   targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
-  prepareSessionEntryPresenceRead,
   prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";

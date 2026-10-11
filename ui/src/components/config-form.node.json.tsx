@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
-import { locale } from "../lib/reactive/i18n.ts";
+import { getLocale } from "../lib/reactive/i18n.ts";
 import {
   getSensitiveRenderState,
   jsonValue,
@@ -13,7 +13,7 @@ import {
 
 export function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const field = createMemo(() => {
-    locale();
+    getLocale();
     return resolveConfigFieldPresentation(props.params);
   });
   const sensitiveState = createMemo(() => getSensitiveRenderState(props.params));

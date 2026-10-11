@@ -34,7 +34,6 @@ export type Entry = {
   bound?: boolean;
   cleanup?: SqliteWorkerAdmissionCleanup;
   activeOperations: number;
-  operationGeneration: number;
   idleTimer?: IdleTimer;
 };
 export type ActorRetirement = {

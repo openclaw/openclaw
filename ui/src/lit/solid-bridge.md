@@ -74,7 +74,9 @@ microtask checkpoint. Reconnect creates a fresh root using current properties
 and the retained caller content. Moving to a different application provider
 also replaces the root. The bridge uses the DOM `context-request` protocol to
 subscribe to the existing application's Lit provider; it never owns or disposes
-the application capabilities. Direct Solid callers inherit their Solid provider.
+the application capabilities. Lit-hosted pages also publish layout traits to the
+existing shell layout owner. Direct Solid callers inherit their application and
+shell layout providers.
 
 The Lit ratchet excepts only this bridge test's Lit imports and templates, which
 prove caller compatibility. Other metrics and paths stay gated. Delete that

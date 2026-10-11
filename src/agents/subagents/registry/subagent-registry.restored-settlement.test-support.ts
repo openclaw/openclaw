@@ -69,7 +69,7 @@ export function registerRestoredRollbackPublicationTest({
   mockSingleCollectorConcurrency: () => void;
   mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
 }): void {
-  it("holds restored rollback for publication and retries settlement without relaunching", async () => {
+  it("holds restored rollback for publication and cleanup without relaunching", async () => {
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
@@ -95,7 +95,6 @@ export function registerRestoredRollbackPublicationTest({
     const releaseLaunch = createDeferred();
     let releaseAbort: (() => void) | undefined;
     const deleteReleases: Array<() => void> = [];
-    let deletionPublicationFailed = false;
     mocks.callGateway.mockImplementation(async (request) => {
       if (request.method === "agent") {
         agentCalls += 1;
@@ -180,14 +179,8 @@ export function registerRestoredRollbackPublicationTest({
     deleteReleases[0]?.();
     await waitForFast(() => expect(deleteReleases).toHaveLength(2));
     expect(agentCalls).toBe(1);
-    mocks.emitSessionLifecycleEvent.mockImplementationOnce(({ reason }: { reason: string }) => {
-      expect(reason).toBe("delete");
-      deletionPublicationFailed = true;
-      throw new Error("restored deletion publication failed");
-    });
     deleteReleases[1]?.();
     await waitForFast(() => expect(agentCalls).toBe(2));
-    expect(deletionPublicationFailed).toBe(true);
     expect(dispatchedSessionKeys).toEqual([
       "agent:main:subagent:run-restored-stop-one",
       "agent:main:subagent:run-restored-stop-two",
@@ -312,6 +305,8 @@ export function registerRestoredRequesterWakeSettlementTests({
           expect(wakeRequester).not.toHaveBeenCalled();
         }
         gatewayOpen = restoreTiming !== "after Gateway closure";
+        await mod.initSubagentRegistry();
+        await mod.activateSubagentRegistry(resolveGatewayContext);
         await vi.advanceTimersByTimeAsync(1_000);
         if (!gatewayOpen || restoreTiming === "without instance binding") {
           await vi.advanceTimersByTimeAsync(5_000);
@@ -345,93 +340,4 @@ export function registerRestoredRequesterWakeSettlementTests({
       );
     },
   );
-}
-
-export function registerRestoredRotationFailureTest({
-  getRegistry,
-  mocks,
-  hydrateAndActivateRegistry,
-  mockSingleCollectorConcurrency,
-  mockRestoredRuns,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "persistRegistryRows" | "callGateway" | "lifecycleGeneration"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
-  mockSingleCollectorConcurrency: () => void;
-  mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
-}): void {
-  it("releases restored FIFO ownership when lifecycle rotates during failure persistence", async () => {
-    const mod = getRegistry();
-    vi.useRealTimers();
-    const now = Date.now();
-    mockSingleCollectorConcurrency();
-    mockRestoredRuns(() => [
-      makeQueuedRun({
-        runId: "run-restored-rotation-one",
-        groupId: "restore-lifecycle-rotation",
-        createdAt: now,
-      }),
-      makeQueuedRun({
-        runId: "run-restored-rotation-two",
-        groupId: "restore-lifecycle-rotation",
-        createdAt: now + 1,
-      }),
-    ]);
-    mocks.entries = {
-      "agent:main:subagent:run-restored-rotation-one": {
-        sessionId: "one",
-        lifecycleRevision: "revision-one",
-        updatedAt: now,
-      },
-      "agent:main:subagent:run-restored-rotation-two": {
-        sessionId: "two",
-        lifecycleRevision: "revision-two",
-        updatedAt: now,
-      },
-    };
-    let persistenceCalls = 0;
-    let concurrentSweep: Promise<void> | undefined;
-    let agentCalls = 0;
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        if (agentCalls === 1) {
-          mocks.persistRegistryRows.mockImplementation(() => {
-            persistenceCalls += 1;
-            if (persistenceCalls === 1) {
-              throw new Error("sqlite unavailable after Gateway acceptance");
-            }
-            if (persistenceCalls === 2) {
-              mocks.lifecycleGeneration = "rotated-generation";
-              concurrentSweep = mod.testing.sweepOnceForTests();
-              throw new Error("sqlite unavailable during failure settlement");
-            }
-          });
-        }
-        return { runId: `gateway-restored-rotation-${agentCalls}` };
-      }
-      return request.method === "agent.wait" ? { status: "pending" } : {};
-    });
-
-    await hydrateAndActivateRegistry();
-
-    await waitForFast(() => expect(persistenceCalls).toBeGreaterThanOrEqual(3));
-    await concurrentSweep;
-    await waitForFast(() => expect(agentCalls).toBe(2));
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(mod.getSubagentRunByRunId("run-restored-rotation-one")).toMatchObject({
-      execution: {
-        status: "terminal",
-        suppressSessionEffects: true,
-        outcome: { status: "error" },
-      },
-      collectorCompletion: { status: "failed" },
-    });
-    expect(mod.getSubagentRunByRunId("gateway-restored-rotation-2")).toMatchObject({
-      execution: { status: "running", lifecycleGeneration: "rotated-generation" },
-    });
-  });
 }

@@ -446,6 +446,7 @@ describe("ConfigPage model catalog lifecycle", () => {
             ? ({ request: vi.fn().mockResolvedValue({}) } as unknown as GatewayBrowserClient)
             : firstClient;
         const { view, source, context } = await mount(firstClient);
+        await waitForSolid(() => expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledOnce());
         const snapshot = { ...source.gateway.snapshot, client: secondClient };
         if (replacement === "source") {
           view.setContext({ ...context, gateway: createApplicationGateway(snapshot).gateway });
@@ -498,6 +499,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const { view, context } = await mount(client);
+      await waitForSolid(() => expect(mainRequests).toBe(1));
       const selection = context.settingsAgentSelection.state as { selectedId: string | null };
       selection.selectedId = "writer";
       publishConfigSource(context.settingsAgentSelection);
@@ -511,7 +513,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       publishConfigSource(context.settingsAgentSelection);
       flush();
       const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
-      expect(mainRequests).toBe(1);
+      await waitForSolid(() => expect(mainRequests).toBe(2));
       await waitForSolid(() => expect(observerModels(view)).toEqual([]));
       firstMain.resolve({ models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }] });
       flush();
@@ -570,9 +572,8 @@ describe("ConfigPage model catalog lifecycle", () => {
       flush();
 
       const remounted = mountConfigPage(context, { pageId: "appearance" });
-      flush();
-      expect(catalogReads).toBe(2);
-      await waitForSolid(() => expect(observerModels(remounted)).toEqual([]));
+      await waitForSolid(() => expect(catalogReads).toBe(3));
+      await waitForSolid(() => expect(observerModels(remounted)).toEqual(expectedModels(fresh)));
       stale.resolve({ models: original });
       flush();
       await waitForSolid(() => expect(observerModels(remounted)).toEqual(expectedModels(fresh)));
@@ -695,8 +696,9 @@ describe("ConfigPage meeting capture", () => {
           targetBlockId: "config-section-transcripts",
         },
       });
-      flush();
-      expect(advanced.open).toBe(true);
+      await waitForSolid(() => expect(advanced.open).toBe(true));
+      expect(container.querySelector("openclaw-meeting-capture-settings")).toBe(capture);
+      expect(capture.querySelector("details")).toBe(advanced);
       await advancedToggled;
       const messagesTab = container.querySelector<HTMLElement>('wa-tab[panel="messages"]')!;
       messagesTab.focus();

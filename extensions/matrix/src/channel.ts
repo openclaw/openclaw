@@ -69,7 +69,9 @@ import {
 } from "./matrix/target-ids.js";
 import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
   setMatrixThreadBindingMaxAgeBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./matrix/thread-bindings-shared.js";
 import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
 import { matrixResolverAdapter } from "./resolver.js";
@@ -438,6 +440,22 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             accountId: accountId ?? "",
             maxAgeMs,
           }).map(projectMatrixConversationBinding),
+        setIdleTimeoutBySessionKeyAsync: async ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+          (
+            await setMatrixThreadBindingIdleTimeoutBySessionKeyAsync({
+              targetSessionKey,
+              accountId: accountId ?? "",
+              idleTimeoutMs,
+            })
+          ).map(projectMatrixConversationBinding),
+        setMaxAgeBySessionKeyAsync: async ({ targetSessionKey, accountId, maxAgeMs }) =>
+          (
+            await setMatrixThreadBindingMaxAgeBySessionKeyAsync({
+              targetSessionKey,
+              accountId: accountId ?? "",
+              maxAgeMs,
+            })
+          ).map(projectMatrixConversationBinding),
       },
       messaging: {
         defaultMarkdownTableMode: "block",

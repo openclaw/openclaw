@@ -110,6 +110,7 @@ function createQueuedDelivery(
     ...projectQueuedDeliveryOptions(params),
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...(params.initialProducerClaim ??
       (params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {})),
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
@@ -276,10 +277,11 @@ function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after
     stateDir?: string,
     expectedPlatformSendAttemptId?: string | null,
     context?: DeliveryQueueStateContext,
+    ambiguousTransportError?: true,
   ): Promise<void> => {
     await executeDeliveryQueueOperation(context, stateDir, {
       type: "deliveryQueue.mutateOutbound",
-      input: { kind, id, error, expectedPlatformSendAttemptId },
+      input: { kind, id, error, expectedPlatformSendAttemptId, ambiguousTransportError },
     });
   };
 }

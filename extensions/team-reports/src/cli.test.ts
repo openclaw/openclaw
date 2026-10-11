@@ -55,10 +55,26 @@ describe("Team Reports CLI", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "runId": "run-fixture"\n}\n');
   });
 
-  it("rejects invalid calendar dates before issuing a Gateway mutation", async () => {
-    await expect(
-      program().parseAsync(["team-reports", "generate", "--date", "2026-02-30"], { from: "user" }),
-    ).rejects.toThrow();
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      args: ["list", "--period", "yearly"],
+      message: "--period must be day, week, or month.",
+    },
+    {
+      args: ["show", "yearly", "2026"],
+      message: "<period> must be day, week, or month.",
+    },
+    {
+      args: ["generate", "--date", "2026-02-30"],
+      message: "--date must be a UTC day in YYYY-MM-DD form.",
+    },
+  ])(
+    "rejects $args with a readable message before calling the Gateway",
+    async ({ args, message }) => {
+      await expect(
+        program().parseAsync(["team-reports", ...args], { from: "user" }),
+      ).rejects.toThrow(message);
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
 });

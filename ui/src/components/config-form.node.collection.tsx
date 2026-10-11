@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
-import { locale, t } from "../lib/reactive/i18n.ts";
+import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
   openCollectionDraft,
@@ -50,7 +50,7 @@ type CollectionProps = {
 export function ConfigObject(props: CollectionProps): JSX.Element {
   const object = createMemo(() => resolveConfigObjectFields(props.params));
   const meta = createMemo(() => {
-    locale();
+    getLocale();
     return resolveFieldMeta(props.params.path, props.params.schema, props.params.hints);
   });
   const fields = () => (
@@ -358,7 +358,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
     return new ConfigFormArrayIdentity();
   });
   const content = createMemo(() => {
-    locale();
+    getLocale();
     return resolveArrayContent(props.params, identity());
   });
   const entries = createMemo(

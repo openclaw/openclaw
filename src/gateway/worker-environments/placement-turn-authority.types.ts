@@ -57,13 +57,11 @@ export type RetainedPlacement = {
 };
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
-  incarnation: string;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
   observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
   placementReaders: Map<string, Set<RetainedPlacement>>;
   pending: Set<ClaimChange>;
-  settlementListeners: Set<() => void>;
   sequence: number;
   published: Map<string, number>;
   tools: Map<string, { sequence: number; authority?: ToolAuthority }>;

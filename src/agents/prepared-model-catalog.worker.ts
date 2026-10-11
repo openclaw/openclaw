@@ -54,6 +54,7 @@ import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.j
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -62,7 +63,6 @@ import {
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
 } from "./prepared-model-catalog-fingerprints.js";
-import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import type {
   PreparedModelCatalogWorkerInput,

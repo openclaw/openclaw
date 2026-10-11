@@ -94,7 +94,14 @@ operator-stopped services and explicit data-risk refusals remain stopped.
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
 rollback. The command still exits nonzero when required finalization cannot
-complete; follow its recovery guidance after the owning updater exits.
+complete; follow its recovery guidance after the owning updater exits. If update
+history already records success, a later result-publication error is a warning
+and the command exits successfully without offering recovery.
+
+Repair warns when configured channel accounts remain stopped or suppressed,
+including accounts other than the default. Run `openclaw health --json` to inspect
+them. These warnings do not make a verified Gateway recovery fail, start stopped
+channels, or disable the crash-loop breaker.
 
 Activation Doctor rechecks the chat requester's authority inside its own live
 maintenance scope. This lets it read authorization policy while the state database
@@ -640,9 +647,10 @@ service restoration, including when the Gateway is still starting or restoration
 also fails. A startup warning after otherwise successful Doctor repair does not
 clear a repair phase timeout.
 
-Recorded pending-migration warnings stop appearing after the migration owner
-records completion. Unrelated warnings and later or reintroduced obligations
-remain visible; the original update history is preserved.
+Recorded pending-migration warnings stop appearing when the plugin is no longer
+pending in the migration owner's current state, including warnings delivered
+after completion by a Doctor child. Unrelated warnings and reintroduced pending
+obligations remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw checks the installed Gateway using the normal startup and readiness

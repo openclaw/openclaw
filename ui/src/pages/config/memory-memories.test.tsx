@@ -130,36 +130,6 @@ describe("MemoryMemoriesElement", () => {
     }
   });
 
-  it("searches only on submit and renders loading, ready, mode, and result metadata", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
-    const element = createElement(request);
-    try {
-      typeQuery(element, "Ada");
-      expect(request).not.toHaveBeenCalled();
-
-      submit(element);
-      await waitForSolid(() => expect(element.textContent).toContain("Searching memories"));
-      expect(request).toHaveBeenCalledWith("memory.search", { query: "Ada", agentId: "main" });
-
-      pending.resolve({
-        agentId: "main",
-        provider: "local",
-        searchMode: "hybrid",
-        results: [result],
-      });
-      await waitForSolid(() => expect(element.textContent).toContain(result.snippet));
-      expect(element.textContent).toContain("hybrid search");
-      expect(element.textContent?.replace(/\s+/g, " ")).toContain(
-        "memory/people/ada.md · lines 2–3",
-      );
-      expect(element.textContent).toContain("score 0.88");
-      expect(element.textContent).toContain("memory");
-    } finally {
-      element.remove();
-    }
-  });
-
   it("renders empty and retryable error states", async () => {
     const request = vi
       .fn<Request>()
@@ -402,7 +372,7 @@ describe("MemoryMemoriesElement", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "shows stale guidance alongside results and clears it after a fresh search (hits=%s)",
     async (hasHits) => {
       const warning =

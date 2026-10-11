@@ -4,15 +4,20 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
-import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
+import { installCliSignalExitHandlers, registerSignalExitGate } from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   scheduler: GatewayScheduler;
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
+  /** Captured before dispatch so source replacement cannot invalidate cleanup. */
+  closeSkillsWatchers: () => Promise<void>;
   pluginResources?: CliPluginInvocationResources;
+  /** Executable routing stays available until admitted command work has settled. */
+  releaseManagedProxy?: () => Promise<void>;
 };
 
 // Entry modules must stay runtime-free. Only executable bootstraps grant this scope;
@@ -66,6 +71,7 @@ export async function withCliCommandCleanup<T>(
   const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
   const { closeDefaultRetainedNativeWorkerSource } =
     await import("../infra/worker-native-lifecycle.js");
+  const { closeSkillsWatchers } = await import("../skills/runtime/refresh.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
@@ -78,21 +84,34 @@ export async function withCliCommandCleanup<T>(
     scheduler,
     harnesses: new Map(),
     registries: new Set(),
+    closeSkillsWatchers,
     pluginResources,
   };
-  return sdkResourceHost.run(() =>
-    scope.run(cleanup, async () => {
-      try {
-        return await run(cleanup);
-      } finally {
-        // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
-        await runCliDisposerAfterPending("shared-state", async () => {
-          await closeOpenClawStateDatabaseAsync();
-          await closeDefaultRetainedNativeWorkerSource();
-        });
-      }
-    }),
-  );
+  const finished = createDeferredCore();
+  const releaseExitGate = registerSignalExitGate(finished.promise, (signal) => {
+    pluginResources.beginClose(
+      new DOMException(`CLI stopping${signal ? ` (${signal})` : ""}`, "AbortError"),
+    );
+    void scheduler.stop();
+  });
+  try {
+    return await sdkResourceHost.run(() =>
+      scope.run(cleanup, async () => {
+        try {
+          return await run(cleanup);
+        } finally {
+          // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+          await runCliDisposerAfterPending("shared-state", async () => {
+            await closeOpenClawStateDatabaseAsync();
+            await closeDefaultRetainedNativeWorkerSource();
+          });
+        }
+      }),
+    );
+  } finally {
+    releaseExitGate();
+    finished.resolve();
+  }
 }
 
 export function retainCliRegistryHarnesses(

@@ -131,6 +131,14 @@ async function resolveCronThinkingCatalog(params: {
   agentRuntime: string;
 }): Promise<ModelCatalogEntry[]> {
   const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
+  const selected = findModelInCatalog(catalog, params.provider, params.model);
+  if (
+    params.agentRuntime === "openclaw" &&
+    selected &&
+    (selected.nativeRuntime === undefined || selected.nativeRuntime === "openclaw")
+  ) {
+    return catalog;
+  }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
   const hydration = loadProviderScopedThinkingCatalog({
     config: params.owner.config,

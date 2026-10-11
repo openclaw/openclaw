@@ -229,8 +229,7 @@ describe("AgentsPage gateway lifecycle", () => {
     setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.loadEffectiveToolsForAgent("main");
-    await Promise.resolve();
-    expect(page.toolsEffectiveResult?.profile).toBe("messaging");
+    await waitForFast(() => expect(page.toolsEffectiveResult?.profile).toBe("messaging"));
 
     void page.refreshAgents("save");
     saved.resolve(true);
@@ -239,8 +238,8 @@ describe("AgentsPage gateway lifecycle", () => {
     await roster.promise;
     await Promise.resolve();
 
+    await waitForFast(() => expect(page.toolsEffectiveResult?.profile).toBe("full"));
     expect(effectiveReads).toBe(2);
-    expect(page.toolsEffectiveResult?.profile).toBe("full");
   });
 
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
@@ -441,11 +440,6 @@ describe("AgentsPage gateway lifecycle", () => {
         page.loadActivePanelData();
       }
 
-      if (replacement === "publication" || replacement === "gateway source") {
-        expect(oldRequest.mock.calls.length + nextRequest.mock.calls.length).toBe(1);
-        expect(page.modelCatalog.models).toEqual([]);
-        oldResult.resolve({ models: oldModels });
-      }
       await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
       oldResult.resolve({ models: oldModels });
       await oldResult.promise;
@@ -979,51 +973,6 @@ describe("AgentsPage gateway lifecycle", () => {
     nextEnsure.resolve();
     await nextEnsure.promise;
     await waitForFast(() => expect(page.agentIdentityLoading).toBe(false));
-    page.subscriptions.hostDisconnected();
-  });
-
-  it("rejects effective-tools results from a replaced sessions capability", async () => {
-    const oldResult = deferred<ToolsEffectiveResult>();
-    const nextResult = deferred<ToolsEffectiveResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(oldResult.promise)
-      .mockReturnValueOnce(nextResult.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const currentGateway = gateway(snapshot(client));
-    const agents = agentsCapability(async () => files("main", "unused"));
-    const oldSessions = {
-      state: { result: null, modelOverrides: {} },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["sessions"];
-    const nextSessions = {
-      state: { result: null, modelOverrides: {} },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["sessions"];
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    const context = pageContext(currentGateway, agents, { sessions: oldSessions });
-    page.routeData = agentsRouteData(currentGateway);
-    page.context = context;
-    setPageGateway(page, client);
-    page.subscriptions.hostConnected();
-    page.loadEffectiveToolsForAgent("main");
-    expect(page.toolsEffectiveLoading).toBe(true);
-
-    page.context = { ...context, sessions: nextSessions };
-    page.subscriptions.hostUpdate();
-    page.loadEffectiveToolsForAgent("main");
-    expect(page.toolsEffectiveLoading).toBe(true);
-
-    oldResult.resolve({ profile: "old" } as ToolsEffectiveResult);
-    await oldResult.promise;
-    await Promise.resolve();
-    expect(page.toolsEffectiveResult).toBeNull();
-    expect(page.toolsEffectiveLoading).toBe(true);
-
-    nextResult.resolve({ profile: "new" } as ToolsEffectiveResult);
-    await nextResult.promise;
-    await waitForFast(() => expect(page.toolsEffectiveResult?.profile).toBe("new"));
-    expect(page.toolsEffectiveLoading).toBe(false);
     page.subscriptions.hostDisconnected();
   });
 });

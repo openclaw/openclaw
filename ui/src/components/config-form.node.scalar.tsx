@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { For, createEffect, createMemo, untrack } from "solid-js";
 import { i18n } from "../i18n/index.ts";
-import { locale, t } from "../lib/reactive/i18n.ts";
+import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
   configValuesEqual,
   isSupportedConfigValueValid,
@@ -152,7 +152,7 @@ function ScalarInput(props: {
   let input!: HTMLInputElement;
   let initialized = false;
   const state = createMemo(() => {
-    locale();
+    getLocale();
     const params = props.params;
     const { schema, value, path, hints } = params;
     const hint = hintForPath(path, hints);
@@ -513,7 +513,7 @@ export function SelectInput(props: {
   params: ConfigNodeRenderParams & { options: unknown[] };
 }): JSX.Element {
   const field = createMemo(() => {
-    locale();
+    getLocale();
     return resolveConfigFieldPresentation(props.params);
   });
   const unset = "__unset__";

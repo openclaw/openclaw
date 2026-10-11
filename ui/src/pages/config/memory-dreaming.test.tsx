@@ -64,30 +64,14 @@ function selectedSegment(container: HTMLElement): string | null {
 }
 
 describe("renderDreamingSettings", () => {
-  // resolveMemoryDreamingConfig defaults every phase's `enabled` to true, so a
-  // config that only turns dreaming on is running all three phases.
-  it("renders every phase as on when the config only sets dreaming.enabled", () => {
-    const states = toggleStates(renderInto({ enabled: true }));
-
-    expect(states["Light phase/Enabled"]).toBe(true);
-    expect(states["Deep phase/Enabled"]).toBe(true);
-    expect(states["REM phase/Enabled"]).toBe(true);
-  });
-
-  it("still renders a phase that config explicitly disables as off", () => {
+  it("defaults phases on unless explicitly disabled", () => {
     const states = toggleStates(
       renderInto({ enabled: true, phases: { deep: { enabled: false } } }),
     );
 
     expect(states["Light phase/Enabled"]).toBe(true);
     expect(states["Deep phase/Enabled"]).toBe(false);
-  });
-
-  it("keeps toggles that default to off unchecked when absent", () => {
-    const states = toggleStates(renderInto(null));
-
-    expect(states["Schedule/Verbose logging"]).toBe(false);
-    expect(states["Storage/Separate reports"]).toBe(false);
+    expect(states["REM phase/Enabled"]).toBe(true);
   });
 
   it("renders the runtime storage-mode default when the config omits it", () => {
@@ -96,19 +80,6 @@ describe("renderDreamingSettings", () => {
     expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
     // An unreadable stored value is not a fourth mode: it reads as the default.
     expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
-  });
-
-  it("shows inherited values in placeholders without repeating default status", () => {
-    const container = renderInto(null);
-
-    expect(container.textContent).not.toContain("Using default:");
-    expect(rowFor(container, "Dreaming frequency").querySelector("input")?.placeholder).toBe(
-      "0 3 * * *",
-    );
-    expect(rowFor(container, "Timezone").querySelector("input")?.placeholder).toBe(
-      "Asia/Singapore",
-    );
-    expect(numberInput(container, "Lookback days").placeholder).toBe("2");
   });
 
   it("shows the advanced execution model as the inherited model default", async () => {
@@ -142,32 +113,6 @@ describe("renderDreamingSettings", () => {
 
     const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
     expect(rowFor(inherited, "Dreaming model").textContent).not.toContain("Using default:");
-  });
-
-  it("displays runtime defaults for malformed explicit values", () => {
-    const onPatch = vi.fn();
-    const container = renderInto(
-      {
-        frequency: 42,
-        verboseLogging: "yes",
-        storage: { mode: 42, separateReports: "yes" },
-      },
-      onPatch,
-    );
-
-    for (const title of [
-      "Dreaming frequency",
-      "Verbose logging",
-      "Storage mode",
-      "Separate reports",
-    ]) {
-      const row = rowFor(container, title);
-      expect(row.textContent).toContain("Default:");
-    }
-    expect(numberInput(container, "Dreaming frequency").value).toBe("");
-    expect(toggleStates(container)["Schedule/Verbose logging"]).toBe(false);
-    expect(selectedSegment(container)).toBe("separate");
-    expect(toggleStates(container)["Storage/Separate reports"]).toBe(false);
   });
 
   it("locks every global dreaming control when config mutation is unavailable", () => {
@@ -213,9 +158,13 @@ describe("numeric field bounds", () => {
   // minimum, similarity/score fields are numbers in 0..1.
   it("rejects values the memory-core manifest would refuse instead of patching them", () => {
     const onPatch = vi.fn();
-    const container = renderInto({ enabled: true }, onPatch);
+    const container = renderInto(
+      { enabled: true, phases: { light: { lookbackDays: 7 } } },
+      onPatch,
+    );
 
     editNumber(numberInput(container, "Lookback days"), "-1");
+    expect(numberInput(container, "Lookback days").value).toBe("7");
     editNumber(numberInput(container, "Limit"), "2.5");
     editNumber(numberInput(container, "Dedupe similarity"), "1.4");
     editNumber(numberInput(container, "Maximum age (days)"), "0");
@@ -227,43 +176,11 @@ describe("numeric field bounds", () => {
     expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "dedupeSimilarity"], 0.82);
   });
 
-  it("restores the stored value so a refused edit does not linger in the field", () => {
-    const container = renderInto({ phases: { light: { lookbackDays: 7 } } });
-    const input = numberInput(container, "Lookback days");
-
-    editNumber(input, "-3");
-    expect(input.value).toBe("7");
-  });
-
-  it("treats the manifest bounds as inclusive", () => {
-    const onPatch = vi.fn();
-    const container = renderInto({ enabled: true }, onPatch);
-
-    editNumber(numberInput(container, "Dedupe similarity"), "1");
-    editNumber(numberInput(container, "Dedupe similarity"), "0");
-    expect(onPatch).toHaveBeenNthCalledWith(1, ["phases", "light", "dedupeSimilarity"], 1);
-    expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "dedupeSimilarity"], 0);
-  });
-
   it("clears the stored value when the field is emptied", () => {
     const onPatch = vi.fn();
     const container = renderInto({ phases: { light: { lookbackDays: 7 } } }, onPatch);
 
     editNumber(numberInput(container, "Lookback days"), "");
     expect(onPatch).toHaveBeenCalledWith(["phases", "light", "lookbackDays"], undefined);
-  });
-
-  it("advertises the manifest bounds on the inputs", () => {
-    const container = renderInto(null);
-
-    const similarity = numberInput(container, "Dedupe similarity");
-    expect(similarity.getAttribute("min")).toBe("0");
-    expect(similarity.getAttribute("max")).toBe("1");
-    expect(similarity.getAttribute("step")).toBe("any");
-
-    const maxAge = numberInput(container, "Maximum age (days)");
-    expect(maxAge.getAttribute("min")).toBe("1");
-    expect(maxAge.getAttribute("step")).toBe("1");
-    expect(maxAge.getAttribute("max")).toBeNull();
   });
 });

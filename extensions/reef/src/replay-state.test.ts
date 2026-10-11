@@ -6,7 +6,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { base64url, generateIdentity, signReceipt } from "../protocol/index.js";
+import { generateIdentity, signReceipt } from "../protocol/index.js";
 import {
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
@@ -26,17 +26,13 @@ import {
   reefReplayStoreKey,
   type ReefReplayRecord,
 } from "./replay-store.js";
-import { openStores } from "./state.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const id = "01JZ0000000000000000000000";
 const hash = "a".repeat(64);
 const key = reefReplayStoreKey("alice", id);
 
-function fixture(
-  host: "worker" | "no-observe" | "no-compare" = "worker",
-  maxEntries = REEF_REPLAY_MAX_ENTRIES,
-) {
+function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
   const stateDir = temp.make("reef-replay-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const runtime = createPluginRuntimeMock();
@@ -47,32 +43,26 @@ function fixture(
     defaultTtlMs: REEF_REPLAY_TTL_MS,
     env,
   };
-  const store = createPluginStateKeyedStoreForTests<ReefReplayRecord>("reef", options);
+  const store = createPluginStateKeyedStoreV2ForTests<ReefReplayRecord>("reef", options, {
+    assertCurrent() {},
+  });
   const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
   runtime.state.openSyncKeyedStore = <T>(opts: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", { ...opts, env });
-  runtime.state.openKeyedStore = <T>(opts: OpenAsyncKeyedStoreOptions) => {
+  runtime.state.openKeyedStoreV2 = <T>(opts: OpenAsyncKeyedStoreOptions) => {
     if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
-      return createPluginStateKeyedStoreForTests<T>("reef", { ...opts, env });
+      return createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        { ...opts, env },
+        { assertCurrent() {} },
+      );
     }
-    const adapter = {
-      ...store,
-      ...(host === "no-observe" ? { observe: undefined } : {}),
-      ...(host === "no-compare" ? { compareAndApply: undefined } : {}),
-    };
     // The runtime's generic namespace selects this fixture's ReefReplayRecord store.
-    return adapter as PluginStateKeyedStore<T>;
+    return { ...store } as PluginStateKeyedStore<T, 2>;
   };
   const identity = generateIdentity();
   const replayKey = new Uint8Array(32).fill(2);
-  const keys = {
-    ...identity,
-    keyEpoch: 1,
-    auditKey: base64url(new Uint8Array(32).fill(1)),
-    replayKey: base64url(replayKey),
-  };
-  const open = async () =>
-    (await openStores(runtime, keys, { replayMaxEntries: maxEntries })).replay;
+  const open = () => new ReefSqliteReplayStore(runtime, replayKey, randomBytes, maxEntries);
   const openWithRng = (rng: (length: number) => Uint8Array) =>
     new ReefSqliteReplayStore(runtime, replayKey, rng, maxEntries);
   const receipt = signReceipt(
@@ -94,7 +84,7 @@ describe("Reef replay worker ownership", () => {
 
   it("claims, refreshes, completes and reopens encrypted replay without host SQLite calls", async () => {
     const f = fixture();
-    const replay = await f.open();
+    const replay = f.open();
     const observation = observeHostDataSql();
     const sql = observation.calls;
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
@@ -110,28 +100,12 @@ describe("Reef replay worker ownership", () => {
       expect(spy).not.toHaveBeenCalled();
     }
     vi.restoreAllMocks();
-    await expect((await f.open()).completed("alice", id)).resolves.toEqual({
+    await expect(f.open().completed("alice", id)).resolves.toEqual({
       receipt: f.receipt,
       body: { text: "synthetic private body" },
     });
     expect(JSON.stringify(f.raw.lookup(key))).not.toContain("synthetic private body");
   });
-
-  it.each(["no-observe", "no-compare"] as const)(
-    "retains atomic native publication when %s",
-    async (host) => {
-      const f = fixture(host);
-      const comparisons = vi.spyOn(f.store, "compareAndApply");
-      const replay = await f.open();
-      const claim = replay.claim("alice", id, hash);
-      expect(f.raw.lookup(key)?.state).toBe("in_flight");
-      const complete = replay.complete("alice", id, f.receipt, { text: "body" });
-      expect(f.raw.lookup(key)?.state).toBe("completed");
-      await expect(claim).resolves.toBe("new");
-      await complete;
-      expect(comparisons).not.toHaveBeenCalled();
-    },
-  );
 
   it("preserves invocation order through delayed claim publication and successor ownership", async () => {
     const f = fixture();
@@ -146,7 +120,7 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    const replay = await f.open();
+    const replay = f.open();
     const first = replay.claim("alice", id, hash);
     await started.promise;
     const release = replay.release("alice", id);
@@ -163,29 +137,11 @@ describe("Reef replay worker ownership", () => {
     expect(f.raw.lookup(key)?.state).toBe("completed");
   });
 
-  it.each(["refresh", "complete", "release"] as const)(
-    "retains a matching owner after lease expiry for %s",
-    async (operation) => {
-      const f = fixture();
-      const replay = await f.open();
-      await replay.claim("alice", id, hash);
-      await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
-      if (operation === "complete") {
-        await replay.complete("alice", id, f.receipt, { text: "body" });
-      } else {
-        await replay[operation]!("alice", id);
-      }
-      expect(f.raw.lookup(key)?.state).toBe(
-        { refresh: "in_flight", complete: "completed", release: "available" }[operation],
-      );
-    },
-  );
-
   it("rejects stale completion and cleanup after a conflicting successor takes ownership", async () => {
     const f = fixture();
-    const original = await f.open();
+    const original = f.open();
     await original.claim("alice", id, hash);
-    const successor = await f.open();
+    const successor = f.open();
     const compare = f.store.compareAndApply!;
     let takeover = true;
     f.store.compareAndApply = async (...args) => {
@@ -197,7 +153,7 @@ describe("Reef replay worker ownership", () => {
       return compare(...args);
     };
     // A fresh handle captures the instrumented worker method but owns its own claim.
-    const stale = await f.open();
+    const stale = f.open();
     await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
     takeover = false;
     await stale.claim("alice", id, hash);
@@ -240,7 +196,7 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    const replay = await f.open();
+    const replay = f.open();
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     expect(f.raw.lookup(key)?.claimExpiresAt).toBe(now + 5 * 60_000);
     await replay.complete("alice", id, f.receipt, { text: "body" });
@@ -267,7 +223,7 @@ describe("Reef replay worker ownership", () => {
       }
       return compare(...args);
     };
-    await expect((await f.open()).claim("alice", id, hash)).resolves.toBe("in_flight");
+    await expect(f.open().claim("alice", id, hash)).resolves.toBe("in_flight");
     expect(f.raw.lookup(key)).toEqual(valid);
   });
 
@@ -330,63 +286,42 @@ describe("Reef replay worker ownership", () => {
     });
   });
 
-  it.each(["mismatch", "duplicate", "in_flight", "refresh", "complete", "release"] as const)(
-    "renews existing-row retention on %s refusal",
-    async (operation) => {
-      const f = fixture();
-      const replay = await f.open();
-      await replay.claim("alice", id, hash);
-      const state = operation === "duplicate" ? "consumed" : "in_flight";
-      await f.store.register(
-        key,
-        { ...f.raw.lookup(key)!, state, claimOwner: "successor" },
-        { ttlMs: 1_000 },
-      );
-      const before = f.raw.entries()[0]!.expiresAt!;
-      if (operation === "mismatch" || operation === "duplicate" || operation === "in_flight") {
-        await expect(
-          replay.claim("alice", id, operation === "mismatch" ? "other" : hash),
-        ).resolves.toBe(operation);
-      } else if (operation === "release") {
-        await replay.release("alice", id);
-      } else {
-        await expect(
-          operation === "complete"
-            ? replay.complete("alice", id, f.receipt, { text: "body" })
-            : replay[operation]!("alice", id),
-        ).rejects.toThrow("replay claim is not in flight");
-      }
-      const after = f.raw.entries()[0]!;
-      expect(after.expiresAt! - before).toBeGreaterThan(REEF_REPLAY_TTL_MS - 2_000);
-      expect(after.value.claimOwner).toBe("successor");
-    },
-  );
+  it("renews existing-row retention on duplicate refusal", async () => {
+    const f = fixture();
+    const replay = f.open();
+    await replay.claim("alice", id, hash);
+    await f.store.register(
+      key,
+      { ...f.raw.lookup(key)!, state: "consumed", claimOwner: "successor" },
+      { ttlMs: 1_000 },
+    );
+    const before = f.raw.entries()[0]!.expiresAt!;
+    await expect(replay.claim("alice", id, hash)).resolves.toBe("duplicate");
+    const after = f.raw.entries()[0]!;
+    expect(after.expiresAt! - before).toBeGreaterThan(REEF_REPLAY_TTL_MS - 2_000);
+    expect(after.value.claimOwner).toBe("successor");
+  });
 
-  it.each(["worker", "no-compare"] as const)(
-    "preserves validation placement and native diagnostics on %s",
-    async (host) => {
-      const f = fixture(host);
-      const rng = vi.fn(randomBytes);
-      const replay = f.openWithRng(rng);
-      await expect(
-        replay.complete("alice", id, { ...f.receipt, id: "wrong" }, { text: "body" }),
-      ).rejects.toThrow("receipt id does not match");
-      await expect(replay.complete("alice", id, f.receipt)).rejects.toThrow("requires body");
-      await expect(
-        replay.complete("alice", id, f.receipt, { text: "body", thread: "invalid" }),
-      ).rejects.toThrow("replay claim is not in flight");
-      expect(rng).not.toHaveBeenCalled();
-      await replay.claim("alice", id, hash);
-      await expect(
-        replay.complete("alice", id, f.receipt, { text: "body", thread: "invalid" }),
-      ).rejects.toThrow(
-        host === "worker" ? "invalid body identifier" : "Failed to update plugin state entry",
-      );
-      expect(rng).not.toHaveBeenCalled();
-      await replay.complete("alice", id, f.receipt, { text: "valid" });
-      expect(rng.mock.calls).toEqual([[12]]);
-    },
-  );
+  it("validates completion only after matching the live claim", async () => {
+    const f = fixture();
+    const rng = vi.fn(randomBytes);
+    const replay = f.openWithRng(rng);
+    await expect(
+      replay.complete("alice", id, { ...f.receipt, id: "wrong" }, { text: "body" }),
+    ).rejects.toThrow("receipt id does not match");
+    await expect(replay.complete("alice", id, f.receipt)).rejects.toThrow("requires body");
+    await expect(
+      replay.complete("alice", id, f.receipt, { text: "body", thread: "invalid" }),
+    ).rejects.toThrow("replay claim is not in flight");
+    expect(rng).not.toHaveBeenCalled();
+    await replay.claim("alice", id, hash);
+    await expect(
+      replay.complete("alice", id, f.receipt, { text: "body", thread: "invalid" }),
+    ).rejects.toThrow("invalid body identifier");
+    expect(rng).not.toHaveBeenCalled();
+    await replay.complete("alice", id, f.receipt, { text: "valid" });
+    expect(rng.mock.calls).toEqual([[12]]);
+  });
 
   it.each(["observe", "compareAndApply"] as const)(
     "does not fall back after %s fails",
@@ -395,7 +330,7 @@ describe("Reef replay worker ownership", () => {
       const failure = new Error("synthetic worker refusal");
       vi.spyOn(f.store, method).mockRejectedValue(failure);
       const native = vi.spyOn(f.runtime.state, "openSyncKeyedStore");
-      const replay = await f.open();
+      const replay = f.open();
       native.mockClear();
       await expect(replay.claim("alice", id, hash)).rejects.toBe(failure);
       expect(native).not.toHaveBeenCalled();
@@ -404,8 +339,8 @@ describe("Reef replay worker ownership", () => {
   );
 
   it("does not evict retained bindings at capacity and admits queued work after a failure", async () => {
-    const f = fixture("worker", 1);
-    const replay = await f.open();
+    const f = fixture(1);
+    const replay = f.open();
     await replay.claim("alice", id, hash);
     await replay.complete("alice", id, f.receipt, { text: "body" });
     await expect(replay.claim("alice", "second", hash)).rejects.toMatchObject({

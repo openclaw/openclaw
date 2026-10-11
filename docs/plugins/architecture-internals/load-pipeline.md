@@ -253,9 +253,11 @@ root and entry, preserving source overlays and retained module instances.
 Bundled provider policy lookups retain their resolved surface, including absence,
 in the metadata cache. Repeated model-reference canonicalization reuses that
 surface without resolving artifact candidates again. The memo follows the
-selected registry's publication version and bundled-directory selection;
-registration and unpublished registries remain uncached. A new generation or
-explicit metadata invalidation resolves the surface again, and managed surfaces
+selected registry's publication version and bundled-directory selection, with
+separate weakly held entries for each registry. Completed private registries
+become cacheable when their loader publishes its identity; registration and
+incomplete registries remain uncached. A new generation or explicit metadata
+invalidation resolves the surface again, and managed surfaces
 retain their instance's admission checks.
 
 The CLI invocation owns one operation cache across config reads, output metadata,

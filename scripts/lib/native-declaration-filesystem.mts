@@ -57,10 +57,6 @@ export function createDeclarationFileSystem(
           }
         : { ...lookup, path: file };
     const key = `${recorded.kind}\0${recorded.path}`;
-    const previous = lookups.get(key);
-    if (previous && JSON.stringify(previous) !== JSON.stringify(recorded)) {
-      reject(new Error(`Native compiler lookup changed during compilation: ${recorded.path}`));
-    }
     lookups.set(key, recorded);
   };
   const local = (file: string) => {

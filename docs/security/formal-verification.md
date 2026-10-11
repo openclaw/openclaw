@@ -93,18 +93,22 @@ See also `docs/gateway-exposure-matrix.md` in the models repo.
 
 Follow-on models that tighten fidelity around real-world failure modes: non-atomic updates, retries, and message fan-out.
 
-### Pairing store concurrency and idempotency
+<a id="pairing-store-concurrency-and-idempotency" />
 
-**Claim:** the pairing store enforces `MaxPending` and idempotency even under interleavings — check-then-write must be atomic/locked, and refresh must not create duplicates. Concretely: concurrent requests cannot exceed `MaxPending` for a channel, and repeated requests/refreshes for the same `(channel, sender)` do not create duplicate live pending rows.
+### Pairing store concurrency and duplicate prevention
+
+**Claim:** the pairing store enforces `MaxPending` and prevents duplicates even when requests overlap — check-then-write must be atomic/locked, and refresh must not create duplicates. Concretely: concurrent requests cannot exceed `MaxPending` for a channel, and repeated requests/refreshes for the same `(channel, sender)` do not create duplicate live pending rows.
 
 | Result         | Targets                                                                                                                                                                     |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Green          | `make pairing-race` (atomic/locked cap check), `make pairing-idempotency`, `make pairing-refresh`, `make pairing-refresh-race`                                              |
 | Red (expected) | `make pairing-race-negative` (non-atomic begin/commit cap race), `make pairing-idempotency-negative`, `make pairing-refresh-negative`, `make pairing-refresh-race-negative` |
 
-### Ingress trace correlation and idempotency
+<a id="ingress-trace-correlation-and-idempotency" />
 
-**Claim:** ingestion preserves trace correlation across fan-out and is idempotent under provider retries. When one external event becomes multiple internal messages, every part keeps the same trace/event identity. Retries do not double-process. If provider event IDs are missing, dedupe falls back to a safe key (for example trace ID) to avoid dropping distinct events.
+### Ingress trace correlation and duplicate prevention
+
+**Claim:** ingestion preserves trace correlation across fan-out and does not process provider retries twice. When one external event becomes multiple internal messages, every part keeps the same trace/event identity. If provider event IDs are missing, dedupe falls back to a safe key (for example trace ID) to avoid dropping distinct events.
 
 | Result         | Targets                                                                                                                                     |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -113,7 +117,7 @@ Follow-on models that tighten fidelity around real-world failure modes: non-atom
 
 ### Routing dmScope precedence and identityLinks
 
-**Claim:** `dmScope` precedence and identity links behave deterministically. The default `main` scope shares one rolling session across a single owner's DMs (the personal-agent default). Any configured isolating scope (`per-peer`, `per-channel-peer`, `per-account-channel-peer`) keeps DM sessions strictly separated. Channel-specific `dmScope` overrides win over global defaults. `identityLinks` collapse sessions only within explicit linked groups, not across unrelated peers. Multi-user inboxes are expected to opt into an isolating scope (the runtime security audit recommends this when it detects multi-user DM traffic).
+**Claim:** `dmScope` precedence and identity links follow fixed rules. The default `main` scope shares one rolling session across a single owner's DMs (the personal-agent default). Any configured isolating scope (`per-peer`, `per-channel-peer`, `per-account-channel-peer`) keeps DM sessions strictly separated. Channel-specific `dmScope` overrides win over global defaults. `identityLinks` collapse sessions only within explicit linked groups, not across unrelated peers. Multi-user inboxes are expected to opt into an isolating scope (the runtime security audit recommends this when it detects multi-user DM traffic).
 
 | Result         | Targets                                                                   |
 | -------------- | ------------------------------------------------------------------------- |

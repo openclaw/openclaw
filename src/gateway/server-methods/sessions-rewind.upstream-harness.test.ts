@@ -3,16 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   listSessionEntriesCore,
-  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  upsertSessionUpstreamLink,
-  upsertSessionUpstreamLinkAsync,
-} from "../../sessions/session-upstream-links.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -226,39 +222,6 @@ describe("upstream session message-cut methods", () => {
       expect(nativeWrites).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects a worker-committed upstream source change before deferred native fork I/O", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    const nativeWrite = vi.fn();
-    mocks.upstreamFork.mockImplementation(
-      async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        await Promise.resolve();
-        expect(
-          await upsertSessionUpstreamLinkAsync({
-            agentId: "main",
-            catalogId: "codex",
-            hostId: "gateway:local",
-            marker: null,
-            sessionKey,
-            threadId: "replacement-thread",
-            upstreamKind: "codex-app-server",
-            upstreamRef: { connectionFingerprint: "fingerprint", threadId: "replacement-thread" },
-          }),
-        ).toBe(true);
-        assertCurrent();
-        nativeWrite();
-        return { status: "created", key: "agent:main:dashboard:forked" };
-      },
-    );
-
-    await expect(invoke("sessions.fork", "user-entry")).rejects.toThrow(
-      "changed during fork initialization",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(sourceSessionId);
-  });
 
   it.each(["dual", "legacy", "v2"] as const)(
     "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",

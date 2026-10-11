@@ -41,11 +41,7 @@ import {
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
-import {
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-} from "../tui/tui.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -975,26 +971,16 @@ export async function finalizeSetupWizard(
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
         if (sessionGateway) {
-          // The temporary Gateway can own the same provider and child-process teardown as
-          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
-          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
-            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
+          // Setup owns this temporary Gateway; settle it before returning or
+          // propagating a TUI failure to the CLI finalizer.
+          await closeSessionGatewayForOnboarding({
+            sessionGateway,
+            runtime,
+            reason: "onboarding tui exited",
           });
-          try {
-            await closeSessionGatewayForOnboarding({
-              sessionGateway,
-              runtime,
-              reason: "onboarding tui exited",
-            });
-            sessionGateway = undefined;
-          } finally {
-            clearTimeout(cleanupExitTimer);
-          }
+          sessionGateway = undefined;
         }
       }
-      // Setup owns the temporary Gateway, so its cleanup must finish before
-      // the in-process TUI fallback is allowed to terminate the process.
-      scheduleProcessExitAfterTuiReturn();
       launchedTui = true;
     }
 

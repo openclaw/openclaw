@@ -173,15 +173,6 @@ export function prepareAgentDeletionPathFence(
   };
 }
 
-function journalFenceFingerprint(rows: readonly JournalFenceRow[]): string {
-  return rows
-    .map((row) =>
-      [...journalFenceFields.map((field) => row[field]), row.cleanup_completed].join("\0"),
-    )
-    .toSorted()
-    .join("\n");
-}
-
 /** Refuse database claims beneath paths still owned by an unfinished deletion. */
 export function assertAgentDeletionPathFence(
   state: OpenClawStateDatabase,
@@ -191,12 +182,6 @@ export function assertAgentDeletionPathFence(
   const { rows: journalRows, known } = readAgentDeletionPathFenceRows(database, snapshot.purpose);
   if (!known && journalRows.length === 0) {
     return;
-  }
-  if (
-    journalFenceFingerprint(snapshot.entries.map((entry) => entry.row)) !==
-    journalFenceFingerprint(journalRows)
-  ) {
-    throw new Error("Agent deletion journal changed while preparing a database claim.");
   }
   // Existing foreign leases remain blockers even inside the deletion's cleanup scope.
   const cleanup = snapshot.fenceAgentId
@@ -228,19 +213,19 @@ export function assertAgentDeletionPathFence(
     if (row.cleanup_completed === 1 && row.agent_id === creationAgentId) {
       continue;
     }
+    const entry = snapshot.entries.find((candidate) =>
+      journalFenceFields.every((field) => candidate.row[field] === row[field]),
+    );
+    if (row.cleanup_completed !== 1 && !entry) {
+      throw new Error("Agent deletion journal changed while preparing a database claim.");
+    }
     assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);
     if (row.cleanup_completed === 1) {
       continue;
     }
     // Filesystem canonicalization stays outside the SQLite write transaction; the exact journal
     // row is revalidated here so a concurrent deletion can only make the claim fail closed.
-    const entry = snapshot.entries.find((candidate) =>
-      journalFenceFields.every((field) => candidate.row[field] === row[field]),
-    );
-    if (!entry) {
-      throw new Error("Agent deletion journal changed while preparing a database claim.");
-    }
-    for (const fence of entry.fences) {
+    for (const fence of entry!.fences) {
       const blockedPath = snapshot.targetPaths.find(
         (targetPath) =>
           targetPath === fence.canonicalPath || isPathInside(fence.canonicalPath, targetPath),

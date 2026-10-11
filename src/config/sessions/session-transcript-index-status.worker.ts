@@ -8,7 +8,11 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseSiblingWriteRevision,
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -227,12 +231,14 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
         // Empty cleanup must not publish a write receipt that invalidates clean search hits.
         if (selected.length > 0) {
           const removed =
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom(table).where(
-                "rowid",
-                "in",
-                selected.map((row) => row.rowId),
+            withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+              executeSqliteQuerySync(
+                db,
+                kysely.deleteFrom(table).where(
+                  "rowid",
+                  "in",
+                  selected.map((row) => row.rowId),
+                ),
               ),
             ).numAffectedRows ?? 0n;
           remainingRows[index]! -= Number(removed);
