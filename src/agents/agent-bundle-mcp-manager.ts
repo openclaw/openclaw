@@ -83,6 +83,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       const priorDisposal = store.disposalInFlight;
       const priorSessionWork = store.runtimeWorkChains.get(params.sessionId);
+      const publication = store.configReload;
       let acquired: T | undefined;
       try {
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
@@ -92,7 +93,9 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
           acquired = await acquire({
             ...params,
             requester,
-            ...(reload ? { cfg: reload.cfg, manifestRegistry: reload.manifestRegistry } : {}),
+            ...(reload && reload !== publication
+              ? { cfg: reload.cfg, manifestRegistry: reload.manifestRegistry }
+              : {}),
           });
           store.scheduler.signal.throwIfAborted();
           return acquired;

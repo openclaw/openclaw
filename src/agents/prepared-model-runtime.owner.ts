@@ -121,18 +121,6 @@ function findConfiguredOwnerCandidates(
       : identityCandidates;
 }
 
-export function resolveConfiguredOwnerPublication(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  rawInput: PreparedModelRuntimeInput,
-): { matches: boolean; pending?: Promise<PreparedModelRuntimeSnapshot> } {
-  const input = normalizePreparedModelRuntimeInput(rawInput);
-  const candidates = findConfiguredOwnerCandidates(owners, input);
-  return {
-    matches: candidates.length > 0,
-    pending: candidates.length === 1 ? candidates[0]?.pending : undefined,
-  };
-}
-
 export function resolveConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
