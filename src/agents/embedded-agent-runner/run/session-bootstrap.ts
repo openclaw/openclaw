@@ -18,13 +18,13 @@ import {
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeScope } from "../../../config/sessions/session-accessor.types.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
+import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-entry-presence-read.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
-import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
