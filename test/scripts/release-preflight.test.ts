@@ -36,7 +36,6 @@ const CHECK_COMMANDS = [
   "pnpm native:i18n:check",
 ];
 const FIX_COMMANDS = [
-  "pnpm update:compat:check",
   "node --import tsx scripts/sync-plugin-versions.ts",
   "pnpm channels:catalog:gen",
   "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
@@ -275,18 +274,6 @@ describe("scripts/release-preflight.mjs", () => {
     );
   });
 
-  it("fails release preparation when the supported updater inventory is stale", () => {
-    const fakePnpm = makeFakePnpm();
-    const result = runPreflight(["--fix"], fakePnpm, {
-      OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS: "pnpm update:compat:check",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "- previous updater compatibility: exit 7 (pnpm update:compat:check)",
-    );
-  });
-
   it("serializes the root package writer before generated-artifact readers", () => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
@@ -407,7 +394,6 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(0);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
-        "pnpm update:compat:check",
         "node --import tsx scripts/sync-plugin-versions.ts",
         "pnpm channels:catalog:gen",
         "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",

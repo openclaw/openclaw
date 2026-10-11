@@ -217,9 +217,8 @@ function createPrepackLifecycleFixture() {
   );
   writeFileSync(
     path.join(rootDir, "check-update-compat.mjs"),
-    'import { existsSync, writeFileSync } from "node:fs";\n' +
-      'writeFileSync("compat-check-invoked", "update:compat:check\\n");\n' +
-      'if (existsSync("stale-update-compat")) throw new Error("Missing latest updater inventory; run pnpm update:compat:gen");\n',
+    'import { writeFileSync } from "node:fs";\n' +
+      'writeFileSync("compat-check-invoked", "update:compat:check\\n");\n',
   );
   writeFileSync(
     path.join(rootDir, "lifecycle.mjs"),
@@ -479,6 +478,7 @@ describe("prepared prepack ownership", () => {
 });
 
 describe("prepack lifecycle", () => {
+  // Live npm updater coverage is a test/release-preparation gate, not a packaging gate.
   it.each([true, false])("packs and restores source artifacts with prepared=%s", (prepared) => {
     const fixture = createPrepackLifecycleFixture();
     const result = fixture.pack(prepared);
@@ -486,7 +486,7 @@ describe("prepack lifecycle", () => {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(path.join(fixture.rootDir, "build-invoked"))).toBe(!prepared);
-    expect(existsSync(path.join(fixture.rootDir, "compat-check-invoked"))).toBe(prepared);
+    expect(existsSync(path.join(fixture.rootDir, "compat-check-invoked"))).toBe(false);
     const prepack = fixture.readLifecycleResult("prepack");
     expect(prepack).toMatchObject({ status: 0, signal: null });
     expect(prepack.stdout).toContain("channel=1");
@@ -510,21 +510,19 @@ describe("prepack lifecycle", () => {
     fixture.expectRestored();
   });
 
-  it.each(["missing asset", "invalid changelog", "stale updater inventory"])(
+  it.each(["missing asset", "invalid changelog"])(
     "rejects prepared packages with %s without rebuilding or leaving source mutations",
     (failure) => {
       const fixture = createPrepackLifecycleFixture();
       if (failure === "missing asset") {
         rmSync(path.join(fixture.rootDir, "dist/control-ui/assets/fixture.js.gz"));
-      } else if (failure === "invalid changelog") {
+      } else {
         fixture.sourceFiles["CHANGELOG.md"] =
           "# Changelog\n\n## 2026.7.1\n- Previous release notes.\n";
         writeFileSync(
           path.join(fixture.rootDir, "CHANGELOG.md"),
           fixture.sourceFiles["CHANGELOG.md"],
         );
-      } else {
-        writeFileSync(path.join(fixture.rootDir, "stale-update-compat"), "stale\n");
       }
       const result = fixture.pack(true);
 
@@ -535,9 +533,7 @@ describe("prepack lifecycle", () => {
       expect(prepack.stderr).toContain(
         failure === "missing asset"
           ? "missing prepared Control UI .gz asset"
-          : failure === "invalid changelog"
-            ? "CHANGELOG.md does not contain a release section for 2026.8.1"
-            : "Missing latest updater inventory; run pnpm update:compat:gen",
+          : "CHANGELOG.md does not contain a release section for 2026.8.1",
       );
       expect(existsSync(path.join(fixture.rootDir, "build-invoked"))).toBe(false);
       expect(readdirSync(fixture.packDir)).toEqual([]);
