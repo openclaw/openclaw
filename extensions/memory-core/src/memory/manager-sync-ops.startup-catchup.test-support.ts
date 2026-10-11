@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_CHUNKING_VERSION,
+  ensureMemoryIndexSchema,
   type MemorySource,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
@@ -66,21 +67,8 @@ function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): MemoryIndex
   );
   startupHarnessDatabases.add(database);
   const db = database.db;
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
   db.exec(`
-    CREATE TABLE memory_index_sources (
-      path TEXT NOT NULL,
-      source TEXT NOT NULL,
-      hash TEXT NOT NULL,
-      mtime REAL NOT NULL,
-      size INTEGER NOT NULL,
-      UNIQUE(path, source)
-    );
-    CREATE TABLE memory_index_chunks (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      source TEXT NOT NULL,
-      model TEXT NOT NULL
-    );
     CREATE TABLE memory_index_source_update_audit (path TEXT NOT NULL);
     CREATE TRIGGER memory_index_source_update_audit_trigger
     AFTER UPDATE ON memory_index_sources

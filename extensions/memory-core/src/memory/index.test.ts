@@ -11,7 +11,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseWrite,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -550,10 +553,10 @@ describe("memory index", () => {
     await oldManager.close?.();
     await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
 
-    const nextManager = await getFreshManager(cfg);
-    (Reflect.get(nextManager, "db") as DatabaseSync).exec(
-      `DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`,
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`),
     );
+    const nextManager = await getFreshManager(cfg);
     expect(nextManager.status().custom?.indexIdentity).toEqual({
       status: "missing",
       reason: "index metadata is missing",
@@ -1130,13 +1133,16 @@ describe("memory index", () => {
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 
-  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
-    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
-    await manager.sync({ reason: "test", force: true });
-    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
-    expect(manager.status().vector?.storeAvailable).toBe(true);
+  it("retires a legacy vector table when reopening an indexed database", async () => {
+    const cfg = createCfg({ vectorEnabled: true });
+    const previous = await getPersistentManager(cfg);
+    await previous.sync({ reason: "test", force: true });
+    await previous.close();
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)"),
+    );
+    const manager = await getPersistentManager(cfg);
     const db = Reflect.get(manager, "db") as DatabaseSync;
-    db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
     await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
@@ -1146,6 +1152,7 @@ describe("memory index", () => {
         .get(),
     ).toBeUndefined();
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
   });
 
   it("reports persisted vector index state on the unprobed status path", async () => {
