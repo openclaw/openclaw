@@ -14,7 +14,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
-              "formula": "steipete/tap/peekaboo",
+              "formula": "openclaw/tap/peekaboo",
               "bins": ["peekaboo"],
               "label": "Install Peekaboo (brew)",
             },
