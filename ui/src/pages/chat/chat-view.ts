@@ -424,7 +424,7 @@ export function renderChat(props: ChatProps) {
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
   const notices = renderChatComposerNotices(props);
-  // Transcript invalidation replaces its render context; bind submission afterward.
+  // The outer view owns submission callbacks across deferred transcript commits.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const inputDisplay = selectChatInputDisplay(

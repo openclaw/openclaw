@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import type * as deliveryTarget from "../cron/isolated-agent/delivery-target.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,16 @@ const mocks = vi.hoisted(() => ({
     release: vi.fn(async () => {}),
   })),
   sendCronAnnouncePayloadStrict: vi.fn(),
+  resolveDeliveryTarget: vi.fn<typeof deliveryTarget.resolveDeliveryTarget>(
+    async (_cfg, _agentId, target) => ({
+      ok: true,
+      channel: target.channel ?? "telegram",
+      to: target.to ?? "channel:ops",
+      accountId: target.accountId,
+      threadId: target.threadId,
+      mode: "explicit",
+    }),
+  ),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -23,6 +34,11 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
     sendCronAnnouncePayloadStrict: mocks.sendCronAnnouncePayloadStrict,
   };
 });
+
+vi.mock("../cron/isolated-agent/delivery-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof deliveryTarget>()),
+  resolveDeliveryTarget: mocks.resolveDeliveryTarget,
+}));
 
 import { sendGatewayCronFailureAlert as sendGatewayCronFailureAlertBase } from "./server-cron-notifications.js";
 

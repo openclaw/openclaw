@@ -7,7 +7,10 @@ import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/ta
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
+import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
+import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { MascotMood } from "../components/mascot-pose.ts";
+import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
 
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
@@ -23,7 +26,26 @@ declare module "@solidjs/web" {
       "onWa-after-show"?: EventHandlerUnion<T, CustomEvent>;
       "onOpenclaw-composer-dismiss-invocations"?: EventHandlerUnion<T, CustomEvent>;
     }
+    interface ExplicitProperties {
+      messageActions: MessageActionDetails | null | undefined;
+    }
     interface IntrinsicElements {
+      "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
+        "prop:surface": "tool-result";
+        "prop:props": ControlUiSurfaceProps["tool-result"];
+        "prop:defaultView": unknown;
+        "prop:presented": boolean;
+      };
+      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
+        compact?: boolean;
+        placement?: "bottom-start" | "bottom-end";
+        "prop:activeEmoji"?: ReadonlySet<string>;
+        "prop:onSelect"?: (emoji: string, remove: boolean) => void;
+      };
+      "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
+        "prop:recommendation"?: ClawHubRecommendation;
+        "prop:agentId"?: string;
+      };
       "wa-tab-group": HTMLAttributes<WaTabGroup> & {
         "prop:active": string;
         activation: "auto" | "manual";

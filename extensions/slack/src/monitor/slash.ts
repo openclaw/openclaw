@@ -5,11 +5,7 @@ import type {
   SlackCommandMiddlewareArgs,
   SlackOptionsMiddlewareArgs,
 } from "@slack/bolt";
-import {
-  loadPreparedModelCatalog,
-  resolveAgentDir,
-  resolveDefaultModelForAgent,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -18,8 +14,6 @@ import {
   prepareSkillCommandsForAgents,
   parseCommandArgs,
   resolveCommandArgMenu,
-  resolveEffectiveAgentRuntime,
-  resolveStoredModelOverride,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -40,13 +34,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { resolveSlackAccount, type ResolvedSlackAccount } from "../accounts.js";
+import { buildSlackCompleteBlocksFallbackText } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
 import { formatSlackError } from "../errors.js";
@@ -76,6 +67,7 @@ import {
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 import { captureSlackSessionTargetGuard } from "./session-run-targets.js";
+import { resolveSlackCommandMenuModelContext } from "./slash-menu-model-context.js";
 import type { SlackCommandInvocation } from "./types.js";
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
@@ -111,58 +103,6 @@ const loadSlashDispatchRuntime = createLazyRuntimeModule(
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
 );
-
-function resolveSlackCommandMenuModelContext(params: {
-  cfg: SlackMonitorContext["cfg"];
-  agentId: string;
-  sessionKey: string;
-}): { provider?: string; model?: string; agentRuntime?: string } {
-  if (!params.sessionKey.trim()) {
-    return {};
-  }
-  try {
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
-    let provider: string | undefined;
-    let model: string | undefined;
-    if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      provider = defaultModel.provider;
-      model = defaultModel.model;
-    } else {
-      const override = resolveStoredModelOverride({
-        sessionEntry: entry,
-        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-        sessionKey: params.sessionKey,
-        defaultProvider: defaultModel.provider,
-      });
-      provider = override?.model
-        ? override.provider || defaultModel.provider
-        : (normalizeOptionalString(entry?.providerOverride) ??
-          normalizeOptionalString(entry?.modelProvider));
-      model = override?.model
-        ? override.model
-        : (normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model));
-    }
-    return {
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
-      agentRuntime: resolveEffectiveAgentRuntime({
-        cfg: params.cfg,
-        provider: provider ?? defaultModel.provider,
-        modelId: model ?? defaultModel.model,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        sessionEntry: entry,
-      }),
-    };
-  } catch {
-    return {};
-  }
-}
 
 const slackExternalArgMenuStore = createSlackExternalArgMenuStore();
 
@@ -586,7 +526,7 @@ export function createSlackCommandHandler(params: {
             : undefined;
         const menuModelContext =
           menuNeedsModelContext && menuRoute
-            ? resolveSlackCommandMenuModelContext({
+            ? await resolveSlackCommandMenuModelContext({
                 cfg,
                 agentId: menuRoute.agentId,
                 sessionKey: menuRoute.sessionKey,
@@ -615,6 +555,7 @@ export function createSlackCommandHandler(params: {
           catalog: menuModelCatalog,
         });
         if (menu) {
+          const route = menuRoute ?? (await resolveSlashRoute());
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
           const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
           const blocks = buildSlackCommandArgMenuBlocks({
@@ -632,6 +573,23 @@ export function createSlackCommandHandler(params: {
             blocks,
             response_type: "ephemeral",
           });
+          const commandId = p.eventTs ?? command.trigger_id;
+          if (commandId) {
+            const { recordDeliveredCommandExchange } = await loadSlashDispatchRuntime();
+            await recordDeliveredCommandExchange({
+              config: cfg,
+              agentId: route.agentId,
+              sessionKey: route.sessionKey,
+              assertCurrent: isCurrentSession,
+              commandText: prompt,
+              commandId: `slack:${account.accountId}:${routeTarget.peerId}:${commandId}`,
+              replyId: "argument-menu",
+              replyText: buildSlackCompleteBlocksFallbackText(blocks, {
+                includeSelectOptions: true,
+                nativeDataFormat: "plain",
+              }),
+            });
+          }
           return false;
         }
       }

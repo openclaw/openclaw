@@ -7,7 +7,7 @@ import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.t
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
-import type { AttachmentAdmission } from "./chat-message-attachment-admission.ts";
+import type { AttachmentAdmission } from "./chat-message-attachment-admission-model.ts";
 import type { AssistantAttachmentItem, AttachmentItem } from "./chat-message-media.ts";
 
 export function isPastedTextAttachment(

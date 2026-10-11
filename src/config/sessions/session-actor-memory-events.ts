@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { advanceCliHistoryBoundary, getCliHistoryWriter } from "./cli-history-boundary.js";
 import type { TranscriptEventAppendOptions } from "./session-accessor.sqlite-contract.js";
@@ -112,7 +113,11 @@ export function createSessionActorMemoryEvents(options: {
     const rawSeq = (state.hot.transcript.version.rawSeq ?? -1) + 1;
     const generation = state.hot.transcript.version.generation ?? randomUUID();
     state.events = [...state.events, { rawSeq, event: JSON.parse(eventJson), eventJson }];
-    state.hot.transcript.version = { generation, rawSeq, updatedAt: Date.now() };
+    state.hot.transcript.version = {
+      generation,
+      rawSeq,
+      updatedAt: Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1),
+    };
     state.hot.transcript.watermark = { generation, maxSeq: rawSeq };
     const writer = getCliHistoryWriter({
       agentId,
@@ -145,6 +150,14 @@ export function createSessionActorMemoryEvents(options: {
           { key, eventId: event.id, rawSeq },
         ];
       }
+    }
+    if (
+      isRecord(event) &&
+      event.type === "compaction" &&
+      parseCompactionDetails(event.details)?.qualityDegraded &&
+      !requireEntry().compactionQualityDegraded
+    ) {
+      state.hot.entry = { ...requireEntry(), compactionQualityDegraded: true };
     }
     refresh();
     return true;
@@ -242,5 +255,37 @@ export function createSessionActorMemoryEvents(options: {
         }
       : { appended: false as const };
   };
-  return { version, tree, writeEvent, parent, checkMutation, rebasePrepared, appendRaw };
+  const replaceRows = (rows: SessionActorMemoryState["events"]) => {
+    const generation = randomUUID();
+    const updatedAt = Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1);
+    state.events = rows;
+    state.hot.transcript.version = { generation, rawSeq: rows.at(-1)?.rawSeq ?? null, updatedAt };
+    state.hot.transcript.watermark = { generation, maxSeq: rows.at(-1)?.rawSeq ?? null };
+    const identities = new Map<string, { key: string; eventId: string; rawSeq: number }>();
+    for (const row of rows) {
+      if (
+        !isRecord(row.event) ||
+        row.event.type !== "message" ||
+        typeof row.event.id !== "string"
+      ) {
+        continue;
+      }
+      const key = readMessageIdempotencyKey(row.event.message);
+      if (key) {
+        identities.set(key, { key, eventId: row.event.id, rawSeq: row.rawSeq });
+      }
+    }
+    state.hot.transcript.idempotency = [...identities.values()];
+    refresh();
+  };
+  return {
+    version,
+    tree,
+    writeEvent,
+    parent,
+    checkMutation,
+    rebasePrepared,
+    appendRaw,
+    replaceRows,
+  };
 }
