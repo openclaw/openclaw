@@ -793,7 +793,16 @@ struct TalkModeRuntimeSpeechTests {
     @Test func `failed realtime bootstrap clears prior Gateway selection`() async throws {
         let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
             throw RuntimeRelayStartError.failed
-        })
+        }, dependencies: .init(
+            permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+            audioCapture: { RuntimeTestAudioCapture() },
+            pcmPlayer: { RuntimeTestPCMPlayer() },
+            selectedSession: { nil },
+            stopPCM: { nil },
+            stopMP3: { nil },
+            stopBuffered: { nil },
+            stopSystem: {},
+            stopMLX: {}))
         let staleConfig = await runtime.parseTalkConfig(
             makeRuntimeTestConfigSnapshot(realtimeModel: "stale-model"))
         await runtime.applyTalkConfig(staleConfig)
