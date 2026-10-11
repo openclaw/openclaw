@@ -518,9 +518,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 }
               }
 
-              const hasTarget =
-                (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
-                (typeof delivery?.to === "string" && delivery.to.trim());
+              const hasTarget = typeof delivery?.to === "string" && delivery.to.trim();
               const shouldInfer =
                 (deliveryValue == null || delivery) &&
                 (mode === "" || mode === "announce") &&
@@ -531,7 +529,13 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                   currentDeliveryContext: opts.currentDeliveryContext,
                   agentSessionKey: opts.agentSessionKey,
                 });
-                if (inferred) {
+                // A current job must freeze its origin even when the model repeats
+                // the channel. Other channels/accounts and isolated jobs stay explicit.
+                const matchesCurrentOrigin =
+                  job.sessionTarget === "current" &&
+                  delivery?.channel === inferred?.channel &&
+                  (!delivery?.accountId || delivery.accountId === inferred?.accountId);
+                if (inferred && (!delivery?.channel || matchesCurrentOrigin)) {
                   job.delivery = {
                     ...inferred,
                     ...delivery,
