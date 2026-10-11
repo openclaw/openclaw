@@ -281,10 +281,10 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
         },
         async (request, client) => {
-          const discover = async () => {
-            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-            const isClientCurrent = captureSharedClientRegistration(client);
-            try {
+          try {
+            const discover = async () => {
+              const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+              const isClientCurrent = captureSharedClientRegistration(client);
               const listed = await listAllCodexAppServerModels({
                 request,
                 limit: 100,
@@ -314,22 +314,23 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                 isClientCurrent,
                 accountType,
               } as const;
-            } catch (error) {
-              // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
-              if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
-                retireSharedCodexAppServerClientIfCurrent(client);
-              }
-              throw error;
+            };
+            const first = await discover();
+            if (first.rawModelCount > 0 && first.isCurrent() && first.isClientCurrent()) {
+              return first;
             }
-          };
-          const first = await discover();
-          if (first.rawModelCount > 0 && first.isCurrent() && first.isClientCurrent()) {
-            return first;
+            // A genuinely empty cold response or account/config churn can race native startup.
+            // Re-read model/list and account/read together once, on the same scoped client.
+            const retryIsCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+            const retryClientIsCurrent = captureSharedClientRegistration(client);
+            return retryIsCurrent() && retryClientIsCurrent() ? discover() : first;
+          } catch (error) {
+            // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
+            if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
+              retireSharedCodexAppServerClientIfCurrent(client);
+            }
+            throw error;
           }
-          // A genuinely empty cold response or account/config churn can race native startup.
-          // Re-read model/list and account/read together once, on the same scoped client.
-          const retryIsCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-          return retryIsCurrent() ? discover() : first;
         },
       );
       // Publish only after the bounded operation settles; a late timed-out callback cannot publish.

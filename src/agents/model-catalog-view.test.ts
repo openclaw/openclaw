@@ -459,12 +459,12 @@ describe("prepared native catalog readiness", () => {
   });
 
   it.each([
+    { name: "preferred account", preferredProfileId: "custom:chosen", cfg: {} },
+    { name: "pinned account", pinnedProfileId: "custom:chosen", cfg: {} },
     {
       name: "auth profile order",
       cfg: { auth: { order: { custom: ["custom:chosen"] } } },
     },
-    { name: "preferred account", preferredProfileId: "custom:chosen", cfg: {} },
-    { name: "pinned account", pinnedProfileId: "custom:chosen", cfg: {} },
     {
       name: "authored route",
       cfg: {
