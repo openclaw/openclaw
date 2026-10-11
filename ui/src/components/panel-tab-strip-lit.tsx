@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, mapArray, merge, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, mapArray, merge, omit, onCleanup } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
 import type {
@@ -36,7 +36,7 @@ function LegacyPanelTabStrip(props: { params: LegacyPanelTabStripParams }) {
     () => props.params.tabs,
     (tab) => {
       const icon = <LitContent value={tab().icon} renderContent={props.params.renderContent} />;
-      return merge(tab, {
+      return merge(omit(merge(tab), "icon"), {
         get icon() {
           return tab().icon === undefined ? undefined : icon;
         },

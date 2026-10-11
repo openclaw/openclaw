@@ -14,7 +14,7 @@ export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
 type LegacyInputs = Omit<LegacyPanelTabStripParams, "renderContent">;
 
 function shallowEqual(left: object, right: object) {
-  const entries = Object.entries<unknown>(left);
+  const entries: [string, unknown][] = Object.entries(left);
   return (
     entries.length === Object.keys(right).length &&
     entries.every(([key, value]) => Object.is(value, Reflect.get(right, key)))
