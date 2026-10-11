@@ -8,7 +8,7 @@ import {
   parseToolOutputJson,
   splitMockConversationContext,
 } from "./mock-openai-input.js";
-import { canCallScenarioTool } from "./mock-openai-tool-routing.js";
+import { canCallScenarioTool, readScenarioToolCompletion } from "./mock-openai-tool-routing.js";
 
 // One line of JSON after the marker: `QA tool plan: {"calls":[{"name":"<tool>","args":{}}],
 // "reply":"..."}`. The model calls each tool in order with exactly those arguments, then replies;
@@ -52,7 +52,8 @@ function readOutputMediaPath(output: string): string {
   return (
     structured ||
     /MEDIA:\s*(\S+)/u.exec(output)?.[1] ||
-    /(?:^|\s)(\/[^\s"'`<>]+)/u.exec(output)?.[1] ||
+    // A plain-text result names a POSIX or drive-rooted Windows path.
+    /(?:^|\s)((?:\/|[A-Za-z]:[\\/])[^\s"'`<>]+)/u.exec(output)?.[1] ||
     ""
   );
 }
@@ -71,11 +72,30 @@ export function planQaToolPlanTurn(
   }
   // Only results after this plan's own user turn count; earlier turns ran other plans.
   const turn = extractLastMatchingUserTurn(input, QA_TOOL_PLAN_PROMPT_RE);
-  const outputs = (turn ? input.slice(turn.index) : [])
-    .filter(
-      (item) => item.type === "function_call_output" || item.type === "custom_tool_call_output",
-    )
-    .map((item) => extractAllToolOutputText([item]));
+  const toolOutputs = input.flatMap((item, index) =>
+    index >= (turn?.index ?? input.length) &&
+    (item.type === "function_call_output" || item.type === "custom_tool_call_output")
+      ? [{ item, index }]
+      : [],
+  );
+  const outputs: string[] = [];
+  for (const { item, index } of toolOutputs) {
+    // A call that Code Mode runs reports `waiting` until a `wait` settles it; only its settled
+    // result counts as the call's. While the latest is waiting, the server's Code Mode
+    // handling issues the `wait`.
+    const completion = readScenarioToolCompletion(
+      toolDeclarationBody,
+      input.slice(0, index + 1),
+      "",
+    );
+    if (!completion.hasCodeModeControlOutput) {
+      outputs.push(extractAllToolOutputText([item]));
+    } else if (completion.codeModeControlJson?.status !== "waiting") {
+      outputs.push(completion.toolOutput);
+    } else if (index === toolOutputs.at(-1)?.index) {
+      return null;
+    }
+  }
   const next = plan.calls[outputs.length];
   if (next) {
     return canCallScenarioTool(toolDeclarationBody, next.name)
