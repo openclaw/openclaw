@@ -402,7 +402,8 @@ function installActivePluginRegistry(
 }
 
 /** One Gateway owns the process registry; overlapping Gateways are best effort. */
-export function createPluginRegistryOwner(registry: PluginRegistry, _workspaceDir?: string) {
+export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir?: string) {
+  void workspaceDir;
   const owner: RegistryOwner = { activeRegistry: registry };
   registryOwner.current = owner;
   const gatewayOwner: PluginRegistryGatewayOwner = {
