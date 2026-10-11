@@ -546,9 +546,16 @@ export class LinkReaderPanelOwner {
       this.requestAbort === request &&
       !request.signal.aborted &&
       this.isConnected &&
+      this.client === client &&
+      this.agentId === agentId &&
+      this.sessionKey === sessionKey &&
       client.connectionGeneration === generation &&
       client.recoveryScope === recoveryScope &&
-      this.panelPresented;
+      this.available &&
+      this.panelPresented &&
+      this.activeTab === tab &&
+      this.target?.href === target.href &&
+      this.readers.includes(target.reader);
     const requestParams: ControlUiLinkReaderDetailParams = {
       url: target.href,
       ...(agentId ? { agentId } : {}),
