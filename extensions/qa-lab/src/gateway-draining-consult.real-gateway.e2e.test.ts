@@ -10,14 +10,22 @@
  *
  * The run is held on a real `wait` tool call (`qa_restart_wait`) and the
  * assertion waits for that call to be in flight, so the reset interrupts a live
- * observation rather than racing a settled turn.
+ * observation rather than racing a settled turn. The observation is proven
+ * pending (not already rejected) before the interrupting restart is requested.
  *
  * Scope boundary: this proves the Gateway wait response only. It does not drive
- * a Browser Talk session, so it does not yet prove the correlated timeout is
- * submitted through the voice transport; that boundary has no harness here.
+ * a Browser Talk session, so it does not prove the correlated timeout is
+ * submitted through the voice transport. That boundary needs a realtime voice
+ * provider that can mint a browser session without a live external endpoint:
+ * `talk.client.create` resolves through `resolveConfiguredRealtimeVoiceProvider`
+ * (src/talk/provider-resolver.ts:104) and the only browser-session provider
+ * POSTs to a hardcoded https://api.openai.com/v1 for its client secret
+ * (extensions/openai/realtime-provider-shared.ts:64), so it cannot be exercised
+ * offline. Driving the transport would need a live key and is not claimed here.
  */
 
 import path from "node:path";
+import type { ControlUiSessionListResult } from "openclaw/plugin-sdk/control-ui";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
@@ -25,10 +33,8 @@ import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
-import {
-  readRawQaSessionStore,
-  readSessionTranscriptSummary,
-} from "./suite-runtime-agent-session.js";
+import { waitForQaTransportCondition } from "./qa-transport.js";
+import { readSessionTranscriptSummary } from "./suite-runtime-agent-session.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 
@@ -121,13 +127,20 @@ describe.skipIf(process.platform === "win32")("gateway draining during active Ta
       expect(turn.status).toBe("started");
       expect(typeof turn.runId).toBe("string");
 
-      // Synchronize on the hold before interrupting: the run must be running with
-      // its `wait` tool call still in flight. A run that has already settled would
-      // answer `ok` and prove nothing about the draining classification.
-      await transport.waitForCondition(
+      // Synchronize on the hold before interrupting: the Gateway must still
+      // report the run active, and its `wait` tool call must still be in flight.
+      // A run that has already settled would answer `ok` and prove nothing about
+      // the draining classification.
+      await waitForQaTransportCondition(
         async () => {
-          const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
-          if (entry?.status !== "running") {
+          const list = (await gateway.call("sessions.list", {
+            agentId: "qa",
+            limit: 100,
+          })) as ControlUiSessionListResult;
+          // `sessions.list` is the authoritative active-run observation: the row
+          // owner projects live run state onto `hasActiveRun`/`status`.
+          const row = list.sessions.find((session) => session.key === sessionKey);
+          if (!row?.hasActiveRun || row.status !== "running") {
             return undefined;
           }
           const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey, {
@@ -150,15 +163,44 @@ describe.skipIf(process.platform === "win32")("gateway draining during active Ta
           (result) => ({ ok: true, result }) as const,
           (error: unknown) => ({ ok: false, error }) as const,
         );
+      const drainedSettled = drained.then(() => true);
+      let drainedOutcome: "pending" | "settled" = "pending";
+      drained.then(() => {
+        drainedOutcome = "settled";
+      });
 
-      // The hold keeps the run pending, so an admitted wait stays open until the
-      // reset retires it; an unadmitted one resolves with a run-not-found error,
-      // which the assertion below reports rather than hiding.
+      // The observation must be admitted and genuinely pending before it is
+      // interrupted. A rejected wait (unknown run, session-scoped rejection)
+      // settles immediately with an error instead of staying open, so proving
+      // this pending state is what separates "the reset retired a live
+      // observation" from "the wait had already failed". `status` on the active
+      // row is the Gateway's own projection of the run the wait is observing.
+      await waitForQaTransportCondition(
+        async () => {
+          if (await drainedSettled) {
+            throw new Error("agent.wait settled before the restart: it was never pending");
+          }
+          const list = (await gateway.call("sessions.list", {
+            agentId: "qa",
+            limit: 100,
+          })) as ControlUiSessionListResult;
+          const row = list.sessions.find((session) => session.key === sessionKey);
+          return row?.hasActiveRun && row.status === "running" ? true : undefined;
+        },
+        120_000,
+        25,
+        () => `agent.wait did not stay pending on run ${turn.runId}; observed=${drainedOutcome}`,
+      );
 
-      console.log("Triggering gateway restart to interrupt a pending wait...");
+      // Interrupt the pending observation. A plain safe restart would defer while
+      // active work remains, letting the hold release and the run finish first;
+      // skipDeferral bypasses that gate so the lifecycle reset actually retires
+      // the in-flight wait (src/infra/restart-coordinator.ts:112-119).
+      console.log("Triggering a non-deferring gateway restart to interrupt a pending wait...");
       await gateway.call("gateway.restart.request", {
         reason: "e2e-consult-draining-test",
         safe: true,
+        skipDeferral: true,
       });
 
       // The wait owner resolves an interrupted observation as a terminal timeout
@@ -169,8 +211,11 @@ describe.skipIf(process.platform === "win32")("gateway draining during active Ta
       if (!observation.ok) {
         throw new Error(`agent.wait rejected during draining: ${String(observation.error)}`);
       }
-      const result = observation.result as { status?: string; timeoutPhase?: string };
-      expect({ status: result.status, timeoutPhase: result.timeoutPhase }).toEqual({
+      const { status, timeoutPhase } = observation.result as {
+        status?: string;
+        timeoutPhase?: string;
+      };
+      expect({ status, timeoutPhase }).toEqual({
         status: "timeout",
         timeoutPhase: "gateway_draining",
       });

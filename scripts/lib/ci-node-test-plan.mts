@@ -1585,6 +1585,7 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/gateway-draining-consult.real-gateway.e2e.test.ts",
 ]);
 
 const sharedUiE2eInputs = [
