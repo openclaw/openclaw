@@ -70,7 +70,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
 
       <div class="dreams__glow" />
       <div class="dreams__lobster" style={style()}>
-        <LitContent content={() => renderLobsterSvg(look(), { sleeping: true })} />
+        <LitContent render={() => renderLobsterSvg(look(), { sleeping: true })} />
       </div>
       <span class="dreams__z">z</span>
       <span class="dreams__z">z</span>

@@ -234,7 +234,7 @@ export function renderDiarySection(props: DreamingProps) {
           <div class="dreams-diary__header">
             <span class="dreams-diary__title">{t("dreaming.diary.title")}</span>
             <LitContent
-              content={() =>
+              render={() =>
                 renderHubTabs({
                   id: "dream-diary",
                   active: activeDiarySubTab(),

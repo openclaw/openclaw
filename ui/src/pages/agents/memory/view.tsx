@@ -69,7 +69,7 @@ export function renderDreaming(props: DreamingProps) {
     <div class="dreams-page">
       <div class="dreams__topbar">
         <LitContent
-          content={() =>
+          render={() =>
             renderHubTabs({
               id: "dreams",
               active: state.activeSubTab,

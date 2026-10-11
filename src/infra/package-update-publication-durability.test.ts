@@ -42,7 +42,9 @@ afterEach(async () => {
   }
 });
 
-it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidate"] as const)(
+it
+  .skipIf(process.platform === "win32")
+  .each(["unchanged", "initially-fresh", "previous", "candidate"] as const)(
   "reuses settled preparation digests while refusing changed publication bytes (%s)",
   (changed) =>
     fixture.lifetime.run(async () => {
@@ -51,7 +53,8 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const previousRoot = path.join(anchor, "previous");
       const candidateRoot = path.join(anchor, "candidate");
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+      let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
+      vi.spyOn(Date, "now").mockImplementation(() => now);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
         const reader = integrity.createPackageIntegrityReader();
@@ -75,9 +78,11 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
           changed === "previous" ? f.packageRoot : candidateRoot,
           "dist/index.js",
         );
-        if (changed !== "unchanged") {
+        const tamper = changed === "previous" || changed === "candidate";
+        if (tamper) {
           await fsp.writeFile(tampered, `changed ${changed} package content\n`);
         }
+        now += 6_000;
         const hash = interceptPackageFileHashes();
         const packageOpens: string[] = [];
         const open = fsp.open.bind(fsp);
@@ -94,7 +99,7 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
           return open(...args);
         });
         const publishing = prepared!.publish(false);
-        if (changed !== "unchanged") {
+        if (tamper) {
           await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
           expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
           expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
@@ -102,14 +107,28 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
         }
         await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        expect(hash).not.toHaveBeenCalled();
+        if (changed === "initially-fresh") {
+          // Re-read recent preparation bytes once after they settle, then reuse
+          // that observation even when publication moves the same inode.
+          expect(hash.mock.calls.length).toBeGreaterThan(0);
+          expect(new Set(hash.mock.calls.map(([, stat]) => `${stat.dev}:${stat.ino}`)).size).toBe(
+            hash.mock.calls.length,
+          );
+          hash.mockClear();
+        } else {
+          expect(hash).not.toHaveBeenCalled();
+        }
         // Each of the four remaining content walks still reads its manifest version.
-        expect(packageOpens).toHaveLength(4);
-        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        if (changed !== "initially-fresh") {
+          expect(packageOpens).toHaveLength(4);
+          expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        }
         await expect(prepared!.retire()).resolves.toMatchObject({ phase: "complete" });
         expect(hash).not.toHaveBeenCalled();
-        expect(packageOpens).toHaveLength(5);
-        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        if (changed !== "initially-fresh") {
+          expect(packageOpens).toHaveLength(5);
+          expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        }
         expect(fs.existsSync(anchor)).toBe(false);
       });
     }),

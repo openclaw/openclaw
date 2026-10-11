@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "./chat-detail-panel.ts";
@@ -59,7 +60,9 @@ async function mount(
   const panel = document.createElement("openclaw-chat-detail-panel") as Panel;
   panel.style.cssText = "width:100%;height:600px";
   panel.content = file;
-  document.body.append(panel);
+  const container = createChatSidebarContainer();
+  container.append(panel);
+  document.body.append(container);
   await panel.updateComplete;
   await customElements.whenDefined("openclaw-chat-html-preview");
   await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();

@@ -464,7 +464,7 @@ export function AgentTools(
         {runtimeAvailability()}
       </SettingsSection>
       <LitContent
-        content={() => renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
+        render={() => renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
       />
       <SettingsSection title={t("agentTools.catalogTitle")}>
         {catalogLoading() ? (

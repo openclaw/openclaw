@@ -174,7 +174,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // reconciliation attempts to release the owning worker claims.
   await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
-  params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
+  await params.startup.placementStore.clearLocalTurnClaimsAfterRestartAsync();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
     // Claims loaded before this Gateway acquired the state lock remain usable only by
     // workspace recovery. Worker authority is minted from claims created in this lifecycle.

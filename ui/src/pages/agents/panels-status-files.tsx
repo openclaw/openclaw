@@ -293,7 +293,7 @@ export function AgentCron(params: {
               }}
             </For>
             <LitContent
-              content={() =>
+              render={() =>
                 renderCronJobsPagination({
                   jobsShown: params.jobs.length,
                   jobsTotal: params.jobsTotal,

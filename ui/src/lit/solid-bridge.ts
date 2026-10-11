@@ -10,23 +10,9 @@ import {
   runWithOwner,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
-
-/** Keep the remaining stateless Lit helpers inside their own DOM owner. */
-export function LitContent(props: { content: () => unknown }) {
-  const host = document.createElement("span");
-  host.style.display = "contents";
-  createEffect(
-    () => props.content(),
-    (content) => {
-      renderLit(content, host, { host });
-    },
-  );
-  onCleanup(() => {
-    renderLit(nothing, host).setConnected(false);
-  });
-  return host;
-}
 
 type Property<T> = {
   default: T;
@@ -152,7 +138,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           : typeof property.default === "number"
             ? Number
             : String);
-      this.#write(
+      Reflect.set(
+        this,
         key,
         type === Boolean
           ? value !== null
@@ -160,6 +147,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             ? Number(value)
             : value,
       );
+    }
+
+    connectedMoveCallback() {
+      // Atomic parking keeps the existing provider and owned child tree.
     }
 
     connectedCallback() {
@@ -232,6 +223,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       this.#dispose = render(() => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
@@ -249,7 +241,16 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const view = () => content(props, this.#host);
+        const renderContent = () => content(props, this.#host);
+        const view = () =>
+          layout
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layout, host: this },
+                get children() {
+                  return renderContent();
+                },
+              })
+            : renderContent();
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
@@ -286,7 +287,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent),
           (value) => {
             if (value !== absent) {
-              host.#write(key, value === undefined ? property.default : value);
+              Reflect.set(host, key, value === undefined ? property.default : value);
             }
           },
         );
@@ -301,4 +302,22 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: { render: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  let part: ReturnType<typeof renderLit> | undefined;
+  createEffect(
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
+    },
+  );
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
+  return host;
 }

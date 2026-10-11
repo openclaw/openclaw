@@ -165,8 +165,8 @@ function persistLease(targetPath, lease, verifyCurrent) {
 function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
   const { DatabaseSync } = require("node:sqlite");
   const database = new DatabaseSync(databasePath);
-  database.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL); BEGIN IMMEDIATE");
   try {
+    database.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL); BEGIN IMMEDIATE");
     database
       .prepare("DELETE FROM workspace_leases WHERE json_extract(lease_json, '$.expiresAtMs') <= ?")
       .run(Date.now());
@@ -184,7 +184,7 @@ function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
     database.exec("COMMIT");
     return next;
   } catch (error) {
-    database.exec("ROLLBACK");
+    if (database.isTransaction) database.exec("ROLLBACK");
     throw error;
   } finally {
     database.close();
@@ -356,7 +356,8 @@ return "";
 // unsignalable, e.g. macOS SIP-protected same-uid processes on shared static-ssh dev hosts)
 // must not crash cleanup/resume paths, but a freeze target that returns EPERM stays counted
 // as live so quiescence fails closed instead of reporting a still-running process as frozen.
-const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`${REMOTE_QUIESCENCE_CONTEXT_JS}
+const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`(() => {
+${REMOTE_QUIESCENCE_CONTEXT_JS}
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 fs.mkdirSync(leaseDirectory, { recursive: true, ...(process.platform === "win32" ? {} : { mode: 0o700 }) });
 if (process.platform !== "win32") fs.chmodSync(leaseDirectory, 0o700);
@@ -595,17 +596,37 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
 }
 if (ownedWatchdog) {
   let active = true;
+  let retired = false;
   let expiry;
+  const retire = () => {
+    if (retired) return;
+    retired = true;
+    process.exitCode = 0;
+    clearTimeout(expiry);
+    process.off("message", onMessage);
+    process.off("disconnect", onDisconnect);
+    process.stdin.destroy();
+    if (process.connected) process.disconnect();
+  };
+  const onDisconnect = () => {
+    // Keep the last resumer until expiry if its owner disappears during a lease.
+    if (!active) retire();
+  };
   const scheduleExpiry = () => {
     clearTimeout(expiry);
     expiry = setTimeout(() => {
       resumeWorkspaceLease(true, watchdogReference);
       active = false;
       if (process.connected) process.send({ type: "workspace-quiescence-retired", nonce });
+      else retire();
     }, watchdogTimeoutMs);
   };
-  process.on("message", (message) => {
-    if (message?.type === "workspace-quiescence-retire" && message.nonce === nonce && !active) process.exit(0);
+  const onMessage = (message) => {
+    if (retired) return;
+    if (message?.type === "workspace-quiescence-retire" && message.nonce === nonce && !active) {
+      retire();
+      return;
+    }
     if (message?.type !== "workspace-quiescence-control") return;
     const { action } = message;
     let failure;
@@ -634,12 +655,15 @@ if (ownedWatchdog) {
       failure = error instanceof Error ? error.message : String(error);
     }
     process.send({ type: "workspace-quiescence-result", id: message.id, nonce: message.nonce, action, ...(failure !== undefined ? { error: failure } : {}) });
-  });
+  };
+  process.on("message", onMessage);
+  process.once("disconnect", onDisconnect);
   process.send({ type: "workspace-quiescence-result", nonce, action: "acquire" });
   scheduleExpiry();
 } else {
   process.stdout.write("quiesced " + nonce + "\n");
 }
+})();
 `;
 
 const REMOTE_QUIESCENCE_CONTROL_CONTEXT_JS = String.raw`${REMOTE_QUIESCENCE_CONTEXT_JS}

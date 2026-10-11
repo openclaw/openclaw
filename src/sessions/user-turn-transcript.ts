@@ -18,6 +18,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
   registerUserTurnTranscriptAdmissionOwner,
+  inheritUserTurnPromptReactionSource,
 } from "./user-turn-transcript-admission.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
@@ -729,6 +730,7 @@ export function createUserTurnTranscriptRecorder(
     sentToProvider: () => sentToProvider,
     refresh: refreshAdmission,
   });
+  inheritUserTurnPromptReactionSource(recorder, params.pendingInputSources);
   return recorder;
 }
 

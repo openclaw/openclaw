@@ -24,7 +24,7 @@ import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 
 describe("worker environment service", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
 
   it("admits only a gateway-preclaimed worker placement and fences later requests", async () => {
     const environmentId = "worker-placement-fence";

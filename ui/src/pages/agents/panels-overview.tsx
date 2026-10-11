@@ -229,7 +229,7 @@ export function AgentOverview(
           <div class="agent-identity-editor">
             <span class="agent-identity-editor__avatar" aria-hidden="true">
               <LitContent
-                content={() =>
+                render={() =>
                   renderAgentIdentityAvatar(
                     {
                       id: params.agent.id,
@@ -382,7 +382,7 @@ export function AgentOverview(
           title={primaryModelLabel()}
           control={
             <LitContent
-              content={() => {
+              render={() => {
                 const inherited = defaultPrimary();
                 return renderModelPicker({
                   label: primaryModelLabel(),
@@ -418,7 +418,7 @@ export function AgentOverview(
           description={t("chat.modelControls.decisionAgentHelp")}
           control={
             <LitContent
-              content={() => {
+              render={() => {
                 const agentConfig = config();
                 const decisionModel = agentConfig.entry?.decisionModel;
                 const inheritedDecisionModel = agentConfig.defaults?.decisionModel;

@@ -103,7 +103,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   childSessionScope = {};
   private childSessionCanonicalListRevision: number | null = null;
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
-  private cachedSessionResult: SessionsListResult | null = null;
   private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
@@ -369,14 +368,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
-    const snapshot = sessions.state;
-    if (this.cachedSessionResult && !sessions.presentation.resultCached) {
-      // A filtered live list can replace the cached projection before the primary list lands.
-      if (this.sessionsResult === this.cachedSessionResult) {
-        this.clearSessionCache();
-      }
-      this.cachedSessionResult = null;
+    if (sessions.presentation.resultCached) {
+      return;
     }
+    const snapshot = sessions.state;
     if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
       this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
       // Observed child queries own their freshness. Only unobserved, collapsed
@@ -394,9 +389,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...sessions.presentation });
-    this.cachedSessionResult = sessions.presentation.resultCached
-      ? sessions.presentation.result
-      : null;
     this.sessionsLoading = snapshot.loading;
     this.requestSessionDataUpdate();
   };
@@ -476,7 +468,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private clearSessionCache(): void {
     this.childSessionCanonicalListRevision = null;
-    this.cachedSessionResult = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
     this.sessionsStartupPending = false;
@@ -700,8 +691,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.resetChildSessionState();
     this.sessionResultsByAgent = {};
     if (!hasSidebarListFilter(this.host) && this.context) {
-      this.sessionsResult = this.context.sessions.presentation.result;
-      this.sessionsAgentId = this.context.sessions.presentation.agentId;
+      const presentation = this.context.sessions.presentation;
+      this.sessionsResult = presentation.resultCached ? null : presentation.result;
+      this.sessionsAgentId = presentation.resultCached ? null : presentation.agentId;
     } else if (this.context) {
       this.bindFilteredSessions();
     }

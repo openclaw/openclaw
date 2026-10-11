@@ -165,7 +165,7 @@ export function AgentSkills(
                               </span>
                               <span class="settings-row__desc">{skill().description}</span>
                               <LitContent
-                                content={() => renderSkillStatusChips({ skill: skill() })}
+                                render={() => renderSkillStatusChips({ skill: skill() })}
                               />
                               <For
                                 each={

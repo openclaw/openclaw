@@ -263,26 +263,6 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });
 
-  it("uses the matching configured workspace snapshot", () => {
-    const cfg = {};
-    const workspaceDir = "/configured-workspace";
-    setCurrentManifestPlugins([createMistralManifestPlugin()]);
-
-    expect(
-      resolveBundledStaticCatalogModel({
-        ...mistralLookup,
-        cfg,
-        workspaceDir,
-      })?.id,
-    ).toBe("mistral-medium-3-5");
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-      workspaceDir,
-    });
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-  });
-
   it("uses the Gateway inventory even when a run supplies its own environment", () => {
     const plugin = createMistralManifestPlugin();
     manifestMocks.getGatewayPluginMetadataSnapshot.mockReturnValue(

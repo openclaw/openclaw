@@ -166,7 +166,7 @@ export function AgentFiles(
           <div class="agents-panel-body">
             <div class="agent-file-tabs">
               <LitContent
-                content={() =>
+                render={() =>
                   renderHubTabs({
                     id: "agent-files",
                     active: active(),

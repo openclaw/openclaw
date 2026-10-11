@@ -334,7 +334,7 @@ through Codex's native image input.
 For an unsandboxed local Codex process with file-read permission, OpenClaw also
 supplies verified paths to saved documents. Codex can process the complete file
 when inline extraction is bounded. OpenClaw adds the paths to the admitted native
-input without changing its canonical attachment references or transcript text.
+input without changing its stored attachment references or transcript text.
 If the path note cannot fit the native input budget, OpenClaw omits it and retains
 the original request and inline attachment context.
 JSON escapes keep mention characters in attachment metadata from selecting skills
@@ -354,7 +354,7 @@ synchronized filesystem. Codex images are materialized directly from typed
 app-server events. Saved-path-only images use the same bounded remote reader.
 Uploads always use the Gateway's configured channel identity and request timeout.
 
-Use canonical OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
+Use standard OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
 legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
@@ -712,7 +712,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 - <a id="deployment-patterns"></a>[Deployment patterns](/plugins/codex-harness/routing#deployment-patterns)
 - <a id="basic-codex-deployment"></a>[Basic Codex deployment](/plugins/codex-harness/routing#basic-codex-deployment)
 - <a id="mixed-provider-deployment"></a>[Mixed provider deployment](/plugins/codex-harness/routing#mixed-provider-deployment)
-- <a id="fail-closed-codex-deployment"></a>[Fail-closed Codex deployment](/plugins/codex-harness/routing#fail-closed-codex-deployment)
+- <a id="fail-closed-codex-deployment"></a>[Require Codex for deployment](/plugins/codex-harness/routing#fail-closed-codex-deployment)
 
 ### Codex harness configuration
 

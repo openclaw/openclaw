@@ -277,7 +277,7 @@ function trackSchemaChanges(
       owner.isolatedTempTables.has(table),
     );
     if ((dataChange && !temporaryWrite) || mainSchemaChange) {
-      beginSqliteDatabaseWrite(database);
+      beginSqliteDatabaseWrite(database, mainSchemaChange || owner.nativeDepth > 0);
     }
     owner.nativeDepth += 1;
     const finishAdmissions = beginSqliteDatabaseAdmissionOperation(database);

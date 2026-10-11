@@ -227,7 +227,7 @@ export function Agents(props: AgentsProps) {
           {(agent) => (
             <>
               <LitContent
-                content={() =>
+                render={() =>
                   renderHubTabs({
                     id: "agents",
                     active: props.activePanel,

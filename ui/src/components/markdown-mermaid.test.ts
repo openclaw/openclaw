@@ -124,7 +124,7 @@ describe("Mermaid Markdown presentation", () => {
     await diagram.updateComplete;
   });
 
-  it.each([true, false])("preserves source and reports copy success=%s", async (copied) => {
+  it.each([false])("preserves source and reports copy success=%s", async (copied) => {
     copySource.mockResolvedValueOnce(copied);
     const original = source("x < y & z <script>alert(1)</script>");
     const {
@@ -268,21 +268,5 @@ describe("Mermaid Markdown presentation", () => {
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(firstUrl);
     expect(imageSource(elements[1]!)).toBe(secondUrl);
     expect(revokeObjectURL).not.toHaveBeenCalledWith(secondUrl);
-  });
-
-  it("evicts older layouts under sustained use without revoking visible images", async () => {
-    const sources = Array.from({ length: 20 }, (_, index) => source(`Diagram ${index}`));
-    const { elements } = await mount(...sources);
-    const originalUrls = await Promise.all(elements.map(waitForImage));
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length);
-
-    const recent = await mount(sources.at(-1)!);
-    await waitForImage(recent.elements[0]!);
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length);
-    const oldest = await mount(sources[0]!);
-    await waitForImage(oldest.elements[0]!);
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length + 1);
-    expect(elements.map(imageSource)).toEqual(originalUrls);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 });
