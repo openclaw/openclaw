@@ -92,63 +92,74 @@ export function readTranscriptMirrorFacts(
         existingIdempotencyKeys: new Set(),
         messagesByIdempotencyKey: new Map(),
       };
+      const batches = chunkItems(idempotencyKeys, TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE);
       if (params.sourceRunId) {
-        const rows = executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .onRef("event.session_id", "=", "active.session_id")
-                .onRef("event.seq", "=", "active.event_seq"),
-            )
-            .select(transcriptEventJsonSql(database.db, "event").as("event_json"))
-            .where("active.session_id", "=", resolved.sessionId)
-            .where(
-              sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')`,
-              "=",
-              params.sourceRunId,
-            )
-            .orderBy("event.seq", "asc"),
-        ).rows;
-        // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
-        facts.sourceEvents = rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+        facts.sourceEvents = [];
+        if (batches.length === 0) {
+          batches.push([]);
+        }
       }
       let anchorsReady: boolean | undefined;
-      for (const batch of chunkItems(idempotencyKeys, TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE)) {
+      for (const batch of batches) {
+        const sourceRunId = batch === batches[0] ? params.sourceRunId : undefined;
         const rows = executeSqliteQuerySync(
           database.db,
           db
-            .selectFrom("transcript_event_identities as identity")
-            .innerJoin("transcript_events as event", (join) =>
+            .selectFrom("transcript_events as event")
+            .leftJoin("transcript_event_identities as identity", (join) =>
               join
-                .onRef("event.session_id", "=", "identity.session_id")
-                .onRef("event.seq", "=", "identity.seq"),
+                .onRef("identity.session_id", "=", "event.session_id")
+                .onRef("identity.seq", "=", "event.seq"),
             )
             .leftJoin("session_transcript_active_events as active", (join) =>
               join
-                .onRef("active.session_id", "=", "identity.session_id")
-                .onRef("active.event_seq", "=", "identity.seq"),
+                .onRef("active.session_id", "=", "event.session_id")
+                .onRef("active.event_seq", "=", "event.seq"),
             )
             .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-              join.onRef("rewrite.session_id", "=", "identity.session_id"),
+              join.onRef("rewrite.session_id", "=", "event.session_id"),
             )
             .select([
               "identity.event_id",
               "identity.message_idempotency_key",
-              "identity.seq",
+              "event.seq",
               "identity.parent_id",
               transcriptEventJsonSql(database.db, "event").as("event_json"),
               "active.message_position",
               "rewrite.generation",
             ])
-            .where("identity.session_id", "=", resolved.sessionId)
-            .where("identity.message_idempotency_key", "in", batch)
-            .orderBy("identity.seq", "asc"),
+            .where("event.session_id", "=", resolved.sessionId)
+            .where((eb) => {
+              const matchesKey = eb("identity.message_idempotency_key", "in", batch);
+              return sourceRunId
+                ? eb.or([
+                    matchesKey,
+                    eb.and([
+                      eb("active.event_seq", "is not", null),
+                      eb(
+                        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')`,
+                        "=",
+                        sourceRunId,
+                      ),
+                    ]),
+                  ])
+                : matchesKey;
+            })
+            .orderBy("event.seq", "asc"),
         ).rows;
         for (const row of rows) {
+          // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
+          const event = JSON.parse(row.event_json) as TranscriptEvent;
+          const message = readTranscriptEventMessage(event);
+          if (
+            sourceRunId &&
+            row.message_position !== null &&
+            readSessionTranscriptRunId(message) === sourceRunId
+          ) {
+            facts.sourceEvents?.push(event);
+          }
           const idempotencyKey = row.message_idempotency_key;
-          if (!idempotencyKey) {
+          if (!idempotencyKey || !row.event_id || !batch.includes(idempotencyKey)) {
             continue;
           }
           facts.existingIdempotencyKeys.add(idempotencyKey);
@@ -164,7 +175,6 @@ export function readTranscriptMirrorFacts(
           if (anchor) {
             facts.anchorsByIdempotencyKey.set(idempotencyKey, anchor);
           }
-          const message = readTranscriptEventMessage(JSON.parse(row.event_json) as TranscriptEvent);
           if (message !== undefined) {
             facts.messagesByIdempotencyKey.set(idempotencyKey, message);
           }
