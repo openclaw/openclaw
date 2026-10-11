@@ -288,7 +288,9 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  return accumulatedText.includes(content) ? "" : content;
+  // A resent payload that diverges from the streamed text must not be
+  // appended wholesale, or the reply gains a duplicated tail.
+  return "";
 }
 
 export function resolveStreamingReply(params: {
