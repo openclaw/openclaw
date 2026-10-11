@@ -73,7 +73,6 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
       };
     },
     resolveWhatsAppDmRouteTarget: () => null,
-    resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
   };
 });

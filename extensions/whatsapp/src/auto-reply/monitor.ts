@@ -58,42 +58,6 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 }
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
-type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
-
-function resolveWebMonitorConfigSnapshot(params: {
-  cfg: WhatsAppRuntimeConfig;
-  accountId?: string | null;
-}): {
-  cfg: WhatsAppRuntimeConfig;
-  account: ReturnType<typeof resolveWhatsAppAccount>;
-} {
-  const account = resolveWhatsAppAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const cfg = {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      whatsapp: {
-        ...params.cfg.channels?.whatsapp,
-        responsePrefix: account.messagePrefix,
-        allowFrom: account.allowFrom,
-        groupAllowFrom: account.groupAllowFrom,
-        groupPolicy: account.groupPolicy,
-        textChunkLimit: account.textChunkLimit,
-        // Account merge replaces `streaming` wholesale, so pinning the
-        // account-resolved object here keeps downstream root-level resolver
-        // reads (chunk mode, block enable/coalesce) on this account's config.
-        streaming: account.streaming,
-        mediaMaxMb: account.mediaMaxMb,
-        groups: account.groups,
-      },
-    },
-  } satisfies WhatsAppRuntimeConfig;
-  return { cfg, account };
-}
-
 function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
 }
@@ -130,16 +94,9 @@ export async function monitorWebChannel(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const baseCfg = getRuntimeConfig();
-  const { cfg, account } = resolveWebMonitorConfigSnapshot({
-    cfg: baseCfg,
-    accountId: tuning.accountId,
-  });
-  const loadCurrentMonitorConfig = () =>
-    resolveWebMonitorConfigSnapshot({
-      cfg: getRuntimeConfig(),
-      accountId: account.accountId,
-    }).cfg;
+  const cfg = getRuntimeConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: tuning.accountId });
+  const loadCurrentMonitorConfig = getRuntimeConfig;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(tuning.heartbeatSeconds);

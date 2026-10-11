@@ -1,3 +1,4 @@
+import { resolveChannelMessagingConfig } from "../channels/plugins/messaging-config.js";
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -60,6 +61,13 @@ function resolveChannelMessageSetting(
   opts?: { channel?: string; accountId?: string },
 ): string | undefined {
   if (opts?.channel) {
+    const resolved =
+      key === "responsePrefix"
+        ? resolveChannelMessagingConfig(cfg, opts.channel, opts.accountId)
+        : undefined;
+    if (resolved) {
+      return resolved.responsePrefix ?? cfg.messages?.responsePrefix;
+    }
     const channelCfg = getChannelConfig(cfg, opts.channel);
     if (opts.accountId) {
       const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
