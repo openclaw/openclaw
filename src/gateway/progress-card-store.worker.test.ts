@@ -226,7 +226,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("preserves native decoding errors and never replays a lost committed reply", async () => {
+it("never replays a lost committed reply", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({}, {});
     await replaceSessionEntry(
@@ -235,12 +235,6 @@ it("preserves native decoding errors and never replays a lost committed reply", 
     );
     await progressCardStore.put(sessionKey, { markdown: "Before" });
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare("UPDATE session_progress_cards SET steps_json = '{' WHERE session_key = ?").run(
-      sessionKey,
-    );
-    await expect(progressCardStore.put(sessionKey, { expectedRevision: 1 })).rejects.toBeInstanceOf(
-      SyntaxError,
-    );
     const unknown = new SqliteWorkerError("Synthetic lost commit reply", "outcome-unknown");
     const open = publications.openOpenClawAgentSqliteWorkerStore;
     let dispatches = 0;

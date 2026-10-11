@@ -48,7 +48,7 @@ export function applySessionGroupCategoryMutation(
   }));
 }
 
-export function assertSessionGroupCategoryDestination(
+function assertSessionGroupCategoryDestination(
   to: string | undefined,
   env: NodeJS.ProcessEnv,
 ): void {
