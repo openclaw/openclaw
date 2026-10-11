@@ -19,7 +19,7 @@ suite.define(() => {
       const page = await browser.newPage();
       let loadingNextRoute = false;
       await page.route(
-        controlUiE2eBuiltModuleRequest("ui/src/pages/about/about-page.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/pages/about/about-page.tsx"),
         async (route) => {
           loadingNextRoute = true;
           await routeReady;

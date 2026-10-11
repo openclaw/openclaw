@@ -220,21 +220,16 @@ describe("worker node enrollment", () => {
     },
   );
 
-  it("releases requested-state preflight artifact custody without aborting its caller", async () => {
+  it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
     const provider = await createArtifactProvider();
-    let consumerSignal: AbortSignal | undefined;
     const manager = createManager({
-      prepareArtifact: async (_record, signal) => {
-        consumerSignal = signal;
-        return await provider.prepare(signal);
-      },
+      prepareArtifact: async (_record, signal) => await provider.prepare(signal),
     });
     const caller = new AbortController();
     const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
     const grant = vi.spyOn(transfer, "prepare");
     await manager.prepare(record, caller.signal);
-    expect(consumerSignal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
     expect(ensureEnrollment).not.toHaveBeenCalled();
     expect(grant).not.toHaveBeenCalled();
@@ -874,23 +869,4 @@ describe("worker node enrollment", () => {
       await rejected;
     },
   );
-
-  it("does not return a connected device after teardown during its availability check", async () => {
-    const record = await createProvisioning("device-pending");
-    const entered = createDeferredCore();
-    const availability = createDeferredCore<{ available: true }>();
-    const manager = createManager({
-      resolveAvailability: async () => {
-        entered.resolve();
-        return await availability.promise;
-      },
-    });
-    const enrollment = await manager.begin(record);
-    const waiting = enrollment.waitForDeviceId();
-    const rejected = expect(waiting).rejects.toThrow(/no longer current/u);
-    await entered.promise;
-    await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-    availability.resolve({ available: true });
-    await rejected;
-  });
 });

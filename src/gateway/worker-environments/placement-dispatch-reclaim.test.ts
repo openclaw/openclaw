@@ -867,7 +867,7 @@ describe("worker placement dispatch reclaim", () => {
     }
   });
 
-  it("completes a session stop when a dropped tunnel loses the race to durable teardown", async () => {
+  it("preserves completed teardown and permits retry after a late tunnel disconnect", async () => {
     const harness = createHarness(database, placementStore, {
       terminalizeReclaimOnTunnelDrop: true,
     });
@@ -878,25 +878,17 @@ describe("worker placement dispatch reclaim", () => {
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
     };
-    const first = prepareSessionWorkerPlacementStop({
-      ...request,
-      action: "delete",
-      context: {
-        workerSessionPlacementService: placementStore,
-        workerPlacementDispatchService: harness.service,
-        workerEnvironmentService: harness.environments,
-      },
-    }).stop();
-    const coalesced = harness.service.reclaim(request);
-
-    await expect(Promise.all([first, coalesced])).resolves.toMatchObject([
-      undefined,
-      { state: "reclaimed", turnClaim: null },
-    ]);
+    await expect(harness.service.reclaim(request)).rejects.toThrow(
+      "Worker tunnel owner is no longer connected",
+    );
 
     expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
     expect(harness.environments.get(REQUEST.sessionId)).toMatchObject({ state: "destroyed" });
-    expect(harness.log).toContain("teardown:destroy");
+    await expect(harness.service.reclaim(request)).resolves.toMatchObject({
+      state: "reclaimed",
+      turnClaim: null,
+    });
+    expect(harness.log.filter((event) => event === "teardown:destroy")).toHaveLength(1);
   });
 
   it("does not hide an unrelated failure after durable teardown", async () => {
