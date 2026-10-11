@@ -59,6 +59,7 @@ function section<T>(descriptor: {
     render: (props) =>
       descriptor.render({
         get value() {
+          // SAFETY: This descriptor renders only values returned by its paired loader.
           return props.value as T;
         },
         get history() {

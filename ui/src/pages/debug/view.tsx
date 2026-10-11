@@ -64,6 +64,7 @@ function CodeBlock(props: { title: string; value: unknown; format: () => string 
 
 function SecurityRow(props: { status: DebugProps["status"] }) {
   const summary = () =>
+    // SAFETY: status.get publishes numeric security-audit counters in this field.
     (props.status as { securityAudit?: { summary?: Record<string, number> } } | null)?.securityAudit
       ?.summary;
   const critical = () => summary()?.critical ?? 0;

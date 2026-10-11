@@ -93,7 +93,7 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
               return;
             }
             if (section.id === "status") {
-              // The status descriptor is the only producer of this snapshot.
+              // SAFETY: The status descriptor is the only producer of this snapshot.
               const sample = value as DebugOverlayStatusSnapshot;
               setHistory((previous) =>
                 previous.at(-1)?.at === sample.sampledAt
@@ -188,7 +188,10 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
           }
         >
           <DebugOverlayWidget
-            status={value("status") as DebugOverlayStatusSnapshot}
+            status={
+              // SAFETY: A ready status entry contains the status descriptor's snapshot.
+              value("status") as DebugOverlayStatusSnapshot
+            }
             history={history()}
           />
         </Show>

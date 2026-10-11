@@ -48,21 +48,36 @@ export const MemoryImportPage = defineSolidBridge(
     const [revision, setRevision] = createSignal(0);
     const publish = () => setRevision((value) => value + 1);
     // Request state stays synchronous so a second activation observes the first immediately.
-    const state = {
+    const state: {
+      replaceExisting: boolean;
+      selectedByProvider: Record<string, string[]>;
+      applyingProviderId: string | null;
+      pendingImport: PendingMemoryImport | null;
+      applyError: string | null;
+      lastResults: Record<string, MigrationsMemoryApplyResult>;
+      backfillFrom: string;
+      backfillTo: string;
+      backfillBusy: "preview" | "apply" | "rollback" | null;
+      backfillError: string | null;
+      backfillPreview: SessionBackfillGatewayResult | null;
+      backfillProgress: SessionBackfillProgress | null;
+      backfillRollbackResult: SessionBackfillRollbackResult | null;
+      backfillRollbackTarget: { client: MemoryImportClient; agentId: string } | null;
+    } = {
       replaceExisting: false,
-      selectedByProvider: {} as Record<string, string[]>,
-      applyingProviderId: null as string | null,
-      pendingImport: null as PendingMemoryImport | null,
-      applyError: null as string | null,
-      lastResults: {} as Record<string, MigrationsMemoryApplyResult>,
+      selectedByProvider: {},
+      applyingProviderId: null,
+      pendingImport: null,
+      applyError: null,
+      lastResults: {},
       backfillFrom: "",
       backfillTo: "",
-      backfillBusy: null as "preview" | "apply" | "rollback" | null,
-      backfillError: null as string | null,
-      backfillPreview: null as SessionBackfillGatewayResult | null,
-      backfillProgress: null as SessionBackfillProgress | null,
-      backfillRollbackResult: null as SessionBackfillRollbackResult | null,
-      backfillRollbackTarget: null as { client: MemoryImportClient; agentId: string } | null,
+      backfillBusy: null,
+      backfillError: null,
+      backfillPreview: null,
+      backfillProgress: null,
+      backfillRollbackResult: null,
+      backfillRollbackTarget: null,
     };
     let applyEpoch = 0;
     let backfillEpoch = 0;
