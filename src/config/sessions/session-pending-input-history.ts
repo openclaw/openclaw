@@ -19,7 +19,6 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   hasRegisteredSessionPendingInputOwner,
-  projectSessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
@@ -38,6 +37,7 @@ import type {
   PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,

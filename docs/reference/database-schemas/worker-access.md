@@ -719,11 +719,22 @@ completion contract.
 
 ### Session phase actor
 
-The shared session actor contract serves durable and incognito sessions. The actor
-lives inside the canonical agent execution worker and shares its physical writer
-queue; it does not introduce another database, worker service, or writer owner.
-Durable actors bind the physical database identity and session key. Incognito
-actors bind the existing memory database's handle and incarnation.
+The shared session actor contract separates phase batching and caller lifetime
+from storage. The durable backend lives inside the canonical agent execution
+worker and shares its physical writer queue. The memory backend owns incognito
+entries, transcript bytes, pending inputs, and completion outcomes in process
+memory. It opens no SQLite database and allocates no database worker. Backend
+selection happens once at acquisition; commands never fall back to another store.
+
+Memory actors serialize commands for the same session and publish complete
+postimages before acknowledgement. Releasing a caller drains its accepted work
+without deleting the session. Session closure invalidates its old handles and
+discards its state; database closure discards all of that owner's sessions. A
+later acquisition creates empty state without reviving an old handle. A process
+exit loses this memory by design. Existing transport teardown still guards
+external effects; work already handed to a transport may finish during closure.
+Talk's voice-session metadata retains its separately selected durable owner;
+incognito transcript storage does not change its reservation or confirmation contract.
 
 Native incognito acquisition returns `not-actor-owned`; those sessions keep
 their existing owner and get no actor savings until Phase E / P12. The actor
@@ -731,7 +742,9 @@ has no native incognito adapter. Worker-backed incognito acquisition selects
 the captured memory execution owner. Closing that owner invalidates captured
 targets; acquisition cannot revive its old run authority or create a replacement
 memory database. Follow-on input, turn, and delivery cutovers must honor the
-native decline until P12 selects the worker-backed actor.
+native decline until all entry, transcript, history, and side-data consumers move
+to the memory backend together. Explicit memory acquisition is available for that
+cutover; it never mirrors an existing native or worker-backed incognito database.
 
 Agent attempts retain this actor for SessionManager transcript and tool-result
 appends. Each append captures its exact committed snapshot before fallible
@@ -789,6 +802,9 @@ The MAIN replica retains complete committed hot state. A synchronous snapshot
 reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
+If a receipt supersedes an in-flight read, that read uses the current replica.
+An empty replica permits one worker-read retry. A replacement before disclosure
+is reacquired once and authorized again; revoked authority still refuses the read.
 Existing session publications and in-process write receipts invalidate only
 the affected logical keys and shared transcript/window dependencies. Unrelated
 session snapshots survive. Raw writes with unknown coverage, schema changes,

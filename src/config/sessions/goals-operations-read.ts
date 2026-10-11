@@ -2,8 +2,8 @@ import path from "node:path";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { assertSessionGoalOperationTime } from "./goals-operation-policy.js";
 import {
-  assertSessionGoalOperationTime,
   readSessionGoalOperationInDatabase,
   SessionGoalOperationError,
 } from "./goals-operations.js";
