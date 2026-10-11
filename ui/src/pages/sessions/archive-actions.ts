@@ -110,8 +110,8 @@ export class SessionsPageArchive {
       return;
     }
     if (
-      !(await operations.confirmRunningSessionArchive(
-        { ...row, label: row.label ?? row.displayName ?? row.key },
+      !(await operations.confirmRunningSessionsArchive(
+        [{ ...row, label: row.label ?? row.displayName ?? row.key }],
         scope.signal,
       )) ||
       !this.host.isCurrent(scope)

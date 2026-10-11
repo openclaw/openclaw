@@ -3,11 +3,7 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionEntryCacheValidityToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
-import {
-  readSessionEntrySelectionSnapshot,
-  readUnchangedLifecycleTargetSnapshot,
-  writeSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -211,7 +207,6 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       expect(snapshotRows(opened.db)).toEqual(coldRows);
       expect(readRevision()).toEqual(migratedRevision);
       expect(transcriptRows(opened.db)).toEqual(beforeTranscript);
-      const prepared = readSessionEntrySelectionSnapshot(opened, "agent:main:fixture-0", true);
       const revision = readSessionEntryCacheValidityToken(opened.db);
       opened.db.exec("BEGIN");
       try {
@@ -219,7 +214,6 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
           .prepare(`UPDATE session_entry_snapshots SET value_json = ?
             WHERE session_key = 'agent:main:fixture-0' AND field = 'skillsSnapshot'`)
           .run(JSON.stringify({ prompt: "Changed outside the entry writer", skills: [] }));
-        expect(readUnchangedLifecycleTargetSnapshot(opened, prepared)).toBeUndefined();
         expect(readSessionEntryCacheValidityToken(opened.db)).not.toEqual(revision);
         expect(
           readExactSessionEntryRow(opened, "agent:main:fixture-0")?.entry.skillsSnapshot?.prompt,
@@ -227,7 +221,6 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       } finally {
         opened.db.exec("ROLLBACK");
       }
-      expect(readUnchangedLifecycleTargetSnapshot(opened, prepared)).toBe(prepared);
       const rolledBackRevision = readSessionEntryCacheValidityToken(opened.db);
       expect(rolledBackRevision).not.toEqual(revision);
       expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(rolledBackRevision);

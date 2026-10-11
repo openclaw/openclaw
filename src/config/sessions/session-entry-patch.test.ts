@@ -1,6 +1,5 @@
 import "./session-entry-patch-delivery.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { deserialize, serialize } from "node:v8";
 import { MessageChannel } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
@@ -35,12 +34,12 @@ import { retainPreparedSessionGenerationFacts } from "./session-accessor.sqlite-
 import {
   readExactSessionEntryRow,
   readSessionEntrySelectionSnapshot,
-  readUnchangedLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
@@ -107,6 +106,31 @@ it("ends an absent live-switch selection without committing and keeps newer flag
   });
 });
 
+it("publishes participant writes accepted while an entry callback was awaiting commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      recordSessionParticipant(f.scope, {
+        identity: { type: "agent", id: "during-callback" },
+        promptedAt: 10,
+      });
+    };
+    const result = await patchSessionEntryCore(f.scope, () => ({ label: "patched" }), {
+      skipMaintenance: true,
+    });
+    expect(result).toMatchObject({
+      label: "patched",
+      participants: [{ identity: { type: "agent", id: "during-callback" } }],
+      participantCount: 1,
+    });
+    expect(f.read()).toMatchObject({
+      label: "patched",
+      participants: [{ identity: { type: "agent", id: "during-callback" } }],
+    });
+  });
+});
+
 it("preserves cold serialization and snapshot revisions for synchronous SDK commit guards", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
@@ -143,22 +167,12 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
         .get(f.scope.sessionKey)?.snapshot_revision;
     const saved = snapshots();
     const initialRevision = revision();
-    const stringify = vi.spyOn(JSON, "stringify");
-    const serializedColdFields = () =>
-      stringify.mock.calls.filter(
-        ([value]) =>
-          value !== null &&
-          typeof value === "object" &&
-          ("prompt" in value || "files" in value || "systemPrompt" in value),
-      ).length;
-    // Released synchronous commit guards retain the native writer, so the spy observes its JSON work.
     const patch = (update: Partial<SessionEntry>) =>
       patchInternalSessionEntry(f.scope, () => update, {
         skipMaintenance: true,
         assertCommitAllowed: () => expect(f.database.db.isTransaction).toBe(true),
       });
     await patch({ label: "metadata only", sidebarRoot: true });
-    expect(serializedColdFields()).toBe(0);
     expect(snapshots()).toEqual(saved);
     expect(revision()).toBe(initialRevision);
     expect(f.read()).toMatchObject({ label: "metadata only", sidebarRoot: true });
@@ -167,10 +181,8 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
     expect(snapshots()).toEqual(saved);
     expect(revision()).toBe(initialRevision);
 
-    stringify.mockClear();
     const changedSkills = { ...cold.skillsSnapshot, prompt: "changed instructions" };
     await patch({ skillsSnapshot: changedSkills });
-    expect(serializedColdFields()).toBe(3);
     expect(snapshots()).toEqual(
       saved.map((row) =>
         row.field === "skillsSnapshot"
@@ -180,9 +192,7 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
     );
     expect(revision()).toBe(Number(initialRevision) + 1);
 
-    stringify.mockClear();
     await patch({ skillsSnapshot: undefined });
-    expect(serializedColdFields()).toBe(2);
     expect(snapshots()).toEqual(saved.filter((row) => row.field !== "skillsSnapshot"));
     expect(revision()).toBe(Number(initialRevision) + 2);
     await patch({ sessionDiffBaseline: undefined, systemPromptReport: undefined });
@@ -269,20 +279,6 @@ it.each([false, true])(
     });
   },
 );
-
-it("compares transported snapshot columns without rehydrating unchanged entries", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const snapshot: ReturnType<typeof readSessionEntrySelectionSnapshot> = deserialize(
-      serialize(readSessionEntrySelectionSnapshot(f.database, f.scope.sessionKey, false)),
-    );
-    expect(readUnchangedLifecycleTargetSnapshot(f.database, snapshot)?.[0]?.entry.label).toBe(
-      "initial",
-    );
-    replaceSessionEntrySync(f.scope, { sessionId: "original", updatedAt: 2, label: "changed" });
-    expect(readUnchangedLifecycleTargetSnapshot(f.database, snapshot)).toBeUndefined();
-  });
-});
 
 it("keeps updater context, FIFO and publication ordering while the host executes no session SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

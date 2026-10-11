@@ -1,4 +1,3 @@
-import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   applySessionGoalOperation,
@@ -10,6 +9,7 @@ import {
 } from "./goals-operations.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   readSessionEntryRow,
   readSessionIdentitySnapshot,
@@ -27,6 +27,7 @@ import type {
   SessionTranscriptTurnMessageAppend,
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import {
   readTranscriptAppendPostimage,
   type TranscriptAppendPostimage,
@@ -79,11 +80,16 @@ export function createSessionTranscriptTurnKernel(
     }
     return sessionMatchesExpectedTranscriptTurn(selected, options) ? selected.entry : undefined;
   };
-  const readEntry = (database: Parameters<typeof readSessionEntryRow>[0]) => {
+  const readEntry = (
+    database: Parameters<typeof readSessionEntryRow>[0],
+    includeWindowFacts?: true,
+  ) => {
     const selected =
       options.keyFormat === "agent-qualified"
-        ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey)
-        : readSessionEntryRow(database, resolved.sessionKey);
+        ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
+            includeWindowFacts,
+          })
+        : readSessionEntryRow(database, resolved.sessionKey, "full", includeWindowFacts);
     return selected?.entry ? { entry: selected.entry, row: selected.row } : undefined;
   };
   return {
@@ -101,7 +107,7 @@ export function createSessionTranscriptTurnKernel(
       mutation?.assertCurrent?.();
       assertRouting?.(transactionDb);
       let result: SqliteExpectedSessionTranscriptTurnResult;
-      const fresh = readEntry(transactionDb);
+      const fresh = readEntry(transactionDb, true);
       validateSelected?.(fresh);
       const replay = mutation
         ? readSessionGoalOperationReceipt(
@@ -215,8 +221,7 @@ export function createSessionTranscriptTurnKernel(
 
       // Append-owned metadata (including history coverage) is part of this same
       // transaction. Do not overwrite it with the pre-append entry snapshot.
-      const appended = readEntry(transactionDb);
-      const appendedRevision = getSqliteReadScopeRevision(transactionDb.db);
+      const appended = readEntry(transactionDb, true);
       const appendedEntry = appended?.entry ?? currentEntry;
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,
@@ -232,6 +237,7 @@ export function createSessionTranscriptTurnKernel(
         Object.keys(sessionPatch).length > 0
           ? mergeSessionEntry(appendedEntry, sessionPatch)
           : appendedEntry;
+      const postimages: SessionEntryWritePostimages = new Map();
       let identity:
         | { previous: Map<string, SessionEntry>; current: Map<string, SessionEntry> }
         | undefined;
@@ -246,14 +252,27 @@ export function createSessionTranscriptTurnKernel(
         if (appended) {
           previousIdentity.set(resolved.sessionKey, appended.entry);
         }
+        const snapshot = appended ? captureSessionEntrySnapshot(appended) : undefined;
         const persisted = writesEntry
           ? writeSessionEntry(transactionDb, resolved.sessionKey, next, {
               canonicalPreviousEntry: previousIdentity.get(resolved.sessionKey) ?? null,
-              canonicalPreviousEntryRevision: appendedRevision,
+              canonicalPreviousRow: snapshot?.row,
+              canonicalPreviousWindow: snapshot?.window,
+              canonicalPreviousSideTables: snapshot?.sideTables,
+              postimages,
             })
           : appendedEntry;
         const currentIdentity = new Map(previousIdentity);
         currentIdentity.set(resolved.sessionKey, persisted);
+        if (!writesEntry && appended && snapshot?.window?.row && snapshot.sideTables) {
+          postimages.set(resolved.sessionKey, {
+            changed: true,
+            entry: appendedEntry,
+            row: appended.row,
+            window: snapshot.window.row,
+            sideTables: snapshot.sideTables,
+          });
+        }
         identity = { previous: previousIdentity, current: currentIdentity };
       }
       const sessionTurnMutationResult = mutation
@@ -276,7 +295,7 @@ export function createSessionTranscriptTurnKernel(
         sessionEntry: structuredClone(next),
         sessionFile: options.sessionFile,
       };
-      return { result, identity };
+      return { result, identity, postimages };
     },
   };
 }
