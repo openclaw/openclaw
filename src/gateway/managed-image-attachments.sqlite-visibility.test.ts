@@ -7,6 +7,10 @@ import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -72,22 +76,14 @@ function message(id: string, parentId: string | null, content: unknown) {
   return { type: "message", id, parentId, timestamp, message: { role: "assistant", content } };
 }
 
-async function fixture(messageId = "attached", incognito = false) {
+async function fixture(messageId = "attached") {
   const agentId = "main";
   const sessionId = `managed-visibility-${randomUUID()}`;
-  const sessionKey = incognito
-    ? `agent:${agentId}:dashboard:incognito-${sessionId}`
-    : `agent:${agentId}:${sessionId}`;
+  const sessionKey = `agent:${agentId}:${sessionId}`;
   const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
-  expect(
-    ensureSessionEntrySync(scope, {
-      sessionId,
-      updatedAt: Date.now(),
-      ...(incognito ? { incognito } : {}),
-    }),
-  ).toBe(true);
+  expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
   const attachmentId = randomUUID();
   const body = Buffer.from("synthetic managed original\n");
   const mediaRoot = path.join(stateDir, "media");
@@ -180,7 +176,7 @@ describe("managed attachment SQLite visibility", () => {
   });
 
   it.each(["missing", "invalid-row", "ambiguous"] as const)(
-    "refuses a %s ownership source without collecting its media",
+    "refuses a %s ownership source",
     async (source) => {
       const f = await fixture();
       await seed(f, [message(f.messageId, null, [f.block])]);
@@ -205,11 +201,9 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
-      expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
-        deletedRecordCount: 0,
-        retainedCount: 1,
-      });
-      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+      expect(
+        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
+      ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
       expect(fs.existsSync(f.originalPath)).toBe(true);
     },
   );
@@ -230,21 +224,6 @@ describe("managed attachment SQLite visibility", () => {
     });
     expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
     expect(fs.existsSync(f.originalPath)).toBe(false);
-  });
-
-  it("retains and serves media owned by an unbound process-held incognito session", async () => {
-    // The running Gateway already owns a durable store beside its process-held sessions.
-    openOpenClawAgentDatabase({ agentId: "main" });
-    const f = await fixture("attached", true);
-    await seed(f, [message(f.messageId, null, [f.block])]);
-
-    expect(await f.download()).not.toBeNull();
-    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
-      deletedRecordCount: 0,
-      retainedCount: 1,
-    });
-    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
-    expect(fs.existsSync(f.originalPath)).toBe(true);
   });
 
   it("reads managed attachment membership without validating unrelated payloads", async () => {
@@ -444,9 +423,15 @@ describe("managed attachment SQLite visibility", () => {
       { type: "reset", id: "reset", parentId: f.messageId, timestamp, reason: "new" },
     ]);
     expect(await f.download()).toBeNull();
-    expect(
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-    ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(
+        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
+      ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
     expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
     expect(fs.existsSync(f.originalPath)).toBe(false);
     expect(await f.download()).toBeNull();

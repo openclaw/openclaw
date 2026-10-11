@@ -10,7 +10,10 @@ import { projectionLane } from "../config/sessions/session-transcript-worker-res
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import type { createSessionMembershipProjection } from "./session-membership-projection.js";
@@ -362,6 +365,11 @@ export function createSessionRowEntryReadAccess(
                   replaced.add(target.storePath);
                   entries.set(target.storePath, prepared.entries);
                 }
+              }
+              // Reject replaced sources before publishing their rows and sharing metadata.
+              for (const [index, { target, file }] of captures.entries()) {
+                owners[index]!.assertCurrent();
+                assertExistingDatabaseIdentity(target.storePath, file.key, file.birthtime);
               }
               return consume(
                 () =>

@@ -2,11 +2,7 @@ import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isSessionEntryDataSql,
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -111,16 +107,9 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     openOpenClawAgentDatabase(options);
     const originalPath = await seedManagedRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
-    const host = observeHostDataSql();
-    let result: Awaited<ReturnType<typeof cleanupManagedOutgoingMediaRecords>>;
-    try {
-      result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-        cleanupManagedOutgoingMediaRecords({ stateDir }),
-      );
-      expect(host.queries.filter(isSessionEntryDataSql)).toEqual([]);
-    } finally {
-      host.restore();
-    }
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      cleanupManagedOutgoingMediaRecords({ stateDir }),
+    );
 
     expect(result.deletedRecordCount).toBe(1);
     expect(

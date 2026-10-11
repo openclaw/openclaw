@@ -73,8 +73,6 @@ export function captureSidebarSnapshotModel(
     roster: bootRoster,
     mode: host.sidebarAgentsMode,
     navigationView: host.navigationView,
-    navigationScope: host.navigationScope,
-    scopesEquivalent: host.navigationCatalog.scopesEquivalent,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
         host.getSessionNavigationState().toSidebarSession(row),

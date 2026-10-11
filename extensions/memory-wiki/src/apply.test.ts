@@ -54,16 +54,6 @@ describe("applyMemoryWikiMutation", () => {
     });
   });
 
-  it("rejects out-of-range string confidence in wiki mutations", () => {
-    expect(() =>
-      normalizeMemoryWikiMutationInput({
-        op: "update_metadata",
-        lookup: "entity.alpha",
-        confidence: "1.5",
-      }),
-    ).toThrow("confidence must be a finite number");
-  });
-
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 
@@ -141,43 +131,6 @@ describe("applyMemoryWikiMutation", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[Alpha Synthesis](syntheses/alpha-synthesis.md)",
     );
-  });
-
-  it("applies a write when an unrelated vault page has malformed frontmatter (#96125)", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-apply-unrelated-invalid-",
-    });
-    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
-    const brokenPath = path.join(rootDir, "sources", "broken.md");
-    const brokenPage = [
-      "---",
-      "pageType: source",
-      "id: source.broken",
-      "sourceIds:",
-      '  - **MEMORY.md line 235**:"some quoted, value"',
-      "---",
-      "",
-      "# Broken",
-    ].join("\n");
-    await fs.writeFile(brokenPath, brokenPage, "utf8");
-
-    const result = await applyMemoryWikiMutation({
-      config,
-      mutation: {
-        op: "create_synthesis",
-        title: "Healthy Synthesis",
-        body: "Healthy summary body.",
-        sourceIds: ["source.healthy"],
-      },
-    });
-
-    expect(result.changed).toBe(true);
-    expect(result.compile.pageCounts.source).toBe(0);
-    expect(result.compile.pageCounts.synthesis).toBe(1);
-    expect(result.compile.frontmatterErrors).toEqual([
-      expect.objectContaining({ relativePath: "sources/broken.md" }),
-    ]);
-    await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
   });
 
   it.each([

@@ -106,14 +106,19 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     modelCatalog: params.modelCatalog,
     getModelCatalog: params.getModelCatalog,
     onInvalidated: () => mark({ all: true, scope: "catalog" }),
-    onRefreshed(changed) {
-      if (changed) {
+    onRefreshed(changedAgents) {
+      if (!changedAgents || changedAgents.size > 0) {
         // Rows served during renewal need new materializations only when their model facts changed.
         epoch++;
         revisions.invalidate();
         revisions.publishFacts();
         metadata.invalidate({ all: true, scope: "catalog" });
-        archive.invalidateRows({ all: true, scope: "catalog" }, rows.values());
+        archive.invalidateRows(
+          { all: true, scope: "catalog" },
+          changedAgents
+            ? [...changedAgents].flatMap((agentId) => matching({ agentId }))
+            : rows.values(),
+        );
       }
       void ensureMaterialized().catch(() => {});
     },

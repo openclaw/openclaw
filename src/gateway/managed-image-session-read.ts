@@ -1,8 +1,6 @@
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
-import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
-import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
 import {
   captureIncognitoSessionSource,
@@ -12,89 +10,14 @@ import { captureSessionStoreReadCandidate } from "../config/sessions/session-sto
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
-import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
-type ManagedImageSessionRead<T> = { kind: "ready"; value: T } | { kind: "missing" | "unavailable" };
-
-/** Unbound incognito state remains process-held until its acquisition owner cuts over. */
-function resolveUnboundIncognitoSessionRead(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-  ownerAgentId: string;
-  env: NodeJS.ProcessEnv;
-  stateDir?: string;
-}): { kind: "ready"; scope: SessionTranscriptReadScope } | { kind: "missing" | "unavailable" } {
-  const { cfg, sessionKey, agentId, ownerAgentId, env, stateDir } = params;
-  const discovery = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
-    env,
-  });
-  if (!discovery.available) {
-    return { kind: "unavailable" };
-  }
-  const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
-  type SessionEntry = ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
-  let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
-  for (const target of discovery.targets) {
-    const readTarget = {
-      agentId: ownerAgentId,
-      clone: false,
-      env,
-      sessionKey,
-      storePath: target.storePath,
-    };
-    let targetEntry: SessionEntry;
-    try {
-      const exact = loadExactSessionEntryReadOnlyResult(readTarget);
-      if (!exact.found) {
-        return { kind: "unavailable" };
-      }
-      targetEntry = exact.value?.entry;
-      if (!targetEntry) {
-        targetEntry = resolveSessionEntry(readTarget, { readOnly: true }).existing;
-      }
-    } catch {
-      return { kind: "unavailable" };
-    }
-    if (targetEntry) {
-      if (matched) {
-        return { kind: "unavailable" };
-      }
-      matched = { entry: targetEntry, storePath: target.storePath };
-    }
-  }
-  let entry: SessionEntry = matched?.entry;
-  let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
-  if (!entry && usesRuntimeState) {
-    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
-    const exact = loadExactSessionEntryReadOnlyResult({
-      agentId: ownerAgentId,
-      clone: false,
-      sessionKey,
-      storePath: loaded.storePath,
-    });
-    if (!exact.found) {
-      return { kind: "unavailable" };
-    }
-    entry = exact.value?.entry ?? loaded.entry;
-    storePath = loaded.storePath;
-  }
-  const sessionId = entry?.sessionId;
-  return sessionId
-    ? { kind: "ready", scope: { agentId, sessionEntry: entry, sessionId, sessionKey, storePath } }
-    : { kind: "missing" };
-}
-
-/** One selection owner serves media reads and distinguishes absence from unsafe cleanup. */
+/** Serving keeps discovery and physical readers alive through response publication. */
 export async function withManagedImageSessionRead<T>(
   params: {
     cfg: OpenClawConfig;
@@ -102,9 +25,10 @@ export async function withManagedImageSessionRead<T>(
     agentId: string;
     stateDir: string;
     assertCurrent: () => void;
+    unavailable?: T;
   },
   consume: (scope: SessionTranscriptReadScope, assertCurrent: () => void) => Promise<T>,
-): Promise<ManagedImageSessionRead<T>> {
+): Promise<T | null> {
   const { cfg, sessionKey, agentId, stateDir } = params;
   params.assertCurrent();
   const incognitoScope = {
@@ -121,36 +45,17 @@ export async function withManagedImageSessionRead<T>(
       params.assertCurrent,
       async (entry, assertCurrent) =>
         entry && !("kind" in binding)
-          ? {
-              kind: "ready" as const,
-              value: await consume(
-                {
-                  ...incognitoScope,
-                  storePath: binding.actor.path,
-                  sessionEntry: entry,
-                  sessionId: entry.sessionId,
-                },
-                assertCurrent,
-              ),
-            }
-          : { kind: "missing" as const },
+          ? consume(
+              {
+                ...incognitoScope,
+                storePath: binding.actor.path,
+                sessionEntry: entry,
+                sessionId: entry.sessionId,
+              },
+              assertCurrent,
+            )
+          : null,
     );
-  }
-  if (
-    isIncognitoSessionKey(sessionKey) ||
-    (cfg.session?.store && isIncognitoOpenClawAgentSqlitePath(cfg.session.store, incognitoScope))
-  ) {
-    const selected = resolveUnboundIncognitoSessionRead({
-      cfg,
-      sessionKey,
-      agentId,
-      ownerAgentId: agentId,
-      env: incognitoScope.env,
-      stateDir,
-    });
-    return selected.kind === "ready"
-      ? { kind: "ready", value: await consume(selected.scope, params.assertCurrent) }
-      : selected;
   }
   const { candidates, ...prepared } = prepareSessionStoreTargetInventory(cfg, [agentId], {
     ...process.env,
@@ -168,10 +73,10 @@ export async function withManagedImageSessionRead<T>(
       }
     }
   };
-  return inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
+  const result = inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
     const source = inventory.agents[0];
     if (!source?.result.available) {
-      return { kind: "unavailable" as const };
+      return params.unavailable ?? null;
     }
     return withSessionHistoryWorkerDatabases(
       source.reads.map(({ database }) => ({ ...database, env: prepared.env })),
@@ -206,11 +111,12 @@ export async function withManagedImageSessionRead<T>(
           } catch (error) {
             assertCurrent();
             if (
+              params.unavailable !== undefined ||
               extractErrorCode(error) === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" ||
               (error instanceof SessionMetadataUnavailableError &&
                 error.reason === "schema-missing")
             ) {
-              return { kind: "unavailable" as const };
+              return params.unavailable ?? null;
             }
             throw error;
           }
@@ -219,29 +125,34 @@ export async function withManagedImageSessionRead<T>(
           }
           assertCurrent();
           if (exact.sharing?.placeholders.length) {
-            return { kind: "unavailable" as const };
+            return params.unavailable ?? null;
           }
           let entry = exact.entries[0]?.entry;
           if (!entry) {
-            const read = await reader.readEntryResult({ scope });
+            const read = await reader.readEntryResult({ scope }).catch((error: unknown) => {
+              if (params.unavailable !== undefined) {
+                return undefined;
+              }
+              throw error;
+            });
             assertCurrent();
-            if (!read.ok) {
-              return { kind: "unavailable" as const };
+            if (!read?.ok) {
+              return params.unavailable ?? null;
             }
             entry = read.value;
           }
           if (entry) {
             if (matched) {
-              return { kind: "unavailable" as const };
+              return params.unavailable ?? null;
             }
             matched = { ...scope, sessionEntry: entry, sessionId: entry.sessionId };
           }
         }
         if (matched) {
-          return { kind: "ready" as const, value: await consume(matched, assertCurrent) };
+          return consume(matched, assertCurrent);
         }
         if (path.resolve(stateDir) !== path.resolve(resolveStateDir())) {
-          return { kind: "missing" as const };
+          return null;
         }
         const fallback = await resolveGatewaySessionStoreTargetInWorker({
           cfg: prepared.config,
@@ -252,7 +163,7 @@ export async function withManagedImageSessionRead<T>(
         });
         assertCurrent();
         if (!fallback.readSource) {
-          return { kind: "missing" as const };
+          return null;
         }
         const database = fallback.readSource;
         return withSessionHistoryWorkerDatabases(
@@ -265,33 +176,45 @@ export async function withManagedImageSessionRead<T>(
               storePath: database.path,
               env: prepared.env,
             };
-            const read = await reader!.readEntryResult({ scope });
+            const read = await reader!.readEntryResult({ scope }).catch((error: unknown) => {
+              if (params.unavailable !== undefined) {
+                return undefined;
+              }
+              throw error;
+            });
             const assertFallbackCurrent = () => {
               assertCurrent();
               reader!.assertCurrent();
             };
             assertFallbackCurrent();
-            if (!read.ok) {
-              return { kind: "unavailable" as const };
+            if (!read?.ok) {
+              return params.unavailable ?? null;
             }
             if (!read.value) {
-              return { kind: "missing" as const };
+              return null;
             }
-            return {
-              kind: "ready" as const,
-              value: await consume(
-                {
-                  ...scope,
-                  sessionKey,
-                  sessionId: read.value.sessionId,
-                  sessionEntry: read.value,
-                },
-                assertFallbackCurrent,
-              ),
-            };
+            return consume(
+              {
+                ...scope,
+                sessionKey,
+                sessionId: read.value.sessionId,
+                sessionEntry: read.value,
+              },
+              assertFallbackCurrent,
+            );
           },
         );
       },
     );
   }, assertSelectionCurrent);
+  return result.catch((error: unknown) => {
+    if (
+      params.unavailable !== undefined &&
+      (error instanceof SessionMetadataUnavailableError ||
+        extractErrorCode(error) === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED")
+    ) {
+      return params.unavailable;
+    }
+    throw error;
+  });
 }

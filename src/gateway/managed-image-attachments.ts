@@ -708,13 +708,14 @@ async function recordMatchesTranscriptMessage(
   if (!ownerAgentId) {
     return "unavailable";
   }
-  const selected = await withManagedImageSessionRead(
+  const result = await withManagedImageSessionRead<ManagedOutgoingTranscriptMatch>(
     {
       cfg,
       agentId: ownerAgentId,
       sessionKey,
       stateDir: stateDir ?? resolveStateDir(),
       assertCurrent: captureChannelReadScope()?.assertCurrent ?? (() => {}),
+      unavailable: "unavailable",
     },
     async (scope, assertCurrent) => {
       const index = await readManagedOutgoingAttachmentIndex(
@@ -724,16 +725,13 @@ async function recordMatchesTranscriptMessage(
       );
       assertCurrent();
       cache?.set(cacheKey, index);
-      return index.has(refKey) ? ("match" as const) : ("missing" as const);
+      return index.has(refKey) ? "match" : "missing";
     },
   );
-  if (selected.kind === "ready") {
-    return selected.value;
-  }
-  if (selected.kind === "missing") {
+  if (result === null) {
     cache?.set(cacheKey, null);
   }
-  return selected.kind;
+  return result ?? "missing";
 }
 
 async function readManagedOutgoingAttachmentIndex(
@@ -831,7 +829,7 @@ async function withManagedOutgoingMediaRead<T>(
   if (!agentId) {
     return null;
   }
-  const selected = await withManagedImageSessionRead(
+  return withManagedImageSessionRead(
     { cfg, agentId, sessionKey: record.sessionKey, stateDir, assertCurrent: assertCallerCurrent },
     async (scope, assertCurrent) => {
       const messages = await readSessionMessagesMatchingIdAsync(scope, record.messageId!);
@@ -845,7 +843,6 @@ async function withManagedOutgoingMediaRead<T>(
       return matches ? consume(assertCurrent) : null;
     },
   );
-  return selected.kind === "ready" ? selected.value : null;
 }
 
 /** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */

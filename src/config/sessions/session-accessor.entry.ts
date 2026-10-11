@@ -212,13 +212,21 @@ export async function readResolvedSessionEntriesInWorker(
       env: actorEnv,
       sessionKey: canonicalKey,
     };
-    if (captureIncognitoSessionBinding(actorScope)) {
+    const binding = captureIncognitoSessionBinding(actorScope);
+    if (binding || isIncognitoSessionKey(canonicalKey)) {
       result.set(requestedKey, {
         agentId,
         canonicalKey,
         requestedKey,
         storeKey: canonicalKey,
-        entry: await readSessionEntryReadOnlyInWorker({ ...actorScope, agentId }),
+        entry: await readSessionEntryReadOnlyInWorker({
+          ...actorScope,
+          agentId,
+          // Unbound incognito still belongs to its process-local native owner.
+          ...(!binding && {
+            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: scope.env }),
+          }),
+        }),
       });
       continue;
     }

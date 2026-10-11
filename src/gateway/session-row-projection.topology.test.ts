@@ -113,9 +113,7 @@ it.for(["publication", "source", "dispose"] as const)(
         }
         release.resolve();
         if (change === "source") {
-          await expect(reading).rejects.toThrow(
-            "Session membership store changed before publication",
-          );
+          await expect(reading).rejects.toThrow(/identity changed/);
           expect(projection.capture(query)).toBeUndefined();
         } else {
           await reading;

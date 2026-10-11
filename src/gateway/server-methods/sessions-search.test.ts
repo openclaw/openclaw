@@ -76,7 +76,7 @@ async function callSearch(
   return respond;
 }
 
-async function useRestrictedSearchMetadata() {
+async function useRestrictedSearchMetadata(others: "none" | "view" = "none") {
   const accessor = await vi.importActual<
     typeof import("../../config/sessions/session-entry-read-runtime.js")
   >("../../config/sessions/session-entry-read-runtime.js");
@@ -105,7 +105,7 @@ async function useRestrictedSearchMetadata() {
       roles: {
         default: "restricted",
         definitions: {
-          restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          restricted: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
         },
       },
     },
@@ -208,21 +208,19 @@ describe("sessions.search gateway method", () => {
 
   it("hides a retired session whose visibility changes while its transcript is searched", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { viewer, other } = await useRestrictedSearchMetadata();
+      const { viewer, other } = await useRestrictedSearchMetadata("view");
       const sessionKey = "agent:main:retained";
       const entry = {
         sessionId: "retained-session",
         updatedAt: 1,
-        createdActor: { type: "human" as const, source: "profile" as const, id: viewer.id },
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, source: "profile" as const, id: other.id },
       };
       replaceSessionEntrySync({ agentId: "main", sessionKey }, entry);
       cfg = { ...cfg, agents: { ownership: "explicit", entries: { research: {} } } };
       setRuntimeConfigSnapshot(cfg);
       searchSessionTranscriptsMock.mockImplementationOnce(() => {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          { ...entry, createdActor: { ...entry.createdActor, id: other.id } },
-        );
+        replaceSessionEntrySync({ agentId: "main", sessionKey }, { ...entry, visibility: "draft" });
         return {
           hits: [{ sessionKey, sessionId: entry.sessionId, messageId: "private", score: 1 }],
           indexing: false,
