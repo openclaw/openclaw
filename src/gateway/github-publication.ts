@@ -11,10 +11,12 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
+import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createPersonalGitHubPublicationCoordinator } from "./github-personal-publication.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -138,6 +140,9 @@ export function createGitHubPublicationCoordinator(params: {
   getCommittedRuntimeConfig: () => OpenClawConfig;
 }) {
   const instanceId = params.placements.workspaceResultInstanceId();
+  const scope = createGitHubPublicationWorkerScope(captureOpenClawStateWorkerContext());
+  const assertCurrent = scope.assertCurrent;
+  const signal = scope.signal;
 
   const readById = (requestId: string): PublicationRow | undefined => {
     ensureSchema();
@@ -526,10 +531,19 @@ export function createGitHubPublicationCoordinator(params: {
     deferRequests(rows.map((row) => row.request_id));
   };
 
-  const repository = createRepositoryGitHubPublicationCoordinator(params);
-  const personal = createPersonalGitHubPublicationCoordinator(params.placements);
+  const repository = createRepositoryGitHubPublicationCoordinator({
+    ...params,
+    assertCurrent,
+    signal,
+  });
+  const personal = createPersonalGitHubPublicationCoordinator(
+    params.placements,
+    assertCurrent,
+    signal,
+  );
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
+    assertCurrent,
     readById,
     requestForClaim,
     sameWorktree,
