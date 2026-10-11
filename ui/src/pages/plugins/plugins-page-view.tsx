@@ -306,7 +306,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
           <wa-tab-panel
             id={PLUGINS_HUB_PANEL_ID}
             name="plugins"
-            active
+            prop:active={true}
             aria-labelledby="plugins-tab-plugins"
           >
             {page().state.catalogDetail ? (

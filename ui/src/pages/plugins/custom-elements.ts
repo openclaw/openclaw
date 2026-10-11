@@ -1,5 +1,4 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type { ConfigFormStructuredDraftProps } from "../../components/config-form-structured-draft.ts";
 import type { OpenClawFilePreviewModal } from "../../components/file-preview-modal.ts";
 
@@ -12,10 +11,6 @@ declare module "@solidjs/web" {
       };
       "wa-popup": HTMLAttributes<WaPopup> & {
         "prop:active"?: WaPopup["active"];
-      };
-      "wa-tab-panel": HTMLAttributes<WaTabPanel> & {
-        name: string;
-        active?: boolean;
       };
       "openclaw-plugin-manager": HTMLAttributes<HTMLElement>;
       "openclaw-file-preview-modal": HTMLAttributes<OpenClawFilePreviewModal> & {

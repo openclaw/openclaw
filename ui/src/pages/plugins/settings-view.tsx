@@ -368,7 +368,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         <wa-tab-panel
           id="plugin-settings-panel"
           name={props.tab}
-          active
+          prop:active={true}
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}
