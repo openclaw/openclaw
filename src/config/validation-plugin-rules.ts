@@ -269,6 +269,11 @@ export function validatePreparedConfigWithPlugins(
     return Boolean(normalizedId) && !ensureKnownIds().has(normalizedId) && hasPluginEvidence(id);
   };
 
+  const isExactDisabledUnknownChannelMarker = (channelId: string): boolean => {
+    const channelConfig = config.channels?.[channelId];
+    return channelConfig?.enabled === false && Object.keys(channelConfig).length === 1;
+  };
+
   const collectActiveWebSearchProviderIds = (): string[] => {
     const { registry } = ensureRegistry();
     return [
@@ -460,6 +465,11 @@ export function validatePreparedConfigWithPlugins(
           warnings.push({
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+          });
+        } else if (isExactDisabledUnknownChannelMarker(trimmed)) {
+          warnings.push({
+            ...issue,
+            message: `${issue.message} (disabled channel marker preserved; install the plugin to validate it)`,
           });
         } else {
           issues.push(issue);
