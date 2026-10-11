@@ -3,8 +3,6 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
-  MemoryCliSearchParams,
-  MemoryCliSearchResult,
   MemoryCliSearchOutcome,
   MemoryProviderStatus,
   MemorySearchManager,
@@ -224,10 +222,10 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
   try {
     if (assertCurrent) {
       assertCurrent();
-      const api = loadBundledPluginPublicArtifactModuleSync<{
-        searchMemoryForCli: (params: MemoryCliSearchParams) => Promise<MemoryCliSearchResult>;
-      }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
-      const payload = await api.searchMemoryForCli({
+      if (!acquired.searchForCli) {
+        throw new Error("The memory runtime does not support CLI search.");
+      }
+      const payload = await acquired.searchForCli({
         manager,
         cfg,
         agentId,

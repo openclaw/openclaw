@@ -18,6 +18,8 @@ Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
 
 `search` and `session-backfill` route through the local Gateway when it is
 running. Search preserves its result limits, session scope, and recall recording.
+When dreaming is enabled, those recalls feed the requested agent's workspace
+just as they do when searching offline.
 Backfill preview, apply, and rollback retain their existing output. Apply keeps
 its bounded batch loop and requires the same Gateway owner throughout; a failed
 request is never replayed locally. Update an

@@ -256,7 +256,7 @@ describe("matrix approval reactions", () => {
       clear: vi.fn(),
     }));
     setMatrixRuntime({
-      state: { openKeyedStore },
+      state: { openKeyedStoreV2: openKeyedStore },
       logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
     } as never);
 

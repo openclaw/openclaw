@@ -1465,11 +1465,11 @@ async function prepareCliRunContextWithinReadFence(
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
         : await loadCliSessionPromptContext({
-            abortSignal: params.abortSignal,
-            sessionManager: params.sessionManager,
-            sessionTarget: params.sessionTarget,
+            ...params,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
+            nativeSessionId: reusableCliSessionId,
+            tools: promptTools,
           });
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
@@ -1482,6 +1482,7 @@ async function prepareCliRunContextWithinReadFence(
     const finalizedTranscriptPrompt =
       (params.finalizePromptForResolvedTools ||
         sessionPromptContext?.durableContext ||
+        sessionPromptContext?.sessionGapContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
@@ -1497,6 +1498,7 @@ async function prepareCliRunContextWithinReadFence(
     if (!isControlOperation && params.skillsSnapshot?.librarySelections?.length) {
       preparedPrompt = remapSkillReferencePaths(preparedPrompt, preparedSkills.usagePaths);
     }
+    let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
       ({
         prompt: preparedPrompt,
@@ -1534,10 +1536,8 @@ async function prepareCliRunContextWithinReadFence(
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-    }
-    let historyPromptCurrentTurn = preparedPrompt;
-    if (!skipsTurnPreparation) {
-      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession);
+      const gap = sessionPromptContext?.sessionGapContext;
+      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession, gap);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
       historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);

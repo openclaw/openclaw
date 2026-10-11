@@ -164,7 +164,15 @@ suite.define(() => {
         expect(await status.textContent()).toContain("Applying update");
         expect(await policy.isDisabled()).toBe(true);
         expect(await checks.isDisabled()).toBe(true);
-        expect(await page.locator("wa-radio-group").getAttribute("disabled")).not.toBeNull();
+        expect(
+          await page
+            .getByRole("radiogroup")
+            .getByRole("radio")
+            .evaluateAll(
+              (radios) =>
+                radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+            ),
+        ).toBe(true);
         expect(
           await page.getByRole("button", { name: "Updating…", exact: true }).isDisabled(),
         ).toBe(true);
@@ -381,7 +389,15 @@ suite.define(() => {
         expect(await page.getByRole("note").textContent()).toContain(
           "Administrator access is required",
         );
-        expect(await page.locator("wa-radio-group").getAttribute("disabled")).not.toBeNull();
+        expect(
+          await page
+            .getByRole("radiogroup")
+            .getByRole("radio")
+            .evaluateAll(
+              (radios) =>
+                radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+            ),
+        ).toBe(true);
         expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(
           true,
         );
