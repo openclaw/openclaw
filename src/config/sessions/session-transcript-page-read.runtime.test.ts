@@ -1,12 +1,16 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { startTranscriptPageRead } from "./session-transcript-page-read.operation.js";
-import type { SessionHistoryDatabaseTarget } from "./session-transcript-worker-resources.js";
+import {
+  historyLane,
+  type SessionHistoryDatabaseTarget,
+} from "./session-transcript-worker-resources.js";
 
 const limits = { limit: 2, maxScannedEntries: 1000, maxMaterializedBytes: 16 * 1024 * 1024 };
 const bigLimits = { ...limits, limit: 50 };
@@ -188,6 +192,71 @@ it("revokes publication for an idempotent cancel and keeps the lane usable", asy
       );
       await expect(successor.response.then((value) => value.ok)).resolves.toBe(true);
       await successor.settled;
+    },
+  );
+});
+
+it("keeps admission closed when worker retirement fails during a timeout", async () => {
+  await withPageFixture([{ type: "session", id: "page-runtime", version: 3 }], async (fixture) => {
+    const run = vi.spyOn(historyLane.pool, "run").mockImplementation(((factory: () => unknown) => {
+      // Assign native custody exactly as the pool would, then time out.
+      factory();
+      return Promise.reject(new WorkerTaskError("worker task timed out", "timeout"));
+    }) as typeof historyLane.pool.run);
+    const rotate = vi
+      .spyOn(historyLane.pool, "rotate")
+      .mockImplementation(() => Promise.reject(new Error("retirement failed")));
+    try {
+      const operation = startTranscriptPageRead(
+        fixture.target,
+        operationInput(fixture, performance.now() + 5000),
+      );
+      await expect(operation.response).rejects.toThrow(/worker retirement failed/);
+      await expect(operation.settled).rejects.toThrow(/worker retirement failed/);
+      const successor = startTranscriptPageRead(
+        fixture.target,
+        operationInput(fixture, performance.now() + 5000),
+      );
+      await expect(successor.response).rejects.toThrow(/admission is closed/);
+      await expect(successor.settled).rejects.toThrow(/admission is closed/);
+    } finally {
+      run.mockRestore();
+      rotate.mockRestore();
+    }
+  });
+});
+
+it("settles a canceled operation across a mid-flight source replacement", async () => {
+  await withPageFixture(
+    [
+      { type: "session", id: "page-runtime", version: 3 },
+      { type: "message", id: "one", message: { role: "user", content: "one" } },
+    ],
+    async (fixture) => {
+      const operation = startTranscriptPageRead(
+        fixture.target,
+        operationInput(fixture, performance.now() + 5000),
+      );
+      operation.cancel();
+      const originalPath = fixture.scope.path;
+      const fs = await import("node:fs");
+      fs.renameSync(originalPath, originalPath + ".original");
+      fs.writeFileSync(originalPath, "synthetic replacement; must never be read");
+      try {
+        await expect(operation.response).resolves.toMatchObject({
+          ok: false,
+          error: "timed_out",
+        });
+        await operation.settled;
+        const replaced = startTranscriptPageRead(fixture.target, {
+          ...operationInput(fixture, performance.now() + 5000),
+          expectedIdentity: readDatabasePathIdentitySync(originalPath),
+        });
+        await expect(replaced.response).resolves.toMatchObject({ ok: false });
+        await expect(replaced.settled).resolves.toMatchObject({ final: false });
+      } finally {
+        fs.rmSync(originalPath + ".original", { force: true });
+      }
     },
   );
 });

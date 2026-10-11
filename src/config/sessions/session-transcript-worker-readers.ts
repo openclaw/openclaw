@@ -4,7 +4,10 @@ import { err, ok } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import {
+  decodeSessionTranscriptWorkerReadError,
+  SessionHistoryCleanupError,
+} from "./session-history-worker-errors.js";
 import {
   assertTranscriptPageIdentity,
   TranscriptPageIdentityError,
@@ -102,6 +105,11 @@ export function createSessionHistoryWorkerReaders(
           timeoutMs,
         );
       } catch (error) {
+        // Custody loss is not a store outcome: retirement failures keep the
+        // resource's admission closed and must reach the operation owner.
+        if (error instanceof SessionHistoryCleanupError) {
+          throw error;
+        }
         return {
           ok: false,
           error:

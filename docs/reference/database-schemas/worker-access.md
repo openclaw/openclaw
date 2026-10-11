@@ -2708,3 +2708,27 @@ Doctor, CLI discovery, and released synchronous coding-tool construction retain
 their native compatibility paths. Bundled callers prepare presence before
 invoking that factory. Schemas, stored bytes, retention, and update behavior are
 unchanged.
+
+Read-only transcript page reads use the existing session-history lane and its
+retained database owner through the internal transcript-page operation. The
+caller supplies one absolute deadline of at most five seconds spanning queue
+wait, native execution, and settlement; the pool timeout, host receipt, and
+cleanup share that single allowance, and a queued successor never receives a
+fresh one. One operation admits per physical store at a time, and custody is
+held until the read settles: the retained reader releases only after the worker
+reply or failure completes, so a running task cannot lose its resource to
+pruning. Cancellation is idempotent and resolves with the observed partial
+accounting marked final:false under the timed_out code; a failed worker
+retirement rejects both the response and settlement and keeps the store's
+admission closed to successors until its retry owner recovers the resource.
+Admission is native read-only: the page dispatcher uses the scoped read-only
+owner rather than the generic helper, so a host-held writable handle never
+receives page-read SQL, and the auxiliary quarantine lookup opens its store
+read-only so a lookup cannot create or recreate it. SQLite may create WAL/SHM
+coordination files for an existing store under the logical read-only contract;
+reader-issued writes, DDL, migrations, cold restoration, and missing-store
+creation remain prohibited. Missing, schema-incompatible, and bare stores
+return closed failures with primary bytes unchanged, and no WAL read mark
+survives an operation, so the owner's checkpoint still resets the WAL while
+the reader is idle. These are internal contracts for the later public facade,
+not released SDK surface.

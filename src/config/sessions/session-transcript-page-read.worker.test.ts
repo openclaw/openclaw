@@ -7,6 +7,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveStateDir } from "../state-dir.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -198,5 +199,79 @@ it("pages through the built read-only worker and retains the original frontier a
         }
       },
     );
+  });
+});
+
+it("refuses a newer schema through the worker without migrating it", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const writer = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:newer-schema",
+      sessionId: "newer-schema",
+      path: writer.path,
+      env,
+    };
+    writeSessionEntry(writer, scope.sessionKey, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+    });
+    await closeOpenClawAgentDatabaseByPathAsync(writer.path);
+    const peer = new (requireNodeSqlite().DatabaseSync)(scope.path);
+    try {
+      const current = peer.prepare("PRAGMA user_version").get() as { user_version?: number };
+      peer.exec(`PRAGMA user_version = ${(current.user_version ?? 0) + 1000}`);
+    } finally {
+      peer.close();
+    }
+    const originalBytes = await fs.readFile(scope.path);
+    const result = await withSessionHistoryWorkerDatabase(
+      { agentId: "main", path: scope.path, env },
+      (owner) =>
+        owner.readTranscriptPage({
+          request: { scope, expectedLifecycleRevision: "original", limits },
+          expectedIdentity: readDatabasePathIdentitySync(scope.path),
+        }),
+    );
+    expect(result.ok).toBe(false);
+    expect(await fs.readFile(scope.path)).toEqual(originalBytes);
+    const verify = new (requireNodeSqlite().DatabaseSync)(scope.path, { readOnly: true });
+    try {
+      const version = verify.prepare("PRAGMA user_version").get();
+      expect(version.user_version).toBeGreaterThan(0);
+    } finally {
+      verify.close();
+    }
+  });
+});
+
+it("refuses a store without the agent schema without adopting it", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const bare = path.join(resolveStateDir(env), "bare.sqlite");
+    const create = new (requireNodeSqlite().DatabaseSync)(bare);
+    try {
+      create.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
+    } finally {
+      create.close();
+    }
+    const originalBytes = await fs.readFile(bare);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:bare",
+      sessionId: "bare",
+      path: bare,
+      env,
+    };
+    const result = await withSessionHistoryWorkerDatabase(
+      { agentId: "main", path: bare, env },
+      (owner) =>
+        owner.readTranscriptPage({
+          request: { scope, expectedLifecycleRevision: "original", limits },
+          expectedIdentity: readDatabasePathIdentitySync(bare),
+        }),
+    );
+    expect(result.ok).toBe(false);
+    expect(await fs.readFile(bare)).toEqual(originalBytes);
   });
 });

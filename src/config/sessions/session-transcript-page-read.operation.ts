@@ -14,6 +14,7 @@ import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-
 
 const MAX_TRANSCRIPT_PAGE_READ_WINDOW_MS = 5_000;
 const pageReadOperationTails = new WeakMap<HistoryDatabaseResource, Promise<unknown>>();
+const pageReadOperationFailures = new WeakMap<HistoryDatabaseResource, unknown>();
 
 /**
  * One admitted transcript-page operation per physical store: queue, native
@@ -32,6 +33,7 @@ export function startTranscriptPageRead(
   }
   const resource = acquireHistoryDatabaseResource(target);
   const previous = pageReadOperationTails.get(resource);
+  const priorFailure = pageReadOperationFailures.get(resource);
   const controller = new AbortController();
   const signal = input.signal
     ? AbortSignal.any([controller.signal, input.signal])
@@ -44,26 +46,57 @@ export function startTranscriptPageRead(
   };
   let cleanup: Promise<void> = Promise.resolve();
   const response = (async (): Promise<TranscriptPageReadResult> => {
+    const closedAdmission = (failure: unknown) => {
+      const error = new WorkerTaskError(
+        "Transcript page read admission is closed after a failed cleanup",
+        "unavailable",
+      );
+      error.cause = failure;
+      throw error;
+    };
+    if (priorFailure !== undefined) {
+      closedAdmission(priorFailure);
+    }
     await previous;
+    const settledFailure = pageReadOperationFailures.get(resource);
+    if (settledFailure !== undefined) {
+      closedAdmission(settledFailure);
+    }
     const remaining = input.deadlineAt - performance.now();
     if (remaining <= 0) {
       return { ok: false, error: "timed_out", budget: { ...emptyAccounting } };
     }
     const retained = retainSessionHistoryWorkerDatabase(target);
-    cleanup = (async () => {
-      retained.release();
-    })();
-    return retained.owner.readTranscriptPage(
+    const read = retained.owner.readTranscriptPage(
       { request: input.request, expectedIdentity: input.expectedIdentity },
       signal,
       remaining,
     );
+    // Custody spans native execution: release only after the read settles, so
+    // the resource cannot be pruned out from under a running task.
+    cleanup = read.then(
+      () => {
+        retained.release();
+      },
+      () => {
+        retained.release();
+      },
+    );
+    return read;
   })();
   const settled = (async (): Promise<TranscriptReadAccounting> => {
     const result = await response;
     await cleanup;
     return result.budget;
   })();
+  // Register the failure flag before advancing the tail so a successor that
+  // observes the settled tail also observes the closed admission.
+  void settled.then(
+    () => undefined,
+    (error: unknown) => {
+      pageReadOperationFailures.set(resource, error);
+    },
+  );
   pageReadOperationTails.set(
     resource,
     settled.then(

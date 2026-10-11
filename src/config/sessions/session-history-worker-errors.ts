@@ -126,12 +126,14 @@ export function decodeSessionTranscriptWorkerReadError(
 }
 
 /** Keep read and cleanup failures together through the worker error graph. */
+export class SessionHistoryCleanupError extends AggregateError {}
+
 export function sessionHistoryCleanupError(
   error: unknown,
   cleanupError: unknown,
   stage: "database close" | "worker retirement",
-): AggregateError {
-  return new AggregateError(
+): SessionHistoryCleanupError {
+  return new SessionHistoryCleanupError(
     [error, cleanupError],
     `${coerceErrorMessage(error)}; ${stage} failed: ${coerceErrorMessage(cleanupError)}`,
     { cause: cleanupError },
