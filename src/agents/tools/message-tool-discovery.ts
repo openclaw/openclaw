@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
 import type { ChatType } from "../../channels/chat-type.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
@@ -38,6 +39,7 @@ export type MessageToolDiscoveryParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentPromptReaction?: boolean;
   currentAccountId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -311,6 +313,9 @@ function* resolveMessageToolActionSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
 ): MessageActionDiscoverySteps<string[]> {
   const discoveredActions = yield* resolveMessageToolSchemaActionsSteps(params);
+  if (params.currentPromptReaction && !discoveredActions.includes("react")) {
+    discoveredActions.push("react");
+  }
   const allowedActions = resolveAllowedMessageActions({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -405,7 +410,18 @@ function* buildMessageToolSchemaSteps(
     includePresentation,
     includeDeliveryPin,
     includeBestEffort,
-    extraProperties,
+    extraProperties:
+      params.currentPromptReaction && actions.includes("react")
+        ? {
+            ...extraProperties,
+            emoji: Type.Optional(
+              Type.String({
+                description:
+                  "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+              }),
+            ),
+          }
+        : extraProperties,
   });
 }
 

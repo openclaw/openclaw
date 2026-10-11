@@ -2016,3 +2016,6 @@ src/config/sessions/transcript-write-context.ts
 src/sessions/session-lifecycle-events.ts
 src/sessions/session-row-facts.ts
 src/state/openclaw-agent-worker-store.ts
+src/config/sessions/session-accessor.sqlite-entry-query.ts
+src/config/sessions/session-accessor.sqlite-provenance.ts
+src/config/sessions/session-accessor.sqlite-transcript-presence.ts
