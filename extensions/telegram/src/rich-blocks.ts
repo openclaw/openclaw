@@ -491,10 +491,15 @@ function emitSegments(
   // table opens at or after the container in the source; otherwise the table
   // precedes the container and must render as a preceding sibling. Tables and
   // containers without source lines keep the legacy owned placement.
-  const tableOwnedBy = (container: StructuralSegment, table: StructuralSegment): boolean =>
-    table.sourceLine === undefined ||
-    container.sourceLine === undefined ||
-    table.sourceLine >= container.sourceLine;
+  const sourceLineOf = (segment: StructuralSegment): number | undefined =>
+    segment.kind === "table" || segment.kind === "blockquote" || segment.kind === "list"
+      ? segment.sourceLine
+      : undefined;
+  const tableOwnedBy = (container: StructuralSegment, table: StructuralSegment): boolean => {
+    const tableLine = sourceLineOf(table);
+    const containerLine = sourceLineOf(container);
+    return tableLine === undefined || containerLine === undefined || tableLine >= containerLine;
+  };
   const orderedSegments = [
     ...segments,
     ...findTelegramHtmlIslands(htmlNodes).map((node): StructuralSegment => ({
