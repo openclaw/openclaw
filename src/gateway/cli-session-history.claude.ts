@@ -13,11 +13,11 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import {
   resolveClaudeCliProjectsRoot,
   resolveClaudeCliProjectsRootAsync,
 } from "../agents/command/claude-cli-project-dir.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
