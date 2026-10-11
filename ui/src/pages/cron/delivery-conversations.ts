@@ -11,10 +11,12 @@ export function invalidateStaleDeliveryRoute(
 ): Partial<CronFormState> {
   const deliveryIdentityChanged =
     ("deliveryMode" in patch && patch.deliveryMode !== current.deliveryMode) ||
-    ("deliveryChannel" in patch && patch.deliveryChannel !== current.deliveryChannel) ||
-    ("deliveryAccountId" in patch && patch.deliveryAccountId !== current.deliveryAccountId) ||
-    ("deliveryTo" in patch && patch.deliveryTo !== current.deliveryTo) ||
-    ("agentId" in patch && patch.agentId !== current.agentId);
+    ("deliveryChannel" in patch &&
+      patch.deliveryChannel?.trim() !== current.deliveryChannel.trim()) ||
+    ("deliveryAccountId" in patch &&
+      patch.deliveryAccountId?.trim() !== current.deliveryAccountId.trim()) ||
+    ("deliveryTo" in patch && patch.deliveryTo?.trim() !== current.deliveryTo.trim()) ||
+    ("agentId" in patch && patch.agentId?.trim() !== current.agentId.trim());
   return deliveryIdentityChanged && patch.deliveryThreadId === undefined
     ? { ...patch, deliveryThreadId: undefined }
     : patch;

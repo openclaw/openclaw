@@ -7,8 +7,9 @@ import type { CronStoredJob } from "../../../../src/cron/types.js";
 import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
+import { invalidateStaleDeliveryRoute } from "../../pages/cron/delivery-conversations.ts";
 import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
-import type { CronState } from "./types.ts";
+import type { CronFormState, CronState } from "./types.ts";
 
 function createCronJob(overrides: Pick<CronJob, "id" | "name">): CronJob {
   return {
@@ -113,6 +114,110 @@ describe("automation save editor ownership", () => {
       expect(state.cronJobs).toEqual([updated]);
     },
   );
+});
+
+describe("automation delivery thread save round trip", () => {
+  it.each<{
+    name: string;
+    patch: Partial<CronFormState>;
+    threadId: string | number;
+    expected: string | number | undefined;
+  }>([
+    {
+      name: "recipient change",
+      patch: { deliveryTo: "-100new" },
+      threadId: 42,
+      expected: undefined,
+    },
+    {
+      name: "account change",
+      patch: { deliveryAccountId: "new" },
+      threadId: 42,
+      expected: undefined,
+    },
+    {
+      name: "channel change",
+      patch: { deliveryChannel: "last" },
+      threadId: 42,
+      expected: undefined,
+    },
+    { name: "agent change", patch: { agentId: "other" }, threadId: 42, expected: undefined },
+    {
+      name: "delivery disabled",
+      patch: { deliveryMode: "none" },
+      threadId: 42,
+      expected: undefined,
+    },
+    { name: "unchanged topic", patch: { description: "Edited" }, threadId: 42, expected: 42 },
+    { name: "zero topic", patch: { description: "Edited" }, threadId: 0, expected: 0 },
+    {
+      name: "recipient whitespace",
+      patch: { deliveryTo: " -100old " },
+      threadId: 42,
+      expected: 42,
+    },
+    {
+      name: "account whitespace",
+      patch: { deliveryAccountId: " old " },
+      threadId: 42,
+      expected: 42,
+    },
+    { name: "agent whitespace", patch: { agentId: " writer " }, threadId: 42, expected: 42 },
+    {
+      name: "replacement topic",
+      patch: { deliveryTo: "-100new", deliveryThreadId: "topic-new" },
+      threadId: 42,
+      expected: "topic-new",
+    },
+  ])("persists $name after saving and reopening", async ({ patch, threadId, expected }) => {
+    const stored = {
+      id: "delivery-thread",
+      name: "Synthetic routed task",
+      agentId: "writer",
+      enabled: false,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Synthetic paused task" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-100old",
+        accountId: "old",
+        threadId,
+      },
+      state: {},
+    } satisfies CronStoredJob;
+    const readJob = (): CronJob => ({
+      ...structuredClone(stored),
+      configRevision: "delivery-revision",
+    });
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.update") {
+        applyWirePatch(stored, params);
+        return readJob();
+      }
+      if (method === "cron.get") {
+        return readJob();
+      }
+      if (method === "cron.list") {
+        return cronJobsListResponse([readJob()]);
+      }
+      return { enabled: false, jobs: 1 };
+    });
+    const state = createStateWithRequest(request, {});
+    startCronEdit(state, readJob());
+    state.cronForm = { ...state.cronForm, ...invalidateStaleDeliveryRoute(state.cronForm, patch) };
+
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+    expect(state.cronError).toBeNull();
+    cancelCronEdit(state, null);
+    startCronEdit(state, readJob());
+    expect(stored.delivery?.threadId).toBe(expected);
+    expect(state.cronForm.deliveryThreadId).toBe(expected);
+  });
 });
 
 describe("automation stagger save round trip", () => {
