@@ -73,7 +73,7 @@ export function TranscriptSearch(props: TranscriptSearchProps) {
             maxlength="4096"
             aria-label={t("sessionsView.transcriptSearchInputLabel")}
             placeholder={t("sessionsView.transcriptSearchPlaceholder")}
-            prop:value={query()}
+            value={query()}
             disabled={!props.transcriptSearchAvailable}
             onInput={(event: Event) => {
               if (event.currentTarget instanceof HTMLInputElement) {

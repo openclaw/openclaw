@@ -274,7 +274,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           row: row(),
           mainKey: props.mainKey,
         }).href
-      : null,
+      : undefined,
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
   const kindClass = createMemo(() => `session-kind session-kind--${displayKind()}`);
@@ -356,7 +356,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
         <td class="data-table-checkbox-col">
           <input
             type="checkbox"
-            prop:checked={props.selectedKeys.has(row().key)}
+            checked={props.selectedKeys.has(row().key)}
             onChange={() => props.onToggleSelect(row().key)}
             aria-label={`${t("sessionsView.selectSession")}: ${row().key}`}
           />
@@ -428,7 +428,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
             <button
               class="session-details-toggle"
               type="button"
-              aria-expanded={String(isExpanded())}
+              aria-expanded={isExpanded() ? "true" : "false"}
               aria-controls={isExpanded() ? detailsId() : undefined}
               aria-label={detailsToggleLabel()}
               onClick={(e: MouseEvent) => {
@@ -444,7 +444,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               title={t("chat.sidebar.openSessionMenu")}
               aria-label={t("chat.sidebar.openSessionMenu")}
               aria-haspopup="menu"
-              aria-expanded={String(props.sessionMenu?.key === row().key)}
+              aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
               onClick={(event) => {
                 event.stopPropagation();
                 const trigger = event.currentTarget;
@@ -542,7 +542,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   <span class="session-override-field__label">{t("sessionsView.label")}</span>
                   <input
                     class="settings-input"
-                    prop:value={labelValue()}
+                    value={labelValue()}
                     disabled={props.loading || Boolean(labelDisabledReason())}
                     title={labelDisabledReason() ?? undefined}
                     placeholder={t("sessionsView.optionalPlaceholder")}

@@ -316,7 +316,7 @@ function SessionsTable(props: SessionsProps) {
             type="text"
             aria-label={t("sessionsView.searchPlaceholder")}
             placeholder={t("sessionsView.searchPlaceholder")}
-            prop:value={searchQuery()}
+            value={searchQuery()}
             onInput={(e) => props.onSearchChange(e.currentTarget.value)}
             onKeyDown={(event: KeyboardEvent) => handleSessionsSearchKeydown(event, props)}
           />
@@ -376,7 +376,7 @@ function SessionsTable(props: SessionsProps) {
                 {paginated().length > 0 ? (
                   <input
                     type="checkbox"
-                    prop:checked={paginated().every((r) => props.selectedKeys.has(r.key))}
+                    checked={paginated().every((r) => props.selectedKeys.has(r.key))}
                     prop:indeterminate={
                       paginated().some((r) => props.selectedKeys.has(r.key)) &&
                       !paginated().every((r) => props.selectedKeys.has(r.key))
@@ -456,7 +456,7 @@ function SessionsTable(props: SessionsProps) {
             <select
               class="data-table-pagination__size"
               aria-label={t("sessionsView.pageSize")}
-              prop:value={pageSizeValue()}
+              value={pageSizeValue()}
               onChange={(e) => props.onPageSizeChange(Number(e.currentTarget.value))}
             >
               <For each={PAGE_SIZES}>

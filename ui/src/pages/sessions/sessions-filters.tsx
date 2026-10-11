@@ -131,7 +131,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
                         placeholder={
                           key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
                         }
-                        prop:value={value()}
+                        value={value()}
                         disabled={key === "activeMinutes" && props.statusFilter !== "active"}
                         onInput={(event: Event) => {
                           if (event.currentTarget instanceof HTMLInputElement) {
@@ -163,7 +163,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
                       name={key}
                       class="session-filter-check__input"
                       type="checkbox"
-                      prop:checked={props[key]}
+                      checked={props[key]}
                       onChange={(event: Event) => {
                         if (event.currentTarget instanceof HTMLInputElement) {
                           updateFilter(key, event.currentTarget.checked);
