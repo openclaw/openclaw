@@ -6,9 +6,13 @@ export class AuthProfileStoreUnreadableError extends Error {
   readonly code = "AUTH_PROFILE_STORE_UNREADABLE" as const;
   readonly action = AUTH_PROFILE_MIGRATION_COMMAND;
 
-  constructor(readonly databasePath: string) {
+  constructor(
+    readonly databasePath: string,
+    options?: ErrorOptions,
+  ) {
     super(
       `Auth profile store ${shortenHomePath(databasePath)} is unreadable; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
+      options,
     );
     this.name = "AuthProfileStoreUnreadableError";
   }

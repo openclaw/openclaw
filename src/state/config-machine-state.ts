@@ -137,13 +137,21 @@ export function readConfigMachineStateRowInDatabase(database: DatabaseSync, key:
 export function readConfigMachineStateWithMetadata<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
+  behavior: {
+    artifactPreservingReadOnly?: boolean;
+    mapReadError?: (error: unknown) => Error;
+  } = {},
 ): { value: T; updatedAtMs: number } | undefined {
   const read = ({ db: database }: { db: DatabaseSync }) => {
-    const row = readConfigMachineStateRowInDatabase(database, key);
-    return row
-      ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
-      : undefined;
+    try {
+      const row = readConfigMachineStateRowInDatabase(database, key);
+      return row
+        ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
+        : undefined;
+    } catch (error) {
+      // Only map row failures; admission, native close, and snapshot cleanup keep their owner.
+      throw behavior.mapReadError ? behavior.mapReadError(error) : error;
+    }
   };
   return behavior.artifactPreservingReadOnly
     ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)
@@ -154,7 +162,10 @@ export function readConfigMachineStateWithMetadata<T>(
 export function readConfigMachineState<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
+  behavior: {
+    artifactPreservingReadOnly?: boolean;
+    mapReadError?: (error: unknown) => Error;
+  } = {},
 ): T | undefined {
   return readConfigMachineStateWithMetadata<T>(key, options, behavior)?.value;
 }

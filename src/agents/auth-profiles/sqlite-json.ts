@@ -154,9 +154,12 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
 }
 
 /** The isolated reader closes its native pool before transferring credential rows. */
-export function readAuthProfileRowsReadOnly(databasePath: string): AuthProfileRowRead {
+export function readAuthProfileRowsReadOnly(
+  databasePath: string,
+  snapshotRoot?: string,
+): AuthProfileRowRead {
   try {
-    const acquired = acquireAuthProfileReadDatabase(databasePath);
+    const acquired = acquireAuthProfileReadDatabase(databasePath, snapshotRoot);
     if (acquired.status !== "readable") {
       const inspection: PersistedAuthProfileStoreInspection =
         acquired.status === "missing"

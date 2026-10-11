@@ -14,6 +14,7 @@ import {
   fsSafeEnvInput,
   normalizeFsSafeNativeEnv,
 } from "../../infra/fs-safe-env.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { formatCliCommand } from "../command-format.js";
@@ -254,6 +255,7 @@ async function guardGatewayRunSelectedConfig(
     { normalizeStateDirEnv },
     { collectEnvSecretRefIds },
     { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
+    authProfileEnv,
   ] = await Promise.all([
     createTrustedGatewayEnvLoader(),
     import("../../config/config-env-vars.js"),
@@ -261,6 +263,25 @@ async function guardGatewayRunSelectedConfig(
     import("../../config/paths.js"),
     import("../../config/resolution-facts.js"),
     import("../../daemon/service-managed-env.js"),
+    (async () => {
+      if (params.opts.reset || detectRespawnSupervisor(process.env) !== "systemd") {
+        return undefined;
+      }
+      const [
+        { collectAuthProfileEnvSecretRefIds },
+        { collectCandidateAgentDirs },
+        { AuthProfileStoreUnreadableError },
+      ] = await Promise.all([
+        import("../../agents/auth-profiles/env-secret-refs.js"),
+        import("../../secrets/runtime-fast-path.js"),
+        import("../../agents/auth-profiles/store-unreadable-error.js"),
+      ]);
+      return {
+        collectAuthProfileEnvSecretRefIds,
+        collectCandidateAgentDirs,
+        AuthProfileStoreUnreadableError,
+      };
+    })(),
   ]);
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
   if (params.environmentSelection) {
@@ -325,14 +346,6 @@ async function guardGatewayRunSelectedConfig(
       lastGuardedGatewayRunSnapshot = snapshot;
       return true;
     }
-    // The service marker also owns config SecretRefs. Only dotenv-absent keys with no current
-    // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
-    clearMissingManagedServiceEnvKeys({
-      environment: process.env,
-      managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      presentKeys: trustedEnvLoad.dotenvPresentKeys,
-      preserveKeys: collectEnvSecretRefIds(snapshot.sourceConfig),
-    });
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
     applySelectedConfigEnv(snapshot);
     // Only selection inputs survive a selection hop. Reload credentials once the final config and
@@ -347,6 +360,40 @@ async function guardGatewayRunSelectedConfig(
       });
       continue;
     }
+    // Only the final selected config and auth stores can identify stale service values.
+    const preserveKeys = collectEnvSecretRefIds(snapshot.sourceConfig);
+    const managedKeys = readManagedSystemdServiceEnvKeysFromEnvironment(process.env);
+    if (authProfileEnv && managedKeys.size > 0) {
+      try {
+        for (const id of authProfileEnv.collectAuthProfileEnvSecretRefIds({
+          agentDirs: authProfileEnv.collectCandidateAgentDirs(snapshot.sourceConfig, process.env),
+          env: process.env,
+        })) {
+          preserveKeys.add(id);
+        }
+      } catch (error) {
+        // Only settled row failures prove an unavailable store. Lifecycle failures retain custody.
+        if (!(error instanceof authProfileEnv.AuthProfileStoreUnreadableError)) {
+          throw error;
+        }
+        // Unknown references cannot prove any inherited value stale. Agent admission owns refusal.
+        for (const key of managedKeys) {
+          preserveKeys.add(key);
+        }
+        params.runtime.error(
+          `Could not fully inspect saved auth-profile environment references; preserving inherited managed service values. Run ${formatCliCommand("openclaw doctor --fix")} to inspect unavailable stores.`,
+        );
+      }
+    }
+    // Remove stale inherited values before the final config env layer supplies replacements.
+    restoreAppliedGatewayRunConfigEnvironment();
+    clearMissingManagedServiceEnvKeys({
+      environment: process.env,
+      managedKeys,
+      presentKeys: trustedEnvLoad.dotenvPresentKeys,
+      preserveKeys,
+    });
+    applySelectedConfigEnv(snapshot);
     // Readiness owns current-config recovery; selection cannot write health or restore backups.
     lastGuardedGatewayRunSnapshot = snapshot;
     return true;

@@ -12,6 +12,7 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { retainSnapshotTempDirectory } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
@@ -28,6 +29,7 @@ const AUTH_PROFILE_READ_IDLE_MS = 30 * 60_000;
 type AuthProfileReadHandle = {
   db: DatabaseSync;
   ready: boolean;
+  releaseSnapshot?: () => void;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 const authProfileReadDatabases = new Map<string, AuthProfileReadHandle>();
@@ -50,6 +52,8 @@ export function closeAuthProfileReadDatabase(databasePath: string): void {
   if (entry.db.isOpen) {
     entry.db.close();
   }
+  entry.releaseSnapshot?.();
+  entry.releaseSnapshot = undefined;
   clearTimeout(entry.idleTimer);
   entry.idleTimer = undefined;
   // Failed closes remain owned so scoped disposal can retain the root and retry.
@@ -120,6 +124,7 @@ export function isMissingDatabasePath(pathname: string): boolean {
 
 export function acquireAuthProfileReadDatabase(
   pathname: string,
+  snapshotRoot?: string,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
   if (isDeletedAgentDatabasePath(resolvedPath)) {
@@ -127,6 +132,9 @@ export function acquireAuthProfileReadDatabase(
   }
   const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
+  if (cached && snapshotRoot && !cached.releaseSnapshot) {
+    cached.releaseSnapshot = retainSnapshotTempDirectory(snapshotRoot);
+  }
   if (cached?.ready && cached.db.isOpen) {
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
@@ -143,15 +151,19 @@ export function acquireAuthProfileReadDatabase(
       closeAuthProfileReadDatabase(pendingPath);
     }
   }
+  // Inspection owns its separate image; ordinary pooled readers pin the caller's copy.
+  const releaseSnapshot =
+    !inspection && snapshotRoot ? retainSnapshotTempDirectory(snapshotRoot) : undefined;
   let db: DatabaseSync;
   try {
     db = openSqliteReadOnlyDatabase(resolvedPath, {
       timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     });
   } catch {
+    releaseSnapshot?.();
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
-  const candidate: AuthProfileReadHandle = { db, ready: false };
+  const candidate: AuthProfileReadHandle = { db, ready: false, releaseSnapshot };
   if (!inspection) {
     authProfileReadDatabases.set(resolvedPath, candidate);
     unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
