@@ -57,6 +57,12 @@ vi.mock("../session-utils.js", async () => ({
   loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
 
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    sessionMocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
+}));
+
 function makeOpts(
   params: unknown,
   terminalConfig: { enabled?: boolean } | undefined,

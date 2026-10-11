@@ -126,6 +126,12 @@ vi.mock("../session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
 }));
 
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    loadGatewaySessionEntry(params.key, { agentId: params.agentId }),
+}));
+
 // mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
   resolveCronDeliveryFailurePreview: async () => undefined,
