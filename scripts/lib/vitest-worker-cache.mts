@@ -154,12 +154,7 @@ function matchesInventory(
   );
 }
 
-async function transferRoots(
-  source: string,
-  target: string,
-  outputs: Record<string, string>,
-  verifyHeld: () => Promise<boolean>,
-) {
+async function transferRoots(source: string, target: string, outputs: Record<string, string>) {
   const roots = [...new Set(Object.keys(outputs).map((name) => name.split("/")[0]!))];
   for (const name of roots) {
     try {
@@ -173,9 +168,6 @@ async function transferRoots(
     throw new Error(`Compiled subprocess transfer target already exists: ${name}`);
   }
   for (const name of roots) {
-    if (!(await verifyHeld())) {
-      throw new Error("Compiled subprocess cache transfer lock changed");
-    }
     await fs.promises.rename(path.join(source, name), path.join(target, name));
   }
 }
@@ -190,12 +182,11 @@ export async function createVitestWorkerCache(
     return undefined;
   }
   const { CompilerInputSnapshot } = await import("./compiler-input-snapshot.mts");
-  const snapshot = () =>
-    new CompilerInputSnapshot(root, {
-      toolchainFiles: resolveTsdownCompilerFiles(),
-      generatorInputs: ["package.json", "pnpm-lock.yaml", ...compilerInputs],
-      isGeneratorInput: (file) => file.endsWith("/package.json"),
-    });
+  const snapshot = new CompilerInputSnapshot(root, {
+    toolchainFiles: resolveTsdownCompilerFiles(),
+    generatorInputs: ["package.json", "pnpm-lock.yaml", ...compilerInputs],
+    isGeneratorInput: (file) => file.endsWith("/package.json"),
+  });
   // These absolute external URLs must return to the same exclusively reserved slot.
   const args = [
     `output=${fs.realpathSync(directory)}`,
@@ -204,15 +195,11 @@ export async function createVitestWorkerCache(
     `node-arguments=${JSON.stringify(process.execArgv)}`,
     `umask=${process.umask()}`,
   ];
-  const before = snapshot();
-  let startedAt: number;
   let metadata: Promise<string> | undefined;
-  const prepareBefore = () =>
+  const prepare = () =>
     (metadata ??= (async () => {
-      await before.prepare();
-      const signature = before.signature("tsconfig.json", args, []);
-      startedAt = Date.now();
-      return signature;
+      await snapshot.prepare();
+      return snapshot.signature("tsconfig.json", args, []);
     })());
 
   async function restoreGeneration(): Promise<VitestWorkerManifest | undefined> {
@@ -243,18 +230,12 @@ export async function createVitestWorkerCache(
       }
       // No compiler runs on a hit. Observe resolution after the byte reads,
       // immediately before transfer, rather than scanning the namespace twice.
-      const signature = await prepareBefore();
+      const signature = await prepare();
       if (inputSignature(signature, record.inputs, manifest.inputs) !== record.signature) {
         return undefined;
       }
-      if (!(await lock.verifyStillHeld())) {
-        throw new Error("Compiled subprocess cache restoration lock changed");
-      }
-      if (JSON.stringify(readArtifactRecord(location.stampPath)) !== JSON.stringify(record)) {
-        return undefined;
-      }
       await fs.promises.rm(location.stampPath, { force: true });
-      await transferRoots(location.outputRoot, directory, outputs, () => lock.verifyStillHeld());
+      await transferRoots(location.outputRoot, directory, outputs);
       await fs.promises.rmdir(location.outputRoot);
       return manifest;
     } finally {
@@ -263,21 +244,15 @@ export async function createVitestWorkerCache(
   }
 
   return {
-    get startedAt() {
-      return startedAt;
-    },
     async restore(): Promise<VitestWorkerManifest | undefined> {
       const restored = await restoreGeneration();
-      // A miss still captures the complete pre-compilation snapshot for sealing.
-      await prepareBefore();
+      // A miss still captures the inputs used by the next compilation.
+      await prepare();
       return restored;
     },
     async seal(manifest: VitestWorkerManifest) {
-      const after = snapshot();
-      await after.prepare();
-      const sealed = after.seal("tsconfig.json", args, [], before, startedAt);
       return inputSignature(
-        sealed.signature,
+        await prepare(),
         Object.keys(manifest.inputs).toSorted(),
         manifest.inputs,
       );
@@ -317,25 +292,10 @@ export async function retainVitestWorkerArtifacts(
   const location = cacheLocation(root, directory);
   const lock = await acquireBuildArtifactLockAsync(location.stampPath);
   try {
-    if (!(await lock.verifyStillHeld())) {
-      throw new Error("Compiled subprocess cache retention lock changed");
-    }
     await fs.promises.rm(location.stampPath, { force: true });
-    if (!(await lock.verifyStillHeld())) {
-      throw new Error("Compiled subprocess cache retention lock changed");
-    }
     await fs.promises.rm(location.outputRoot, { force: true, recursive: true });
-    if (!(await lock.verifyStillHeld())) {
-      throw new Error("Compiled subprocess cache retention lock changed");
-    }
     await fs.promises.mkdir(location.outputRoot, { recursive: true, mode: 0o700 });
-    if (!(await lock.verifyStillHeld())) {
-      throw new Error("Compiled subprocess cache retention lock changed");
-    }
-    await transferRoots(directory, location.outputRoot, outputs, () => lock.verifyStillHeld());
-    if (!(await lock.verifyStillHeld())) {
-      throw new Error("Compiled subprocess cache retention lock changed");
-    }
+    await transferRoots(directory, location.outputRoot, outputs);
     writeArtifactRecord(location.stampPath, {
       version: ARTIFACT_CACHE_VERSION,
       signature: completed.cacheSignature!,

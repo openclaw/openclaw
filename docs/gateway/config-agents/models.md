@@ -58,7 +58,7 @@ title: "Configuration — agent models"
 }
 ```
 
-Leaving `agents.defaults.timeoutSeconds` unset gives ordinary agent runs the 48-hour default. Set it only when you need a different whole-run limit; see [Agent runtime](/concepts/agent-loop#timeouts).
+Leaving `agents.defaults.timeoutSeconds` unset gives each model attempt the 48-hour default. Each configured fallback receives a fresh budget, so a run with fallbacks can take longer than this setting. Set `0` for unlimited execution; user cancellation still stops the entire run. See [Agent runtime](/concepts/agent-loop#timeouts).
 
 - `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - String form sets only the primary model.

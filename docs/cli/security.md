@@ -130,7 +130,7 @@ If remediation fails unexpectedly, the command exits with status 1 before runnin
 
 ## What `--fix` changes
 
-Applies safe, deterministic remediations:
+Applies safe, fixed repairs:
 
 - flips common `groupPolicy="open"` to `groupPolicy="allowlist"` (including account variants in supported channels)
 - when WhatsApp group policy flips to `allowlist`, seeds `groupAllowFrom` from the stored `allowFrom` file when that list exists and config does not already define `allowFrom`

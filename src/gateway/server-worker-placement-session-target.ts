@@ -191,7 +191,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
           lifecycleRevision: preparedEntry.lifecycleRevision,
           activeWriterRunId: preparedEntry.activeWriterRunId,
         }),
-        "read",
       );
       assertCurrent();
       resolved.assertCurrent(options.getConfig());

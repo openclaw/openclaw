@@ -1,8 +1,9 @@
 // Importing the module keeps this file a module, so the block below augments it.
-import "@solidjs/web";
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
+import "@solidjs/web";
+export type { JSX } from "@solidjs/web";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -23,13 +24,6 @@ declare module "@solidjs/web" {
         HTMLElementTagNameMap["openclaw-viewer-facepile"]
       > &
         Properties<HTMLElementTagNameMap["openclaw-viewer-facepile"]>;
-    }
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
       "wa-popover": HTMLAttributes<WaPopover> &
         Properties<WaPopover> & {
           for?: string;
@@ -42,15 +36,18 @@ declare module "@solidjs/web" {
           placement?: WaDropdown["placement"];
           "onWa-show"?: (event: Event) => void;
           "onWa-hide"?: (event: Event) => void;
-          "onWa-after-hide"?: (event: Event) => void;
+          "onWa-after-hide"?: (event: CustomEvent<void>) => void;
           "onWa-select"?: (event: CustomEvent<{ item: WaDropdownItem }>) => void;
         };
       "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
         Properties<WaDropdownItem> & {
-          value?: string;
+          value?: WaDropdownItem["value"];
           variant?: WaDropdownItem["variant"];
           "onSubmenu-opening"?: (event: CustomEvent<{ item: HTMLElement }>) => void;
         };
+    }
+    interface SVGAttributes<T> {
+      "xml:space"?: "default" | "preserve";
     }
   }
 }

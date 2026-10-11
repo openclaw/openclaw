@@ -218,6 +218,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Boundary lint loads this migration plugin by path; remove with that config entry.
+  "scripts/oxlint-solid-migration.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -409,6 +411,10 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Inactive phase-owner API for the staged session caller cutover. Remove these
+  // audit roots once accept-input, transcript, and delivery callers activate it.
+  "src/config/sessions/session-actor-contract.ts!",
+  "src/config/sessions/session-actor-durable.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
@@ -875,6 +881,13 @@ const config = {
         "src/lib/reactive/*.ts!",
         "!src/lib/reactive/*.test.ts!",
         "src/solid-smoke/solid-smoke.tsx!",
+        // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
+        // before their page and chat consumers; drop each entry with its first production importer.
+        "src/components/solid/*.tsx!",
+        "!src/components/solid/*.test.tsx!",
+        "src/components/icon-data*.ts!",
+        "src/app/shell-layout-traits-solid.tsx!",
+        "src/pages/chat/solid-render-lifecycle.ts!",
       ],
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],

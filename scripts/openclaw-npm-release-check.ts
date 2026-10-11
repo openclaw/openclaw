@@ -409,7 +409,7 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
   for (const requiredPath of REQUIRED_PACKED_PATHS) {
     if (!packedPaths.has(requiredPath)) {
       errors.push(
-        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+        `npm package is missing required path "${requiredPath}". Build and include UI assets before publishing.`,
       );
     }
   }

@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -65,7 +64,7 @@ import { formatCliCommand } from "./command-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { createPluginInstallLogger } from "./plugins-command-helpers.js";
-import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
@@ -170,7 +169,7 @@ export type RunPluginUpdateCommandParams = {
   };
 };
 
-/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
+/** Run offline plugin/hook-pack updates and persist state for the next Gateway start. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
   if (params.opts.all && params.ids.length > 0) {
     defaultRuntime.error("Use either plugin or hook-pack ids or --all, not both.");
@@ -185,58 +184,24 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
     return;
   }
   assertConfigWriteAllowedInCurrentMode();
-  const gateway = await resolvePluginLifecycleGateway();
-  // Verify the running owner before changing packages; an old or unreachable
-  // Gateway must not silently turn this into an offline update.
-  if (gateway) {
-    await gateway("plugins.list", {});
-  }
   let changed = false;
   let activationDeferred = false;
-  const update = withPluginLifecycleLease({}, (lease) =>
-    runPluginUpdateCommandUnlocked(params, lease, (deferred) => {
-      changed = true;
-      activationDeferred ||= deferred;
-    }),
+  const exitCode = await runWithLocalPluginState("update", (assertCurrent) =>
+    withPluginLifecycleLease({}, (lease) =>
+      runPluginUpdateCommandUnlocked(
+        params,
+        lease,
+        (deferred) => {
+          changed = true;
+          activationDeferred ||= deferred;
+        },
+        assertCurrent,
+      ),
+    ),
   );
-  let updateFailure: { error: unknown } | undefined;
-  await update.catch((error: unknown) => {
-    updateFailure = { error };
-  });
-  // The runtime owner takes the same lease. Old callbacks retain their captured
-  // package graph while this explicit application waits for ownership.
   if (changed && !activationDeferred) {
-    if (gateway) {
-      try {
-        const result = await gateway<PluginsRefreshResult>("plugins.refresh", {});
-        if (!result.runtime) {
-          throw new Error("Plugin update did not return a runtime application receipt.");
-        }
-        for (const warning of result.warnings ?? []) {
-          defaultRuntime.log(theme.warn(warning));
-        }
-        defaultRuntime.log(
-          `Applied plugin updates in Gateway generation ${result.runtime.generation}.`,
-        );
-      } catch (error) {
-        const failure = new Error(
-          "Plugin updates were saved but runtime application failed. Inspect the error, repair the plugin, then run openclaw plugins reload <id>.",
-          { cause: error },
-        );
-        if (updateFailure) {
-          failure.cause = new AggregateError([updateFailure.error, error], undefined, {
-            cause: error,
-          });
-        }
-        throw failure;
-      }
-    } else {
-      defaultRuntime.log("Updates saved; they will load on the next Gateway start.");
-    }
+    defaultRuntime.log("Updates saved; they will load on the next Gateway start.");
   }
-  // Recover the original settlement, including rejection with undefined, after runtime apply.
-  const exitCode = await update;
-  // Process exit skips finally blocks; release ownership and apply committed updates first.
   if (exitCode !== 0) {
     defaultRuntime.exit(exitCode);
   }
@@ -246,8 +211,12 @@ async function runPluginUpdateCommandUnlocked(
   params: RunPluginUpdateCommandParams,
   lease?: PluginLifecycleLeaseContext,
   onMetadataChanged?: (activationDeferred: boolean) => void,
+  assertCurrent?: () => void,
 ): Promise<0 | 1> {
-  const assertOwned = lease?.assertOwned.bind(lease);
+  const assertOwned = () => {
+    assertCurrent?.();
+    lease?.assertOwned();
+  };
   if (!params.opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
@@ -589,7 +558,7 @@ async function runPluginUpdateCommandUnlocked(
         ...sourceSnapshot?.writeOptions,
         afterWrite: {
           mode: "none" as const,
-          reason: "plugin update applies runtime after releasing its lease",
+          reason: "plugin update owns registry refresh",
         },
       };
       const { preparePluginUpdateConfigMigration } =

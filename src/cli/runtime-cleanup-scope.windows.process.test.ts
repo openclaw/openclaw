@@ -1,13 +1,12 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { windowsProcessOwnershipEntrypoint } from "./cli-entrypoint.test-support.js";
 
-const fixture = fileURLToPath(
-  new URL("./runtime-cleanup-scope.windows.test-support.ts", import.meta.url),
-);
+const fixture = resolveRuntimeWorkerUrl(windowsProcessOwnershipEntrypoint);
 
 describe.runIf(process.platform === "win32")("Windows executable process ownership", () => {
   it.each([
@@ -21,7 +20,13 @@ describe.runIf(process.platform === "win32")("Windows executable process ownersh
     async ({ ownership, inherited, exitCode }) => {
       const parent = spawn(
         process.execPath,
-        ["--import", "tsx", fixture, "harness", ownership, String(inherited), String(exitCode)],
+        [
+          ...resolveRuntimeWorkerArgv(fixture),
+          "harness",
+          ownership,
+          String(inherited),
+          String(exitCode),
+        ],
         { stdio: ["ignore", "ignore", "pipe", "ipc"], windowsHide: true },
       );
       const closed = once(parent, "close");

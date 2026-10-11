@@ -224,7 +224,7 @@ const candidateActionRules = Object.entries({
   [candidateLabels.dirtyCandidate]: noisyPrMessage,
   [candidateLabels.externalPluginCandidate]: thirdPartyExtensionMessage,
   [candidateLabels.riskyInfra]:
-    "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. That surface is high-blast-radius; open an issue/RFC or get owner approval before sending a patch.",
+    "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. These changes can affect many development and release workflows; open an issue/RFC or get owner approval before sending a patch.",
   [candidateLabels.docsDiscoverability]:
     "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
   [candidateLabels.lowSignalDocs]:
