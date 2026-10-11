@@ -349,7 +349,17 @@ it.each(admissionScenarios)(
         }
         if (closure !== "queued") {
           await upsertSessionEntryCore(scope, { sessionId: "late-session", updatedAt: Date.now() });
-          await userTurn.persist();
+          if (membershipRequired) {
+            // The pre-ACK commit survives revocation; replay cannot append to the successor.
+            await expect(userTurn.persist()).resolves.toMatchObject({
+              admission: { sessionId: binding.sessionId, sessionKey },
+              message: { role: "user", content: "Keep this user turn in its session" },
+            });
+          } else if (closure === "released") {
+            await expect(userTurn.persist()).rejects.toThrow("Chat input actor admission ended");
+          } else {
+            await userTurn.persist();
+          }
           expect(
             await loadTranscriptEvents({
               ...scope,

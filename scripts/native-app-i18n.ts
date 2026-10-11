@@ -40,6 +40,12 @@ type Candidate = NativeI18nSite &
   Pick<NativeI18nEntry, "source" | "surface" | "sourceContext"> & {
     line: number;
   };
+type CandidateContext = {
+  entries: Candidate[];
+  surface: NativeI18nSurface;
+  repoPath: string;
+  source: string;
+};
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
   glossaryHash: string;
@@ -494,13 +500,8 @@ function readAdjacentStringLiterals(
   }
 }
 
-function extractUiCalls(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
-  uiCallNames: ReadonlySet<string>,
-) {
+function extractUiCalls(context: CandidateContext, uiCallNames: ReadonlySet<string>) {
+  const { source, surface } = context;
   for (const match of source.matchAll(APPLE_CALL_START)) {
     if (!match[1] || !uiCallNames.has(match[1])) {
       continue;
@@ -512,7 +513,7 @@ function extractUiCalls(
       continue;
     }
     const kind = literal.fragments > 1 ? "ui-call-concatenated" : "ui-call";
-    addCandidate(entries, surface, repoPath, literal.value, kind, lineNumber(source, offset));
+    addCandidate(context, literal.value, kind, offset);
   }
 }
 
@@ -622,14 +623,8 @@ function validateNativeTranslationStructure(
   }
 }
 
-function addCandidate(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
-  kind: string,
-  line: number,
-) {
+function addCandidate(context: CandidateContext, source: string, kind: string, offset: number) {
+  const { entries, surface, repoPath } = context;
   const normalized = decodeLiteral(source, kind);
   if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
@@ -646,7 +641,13 @@ function addCandidate(
   if (!isTranslatableCandidate(normalized, kind, literalSource.join(""))) {
     return;
   }
-  entries.push({ kind, line, path: repoPath, source: normalized, surface });
+  entries.push({
+    kind,
+    line: lineNumber(context.source, offset),
+    path: repoPath,
+    source: normalized,
+    surface,
+  });
 }
 
 function findCapturedLiteralOffset(
@@ -663,13 +664,11 @@ function findCapturedLiteralOffset(
 }
 
 function addCapturedLiteralCandidates(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
+  context: CandidateContext,
   match: RegExpMatchArray,
   kind: string,
 ) {
+  const { source, surface } = context;
   let searchStart = match.index ?? 0;
   for (const value of match.slice(1)) {
     if (!value) {
@@ -682,12 +681,10 @@ function addCapturedLiteralCandidates(
     const literal = readAdjacentStringLiterals(surface, source, openingQuote);
     if (literal) {
       addCandidate(
-        entries,
-        surface,
-        repoPath,
+        context,
         literal.value,
         literal.fragments > 1 ? `${kind}-concatenated` : kind,
-        lineNumber(source, openingQuote),
+        openingQuote,
       );
       searchStart = literal.end;
     } else {
@@ -717,13 +714,11 @@ function skipWhitespaceAndBrace(source: string, offset: number): number {
 }
 
 function addConditionalBranchPair(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
+  context: CandidateContext,
   firstOffset: number,
   separator: RegExp,
 ) {
+  const { source, surface } = context;
   const firstStart = skipWhitespaceAndBrace(source, firstOffset);
   const first = readAdjacentStringLiterals(surface, source, firstStart);
   if (!first) {
@@ -741,54 +736,27 @@ function addConditionalBranchPair(
     branches.push({ offset: secondStart, value: second.value });
   }
   for (const branch of branches) {
-    addCandidate(
-      entries,
-      surface,
-      repoPath,
-      branch.value,
-      "conditional-branch",
-      lineNumber(source, branch.offset),
-    );
+    addCandidate(context, branch.value, "conditional-branch", branch.offset);
   }
 }
 
-function extractConditionalBranches(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
-) {
+function extractConditionalBranches(context: CandidateContext) {
+  const { source } = context;
   for (const match of source.matchAll(/\bif\s*\([^)]*\)\s*/gu)) {
-    addConditionalBranchPair(
-      entries,
-      surface,
-      repoPath,
-      source,
-      (match.index ?? 0) + match[0].length,
-      /^\s*\}?\s*else\s*/u,
-    );
+    addConditionalBranchPair(context, (match.index ?? 0) + match[0].length, /^\s*\}?\s*else\s*/u);
   }
   for (const match of source.matchAll(/\?\s*/gu)) {
-    addConditionalBranchPair(
-      entries,
-      surface,
-      repoPath,
-      source,
-      (match.index ?? 0) + match[0].length,
-      /^\s*:\s*/u,
-    );
+    addConditionalBranchPair(context, (match.index ?? 0) + match[0].length, /^\s*:\s*/u);
   }
 }
 
 function addBranchCandidates(
-  entries: Candidate[],
-  surface: NativeI18nSurface,
-  repoPath: string,
-  source: string,
+  context: CandidateContext,
   bodyOffset: number,
   body: string,
   branchStart: RegExp,
 ) {
+  const { source, surface } = context;
   for (const branch of body.matchAll(branchStart)) {
     const openingQuote = skipWhitespaceAndBrace(
       source,
@@ -796,14 +764,7 @@ function addBranchCandidates(
     );
     const literal = readAdjacentStringLiterals(surface, source, openingQuote);
     if (literal) {
-      addCandidate(
-        entries,
-        surface,
-        repoPath,
-        literal.value,
-        "conditional-branch",
-        lineNumber(source, openingQuote),
-      );
+      addCandidate(context, literal.value, "conditional-branch", openingQuote);
     }
   }
 }
@@ -818,6 +779,7 @@ export function extractNativeI18nCandidates(
   ]),
 ): Candidate[] {
   const entries: Candidate[] = [];
+  const context = { entries, surface, repoPath, source };
   const patterns: Array<readonly [RegExp, string]> =
     surface === "apple"
       ? [
@@ -836,11 +798,11 @@ export function extractNativeI18nCandidates(
         ];
   for (const [pattern, kind] of patterns) {
     for (const match of source.matchAll(pattern)) {
-      addCapturedLiteralCandidates(entries, surface, repoPath, source, match, kind);
+      addCapturedLiteralCandidates(context, match, kind);
     }
   }
-  extractConditionalBranches(entries, surface, repoPath, source);
-  extractUiCalls(entries, surface, repoPath, source, uiCallNames);
+  extractConditionalBranches(context);
+  extractUiCalls(context, uiCallNames);
   if (surface === "apple") {
     for (const property of source.matchAll(APPLE_STRING_PROPERTY)) {
       const name = property[1];
@@ -853,39 +815,7 @@ export function extractNativeI18nCandidates(
       if (!/\bswitch\b/u.test(body)) {
         continue;
       }
-      addBranchCandidates(
-        entries,
-        surface,
-        repoPath,
-        source,
-        openingBrace + 1,
-        body,
-        APPLE_SWITCH_BRANCH_START,
-      );
-    }
-    for (const match of source.matchAll(APPLE_NAMED_LITERALS)) {
-      const argumentName = match[1];
-      const callName = enclosingCallName(source, match.index ?? 0);
-      if (
-        !argumentName ||
-        !UI_STRING_NAME_RE.test(argumentName) ||
-        !callName ||
-        !uiCallNames.has(callName)
-      ) {
-        continue;
-      }
-      const multiline = match[2];
-      const literal = multiline ?? match[3];
-      if (literal) {
-        addCapturedLiteralCandidates(
-          entries,
-          surface,
-          repoPath,
-          source,
-          match,
-          multiline === undefined ? "ui-named-argument" : "ui-named-argument-multiline",
-        );
-      }
+      addBranchCandidates(context, openingBrace + 1, body, APPLE_SWITCH_BRANCH_START);
     }
   }
   if (surface === "android") {
@@ -903,7 +833,7 @@ export function extractNativeI18nCandidates(
           continue;
         }
         const body = source.slice(bodyStart, closingBrace);
-        addBranchCandidates(entries, surface, repoPath, source, bodyStart, body, /\breturn\b/gu);
+        addBranchCandidates(context, bodyStart, body, /\breturn\b/gu);
         continue;
       }
       const expression = source.slice(bodyStart);
@@ -915,28 +845,13 @@ export function extractNativeI18nCandidates(
           continue;
         }
         const body = source.slice(openingBrace + 1, closingBrace);
-        addBranchCandidates(
-          entries,
-          surface,
-          repoPath,
-          source,
-          openingBrace + 1,
-          body,
-          ANDROID_WHEN_BRANCH_START,
-        );
+        addBranchCandidates(context, openingBrace + 1, body, ANDROID_WHEN_BRANCH_START);
         continue;
       }
       const openingQuote = skipWhitespaceAndBrace(source, bodyStart);
       const literal = readAdjacentStringLiterals(surface, source, openingQuote);
       if (literal) {
-        addCandidate(
-          entries,
-          surface,
-          repoPath,
-          literal.value,
-          "conditional-branch",
-          lineNumber(source, openingQuote),
-        );
+        addCandidate(context, literal.value, "conditional-branch", openingQuote);
         continue;
       }
       const elvisFallback = expression.match(/^\s*[^\n]*\?:\s*/u);
@@ -944,30 +859,29 @@ export function extractNativeI18nCandidates(
         const fallbackQuote = skipWhitespaceAndBrace(source, bodyStart + elvisFallback[0].length);
         const fallback = readAdjacentStringLiterals(surface, source, fallbackQuote);
         if (fallback) {
-          addCandidate(
-            entries,
-            surface,
-            repoPath,
-            fallback.value,
-            "conditional-branch",
-            lineNumber(source, fallbackQuote),
-          );
+          addCandidate(context, fallback.value, "conditional-branch", fallbackQuote);
         }
       }
     }
-    for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
-      const argumentName = match[1];
-      const callName = enclosingCallName(source, match.index ?? 0);
-      if (
-        !argumentName ||
-        !UI_STRING_NAME_RE.test(argumentName) ||
-        !callName ||
-        !uiCallNames.has(callName) ||
-        !match[2]
-      ) {
-        continue;
-      }
-      addCapturedLiteralCandidates(entries, surface, repoPath, source, match, "ui-named-argument");
+  }
+  const namedLiterals = surface === "apple" ? APPLE_NAMED_LITERALS : ANDROID_NAMED_LITERALS;
+  for (const match of source.matchAll(namedLiterals)) {
+    const argumentName = match[1];
+    const callName = enclosingCallName(source, match.index ?? 0);
+    const multiline = surface === "apple" && match[2] !== undefined;
+    const literal = surface === "apple" ? (match[2] ?? match[3]) : match[2];
+    if (
+      argumentName &&
+      UI_STRING_NAME_RE.test(argumentName) &&
+      callName &&
+      uiCallNames.has(callName) &&
+      literal
+    ) {
+      addCapturedLiteralCandidates(
+        context,
+        match,
+        multiline ? "ui-named-argument-multiline" : "ui-named-argument",
+      );
     }
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
@@ -977,14 +891,7 @@ export function extractNativeI18nCandidates(
         continue;
       }
       if (match[2]) {
-        addCandidate(
-          entries,
-          surface,
-          repoPath,
-          match[2],
-          "resource-string",
-          lineNumber(source, match.index ?? 0),
-        );
+        addCandidate(context, match[2], "resource-string", match.index ?? 0);
       }
     }
     for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
@@ -998,14 +905,7 @@ export function extractNativeI18nCandidates(
         const value = item[1]?.trim();
         // Resource references inherit translatability from their target.
         if (value && !value.startsWith("@")) {
-          addCandidate(
-            entries,
-            surface,
-            repoPath,
-            value,
-            "resource-item",
-            lineNumber(source, bodyOffset + (item.index ?? 0)),
-          );
+          addCandidate(context, value, "resource-item", bodyOffset + (item.index ?? 0));
         }
       }
     }
@@ -1016,14 +916,7 @@ export function extractNativeI18nCandidates(
       const value = match[2];
       if (key && isLocalizableApplePlistKey(key) && value) {
         const valueOffset = (match.index ?? 0) + match[0].indexOf(value);
-        addCandidate(
-          entries,
-          surface,
-          repoPath,
-          decodeXml(value),
-          "plist-string",
-          lineNumber(source, valueOffset),
-        );
+        addCandidate(context, decodeXml(value), "plist-string", valueOffset);
       }
     }
   }
@@ -1175,15 +1068,11 @@ export function collectNativeI18nEntriesFromSources(
     apple: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
   };
   for (const { source, surface } of sources) {
-    if (surface === "android") {
-      for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {
-        if (match[1]) {
-          uiCallNames[surface].add(match[1]);
-        }
-      }
-      continue;
-    }
-    for (const pattern of [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION]) {
+    const patterns =
+      surface === "android"
+        ? [ANDROID_COMPOSABLE_FUNCTION]
+        : [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION];
+    for (const pattern of patterns) {
       for (const match of source.matchAll(pattern)) {
         if (match[1]) {
           uiCallNames[surface].add(match[1]);

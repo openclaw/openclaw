@@ -4,7 +4,7 @@ import {
   type PresentationBinding,
   type PresentationValue,
 } from "../lit/presentation-binding.ts";
-import { LinkReaderPrefetch } from "./link-reader-prefetch.ts";
+import { LinkReaderPrefetchOwner } from "./link-reader-prefetch-owner.ts";
 import { MarkdownBlocks } from "./markdown-blocks.ts";
 
 export function linkReaderPrefetchRef(
@@ -12,20 +12,21 @@ export function linkReaderPrefetchRef(
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
   let root: HTMLElement | undefined;
-  let owner: LinkReaderPrefetch | undefined;
+  let mounted = true;
+  let owner: LinkReaderPrefetchOwner | undefined;
   let binding: PresentationBinding | undefined;
   const presentationChanged = () => {
     if (binding?.isPresented() === false) {
-      owner?.setPresented(false);
+      owner?.hide();
     }
   };
   createEffect(
     () => [element(), ...values()] as const,
     ([nextRoot, sessionKey, presented, connected]) => {
       if (root !== nextRoot) {
-        owner?.setConnected(false);
+        owner?.disconnect();
         root = nextRoot;
-        owner = root ? new LinkReaderPrefetch(root) : undefined;
+        owner = root ? new LinkReaderPrefetchOwner(() => mounted) : undefined;
       }
       const nextBinding = typeof presented === "boolean" ? undefined : presented;
       if (binding?.owner !== nextBinding?.owner) {
@@ -34,6 +35,7 @@ export function linkReaderPrefetchRef(
       }
       binding = nextBinding;
       owner?.update(
+        root,
         sessionKey,
         typeof presented === "boolean" ? presented : presented.isPresented(),
         connected,
@@ -41,8 +43,9 @@ export function linkReaderPrefetchRef(
     },
   );
   onCleanup(() => {
+    mounted = false;
     binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, presentationChanged);
-    owner?.setConnected(false);
+    owner?.disconnect();
   });
   return setElement;
 }

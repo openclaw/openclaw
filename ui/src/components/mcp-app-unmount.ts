@@ -1,5 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
-
 type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
   teardown(): Promise<void>;
@@ -29,19 +27,19 @@ function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTar
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export class McpAppUnmountGate {
+export class McpAppUnmountGate<T = unknown> {
   private renderedKey: McpAppUnmountKey | null = null;
-  private renderedValue: unknown;
+  private renderedValue: T | undefined;
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
 
-  constructor(private readonly host: ReactiveControllerHost) {}
+  constructor(private readonly host: { requestUpdate(): void }) {}
 
   get retiring(): boolean {
     return this.pending || this.restartTargets !== null;
   }
 
-  private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
+  private apply(key: McpAppUnmountKey, renderValue: () => T): T | undefined {
     this.renderedValue = renderValue();
     this.renderedKey = key;
     return this.renderedValue;
@@ -49,10 +47,10 @@ export class McpAppUnmountGate {
 
   render(
     key: McpAppUnmountKey,
-    renderValue: () => unknown,
+    renderValue: () => T,
     leavingRoots: () => Iterable<ParentNode>,
     options: { retainRenderedValue?: boolean; afterCommit?: (effect: () => void) => void } = {},
-  ): unknown {
+  ): T | undefined {
     if (this.pending) {
       return this.renderedValue;
     }

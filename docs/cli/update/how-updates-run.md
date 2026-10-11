@@ -41,7 +41,7 @@ candidate, so it also accepts valid handoffs from older installed updaters.
 
 Channel health collection timeouts are warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and remain in the same running generation. An explicit negative channel
+readiness, and pass the normal health-settle checks. An explicit negative channel
 probe still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
@@ -155,7 +155,14 @@ validation, installation, and Doctor finalization continue in the invoking
 installation. Doctor leaves unverified service records unchanged and reports an
 advisory; state coordinators and database leases still protect active writers.
 
-The baseline package fingerprint is best effort. If its bounded scan times out
+For recovery of a managed service using a separate, unchanged installation,
+OpenClaw rechecks its service definition, runtime pin, package directory and
+version, launchers, Node executable, build identity, and schema support. It does
+not fingerprint that installation's entire package tree; edits elsewhere in that
+tree during an update are best effort. Keep tools that modify either installation
+stopped until the update finishes.
+
+The baseline fingerprint of a package retained for rollback is best effort. If its bounded scan times out
 or reaches its byte or entry limit, the update records a warning and continues
 with the retained package directory.
 Rollback then verifies the restored directory identity, package version, and
@@ -209,6 +216,12 @@ recovery files would change their metadata and could invalidate an older sealed
 helper's fingerprint. Explicit runtime links into those recovery artifacts are
 rejected; the evidence remains untouched for its recovery owner.
 
+Unchanged retained runtime files use hard links when the filesystem supports
+them. Retention verifies each source before linking and checks the resulting
+inode and metadata, without rehashing bytes for the change time caused by its
+own link. Files requiring independent plugin-safety checks or relocation still
+use verified copies.
+
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,
 package version, and launcher verification, recording that full package contents
@@ -220,8 +233,11 @@ identity, metadata, directory listings, links, and a final metadata sweep. A
 file's content digest from the earlier baseline or staged-package scan is reused
 only when its complete metadata, including inode, link count, size, modification
 time, and change time, is unchanged and its change time predates that earlier
-read by at least five seconds. Recovery helpers and later commands re-read file
-contents. Like the metadata sweep, these checks observe the package rather than
+read by at least five seconds. Files that were too recent during preparation
+become eligible after a later successful verification observes them settled;
+subsequent publication checks reuse that observation while still comparing
+against the original package fingerprint. Recovery helpers and later commands
+re-read file contents. Like the metadata sweep, these checks observe the package rather than
 lock it: writes through an already-modified shared memory mapping may not update
 file times. Keep other package managers and tools that modify the installation
 stopped during an update.
@@ -642,13 +658,14 @@ the run stays pending and its continuation is preserved until startup verificati
 settles. A version that has not yet been observed is unknown; a version mismatch
 requires an observed serving version that disagrees with the installed target.
 
-When the readiness allowance expires for the same running PID or boot generation
-while the restart owner reports waiting for a listener, startup migration, or
+When the readiness allowance expires for a running Gateway while the restart
+owner reports waiting for a listener, startup migration, or
 healthy settling, the updater records the elapsed wait and startup phase as a warning. It leaves the process starting, keeps readiness
 unconfirmed, and retains recovery backups. The run ends `skipped` with reason
 `gateway-readiness-unverified`, recording an intentional unverified outcome rather
-than success or an indefinite pending run. Observed PID or boot-generation changes
-remain failures and enter recovery. Check `openclaw gateway status --deep`
+than success or an indefinite pending run. A PID or boot-generation change alone
+does not fail this wait; current health, version, build, and listener checks still
+apply. Check `openclaw gateway status --deep`
 before retiring those backups. A timeout alone does not authorize a recovery
 restart or rollback; a refused rollback also leaves the candidate untouched.
 A running status alone, a failed check on an established listener, or an HTTP
@@ -1036,14 +1053,14 @@ when it detects that its installation was replaced; restart it through its
 service or foreground process owner afterward.
 
 When updater-owned Doctor reaches maintenance before that foreground Gateway
-finishes shutting down, it waits for the same process to release state, up to
+finishes shutting down, it waits for exclusive state ownership, up to
 the installation-check interval plus the existing restart-drain and service-stop
 allowances. Doctor retains the updater's live authority and still acquires its
 normal maintenance locks before repairing state.
-If shutdown has already removed the process identity, Doctor allows only the
-existing ten-second cleanup reserve and refuses any newly appearing owner.
-A different Gateway owner, lost update authority, or unresolved contention stops
-maintenance with recovery guidance. Ordinary Doctor commands and older update
+The same bounded wait applies if the owner exits or changes while Doctor waits;
+only acquiring the physical maintenance lock permits repair. Lost update
+authority or unresolved contention stops maintenance with recovery guidance.
+Ordinary Doctor commands and older update
 drivers without delegated Doctor authority retain their immediate refusal.
 
 An active Gateway suspension keeps installation changes under its host operation’s

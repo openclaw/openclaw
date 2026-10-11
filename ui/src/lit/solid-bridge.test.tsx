@@ -16,6 +16,7 @@ type Methods = { show(): void; close(): void; setPayload(value: object): object 
 type Host = SolidBridgeElement<Props, Methods>;
 const mounted = vi.fn<(value: object) => void>();
 const disposed = vi.fn();
+const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
   (props, host) => {
@@ -53,6 +54,7 @@ const Bridge = defineSolidBridge<Props, Methods>(
       count: { default: 0, type: Number, attribute: "item-count" },
       payload: { default: null, attribute: false },
     },
+    propertyChanged: changed,
     methods: {
       show: (host) => {
         host.enabled = true;
@@ -75,6 +77,7 @@ function createHost() {
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();
+  changed.mockReset();
 });
 afterEach(async () => {
   cleanup();
@@ -103,6 +106,24 @@ it("mounts once, mirrors attributes/properties, and preserves synchronous impera
   await host.updateComplete;
   expect(host.querySelector("output")?.textContent).toBe("property:4:false");
   expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
+  const host = createHost();
+  document.body.append(host);
+  await host.updateComplete;
+  const observations: string[] = [];
+  changed.mockImplementation((current, key) => {
+    observations.push(`${key}:${current.label}:${current.querySelector("output")?.textContent}`);
+  });
+  host.label = "next";
+  expect(observations).toEqual(["label:next:initial:0:false"]);
+  expect(changed).toHaveBeenCalledWith(host, "label");
+  host.label = "next";
+  expect(changed).toHaveBeenCalledTimes(1);
+  await host.updateComplete;
+  expect(host.querySelector("output")?.textContent).toBe("next:0:false");
+  changed.mockReset();
 });
 
 it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
@@ -236,6 +257,44 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
 });
+
+it.each(["attribute", "Solid props"])(
+  "honors the public setter when updating %s",
+  async (input) => {
+    const tag = `openclaw-solid-setter-${crypto.randomUUID()}`;
+    const SetterBridge = defineSolidBridge<{ label: string }>(
+      tag,
+      (props, host) => {
+        const property = Object.getOwnPropertyDescriptor(host, "label")!;
+        Object.defineProperty(host, "label", {
+          ...property,
+          set(value: string) {
+            property.set!.call(host, value.toUpperCase());
+          },
+        });
+        onCleanup(() => Object.defineProperty(host, "label", property));
+        return <output>{props.label}</output>;
+      },
+      { properties: { label: { default: "initial" } } },
+    );
+    const [label, setLabel] = createSignal("initial");
+    const view = mountSolid(() =>
+      input === "attribute" ? document.createElement(tag) : <SetterBridge label={label()} />,
+    );
+    const host = view.container.querySelector(tag) as SolidBridgeElement<{ label: string }>;
+    await host.updateComplete;
+
+    if (input === "attribute") {
+      host.setAttribute("label", "normalized");
+    } else {
+      setLabel("normalized");
+      flush();
+    }
+    expect(host.label).toBe("NORMALIZED");
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("NORMALIZED");
+  },
+);
 
 it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
