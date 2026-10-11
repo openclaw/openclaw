@@ -8,8 +8,10 @@ import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
-export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+export const showDoctorIntro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+export const showDoctorOutro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
 
 export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
   if (runtime === defaultRuntime) {
