@@ -72,6 +72,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/cron/cron-page.tsx":
       // Keep the optional page out of shared boot discovery after regrouping.
       return "cron-page";
+    case "ui/src/pages/plugins/plugins-page.ts":
+    case "ui/src/pages/plugins/plugins-page.tsx":
+      return "plugins-page";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";

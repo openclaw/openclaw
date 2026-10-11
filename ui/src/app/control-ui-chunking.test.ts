@@ -96,6 +96,7 @@ describe("Control UI build chunking", () => {
         "sidebar-update-runtime",
       ],
       [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
+      [new URL("../pages/plugins/plugins-page.tsx", import.meta.url).pathname, "plugins-page"],
       ["/repo/ui/src/components/config-form.shared.ts", undefined],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
@@ -160,6 +161,7 @@ describe("Control UI build chunking", () => {
     );
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);
     // Fetched shared chunks once co-located the chat view with modules New Session needs.
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
