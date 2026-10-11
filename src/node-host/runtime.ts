@@ -480,6 +480,7 @@ export async function prepareNodeHostRuntime(params?: {
                   client,
                   frame,
                   idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                  signal: controller.signal,
                   onError: () => controller.abort(),
                 })
               : undefined;

@@ -17,6 +17,7 @@ export function createNodeInvokeProgressWriter(params: {
   client: NodeHostClient;
   frame: NodeInvokeRequestPayload;
   idleTimeoutMs: number;
+  signal?: AbortSignal;
   onError: (error: Error) => void;
 }) {
   let seq = 0;
@@ -41,12 +42,17 @@ export function createNodeInvokeProgressWriter(params: {
   };
 
   const sendChunk = async (chunk: string) => {
-    await params.client.request("node.invoke.progress", {
-      invokeId: params.frame.id,
-      nodeId: params.frame.nodeId,
-      seq,
-      chunk,
-    });
+    params.signal?.throwIfAborted();
+    await params.client.request(
+      "node.invoke.progress",
+      {
+        invokeId: params.frame.id,
+        nodeId: params.frame.nodeId,
+        seq,
+        chunk,
+      },
+      params.signal ? { signal: params.signal } : undefined,
+    );
     seq += 1;
   };
 
