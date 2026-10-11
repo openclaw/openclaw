@@ -17,6 +17,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../../src/state/openclaw-agent-db.js";
 import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
+import { openOpenClawStateDatabase } from "../../../../src/state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -221,6 +222,32 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).rejects.toThrow(
         "openclaw doctor --fix",
       );
+    });
+  });
+
+  it("reads worker content revisions without claiming an agent database lease", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:revision-corpus";
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      await upsertSessionEntryCore(
+        { sessionKey, storePath },
+        { sessionId: "revision-corpus", updatedAt: 10 },
+      );
+      const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const leases = openOpenClawStateDatabase({ env: state.env }).db.prepare(
+        "SELECT lease_id FROM agent_database_leases WHERE path = ?",
+      );
+      const admitted = new Set(leases.all(agentPath).map((row) => row.lease_id));
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        includeContentRevision: true,
+      });
+
+      expect(entries).toEqual([
+        expect.objectContaining({ sessionKey, contentRevision: expect.stringMatching(/^sqlite:/) }),
+      ]);
+      // Pooled history Workers outlive the request; a writable open would leave their lease.
+      expect(leases.all(agentPath).filter((row) => !admitted.has(row.lease_id))).toEqual([]);
     });
   });
 
