@@ -7,10 +7,20 @@ import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SkillWorkshopAccess } from "./access.ts";
 import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
+
+export function renderWorkshopChangeText(change: SkillWorkshopChange, prefix: string) {
+  return html`<span class=${`${prefix}who`}
+      >${t(`skillWorkshop.changes.actors.${change.actor}`)}
+      ${t(`skillWorkshop.changes.actions.${change.action}`)}</span
+    >
+    ${change.summary ? html`<span class=${`${prefix}why`}>${change.summary}</span>` : nothing}
+    <span class=${`${prefix}when`}>${formatRelativeTimestamp(change.createdAtMs)}</span>`;
+}
 
 export function renderMutationButton(
   props: SkillWorkshopViewProps,

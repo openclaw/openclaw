@@ -8,7 +8,10 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
-import type { PluginGenerationCaptureBudget } from "./plugin-generation-capture-budget.js";
+import {
+  pluginGenerationCaptureBudget,
+  type PluginGenerationCaptureOptions,
+} from "./plugin-generation-capture-budget.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
@@ -52,15 +55,20 @@ type SourceCustody = {
   sourceDigest: string;
 };
 export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
-type SourceRoot = { rootDir: string; sourceRoot: string; entryFile?: string; entry?: string };
+type SourceRoot = {
+  rootDir: string;
+  sourceRoot: string;
+  entryFiles?: readonly string[];
+  entries?: readonly string[];
+};
 type PluginGenerationCaptureArguments = [
   rootDir: string,
-  entryFile?: string,
+  entryFile?: string | readonly string[],
   execute?: <V>(run: () => V) => V,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
-  captureBudget?: PluginGenerationCaptureBudget,
+  captureOptions?: PluginGenerationCaptureOptions,
 ];
 const sourceCustody = new AsyncLocalStorage<{
   sources: Map<string, SourceCustody>;
@@ -115,8 +123,10 @@ export function createPluginGenerationCapture<
       moduleSource,
       nativeRecovery,
       dependencyLookupBoundary,
-      captureBudget,
+      captureOptions,
     ] = args;
+    const captureBudget = pluginGenerationCaptureBudget(captureOptions);
+    const copyNativeFiles = captureOptions !== captureBudget;
     const custody =
       execute &&
       !nativeRecovery &&
@@ -129,7 +139,13 @@ export function createPluginGenerationCapture<
     if (custody.closed) {
       throw new Error("Plugin source custody has been closed");
     }
-    const key = JSON.stringify([path.resolve(rootDir), entryFile && path.resolve(entryFile)]);
+    const key = JSON.stringify([
+      path.resolve(rootDir),
+      typeof entryFile === "string"
+        ? path.resolve(entryFile)
+        : entryFile?.map((file) => path.resolve(file)),
+      copyNativeFiles,
+    ]);
     let retained = custody.sources.get(key);
     if (retained) {
       try {
@@ -149,7 +165,7 @@ export function createPluginGenerationCapture<
         undefined,
         undefined,
         undefined,
-        captureBudget,
+        captureOptions,
         undefined,
         true,
       );
@@ -170,7 +186,7 @@ export function createPluginGenerationCapture<
         moduleSource,
         undefined,
         undefined,
-        undefined,
+        copyNativeFiles ? { copyNativeFiles: true } : undefined,
         {
           source: fork,
           files: retained.files,
@@ -191,12 +207,12 @@ export function createPluginGenerationCapture<
 export function assertPluginSourceRootCurrent({
   rootDir,
   sourceRoot,
-  entryFile,
-  entry,
+  entryFiles,
+  entries,
 }: SourceRoot): void {
   if (
     fs.realpathSync(rootDir) !== sourceRoot ||
-    (entryFile && fs.realpathSync(entryFile) !== entry)
+    entryFiles?.some((file, index) => fs.realpathSync(file) !== entries?.[index])
   ) {
     throw new Error("Plugin source root changed after capture");
   }
@@ -259,7 +275,7 @@ function resolveModuleTarget(resolved: string | undefined): string | undefined {
 /** Record source and dependency facts where recovery detaches them from instance lifetime. */
 export function createPluginSourceFacts(
   rootDir: string,
-  entryFile: string | undefined,
+  entryFiles: readonly string[] | undefined,
   dependencyLookupBoundary: Parameters<typeof createPluginDependencyResolver>[0],
   captureForCustody: boolean,
 ) {
@@ -330,18 +346,18 @@ export function createPluginSourceFacts(
     },
     captureCustody({
       sourceRoot,
-      entry,
+      entries,
       sourceDigest,
       capture,
     }: {
       sourceRoot: string;
-      entry?: string;
+      entries?: readonly string[];
       sourceDigest: string;
       capture: () => PluginRecoverySource;
     }): SourceCustody {
       const retainedFiles = structuredClone(files);
       const assertCurrent = createRetainedSourceVerification(
-        { rootDir, sourceRoot, entryFile, entry },
+        { rootDir, sourceRoot, entryFiles, entries },
         [...retainedFiles.values(), ...structuredClone(directories).values()],
         structuredClone([...dependencies.values()]),
         structuredClone([...moduleLookups.values()]),
@@ -512,6 +528,7 @@ export function createPluginGenerationSourceLookup({
   boundaryRoot,
   capturedPaths,
   hardlinkedSources,
+  revalidate,
   assertModuleAvailable,
   captureNativeRecovery,
 }: {
@@ -520,7 +537,8 @@ export function createPluginGenerationSourceLookup({
   capturedRoot: string;
   boundaryRoot: string;
   capturedPaths: ReadonlyMap<string, string>;
-  hardlinkedSources: ReadonlySet<string>;
+  hardlinkedSources: Set<string>;
+  revalidate?: () => Iterable<string>;
   assertModuleAvailable: (filename: string) => void;
   captureNativeRecovery?: () => PluginNativeRecovery;
 }) {
@@ -528,9 +546,29 @@ export function createPluginGenerationSourceLookup({
     const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
+  const revalidateHardlinks = () => {
+    const sources = new Set([...hardlinkedSources, ...(revalidate?.() ?? [])]);
+    const canonical = new Set<string>();
+    for (const source of sources) {
+      hardlinkedSources.add(source);
+      try {
+        canonical.add(fs.realpathSync(source));
+      } catch {}
+    }
+    for (const [source, captured] of capturedPaths) {
+      let flagged = sources.has(path.resolve(source));
+      try {
+        flagged ||= canonical.has(fs.realpathSync(source));
+      } catch {}
+      if (flagged) {
+        hardlinkedSources.add(captured);
+      }
+    }
+  };
   return {
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
     assertNoHardlinks: () => {
+      revalidateHardlinks();
       if (hardlinkedSources.size > 0) {
         throw new Error("Plugin source is hardlinked; use separate files and reload.");
       }
@@ -541,6 +579,9 @@ export function createPluginGenerationSourceLookup({
       const captured = resolveCaptured(source);
       if (!captured) {
         throw new Error("Plugin entry is outside its captured source package");
+      }
+      if (rejectHardlinks) {
+        revalidateHardlinks();
       }
       if (rejectHardlinks && hardlinkedSources.has(captured)) {
         throw new Error("Plugin source is hardlinked; use a separate file and reload.");

@@ -284,9 +284,9 @@ it("shares first native admission across private inspections and publishes after
             );
             if (admission === "first") {
               expect(inspection.io).toMatchObject({
-                originalBytes: nativeSize,
-                capturedBytes: 0,
-                copies: 0,
+                originalBytes: 0,
+                capturedBytes: nativeSize,
+                copies: 1,
                 wholeFileReads: 0,
               });
               expect(inspection.io.largestBuffer).toBeLessThanOrEqual(1024 * 1024);

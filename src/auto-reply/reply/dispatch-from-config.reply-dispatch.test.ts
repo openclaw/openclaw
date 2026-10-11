@@ -135,14 +135,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
       () => sessionStoreMocks.currentEntry,
     );
-    sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-    sessionStoreMocks.readSessionEntry
-      .mockReset()
-      .mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.resolveSessionStorePathCore
       .mockReset()
       .mockReturnValue("/tmp/mock-sessions.json");
-    sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
@@ -275,9 +270,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionKey: "agent:test:session",
       pendingFinalDelivery: params.pending,
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
     const hookStarted = createDeferred();
     const deliver = vi.fn().mockResolvedValue(undefined);
     let hookCalls = 0;
@@ -387,9 +379,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionKey: "agent:test:session",
       pendingFinalDelivery: pending,
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         throw error;
@@ -423,9 +412,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionKey: "agent:test:session",
       pendingFinalDelivery: pendingFinalDelivery("policy-suppressed reply"),
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
       deliver,

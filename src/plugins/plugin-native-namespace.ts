@@ -14,6 +14,7 @@ import {
   copyPluginSourceFile,
   hashPluginSourceFile,
   inspectPluginSourceDescriptor,
+  isPluginNativeExecutable,
   isPluginSourceEntry,
   linkPluginSourceFile,
   pluginSourceIdentityChangedOnlyByCtime,
@@ -27,6 +28,26 @@ type NamespaceMember = {
   boundary: string;
   linkTo?: string;
 };
+
+export type PluginNativeCaptureHooks = {
+  onDirectoryEntry?: () => void;
+  onSourceDescriptor?: (source: string, stat: fs.BigIntStats, admittedHardlink?: boolean) => void;
+};
+
+export function isPluginNativeArtifact(
+  source: string,
+  boundary: string,
+  stat: fs.BigIntStats,
+  known: boolean,
+): boolean {
+  return (
+    /\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) ||
+    ((stat.mode & 0o111n) !== 0n &&
+      path.extname(source) === "" &&
+      (known || isPluginNativeExecutable(source, boundary)))
+  );
+}
+const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
 export const pluginNativeNamespaceDirectory = (fact: PluginNativeNamespaceFact) =>
   fact.referenceRoot ? fact.sourceDirectory : path.join(fact.capturedRoot, "content");
 export const pluginNativeNamespaceBoundary = (fact: PluginNativeNamespaceFact) =>
@@ -46,6 +67,61 @@ export const pluginNativeNamespaceMemberRelativePath = (
   fact.referenceRoot
     ? Object.entries(fact.members).find(([, member]) => member.source === filename)![0]
     : path.relative(pluginNativeNamespaceDirectory(fact), filename);
+
+export function pluginNativeNamespaceMemberForSource(
+  namespace: PluginNativeNamespaceFact,
+  source: string,
+) {
+  const relative = path.relative(namespace.sourceDirectory, source);
+  if (namespace.members[relative]?.source === source) {
+    return relative;
+  }
+  let members = nativeSourceMembers.get(namespace);
+  if (!members) {
+    members = new Map<string, string>();
+    for (const [key, { source: memberSource }] of Object.entries(namespace.members)) {
+      members.set(memberSource, members.get(memberSource) ?? key);
+    }
+    nativeSourceMembers.set(namespace, members);
+  }
+  return members.get(source);
+}
+
+/** Recover the two admission-owned names written by receipts predating link inventories. */
+export function upgradeLegacyPluginNativeNamespaceHardlinks(fact: PluginNativeNamespaceFact): void {
+  for (const [relative, member] of Object.entries(fact.members)) {
+    if (member.admissionHardlinks) {
+      continue;
+    }
+    const capturedPath = pluginNativeNamespaceMemberPath(fact, relative);
+    if (capturedPath === member.source) {
+      continue;
+    }
+    const source = fs.lstatSync(member.source, { bigint: true, throwIfNoEntry: false });
+    const captured = fs.lstatSync(capturedPath, { bigint: true, throwIfNoEntry: false });
+    if (
+      !source?.isFile() ||
+      !captured?.isFile() ||
+      source.dev !== captured.dev ||
+      source.ino !== captured.ino ||
+      source.nlink !== 2n ||
+      captured.nlink !== 2n ||
+      (pluginSourceStatIdentity(source) !== member.sourceIdentity &&
+        !pluginSourceIdentityChangedOnlyByCtime(
+          member.sourceIdentity,
+          pluginSourceStatIdentity(source),
+        )) ||
+      (pluginSourceStatIdentity(captured) !== member.capturedIdentity &&
+        !pluginSourceIdentityChangedOnlyByCtime(
+          member.capturedIdentity,
+          pluginSourceStatIdentity(captured),
+        ))
+    ) {
+      continue;
+    }
+    member.admissionHardlinks = [member.source, capturedPath];
+  }
+}
 
 export function capturePluginNativeDirectoryAliases(
   selected: ReadonlyMap<string, PluginNativeNamespaceFact>,
@@ -72,9 +148,6 @@ export function assertPluginNativeNamespaceHost(
   hostRoot: string,
   pluginRoot: string,
 ): void {
-  if (!fact.referenceRoot) {
-    return;
-  }
   const pluginDirectory = fs.realpathSync(pluginRoot);
   // Hoisted native dependencies need not have a host peer. The admitting plugin does,
   // and any host visible from the native directory must agree with that selection.
@@ -84,11 +157,14 @@ export function assertPluginNativeNamespaceHost(
       ?.map((modules) => path.join(modules, "openclaw"))
       .find((filename) => fs.existsSync(filename));
     const resolvedHost = candidate ? fs.realpathSync(candidate) : undefined;
-    if (resolvedHost === hostRoot || (!candidate && directory !== pluginDirectory)) {
+    if (
+      resolvedHost === hostRoot ||
+      (!candidate && (directory !== pluginDirectory || !fact.referenceRoot))
+    ) {
       continue;
     }
     throw new Error(
-      `Retained native directory ${fact.sourceDirectory} does not resolve the selected OpenClaw host ${hostRoot}: ` +
+      `Native directory ${fact.sourceDirectory} does not resolve the selected OpenClaw host ${hostRoot}: ` +
         (candidate
           ? `${candidate} resolves to ${resolvedHost}`
           : `no OpenClaw peer resolves from ${directory}`) +
@@ -255,6 +331,7 @@ export function capturePluginNativeNamespace(params: {
   boundary: string;
   capturedRoot: string;
   managed: boolean;
+  copyManaged?: boolean;
   outputRoot?: string;
   previous?: PluginNativeNamespaceFact;
   inspectionRoots?: readonly string[];
@@ -299,7 +376,12 @@ export function capturePluginNativeNamespace(params: {
   const linkedSources = new Set<string>();
   const policyCheckedSources = new Set<string>();
   const checkSourcePolicy = (member: NamespaceMember, stat: fs.BigIntStats) => {
-    if (pluginSourceStatIdentity(stat) !== member.identity) {
+    const identity = pluginSourceStatIdentity(stat);
+    if (
+      identity !== member.identity &&
+      (!linkedSources.has(member.source) ||
+        !pluginSourceIdentityChangedOnlyByCtime(member.identity, identity))
+    ) {
       throw new Error("Native plugin companion changed during admission");
     }
     params.onSourceDescriptor?.(member.source, stat);
@@ -319,6 +401,7 @@ export function capturePluginNativeNamespace(params: {
       } else if (member.stat.isDirectory()) {
         fs.mkdirSync(target, { recursive: true, mode: 0o700 });
       } else if (
+        !params.copyManaged &&
         (previous ||
           (managed &&
             (params.managedRoots ?? [boundary]).some((root) =>
@@ -339,6 +422,7 @@ export function capturePluginNativeNamespace(params: {
     }
   } catch (error) {
     if (
+      params.copyManaged ||
       !managed ||
       previous ||
       !params.retainedRoot ||
@@ -454,6 +538,24 @@ export function capturePluginNativeNamespace(params: {
       }),
     ),
   };
+  const admissionMembers = new Map<string, PluginNativeNamespaceFact["members"][string][]>();
+  for (const member of Object.values(fact.members)) {
+    if (!member.admissionHardlinks) {
+      continue;
+    }
+    const stat = fs.statSync(member.source, { bigint: true, throwIfNoEntry: false });
+    if (!stat?.isFile()) {
+      continue;
+    }
+    const key = `${stat.dev}:${stat.ino}`;
+    admissionMembers.set(key, [...(admissionMembers.get(key) ?? []), member]);
+  }
+  for (const members of admissionMembers.values()) {
+    const inventory = [...new Set(members.flatMap((member) => member.admissionHardlinks ?? []))];
+    for (const member of members) {
+      member.admissionHardlinks = inventory;
+    }
+  }
   // A managed inode has both installed and retained names; linking either changes both identities.
   if (previous?.managed) {
     for (const [relative, member] of Object.entries(fact.members)) {
@@ -496,15 +598,78 @@ function admittedPluginNativeHardlinks(
   if (!member.admissionHardlinks) {
     return undefined;
   }
-  const live = [...new Set(member.admissionHardlinks)].filter((filename) => {
-    const candidate = fs.lstatSync(filename, { bigint: true, throwIfNoEntry: false });
-    return candidate?.isFile() && candidate.dev === stat.dev && candidate.ino === stat.ino;
-  });
-  return BigInt(live.length) === stat.nlink ? live : undefined;
+  const inventory = () =>
+    [...new Set(member.admissionHardlinks)].filter((filename) => {
+      const candidate = fs.lstatSync(filename, { bigint: true, throwIfNoEntry: false });
+      return candidate?.isFile() && candidate.dev === stat.dev && candidate.ino === stat.ino;
+    });
+  const live = inventory();
+  const current = fs.lstatSync(member.source, { bigint: true, throwIfNoEntry: false });
+  const verified = inventory();
+  const finalSource = fs.lstatSync(member.source, { bigint: true, throwIfNoEntry: false });
+  return current?.isFile() &&
+    finalSource?.isFile() &&
+    current.dev === stat.dev &&
+    current.ino === stat.ino &&
+    current.nlink === stat.nlink &&
+    finalSource.dev === current.dev &&
+    finalSource.ino === current.ino &&
+    finalSource.nlink === current.nlink &&
+    live.length === verified.length &&
+    live.every((filename, index) => filename === verified[index]) &&
+    BigInt(verified.length) === finalSource.nlink
+    ? live
+    : undefined;
+}
+
+export function pluginNativeNamespacesOwnSourceHardlinks(
+  namespaces: Iterable<PluginNativeNamespaceFact>,
+  source: string,
+  stat: fs.BigIntStats,
+): boolean {
+  let member: PluginNativeNamespaceFact["members"][string] | undefined;
+  const admissionHardlinks: string[] = [];
+  for (const namespace of namespaces) {
+    for (const candidate of Object.values(namespace.members)) {
+      if (candidate.source === source && candidate.admissionHardlinks) {
+        member ??= candidate;
+        admissionHardlinks.push(...candidate.admissionHardlinks);
+      }
+    }
+  }
+  return Boolean(member && admittedPluginNativeHardlinks({ ...member, admissionHardlinks }, stat));
+}
+
+export function pluginNativeNamespaceUntrustedHardlinks(
+  namespaces: Iterable<PluginNativeNamespaceFact>,
+  admissionNamespaces: Iterable<PluginNativeNamespaceFact> = namespaces,
+): Set<string> {
+  const namespaceFacts = [...namespaces];
+  const admissionFacts =
+    admissionNamespaces === namespaces ? namespaceFacts : [...admissionNamespaces];
+  const hardlinked = new Set<string>();
+  for (const namespace of namespaceFacts) {
+    inspectPluginNativeNamespaceSources(namespace, (source, stat, admitted) => {
+      if (
+        stat.nlink > 1n &&
+        !admitted &&
+        !pluginNativeNamespacesOwnSourceHardlinks(admissionFacts, source, stat)
+      ) {
+        hardlinked.add(source);
+        for (const [relative, member] of Object.entries(namespace.members)) {
+          if (member.source === source) {
+            hardlinked.add(pluginNativeNamespaceMemberPath(namespace, relative));
+          }
+        }
+      }
+    });
+  }
+  return hardlinked;
 }
 
 /** Record another admission-owned name only while every existing link remains accounted for. */
 export function trackPluginNativeNamespaceAdmissionLink(
+  namespace: PluginNativeNamespaceFact,
   member: PluginNativeNamespaceFact["members"][string],
   target: string,
 ): () => void {
@@ -518,7 +683,18 @@ export function trackPluginNativeNamespaceAdmissionLink(
       after.ino === before.ino &&
       after.nlink === before.nlink + 1n
     ) {
-      member.admissionHardlinks = [...admitted, target];
+      const inventory = [...admitted, target];
+      for (const candidate of Object.values(namespace.members)) {
+        const stat = fs.statSync(candidate.source, { bigint: true, throwIfNoEntry: false });
+        if (
+          candidate.admissionHardlinks &&
+          stat?.isFile() &&
+          stat.dev === after.dev &&
+          stat.ino === after.ino
+        ) {
+          candidate.admissionHardlinks = inventory;
+        }
+      }
     }
   };
 }

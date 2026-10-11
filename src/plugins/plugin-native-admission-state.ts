@@ -14,6 +14,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
+import { upgradeLegacyPluginNativeNamespaceHardlinks } from "./plugin-native-namespace.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -257,11 +258,15 @@ export function preparePluginNativeAdmissions(
       }
     }
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
-      state.receipts.set(key, structuredClone(receipt));
-      for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
+      const prepared = structuredClone(receipt);
+      for (const namespace of Object.values(prepared.nativeNamespaces)) {
+        upgradeLegacyPluginNativeNamespaceHardlinks(namespace);
+      }
+      state.receipts.set(key, prepared);
+      for (const [id, namespace] of Object.entries(prepared.nativeNamespaces)) {
         state.namespaces.set(id, structuredClone(namespace));
       }
-      for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
+      for (const [source, fact] of Object.entries(prepared.nativeArtifacts)) {
         state.files.set(source, { ...fact });
       }
     }

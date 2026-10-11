@@ -14,10 +14,11 @@ import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-re
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
+  type PluginStateActionAuthority,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import {
@@ -74,8 +75,11 @@ describe("Codex initialization through the registered session deletion owner", (
         const runtime = createPluginRuntimeMock({
           agent,
           state: {
-            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-              createPluginStateKeyedStore<T>("codex", { ...options, env: state.env }),
+            openKeyedStoreV2: <T>(
+              options: OpenAsyncKeyedStoreOptions,
+              authority: PluginStateActionAuthority = { assertCurrent() {} },
+            ) =>
+              createPluginStateKeyedStoreV2<T>("codex", { ...options, env: state.env }, authority),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
               createPluginStateSyncKeyedStore<T>("codex", { ...options, env: state.env }),
           },

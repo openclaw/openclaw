@@ -399,6 +399,43 @@ describe("external channel secret contract api", () => {
     ]);
   });
 
+  it("ignores unrelated extensionless assets when preserving TypeScript path mappings", () => {
+    const record = writeExternalChannelPlugin({ pluginId: "custom", channelId: "custom" });
+    const helperDir = path.join(record.rootDir, "helpers");
+    fs.mkdirSync(helperDir);
+    fs.writeFileSync(
+      path.join(helperDir, "contract.ts"),
+      channelSecretContractModuleSource("mapped-with-license"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(record.rootDir, "LICENSE"), "import {\n", "utf8");
+    fs.writeFileSync(
+      path.join(record.rootDir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@fixture/contract": ["helpers/contract.ts"] },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(record.rootDir, "secret-contract-api.ts"),
+      'import contract from "@fixture/contract"; export default contract;\n',
+      "utf8",
+    );
+    fs.rmSync(path.join(record.rootDir, "secret-contract-api.cjs"));
+    vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
+
+    const api = loadChannelSecretContractApiForRecord(record as PluginManifestRecord, {
+      throwOnLoadError: true,
+    });
+
+    expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+      "channels.mapped-with-license.token",
+    ]);
+  });
+
   it("preserves safe wildcard TypeScript path mappings through the captured contract", () => {
     const record = writeExternalChannelPlugin({ pluginId: "custom", channelId: "custom" });
     const helperDir = path.join(record.rootDir, "helpers");

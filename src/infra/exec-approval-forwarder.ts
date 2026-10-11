@@ -167,14 +167,14 @@ function restoreApprovalRequestForSuppression(params: {
   }
 }
 
-function shouldSkipForwardingFallback(params: {
+async function shouldSkipForwardingFallback(params: {
   approvalKind: ChannelApprovalKind;
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
   approvalRequest?: ApprovalRequestInput;
   nativeRouteCoordinator: ApprovalNativeRouteCoordinator | undefined;
-}): boolean {
+}): Promise<boolean> {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
   if (!channel) {
     return false;
@@ -198,7 +198,10 @@ function shouldSkipForwardingFallback(params: {
   if (adapter?.delivery?.shouldBlockForwardingFallback?.(fallbackInput)) {
     return true;
   }
-  const suppress = adapter?.delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false;
+  const delivery = adapter?.delivery;
+  const suppress = delivery?.shouldSuppressForwardingFallbackAsync
+    ? await delivery.shouldSuppressForwardingFallbackAsync(fallbackInput)
+    : (delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false);
   if (!suppress || !plugin) {
     return false;
   }
@@ -412,17 +415,20 @@ function createApprovalHandlers<
       resolveSessionTarget: params.resolveSessionTarget,
     });
     const nativeRouteCoordinator = params.getNativeApprovalRouteCoordinator();
-    return targets.filter(
-      (target) =>
-        !shouldSkipForwardingFallback({
-          approvalKind: params.strategy.kind,
-          target,
-          cfg: paramsForRoute.cfg,
-          routeRequest: paramsForRoute.routeRequest,
-          approvalRequest: paramsForRoute.approvalRequest,
-          nativeRouteCoordinator,
-        }),
+    const selected = await Promise.all(
+      targets.map(
+        async (target) =>
+          !(await shouldSkipForwardingFallback({
+            approvalKind: params.strategy.kind,
+            target,
+            cfg: paramsForRoute.cfg,
+            routeRequest: paramsForRoute.routeRequest,
+            approvalRequest: paramsForRoute.approvalRequest,
+            nativeRouteCoordinator,
+          })),
+      ),
     );
+    return targets.filter((_, index) => selected[index]);
   };
 
   const deliverResolved = async (resolved: TResolved, entry?: PendingApproval): Promise<void> => {

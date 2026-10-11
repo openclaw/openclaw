@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   resolvePluginLoaderTryNative,
@@ -29,6 +30,8 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
+import { captureBundledPluginStateOperationModules } from "./plugin-state-operation-module-loader.js";
+import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
@@ -61,6 +64,12 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       rootDir: params.rootDir,
       cache,
       loader,
+      source: captureBundledPluginStateOperationModules({
+        rootDir: params.rootDir,
+        source: params.source,
+        devSourceRoot: params.devSourceRoot,
+        pluginSdkResolution: params.pluginSdkResolution,
+      }),
     });
     return;
   }
@@ -74,6 +83,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     }
     return { source: filename };
   };
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: params.origin,
+    rootDir: params.rootDir,
+  });
   const artifact = capturePluginGenerationArtifact(
     params.rootDir,
     params.standalone ? params.source : undefined,
@@ -83,6 +96,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return entry.generated ? filename : entry.source;
     },
     params.nativeRecovery,
+    undefined,
+    rejectHardlinks ? { copyNativeFiles: true } : undefined,
   );
   if (
     params.expectedSourceDigest !== undefined &&
@@ -111,6 +126,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   if (aliases.packageRoot) {
     artifact.linkHost(aliases.packageRoot);
   }
+  bindPluginStateOperationModuleSource({ ...params, artifact });
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,

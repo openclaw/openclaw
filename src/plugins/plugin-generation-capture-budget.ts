@@ -13,6 +13,16 @@ export type PluginGenerationCaptureBudget = {
   maxTotalBytes: number;
 };
 
+export type PluginGenerationCaptureOptions =
+  | PluginGenerationCaptureBudget
+  | { copyNativeFiles: true };
+
+export function pluginGenerationCaptureBudget(
+  options?: PluginGenerationCaptureOptions,
+): PluginGenerationCaptureBudget | undefined {
+  return options && "maxEntries" in options ? options : undefined;
+}
+
 export function createPluginGenerationCaptureBudget(
   rootDir: string,
   budget?: PluginGenerationCaptureBudget,
@@ -65,30 +75,33 @@ export function createPluginGenerationCaptureBudget(
 export function createBudgetedPluginNativeAdmission(params: {
   rootDir: string;
   directory: string;
-  entryFile?: string;
+  entryFiles?: readonly string[];
   recovery?: PluginNativeRecovery;
   outputRoot?: string;
-  captureBudget?: PluginGenerationCaptureBudget;
-  hardlinkedSources: Set<string>;
+  captureOptions?: PluginGenerationCaptureOptions;
+  hardlinkedSources?: Set<string>;
 }) {
-  const budget = createPluginGenerationCaptureBudget(params.rootDir, params.captureBudget);
+  const captureBudget = pluginGenerationCaptureBudget(params.captureOptions);
+  const budget = createPluginGenerationCaptureBudget(params.rootDir, captureBudget);
+  const hardlinkedSources = params.hardlinkedSources ?? new Set<string>();
   const nativeAdmission = createPluginNativeAdmission(
     params.rootDir,
     params.directory,
-    params.entryFile,
+    params.entryFiles,
     params.recovery,
     params.outputRoot,
-    params.captureBudget
+    captureBudget
       ? {
           onDirectoryEntry: budget.reserveEntry,
           onSourceDescriptor(source, stat, admittedHardlink) {
             budget.reserveFile(source, Number(stat.size));
             if (stat.nlink > 1n && !admittedHardlink) {
-              params.hardlinkedSources.add(source);
+              hardlinkedSources.add(source);
             }
           },
         }
       : undefined,
+    params.captureOptions !== captureBudget,
   );
-  return { budget, nativeAdmission };
+  return { budget, nativeAdmission, hardlinkedSources };
 }
