@@ -645,6 +645,17 @@ openclaw worktrees gc --job <id>
 
 `--json` prints the receipt, including the job state and current cleanup summary. Polling observes the job without starting another pass. Enqueue requests made while a job is queued or running return that same job; only the latest job is retained, and restarting the Gateway discards its receipt. To force reinspection of unchanged deferred checkouts, start a new job with `--retry-deferred` after any current job finishes.
 
+For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
+objects needed by all Git-registered worktree indexes and current HEAD trees
+before attempting cleanup.
+It fetches missing objects from the existing promisor remote in bounded batches,
+preserving staged and working files. Historical commits remain filtered, and
+ordinary background maintenance does not fetch. Repair has a five-minute budget
+and a 4,096-object limit per pass; completed fetches survive interruption. If
+repair cannot finish, maintenance logs a warning. Restore remote access and run
+the command again to resume from the remaining missing objects. Locally created
+objects unavailable from the remote still require recovery from another copy.
+
 UI preferences and other unrelated configuration writes do not interrupt cleanup.
 Changes to cleanup inputs, such as the worktree root or capacity, agent workspaces,
 session storage or ownership, and sandbox mode, cancel the current job before its

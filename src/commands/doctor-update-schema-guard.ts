@@ -236,7 +236,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     const coverageRefusal = (uncovered: typeof blockedMigrations, detail: string) =>
       new UpdateSchemaRefusalError(uncovered, updater.version, {
         targetVersion: VERSION,
-        cause: new Error(`Missing recoverable canonical backup coverage: ${detail}`),
+        cause: new Error(`Missing recoverable database backup coverage: ${detail}`),
         recovery,
       });
     const authority = options.postCoreSchemaRepair;
@@ -301,7 +301,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          `the retained archive at ${backup.archivePath} has no captured canonical image for these agent databases.`,
+          `the retained archive at ${backup.archivePath} has no captured database image for these agent databases.`,
         );
       }
       // A mixed fleet's archive also captures disposable agents. Bind every
@@ -377,7 +377,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          "these pending agent databases have no registered canonical snapshot owner.",
+          "these pending agent databases have no registered snapshot owner.",
         );
       }
       return {

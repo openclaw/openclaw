@@ -21,6 +21,7 @@ const OWNER_SUMMARY_QUERY = {
 export class SidebarNavigationCatalog implements ReactiveController {
   dashboards: SessionListSnapshot | null = null;
   scopesEquivalent = false;
+  scopesReady = false;
   private source?: ApplicationContext["sessions"];
   private client?: ApplicationContext["gateway"]["snapshot"]["client"];
   private viewerId?: string;
@@ -67,7 +68,8 @@ export class SidebarNavigationCatalog implements ReactiveController {
           }
           // Totals include unowned/agent-owned rows missing from the profile facet.
           const equivalent = ready && navigationScopesEquivalent(latest, viewerId);
-          if (equivalent !== this.scopesEquivalent) {
+          if (equivalent !== this.scopesEquivalent || ready !== this.scopesReady) {
+            this.scopesReady = ready;
             this.scopesEquivalent = equivalent;
             this.host.requestUpdate();
           }
@@ -143,5 +145,6 @@ export class SidebarNavigationCatalog implements ReactiveController {
     this.viewerId = undefined;
     this.dashboards = null;
     this.scopesEquivalent = false;
+    this.scopesReady = false;
   }
 }

@@ -48,7 +48,7 @@ Global discovery diagnostics go to stderr, including with `--json`. This explain
 
 SDK import failures appear in the existing plugin error output and Doctor's
 plugin diagnostics. The diagnostic names the plugin, imported
-`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
+`openclaw/plugin-sdk/*` API, running core version, and build version when known.
 For an official plugin, run `openclaw plugins update <id>`. A running Gateway applies
 the update before the command completes; otherwise it loads the update at its next start.
 If the error identifies a nested SDK, the plugin bundles an incompatible
@@ -94,6 +94,11 @@ The local plugin registry is OpenClaw's persisted cold read model for installed 
 When that registry is missing or stale, Gateway startup validates current plugin metadata and serves from that prepared snapshot. After readiness, maintenance refreshes the persisted registry in the shared-state worker under the plugin lifecycle lease using current config and package facts. This retains metadata for later updates without blocking request handling on a SQLite write. Refresh failures produce warnings without replacing the active runtime snapshot. Config recovery and database compatibility checks remain startup gates; updates retain those checks.
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
+
+Inspection revalidates warnings for unavailable configured plugin load paths against
+the current config. Removing the final path removes its warning from the inspected
+view; a missing path that remains configured still produces a warning. Inspection
+does not rewrite the persisted registry. Use `--refresh` to update that ledger.
 
 When persisted and derived plugin records differ, the command lists each differing plugin with both sources. JSON output returns the same rows in `differences`. Policy staleness reports `policy-changed` in `refreshReasons` and leaves `differences` empty because policy validation runs before record comparison; a policy refresh can still update enabled fields. A refresh rereads and verifies its persisted replacement before it reports success. If plugin package files keep changing during verification, stop those updates and run `openclaw plugins registry --refresh` again.
 

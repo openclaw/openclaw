@@ -4,10 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { lobsterPetSeed } from "./lobster-pet-contract.ts";
+import { lobsterPetName } from "./lobster-pet-identity.ts";
 import {
   canonicalLobsterLook,
   createLobsterPetLook,
-  lobsterPetName,
   renderLobsterSvg,
 } from "./lobster-pet-look.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
